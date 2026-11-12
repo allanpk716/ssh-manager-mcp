@@ -54,11 +54,17 @@ type Options struct {
 	// ExecStream 非空时替代 Exec，直接拿到会话的实时输出写入器；集成测试
 	// 用它模拟命令在退出前分多次输出。
 	ExecStream func(cmd string, stdin io.Reader, stdout, stderr io.Writer) int
+	// SFTPHandlers 四个处理器都非空时，SFTP 子系统改用调用方提供的请求处
+	// 理器；测试可以在真实 SSH 与 SFTP 协议边界上模拟远端文件系统变化。
+	SFTPHandlers sftp.Handlers
 	// Connections, when non-nil, is atomically bumped for every accepted TCP
 	// connection (right after Accept, before any SSH handshake) — lets a test
 	// prove a client never even dialed, e.g. a policy-blocked command must
 	// leave it at zero. Optional and purely observational.
 	Connections *atomic.Int64
+	// VirtualFilesystemRoot 把 SFTP 的绝对路径映射到一个临时目录，让测试能
+	// 使用生产代码固定的路径，又不写测试进程所在机器的其他目录。
+	VirtualFilesystemRoot string
 }
 
 // Start launches an in-process SSH server on a random local port.
@@ -131,7 +137,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if opts.Connections != nil {
 				opts.Connections.Add(1)
 			}
-			go serve(conn, cfg, opts.SudoPassword, opts.SudoDoesNotReadPassword, opts.SudoStartFailure, execFn, opts.ExecStream)
+			go serve(conn, cfg, opts.SudoPassword, opts.SudoDoesNotReadPassword, opts.SudoStartFailure, execFn, opts.ExecStream, opts.SFTPHandlers, opts.VirtualFilesystemRoot)
 		}
 	}()
 	cleanup := func() {
@@ -155,7 +161,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sftpHandlers sftp.Handlers, virtualFilesystemRoot string) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -166,7 +172,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPass
 	for newChan := range chans {
 		switch newChan.ChannelType() {
 		case "session":
-			go handleSession(newChan, sudoPw, sudoDoesNotReadPassword, sudoStartFailure, execFn, execStreamFn)
+			go handleSession(newChan, sudoPw, sudoDoesNotReadPassword, sudoStartFailure, execFn, execStreamFn, sftpHandlers, virtualFilesystemRoot)
 		case "direct-tcpip":
 			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
 			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
@@ -182,7 +188,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPass
 	}
 }
 
-func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int) {
+func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sftpHandlers sftp.Handlers, virtualFilesystemRoot string) {
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		return
@@ -294,12 +300,24 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPasswor
 			// Using sftp.NewServer (the canonical host-FS server) instead of the
 			// brief's NewRequestServer+NativeFilesystem: NativeFilesystem was
 			// removed from pkg/sftp; NewServer is its supported replacement.
-			srv, err := sftp.NewServer(ch)
-			if err != nil {
-				return
+			var filesystemServer interface {
+				Serve() error
+				Close() error
 			}
-			_ = srv.Serve()
-			_ = srv.Close()
+			if sftpHandlers.FileGet != nil && sftpHandlers.FilePut != nil &&
+				sftpHandlers.FileCmd != nil && sftpHandlers.FileList != nil {
+				filesystemServer = sftp.NewRequestServer(ch, sftpHandlers)
+			} else if virtualFilesystemRoot == "" {
+				nativeServer, serverErr := sftp.NewServer(ch)
+				if serverErr != nil {
+					return
+				}
+				filesystemServer = nativeServer
+			} else {
+				filesystemServer = sftp.NewRequestServer(ch, newVirtualFilesystemHandler(virtualFilesystemRoot))
+			}
+			_ = filesystemServer.Serve()
+			_ = filesystemServer.Close()
 			return
 		default:
 			req.Reply(false, nil)

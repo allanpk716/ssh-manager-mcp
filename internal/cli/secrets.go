@@ -59,6 +59,7 @@ func newSecretsCmd() *cobra.Command {
 		secretsEditCmd(),
 		secretsRmCmd(),
 		secretsListCmd(),
+		secretsRecordsCmd(),
 		secretsAllowCmd(),
 		secretsDisallowCmd(),
 	)
@@ -217,13 +218,34 @@ func secretsRmCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if err := secretmanage.New(s).DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
+			manager := secretmanage.New(s)
+			if err := printSecretDeliveryReferences(cmd.OutOrStdout(), manager, args[0]); err != nil {
+				return err
+			}
+			if err := manager.DeleteSecret(args[0], secretmanage.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "已删除机密项 %s\n", args[0])
 			return nil
 		},
 	}
+}
+
+// printSecretDeliveryReferences 在删除机密项前列出引用它的全部下发记录。
+// 删除机密项不会删除记录，这里只提示服务器条目与路径，不显示模板与值。
+func printSecretDeliveryReferences(out io.Writer, manager *secretmanage.Manager, name string) error {
+	records, err := manager.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: name})
+	if err != nil {
+		return err
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	fmt.Fprintln(out, "引用该机密项的下发记录（删除机密项后记录保留并标注已删除）：")
+	for _, record := range records {
+		fmt.Fprintf(out, "  %s：%s\n", record.ServerName, record.Path)
+	}
+	return nil
 }
 
 func secretsListCmd() *cobra.Command {
@@ -251,6 +273,94 @@ func secretsListCmd() *cobra.Command {
 	c.Flags().StringVar(&server, "server", "", "只显示可写入列表包含该服务器条目的机密项")
 	c.Flags().StringVar(&instance, "instance", "", policyInstanceFlagHelp)
 	return c
+}
+
+func secretsRecordsCmd() *cobra.Command {
+	var server string
+	c := &cobra.Command{
+		Use:   "records [NAME] [--server 条目]",
+		Args:  cobra.MaximumNArgs(1),
+		Short: "List secret delivery records (never secret values)",
+		Long: `查看机密项写入受管服务器后的下发记录。
+
+不带 NAME 时列出全部记录；带 NAME 时展开该机密项引用记录的模板原文、文件
+哈希与值版本号。记录先写文件后登记，登记失败的历史写入会缺漏，不承诺完整。
+任何输出都不显示机密项值。`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) != 0 {
+				name = args[0]
+			}
+			s, err := requireSecretsVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			manager := secretmanage.New(s)
+
+			filter := store.SecretDeliveryRecordFilter{SecretName: name}
+			if server != "" {
+				resolved, err := s.ResolveServer(server)
+				if err != nil {
+					return err
+				}
+				if resolved == nil {
+					return fmt.Errorf("服务器条目 %q 不存在", server)
+				}
+				filter.ServerID = resolved.ID
+			}
+			records, err := manager.SecretDeliveryRecords(filter)
+			if err != nil {
+				return err
+			}
+			printSecretDeliveryRecords(cmd.OutOrStdout(), records, name)
+			return nil
+		},
+	}
+	c.Flags().StringVar(&server, "server", "", "只显示写入该服务器条目的记录")
+	return c
+}
+
+// printSecretDeliveryRecords 输出 owner 的下发记录。指定机密项名字时展开
+// 记录详情；模板原文来自存储层已校验的无值模板，展示层不尝试解密任何值。
+func printSecretDeliveryRecords(out io.Writer, records []store.SecretDeliveryRecord, name string) {
+	fmt.Fprintln(out, "下发记录（登记失败的历史写入会缺漏，不承诺完整）：")
+	if len(records) == 0 {
+		fmt.Fprintln(out, "没有符合条件的下发记录。")
+		return
+	}
+	for _, record := range records {
+		if name == "" {
+			fmt.Fprintf(out, "- 服务器条目 %s；路径 %s；机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+				record.ServerName, record.Path, secretDeliveryNames(record.Secrets),
+				record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
+				record.InitiatingDeviceName, record.InitiatingInstanceName)
+			continue
+		}
+		fmt.Fprintf(out, "- 服务器条目：%s\n", record.ServerName)
+		fmt.Fprintf(out, "  路径：%s\n", record.Path)
+		fmt.Fprintf(out, "  机密项：%s\n", secretDeliveryNames(record.Secrets))
+		fmt.Fprintf(out, "  写入时间：%s\n", record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"))
+		fmt.Fprintf(out, "  发起设备：%s\n", record.InitiatingDeviceName)
+		fmt.Fprintf(out, "  实例：%s\n", record.InitiatingInstanceName)
+		fmt.Fprintf(out, "  模板原文：%s\n", record.Template)
+		fmt.Fprintf(out, "  文件 SHA-256 哈希：%s\n", record.FileSHA256)
+		for _, secret := range record.Secrets {
+			fmt.Fprintf(out, "  值版本号：%s=%d\n", secret.Name, secret.ValueVersion)
+		}
+	}
+}
+
+func secretDeliveryNames(secrets []store.SecretDeliverySecretRecord) string {
+	names := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		name := secret.Name
+		if secret.Deleted {
+			name += "（已删除）"
+		}
+		names = append(names, name)
+	}
+	return strings.Join(names, ", ")
 }
 
 // loadSecretViews 按本机角色读取机密项可见列表：权威端与单机部署从 vault

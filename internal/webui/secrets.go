@@ -99,8 +99,9 @@ func secretFormMessage(err error) (string, bool) {
 
 // SecretDetailView 是机密项详情页展示数据。
 type SecretDetailView struct {
-	Row     SecretRow
-	Servers []AccessGrantChoice
+	Row             SecretRow
+	Servers         []AccessGrantChoice
+	DeliveryRecords []SecretDeliveryRecordRow
 }
 
 // SecretMatrixView 是机密项与服务器条目的授权矩阵。
@@ -573,6 +574,13 @@ func (h *handler) secretDetail(identifier string) (*SecretDetailView, error) {
 	if !ok {
 		return nil, &SecretNotFoundError{Identifier: identifier}
 	}
+	var deliveryRecords []SecretDeliveryRecordRow
+	if source, ok := h.cfg.Secrets.(SecretDeliveryRecordSource); ok {
+		deliveryRecords, err = source.SecretDeliveryRecords(row.Name)
+		if err != nil {
+			return nil, err
+		}
+	}
 	servers, err := h.cfg.Servers.Servers("")
 	if err != nil {
 		return nil, err
@@ -585,7 +593,9 @@ func (h *handler) secretDetail(identifier string) (*SecretDetailView, error) {
 			ID: server.ID, Name: server.Name, Checked: allowed[server.Name],
 		})
 	}
-	return &SecretDetailView{Row: row, Servers: choices}, nil
+	return &SecretDetailView{
+		Row: row, Servers: choices, DeliveryRecords: deliveryRecords,
+	}, nil
 }
 
 func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, identifier string) {

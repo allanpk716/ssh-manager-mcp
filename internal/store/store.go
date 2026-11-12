@@ -128,9 +128,10 @@ func (s *Store) SetCacheRecommendedVersion(version string) {
 func (s *Store) CacheRecommendedVersion() string { return s.cacheRecommendedVersion }
 
 // CacheAuthorityTooOld 判断当前只读客户端缓存是否来自旧权威端。非缓存
-// 形态本机就是权威端或单机部署，恒为否。
+// 形态本机就是权威端或单机部署，恒为否。版本号查询接口返回 404 不参与
+// 这个判断。
 func (s *Store) CacheAuthorityTooOld() bool {
-	return s.readOnly && clientfeatures.AuthorityTooOld(s.cacheRecommendedVersion)
+	return s != nil && s.readOnly && clientfeatures.AuthorityTooOld(s.cacheRecommendedVersion)
 }
 
 // DefaultStorePath returns the on-disk vault location (program-fixed, spec §3.1/§5.1).
@@ -1027,6 +1028,26 @@ CREATE TABLE IF NOT EXISTS secret_server_allow (
   secret_id TEXT NOT NULL REFERENCES secrets(id) ON DELETE CASCADE,
   server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
   PRIMARY KEY (secret_id, server_id)
+);
+CREATE TABLE IF NOT EXISTS secret_delivery_records (
+  id TEXT PRIMARY KEY,
+  server_id TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  path_key TEXT NOT NULL,
+  template BLOB NOT NULL,
+  file_sha256 TEXT NOT NULL,
+  written_at INTEGER NOT NULL,
+  initiating_device_name TEXT NOT NULL,
+  initiating_instance_name TEXT NOT NULL,
+  recorded_at INTEGER NOT NULL,
+  UNIQUE (server_id, path_key)
+);
+CREATE TABLE IF NOT EXISTS secret_delivery_record_secrets (
+  record_id TEXT NOT NULL REFERENCES secret_delivery_records(id) ON DELETE CASCADE,
+  secret_id TEXT NOT NULL,
+  secret_name TEXT NOT NULL,
+  value_version INTEGER NOT NULL CHECK(value_version > 0),
+  PRIMARY KEY (record_id, secret_id)
 );
 CREATE TABLE IF NOT EXISTS shared_storages (
   id TEXT PRIMARY KEY,

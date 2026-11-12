@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -717,7 +718,40 @@ func seedSecretVaultForExport(t *testing.T) (string, []byte) {
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
 	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
+	seedDeliveryRecordForExport(t, dbPath, mk)
 	return dbPath, mk
+}
+
+// seedDeliveryRecordForExport 在导出测试库里登记一条引用 API_TOKEN 的下发
+// 记录，覆盖备份与导出必须携带下发记录的要求。
+func seedDeliveryRecordForExport(t *testing.T, dbPath string, mk []byte) {
+	t.Helper()
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db1, err := st.GetServerByName("db1")
+	if err != nil || db1 == nil {
+		t.Fatalf("找不到种子服务器条目 db1：%v", err)
+	}
+	if err := st.GrantServers(profileID, []string{db1.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: db1.ID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760001100, 0),
+		Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 2}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // assertSecretSnapshotSegments 比较两个快照的机密项段：字段原样恢复，包括
@@ -729,6 +763,10 @@ func assertSecretSnapshotSegments(t *testing.T, want, got *store.Snapshot) {
 	}
 	if !reflect.DeepEqual(want.SecretAllows, got.SecretAllows) {
 		t.Fatalf("secret allow snapshot rows differ:\nwant %+v\ngot  %+v", want.SecretAllows, got.SecretAllows)
+	}
+	if !reflect.DeepEqual(want.SecretDeliveryRecords, got.SecretDeliveryRecords) {
+		t.Fatalf("secret delivery record snapshot rows differ:\nwant %+v\ngot  %+v",
+			want.SecretDeliveryRecords, got.SecretDeliveryRecords)
 	}
 }
 
@@ -803,6 +841,7 @@ func TestSecretsClientRefused(t *testing.T) {
 		{"secrets", "set", "API_TOKEN", "--stdin"},
 		{"secrets", "edit", "API_TOKEN", "--note", "x"},
 		{"secrets", "rm", "API_TOKEN"},
+		{"secrets", "records"},
 		{"secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1"},
 		{"secrets", "disallow", "--secrets", "API_TOKEN", "--servers", "web1"},
 	}
@@ -873,4 +912,221 @@ func TestSecretsValueNeverVisible(t *testing.T) {
 	if !strings.Contains(got, "secret-set") || !strings.Contains(got, "值已更改") {
 		t.Fatalf("audit output must show secret actions without values:\n%s", got)
 	}
+}
+
+// seedSecretDeliveryReference 建一个带服务器条目、可写授权与一条下发记录的
+// 权威库，返回库路径与主密钥。记录引用 API_TOKEN，写入 web-1 的固定路径。
+func seedSecretDeliveryReference(t *testing.T) (string, []byte) {
+	t.Helper()
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1")
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web1, err := st.GetServerByName("web1")
+	if err != nil || web1 == nil {
+		t.Fatalf("找不到种子服务器条目 web1：%v", err)
+	}
+	if err := st.GrantServers(profileID, []string{web1.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: web1.ID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+		FileSHA256: strings.Repeat("4", 64), WrittenAt: time.Unix(1760000800, 0),
+		Secrets:              []store.SecretDeliverySecret{{Name: "api_token", ValueVersion: 1}},
+		InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	return dbPath, mk
+}
+
+// TestSecretsRecordsQueryIsCaseInsensitive 覆盖登记与查询使用不同大小写：
+// 引用行保存 vault 里的规范名字，查询按小写形式匹配。
+func TestSecretsRecordsQueryIsCaseInsensitive(t *testing.T) {
+	seedSecretDeliveryReference(t)
+
+	out := mustSecretsCli(t, "", "secrets", "records", "api_token")
+	for _, want := range []string{"服务器条目：web1", "路径：/etc/app/config.yml", "API_TOKEN=1"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("按不同大小写查询下发记录输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("下发记录输出不得出现机密项值：\n%s", out)
+	}
+}
+
+// TestSecretsRmListsDeliveryRecordsBeforeDelete `secrets rm` 删除前列出引用
+// 该机密项的下发记录；删除沿用直接删除语义，记录保留并标注机密项已删除，
+// 任何输出都不出现机密项值。
+func TestSecretsRmListsDeliveryRecordsBeforeDelete(t *testing.T) {
+	dbPath, mk := seedSecretDeliveryReference(t)
+
+	out := mustSecretsCli(t, "", "secrets", "rm", "API_TOKEN")
+	for _, want := range []string{
+		"引用该机密项的下发记录", "web1：/etc/app/config.yml", "已删除机密项 API_TOKEN",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("secrets rm 输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) {
+		t.Fatalf("secrets rm 输出不得出现机密项值：\n%s", out)
+	}
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for name, filter := range map[string]store.SecretDeliveryRecordFilter{
+		"按机密项": {SecretName: "API_TOKEN"},
+		"按服务器": {ServerID: mustServerID(t, st, "web1")},
+	} {
+		records, err := st.SecretDeliveryRecords(filter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(records) != 1 || len(records[0].Secrets) != 1 ||
+			records[0].Secrets[0].Name != "API_TOKEN" || !records[0].Secrets[0].Deleted {
+			t.Fatalf("删除机密项后%s查询应保留记录并标注已删除：%+v", name, records)
+		}
+	}
+}
+
+// TestSecretsRecordsListsAndFiltersDeliveryRecords 覆盖 owner 的下发记录查
+// 看：无参数、按机密项、按服务器与组合筛选都从同一查询口读取；指定机密项
+// 时展开模板、哈希与值版本号，且任何输出都不出现机密项值。
+func TestSecretsRecordsListsAndFiltersDeliveryRecords(t *testing.T) {
+	dbPath, mk := newSecretsEnv(t)
+	seedSecretServers(t)
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueB, "secrets", "add", "RETIRED_TOKEN", "--note", "已下线", "--stdin")
+	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,RETIRED_TOKEN", "--servers", "web1,web2")
+
+	st, err := store.Open(dbPath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"web1", "web2"} {
+		srv, err := st.GetServerByName(name)
+		if err != nil || srv == nil {
+			t.Fatalf("找不到服务器条目 %s：%v", name, err)
+		}
+		if err := st.GrantServers(profileID, []string{srv.ID}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	web1 := mustServerID(t, st, "web1")
+	web2 := mustServerID(t, st, "web2")
+	seedRecord := func(serverID, path string, writtenAt int64, name string, version int64) {
+		t.Helper()
+		hashSuffix := "dead"
+		if strings.HasPrefix(path, "/srv/") {
+			hashSuffix = "beef"
+		}
+		_, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:" + name + "}}\n"),
+			FileSHA256: strings.Repeat("4", 60) + hashSuffix,
+			WrittenAt:  time.Unix(writtenAt, 0),
+			Secrets: []store.SecretDeliverySecret{{
+				Name: name, ValueVersion: version,
+			}},
+			InitiatingDeviceName:   "office-laptop",
+			InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}, store.CLISource())
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedRecord(web1, "/etc/api.yml", 1760000800, "API_TOKEN", 1)
+	seedRecord(web2, "/srv/api.yml", 1760000900, "API_TOKEN", 2)
+	seedRecord(web1, "/etc/old.yml", 1760000700, "RETIRED_TOKEN", 1)
+	if err := st.DeleteSecret("RETIRED_TOKEN", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := mustSecretsCli(t, "", "secrets", "records")
+	for _, want := range []string{
+		"下发记录（登记失败的历史写入会缺漏，不承诺完整）",
+		"web1", "web2", "/etc/api.yml", "/srv/api.yml", "/etc/old.yml",
+		"API_TOKEN", "RETIRED_TOKEN（已删除）",
+		"写入时间 2025-10-09", "发起设备 office-laptop", "实例 agent-a",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("records 输出缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, testSecretValueA) || strings.Contains(out, strings.TrimSuffix(testSecretValueB, "\n")) {
+		t.Fatalf("records 输出不得出现机密项值：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "--server", "web2")
+	if !strings.Contains(out, "/srv/api.yml") || strings.Contains(out, "/etc/api.yml") ||
+		strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("按服务器筛选应只留下 web2 的记录：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "API_TOKEN")
+	if !strings.Contains(out, "/etc/api.yml") || !strings.Contains(out, "/srv/api.yml") ||
+		strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("按机密项筛选应只留下 API_TOKEN 的记录：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "API_TOKEN", "--server", web1)
+	for _, want := range []string{
+		"/etc/api.yml", "模板原文：token: {{sshmgr-secret:API_TOKEN}}",
+		"文件 SHA-256 哈希：" + strings.Repeat("4", 60) + "dead",
+		"值版本号：API_TOKEN=1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("机密项详情缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "/srv/api.yml") || strings.Contains(out, "/etc/old.yml") {
+		t.Fatalf("组合筛选应同时按机密项与服务器生效：\n%s", out)
+	}
+	if strings.Contains(out, testSecretValueA) || strings.Contains(out, strings.TrimSuffix(testSecretValueB, "\n")) {
+		t.Fatalf("机密项详情不得出现机密项值：\n%s", out)
+	}
+
+	out = mustSecretsCli(t, "", "secrets", "records", "--server", "db1")
+	if !strings.Contains(out, "没有符合条件的下发记录") {
+		t.Fatalf("空状态必须明确说明没有记录：\n%s", out)
+	}
+
+	help := mustSecretsCli(t, "", "secrets", "records", "--help")
+	if !strings.Contains(help, "登记失败") || !strings.Contains(help, "不承诺完整") {
+		t.Fatalf("帮助文字必须说明记录可能缺漏：\n%s", help)
+	}
+}
+
+// mustServerID 按名字取服务器条目标识符，找不到时终止测试。
+func mustServerID(t *testing.T, st *store.Store, name string) string {
+	t.Helper()
+	srv, err := st.GetServerByName(name)
+	if err != nil || srv == nil {
+		t.Fatalf("找不到服务器条目 %s：%v", name, err)
+	}
+	return srv.ID
 }

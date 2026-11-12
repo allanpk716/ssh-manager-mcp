@@ -4,6 +4,8 @@ package secretmask
 import (
 	"bytes"
 	"sort"
+
+	"ssh-manager-mcp/internal/secretfill"
 )
 
 // Secret 描述一个参与输出遮蔽的机密项。
@@ -103,7 +105,7 @@ func (m Masker) Mask(input []byte, currentServerID string) MaskResult {
 			i++
 		} else {
 			output = append(output, input[copied:i]...)
-			output = append(output, "{{sshmgr-secret:"+selected.name+"}}"...)
+			output = append(output, secretfill.PlaceholderPrefix+selected.name+"}}"...)
 			names = append(names, selected.name)
 			i += len(selected.value)
 			copied = i
@@ -149,7 +151,7 @@ func (s *Stream) takeDecidedOutput() MaskResult {
 	for len(s.pending)-start >= s.masker.longest {
 		selected, matched := s.masker.matchAt(s.pending[start:], s.currentServerID)
 		if matched {
-			output = append(output, "{{sshmgr-secret:"+selected.name+"}}"...)
+			output = append(output, secretfill.PlaceholderPrefix+selected.name+"}}"...)
 			names = append(names, selected.name)
 			start += len(selected.value)
 		} else {

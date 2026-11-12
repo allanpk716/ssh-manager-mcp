@@ -30,8 +30,11 @@ type DeviceDeletePreview struct {
 	Servers            []*models.DeviceServer
 	SharedStorages     []*models.SharedStorage
 	SecretServerAllows []*DeviceDeleteSecretAllow
-	Memberships        []*models.NetworkMembership
-	LayoutCoordinates  []*models.DeviceLayoutCoordinate
+	// DeliveryRecords 是该设备全部服务器条目的机密项下发记录，随条目一起
+	// 删除。
+	DeliveryRecords   []DeliveryRecordImpact
+	Memberships       []*models.NetworkMembership
+	LayoutCoordinates []*models.DeviceLayoutCoordinate
 	// 软件清单相关数量。SoftwareItemCount 是实测与生效声明合成后的条目
 	// 总数；声明数包含草稿；其余对象各自计数。
 	SoftwareItemCount          int
@@ -148,9 +151,14 @@ func (s *Store) deviceDeletePreviewTx(tx *sql.Tx, name string) (*DeviceDeletePre
 	if err != nil {
 		return nil, err
 	}
+	deliveryRecords, err := deleteDeliveryRecordsTx(tx, true, device.ID)
+	if err != nil {
+		return nil, err
+	}
 	return &DeviceDeletePreview{
 		Device: device, Servers: servers, SharedStorages: sharedStorages,
 		SecretServerAllows: secretAllows,
+		DeliveryRecords:    deliveryRecords,
 		Memberships:        memberships, LayoutCoordinates: coordinates,
 		SoftwareItemCount: softwareCounts.Items, SoftwareDeclarationCount: softwareCounts.Declarations,
 		SoftwareCollectorCount:     softwareCounts.Collectors,

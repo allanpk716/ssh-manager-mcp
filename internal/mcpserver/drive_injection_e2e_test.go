@@ -1507,7 +1507,7 @@ func TestNetworkDriveFileTransferAndForwardingDoNotInject(t *testing.T) {
 
 // TestNetworkDriveToolDescriptionsExplainVisibility 钉住工具说明：说明网络
 // 盘符只在命令会话内可见、密码不出现在目标机进程命令行，并提醒文件传输
-// 会话看不到盘符。
+// 会话看不到盘符；relay_file 的 Windows 本地拷贝例外，因为它自己创建注入命令会话。
 func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, nil)
 	toolList, err := fixture.clientSession.ListTools(context.Background(), nil)
@@ -1522,22 +1522,35 @@ func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
 		for _, want := range []string{
 			"Windows network drives are mapped before each command in that command's SSH session",
 			"the mapping password never appears in a target process command line",
-			"Desktop sessions, Windows services, scheduled tasks, upload_file, upload_content, download_file, and relay_file sessions, port forwarding, and processes that keep running after the command ends cannot see those drives",
+			"Desktop sessions, Windows services, scheduled tasks, upload_file, upload_content, download_file, streaming relay sessions, port forwarding, and processes that keep running after the command ends cannot see those drives; relay_file Windows local-copy tasks are the exception because they run in one injected command session",
 		} {
 			if !strings.Contains(descriptions[name], want) {
 				t.Fatalf("%s description missing %q: %s", name, want, descriptions[name])
 			}
 		}
 	}
-	for _, name := range []string{"upload_file", "upload_content", "download_file", "relay_file"} {
+	for _, name := range []string{"upload_file", "upload_content", "download_file"} {
 		if !strings.Contains(descriptions[name],
 			"This separate file transfer session cannot see Windows network drives mapped for exec_command or exec_background") {
 			t.Fatalf("%s description missing the network-drive visibility limit: %s", name, descriptions[name])
 		}
 	}
+	if !strings.Contains(descriptions["relay_file"],
+		"Separate streaming file-transfer sessions cannot see Windows network drives mapped for exec_command or exec_background; a Windows local copy creates its own injected command session and is therefore the exception") {
+		t.Fatalf("relay_file description missing the Windows local-copy exception: %s", descriptions["relay_file"])
+	}
+	for _, want := range []string{
+		"Windows maps the fixed drive with New-SmbMapping in the same SSH command session and then runs robocopy",
+		"whose exit codes 0 through 7 are treated as success and 8 or higher as failure",
+		"The Windows drive letter is visible only for that copy session and leaves no persistent mapping",
+	} {
+		if !strings.Contains(descriptions["relay_file"], want) {
+			t.Fatalf("relay_file description missing Windows local-copy contract %q: %s", want, descriptions["relay_file"])
+		}
+	}
 	if !strings.Contains(descriptions["list_shares"],
-		"For Windows servers the fixed drive letter is mapped before each exec_command or exec_background command in that command's SSH session") ||
-		!strings.Contains(descriptions["list_shares"], "desktop sessions, Windows services, scheduled tasks, file transfers, and processes that outlive the command cannot see it") {
+		"For Windows servers the fixed drive letter is mapped before each exec_command or exec_background command in that command's SSH session; relay_file Windows local-copy tasks create the same kind of injected command session") ||
+		!strings.Contains(descriptions["list_shares"], "Desktop sessions, Windows services, scheduled tasks, separate file-transfer sessions, and processes that outlive the command cannot see it") {
 		t.Fatalf("list_shares description missing Windows drive usage: %s", descriptions["list_shares"])
 	}
 	if !strings.Contains(descriptions["exec_context"], "planned_network_drives") ||

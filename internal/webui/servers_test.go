@@ -115,7 +115,10 @@ func (w *stubServerWriter) DeleteServerPreview(identifier string) (*ServerDelete
 		AnchorCount: 1, ProfileNames: []string{"运维"}, SecretNames: []string{"deploy_note"},
 		DeletedCredentials: []string{"登录凭据（密码）"},
 		KeptCredentials:    []string{"sudo 凭据（密码）（仍被 1 台服务器引用）"},
-		Digest:             "digest-1",
+		DeliveryRecords: []DeliveryRecordImpactView{{
+			ServerName: "fine", Path: "/etc/app/token.yml", SecretNames: []string{"API_TOKEN"},
+		}},
+		Digest: "digest-1",
 	}, nil
 }
 
@@ -343,7 +346,10 @@ func TestServersDeletePreviewConfirmAndCSRF(t *testing.T) {
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
 
 	preview := serversGet(t, h, cookie, "/ui/servers/srv-fine/delete")
-	for _, want := range []string{"fine", "设备保留", "运维", "deploy_note", "登录凭据（密码）", "仍被 1 台服务器引用", "确认删除"} {
+	for _, want := range []string{
+		"fine", "设备保留", "运维", "deploy_note", "登录凭据（密码）", "仍被 1 台服务器引用",
+		"会随之删除的下发记录", "fine：/etc/app/token.yml", "API_TOKEN", "确认删除",
+	} {
 		if !strings.Contains(preview, want) {
 			t.Fatalf("删除预览缺少 %q：\n%s", want, preview)
 		}

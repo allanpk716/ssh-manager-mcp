@@ -48,6 +48,13 @@ func writeServerDeletePreview(w io.Writer, preview *servermanage.DeletePreview) 
 	}
 	fmt.Fprintf(w, "会随之删除的凭据：%s\n", joinOrNone(deleted))
 	fmt.Fprintf(w, "因共用而保留的凭据：%s\n", joinOrNone(kept))
+	deliveries := make([]string, 0, len(preview.DeliveryRecords))
+	for _, record := range preview.DeliveryRecords {
+		deliveries = append(deliveries, fmt.Sprintf(
+			"%s：%s（机密项 %s）", record.ServerName, record.Path, joinOrNone(record.SecretNames),
+		))
+	}
+	fmt.Fprintf(w, "会随之删除的下发记录：%s\n", joinOrNone(deliveries))
 }
 
 func joinOrNone(items []string) string {

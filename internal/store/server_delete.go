@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -29,8 +30,19 @@ type ServerDeleteCredential struct {
 	References int
 }
 
+// DeliveryRecordImpact 是删除预览里的一条机密项下发记录：哪个服务
+// 器条目的哪个路径曾由 sshmgr 填值。引用的机密项即使已删除也按原名字列
+// 出，供 owner 核对随条目一起消失的线索。
+type DeliveryRecordImpact struct {
+	ServerName  string
+	Path        string
+	FileSHA256  string
+	SecretNames []string
+	WrittenAt   time.Time
+}
+
 // ServerDeletePreview 是服务器条目删除影响清单，只覆盖当前级联删除会动
-// 到的数据；共享存储与下发记录不属于这份清单。
+// 到的数据，包含会随条目一起消失的下发记录。
 type ServerDeletePreview struct {
 	Server       *models.Server
 	Device       *models.Device
@@ -39,7 +51,9 @@ type ServerDeletePreview struct {
 	ProfileNames []string
 	SecretNames  []string
 	Credentials  []ServerDeleteCredential
-	digest       string
+	// DeliveryRecords 是会随条目一起删除的机密项下发记录。
+	DeliveryRecords []DeliveryRecordImpact
+	digest          string
 }
 
 // Digest 返回可比对的预览摘要。摘要覆盖预览全部内容与服务器条目修订号：
@@ -135,8 +149,62 @@ func serverDeletePreviewTx(tx *sql.Tx, id string) (*ServerDeletePreview, error) 
 		return nil, err
 	}
 	preview.Credentials = impacts
+	deliveries, err := deleteDeliveryRecordsTx(tx, false, srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	preview.DeliveryRecords = deliveries
 	preview.digest = previewDigest(preview)
 	return preview, nil
+}
+
+// deleteDeliveryRecordsTx 列出会随服务器条目或设备一起删除的下发记录。
+// byDevice 为真时按设备筛选，并先按服务器条目名排序；否则按服务器条目筛
+// 选并直接按路径排序。每条记录引用的机密项名字按字母顺序聚合。
+func deleteDeliveryRecordsTx(tx *sql.Tx, byDevice bool, id string) ([]DeliveryRecordImpact, error) {
+	predicate := "record.server_id=?"
+	orderBy := "record.path,record.id"
+	if byDevice {
+		predicate = "server.device_id=?"
+		orderBy = "server.name,record.path,record.id"
+	}
+	rows, err := tx.Query(`
+		SELECT server.name,record.path,record.file_sha256,record.written_at,record.id
+		FROM secret_delivery_records record
+		JOIN servers server ON server.id=record.server_id
+		WHERE `+predicate+` ORDER BY `+orderBy, id)
+	if err != nil {
+		return nil, err
+	}
+	records := make([]DeliveryRecordImpact, 0)
+	ids := make([]string, 0)
+	for rows.Next() {
+		var record DeliveryRecordImpact
+		var recordID string
+		var writtenAt int64
+		if err := rows.Scan(&record.ServerName, &record.Path, &record.FileSHA256, &writtenAt, &recordID); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		record.WrittenAt = time.Unix(writtenAt, 0)
+		records = append(records, record)
+		ids = append(ids, recordID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	err = attachSecretDeliveryReferences(tx, records, ids, func(index int, refs []secretDeliveryReference) {
+		names := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			names = append(names, ref.SecretName)
+		}
+		records[index].SecretNames = names
+	})
+	if err != nil {
+		return nil, err
+	}
+	return records, nil
 }
 
 func serverDeleteProfileNamesTx(tx *sql.Tx, serverID string) ([]string, error) {
@@ -226,6 +294,11 @@ func previewDigest(p *ServerDeletePreview) string {
 	fmt.Fprint(&b, "|credentials=")
 	for _, cred := range p.Credentials {
 		fmt.Fprintf(&b, "%s:%s:%s:%t:%d;", cred.ID, cred.Kind, cred.Type, cred.Deleted, cred.References)
+	}
+	fmt.Fprint(&b, "|deliveries=")
+	for _, record := range p.DeliveryRecords {
+		fmt.Fprintf(&b, "%s:%s:%s:%s:%d;", record.ServerName, record.Path,
+			record.FileSHA256, strings.Join(record.SecretNames, ","), record.WrittenAt.Unix())
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])

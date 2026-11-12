@@ -464,6 +464,112 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	}
 }
 
+// TestSecretDetailShowsDeliveryRecords 覆盖机密项详情页的下发记录区：展示
+// 引用记录与详情字段，说明可能缺漏，并保持机密项值不出现在页面里。
+func TestSecretDetailShowsDeliveryRecords(t *testing.T) {
+	st := newIntegrationStore(t)
+	serverID := mustServer(t, st, "web-1")
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("API_TOKEN", "接口令牌", "", []byte("web-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddSecret("RETIRED_TOKEN", "已下线", "", []byte("retired-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"API_TOKEN", "RETIRED_TOKEN"}, []string{"web-1"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
+		t.Fatal(err)
+	}
+	fileHash := strings.Repeat("4", 60) + "dead"
+	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+		ServerID: serverID, Path: "/etc/app/config.yml",
+		Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}\nold: {{sshmgr-secret:RETIRED_TOKEN}}\n"),
+		FileSHA256: fileHash, WrittenAt: time.Unix(1760000800, 0),
+		Secrets: []store.SecretDeliverySecret{
+			{Name: "API_TOKEN", ValueVersion: 2},
+			{Name: "RETIRED_TOKEN", ValueVersion: 1},
+		},
+		InitiatingDeviceName:   "office-laptop",
+		InitiatingInstanceName: "agent-a",
+		AuthorizationProfileID: profileID,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.DeleteSecret("RETIRED_TOKEN", secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.AddSecret("EMPTY_TOKEN", "没有记录", "", []byte("empty-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := manager.List(secretmanage.ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make(map[string]string, len(rows))
+	for _, row := range rows {
+		ids[row.Name] = row.ID
+	}
+	h := newIntegrationHandler(t, st)
+
+	detail := body(t, h.do(http.MethodGet, "/ui/secrets/"+ids["API_TOKEN"], nil))
+	for _, want := range []string{
+		"下发记录", "登记失败的历史写入会缺漏，不承诺完整",
+		"web-1", "/etc/app/config.yml", "写入时间", "发起设备与实例", "office-laptop / agent-a",
+		"模板原文", "token: {{sshmgr-secret:API_TOKEN}}", "文件 SHA-256 哈希", fileHash,
+		"API_TOKEN：2", "RETIRED_TOKEN（已删除）：1",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("机密项详情页缺少 %q：\n%s", want, detail)
+		}
+	}
+	for _, value := range []string{"web-secret-value", "retired-secret-value", "empty-secret-value"} {
+		if strings.Contains(detail, value) {
+			t.Fatalf("机密项详情页不得出现机密项值 %q：\n%s", value, detail)
+		}
+	}
+	if strings.Contains(detail, " style=") || regexp.MustCompile(`<script\s*>`).MatchString(detail) {
+		t.Fatalf("机密项详情页不得新增内联样式或内联脚本：\n%s", detail)
+	}
+
+	emptyDetail := body(t, h.do(http.MethodGet, "/ui/secrets/"+ids["EMPTY_TOKEN"], nil))
+	if !strings.Contains(emptyDetail, "该机密项没有下发记录。") {
+		t.Fatalf("无记录机密项应有明确空状态：\n%s", emptyDetail)
+	}
+
+	deletePage := body(t, h.do(http.MethodGet, "/ui/secrets/"+ids["API_TOKEN"]+"/delete", nil))
+	for _, want := range []string{
+		"引用该机密项的下发记录", "web-1", "/etc/app/config.yml",
+		"删除机密项后记录保留并标注已删除",
+	} {
+		if !strings.Contains(deletePage, want) {
+			t.Fatalf("删除确认页缺少 %q：\n%s", want, deletePage)
+		}
+	}
+	emptyDeletePage := body(t, h.do(http.MethodGet, "/ui/secrets/"+ids["EMPTY_TOKEN"]+"/delete", nil))
+	if !strings.Contains(emptyDeletePage, "该机密项没有下发记录。") {
+		t.Fatalf("删除确认页应有下发记录空状态：\n%s", emptyDeletePage)
+	}
+	for _, page := range []string{deletePage, emptyDeletePage} {
+		for _, value := range []string{
+			"web-secret-value", "retired-secret-value", "empty-secret-value",
+			"token: {{sshmgr-secret:API_TOKEN}}", "file SHA-256",
+		} {
+			if strings.Contains(page, value) {
+				t.Fatalf("删除确认页不得展示模板或机密项值 %q：\n%s", value, page)
+			}
+		}
+		if strings.Contains(page, " style=") || regexp.MustCompile(`<script\s*>`).MatchString(page) {
+			t.Fatalf("删除确认页不得新增内联样式或内联脚本：\n%s", page)
+		}
+	}
+}
+
 func TestSecretUploadOverLimitIsRejectedBeforeReadingValue(t *testing.T) {
 	st := newIntegrationStore(t)
 	mustServer(t, st, "web-1")

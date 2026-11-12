@@ -289,6 +289,12 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 	if err != nil {
 		return nil, err
 	}
+	// 票 #230：条目删除会让它的下发记录一起消失。删除前读出记录，删除后
+	// 为每条写一行审计；审计摘要只含服务器名、路径与机密项名字。
+	deliveryRecords, err := deleteDeliveryRecordsTx(tx, false, id)
+	if err != nil {
+		return nil, err
+	}
 	// 票 #58：条目的主机密钥锚随条目在同一事务删除并写审计。
 	if err := deleteEntryPinWithAudit(tx, srv); err != nil {
 		return nil, err
@@ -299,7 +305,28 @@ func deleteServerEntryTx(tx *sql.Tx, id string, auditAt time.Time) (*models.Serv
 	if err := writeServerDeleteSecretAudits(tx, secretAllows, auditAt); err != nil {
 		return nil, err
 	}
+	if err := writeServerDeleteDeliveryAudits(tx, srv.Name, deliveryRecords, auditAt); err != nil {
+		return nil, err
+	}
 	return srv, nil
+}
+
+// writeServerDeleteDeliveryAudits 为随服务器条目删除的下发记录各写一行审
+// 计。摘要按白名单只写服务器名、路径、机密项名字与原因。
+func writeServerDeleteDeliveryAudits(
+	tx *sql.Tx, serverName string, records []DeliveryRecordImpact, at time.Time,
+) error {
+	for _, record := range records {
+		if err := writeSecretAuditTx(tx, at, "secret-delivery-rm", map[string]any{
+			"server":  serverName,
+			"path":    record.Path,
+			"secrets": strings.Join(record.SecretNames, ","),
+			"reason":  "服务器条目已删除",
+		}, WriteSource{}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // ClearServerCredential resets the server to the credential-less form in one
