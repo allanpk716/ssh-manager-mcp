@@ -322,11 +322,14 @@ type BgStopOutput struct {
 // RelayInput is the relay_file tool input (Plan 47; spec §1.1 schema verbatim —
 // the jsonschema text is the agent-facing tool contract).
 type RelayInput struct {
-	FromServerID string `json:"from_server_id,omitempty" jsonschema:"source server id from list_servers; OMIT or empty = the broker's own local disk (e.g. moving a large file already on the broker host)"`
-	FromPath     string `json:"from_path" jsonschema:"absolute path of the SOURCE file: a POSIX absolute path (/...) or Windows drive root (C:/...) on the from-server; or a broker-host absolute path (drive-letter or UNC on a Windows broker) when from_server_id is empty"`
-	ToServerID   string `json:"to_server_id" jsonschema:"destination server id from list_servers"`
-	ToPath       string `json:"to_path" jsonschema:"absolute destination path on the destination server (POSIX /... or Windows drive root C:/...); its parent directory is created if missing; an existing file at the path is replaced on completion"`
-	Fresh        bool   `json:"fresh,omitempty" jsonschema:"discard any existing partial/manifest at the destination and restart from byte 0 (default: resume missing chunks when the manifest matches)"`
+	FromServerID     string `json:"from_server_id,omitempty" jsonschema:"source server id from list_servers; OMIT or empty = the broker's own local disk (e.g. moving a large file already on the broker host)"`
+	FromPath         string `json:"from_path,omitempty" jsonschema:"absolute path of the SOURCE file: a POSIX absolute path (/...) or Windows drive root (C:/...) on the from-server; or a broker-host absolute path (drive-letter or UNC on a Windows broker) when from_server_id is empty; omit it when from_share_address is set"`
+	FromShareAddress string `json:"from_share_address,omitempty" jsonschema:"one SMB shared address (\\\\host\\share\\subpath or smb://host/share/subpath) as the source endpoint; mutually exclusive with from_server_id and from_path"`
+	ToServerID       string `json:"to_server_id,omitempty" jsonschema:"destination server id from list_servers; omit it when to_share_address is set"`
+	ToPath           string `json:"to_path,omitempty" jsonschema:"absolute destination path on the destination server (POSIX /... or Windows drive root C:/...); its parent directory is created if missing; an existing file at the path is replaced on completion; omit it when to_share_address is set"`
+	ToShareAddress   string `json:"to_share_address,omitempty" jsonschema:"one SMB shared address (\\\\host\\share\\subpath or smb://host/share/subpath) as the destination endpoint; mutually exclusive with to_server_id and to_path"`
+	Via              string `json:"via,omitempty" jsonschema:"optional stable server id overriding automatic selection of the actually mounted Linux or macOS endpoint that exposes a shared address to the streaming relay; it is rejected for a local copy and must identify a visible, mountable, actually mounted server"`
+	Fresh            bool   `json:"fresh,omitempty" jsonschema:"for streaming_relay, discard any existing partial/manifest at the destination and restart from byte 0; local_copy always restarts from byte 0"`
 }
 
 // RelayOutput is the relay_file tool output (Plan 47; spec §1.1 schema
@@ -334,12 +337,15 @@ type RelayInput struct {
 type RelayOutput struct {
 	MaskedOutput
 	ConnectionNotesOutput
-	TaskID        string `json:"task_id" jsonschema:"background task id — poll progress with exec_output(task_id), stop with exec_stop(task_id); the transfer is resumable: re-run relay_file with the same paths after any failure/stop"`
-	BytesTotal    int64  `json:"bytes_total" jsonschema:"total source bytes"`
-	ChunksTotal   int    `json:"chunks_total" jsonschema:"total chunk count"`
-	ResumedChunks int    `json:"resumed_chunks" jsonschema:"chunks already complete per the destination manifest (0 on a fresh start)"`
-	ChunkBytes    int64  `json:"chunk_bytes" jsonschema:"the chunk size in bytes (from SSHMGR_TRANSFER_CHUNK at server construction)"`
-	SpaceCheck    string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (the destination SFTP server does not support statvfs — e.g. some Windows targets; proceeding is safe: a full disk mid-transfer just stops at a chunk boundary and resumes after space is freed)"`
+	TaskID                   string `json:"task_id" jsonschema:"background task id — poll progress with exec_output(task_id), stop with exec_stop(task_id); streaming_relay resumes from its manifest, while local_copy must restart from byte 0"`
+	Mode                     string `json:"mode" jsonschema:"transfer mode: streaming_relay or local_copy"`
+	RestartAfterInterruption bool   `json:"restart_after_interruption" jsonschema:"true for local_copy (restart from byte 0 after interruption); false for streaming_relay (resume from its manifest)"`
+	BytesTotal               int64  `json:"bytes_total" jsonschema:"total source bytes"`
+	ChunksTotal              int    `json:"chunks_total" jsonschema:"total chunk count for streaming_relay; always 0 for local_copy"`
+	ResumedChunks            int    `json:"resumed_chunks" jsonschema:"chunks already complete per the streaming manifest; always 0 for local_copy"`
+	ChunkBytes               int64  `json:"chunk_bytes" jsonschema:"the streaming chunk size in bytes (from SSHMGR_TRANSFER_CHUNK at server construction); 0 for local_copy"`
+	SpaceCheck               string `json:"space_check" jsonschema:"destination free-space pre-flight: 'ok' or 'unavailable' (for streaming_relay, unavailable means proceeding is safe because a full disk stops at a chunk boundary and can resume later; for local_copy, unavailable means the local copy command may fail on a full disk and require a restart from byte 0)"`
+	ShareEndpointServerID    string `json:"share_endpoint_server_id,omitempty" jsonschema:"server id selected to expose the shared address to the streaming relay; empty for ordinary streaming relays and local copies"`
 }
 
 // ErrNotInProfile is returned when an agent requests a server outside its Profile (iron rule).
