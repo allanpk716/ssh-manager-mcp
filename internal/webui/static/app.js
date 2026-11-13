@@ -27,6 +27,13 @@
     document.querySelectorAll("[data-share-scope-form]").forEach(updateShareScopeWarnings);
   }
 
+  function updateRevealTarget(checkbox) {
+    var target = document.querySelector("[data-share-reveal-target]");
+    if (target !== null) {
+      target.hidden = !checkbox.checked;
+    }
+  }
+
   document.body.addEventListener("htmx:configRequest", function (event) {
     event.detail.headers["X-CSRF-Token"] = token;
   });
@@ -59,6 +66,9 @@
     var form = event.target.closest("[data-share-scope-form]");
     if (form !== null) {
       updateShareScopeWarnings(form);
+    }
+    if (event.target.hasAttribute && event.target.hasAttribute("data-share-reveal-checkbox")) {
+      updateRevealTarget(event.target);
     }
   });
   updateAllShareScopeWarnings();

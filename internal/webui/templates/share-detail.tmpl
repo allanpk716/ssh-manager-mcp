@@ -71,6 +71,22 @@
 </form>
 </section>
 {{end}}
+{{if .Caps.CanRevokeShares}}
+<section class="share-revoke-entries">
+<h2>撤销授权</h2>
+<p>把服务器移出可挂载范围并按系统类型清理；安全撤销可在同一确认流程里更换共享密码。</p>
+{{if .ShareRevokeEntries}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>操作</th></tr></thead>
+<tbody>
+{{range .ShareRevokeEntries}}
+<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（无）</p>{{end}}
+</section>
+{{end}}
 {{if .Caps.CanUnmountShares}}
 <section class="share-unmount">
 <h2>单台卸载</h2>

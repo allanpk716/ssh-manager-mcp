@@ -281,6 +281,8 @@ type capabilities struct {
 	// CanUnmountShares 控制共享存储详情页的单台卸载操作；只有提供卸载
 	// 任务视图的可写角色可用。
 	CanUnmountShares bool
+	// CanRevokeShares 控制共享存储详情页的单台撤销授权操作。
+	CanRevokeShares bool
 	// CanUseShareDesktopGuide 控制共享存储详情页的桌面手动添加引导；只有
 	// 单机与权威端且提供拓扑来源时可用。
 	CanUseShareDesktopGuide bool
@@ -315,6 +317,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSharesArea = cfg.Shares != nil
 	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
 	caps.CanUnmountShares = cfg.Shares != nil && cfg.ShareUnmountRunner != nil && cfg.Role != RoleClient
+	caps.CanRevokeShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
 	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil

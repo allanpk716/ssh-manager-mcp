@@ -81,6 +81,8 @@ type pageData struct {
 	ShareDeletePreview               *ShareRow
 	ShareUnmountEntries              []ShareUnmountEntry
 	ShareUnmount                     *ShareUnmountView
+	ShareRevokeEntries               []ShareRevokeEntry
+	ShareRevoke                      *ShareRevokeView
 	ShareDesktopGuide                *ShareDesktopGuideView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
