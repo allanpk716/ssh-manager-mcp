@@ -77,6 +77,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter            webui.SecretWriter
 		shareSource             webui.ShareSource
 		shareWriter             webui.ShareWriter
+		shareUnmountRunner      webui.ShareUnmountRunner
 		softwareInventorySource webui.SoftwareInventorySource
 		topologySource          webui.TopologySource
 		topologyWriter          webui.TopologyWriter
@@ -121,6 +122,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter = standaloneUISecretWriter()
 		shareSource = webuishares.FromStore(openStoreForUI)
 		shareWriter = webuishares.WriterFromStore(openStoreForUI)
+		shareUnmountRunner = webuishares.UnmountTasksFromStore(openStoreForUI)
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		topologySource = webuitopology.FromStoreOpener(openStoreForUI)
 		topologyWriter = webuitopology.WriterFromOpener(openStoreForUI)
@@ -179,6 +181,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		SecretsWriter:          secretWriter,
 		Shares:                 shareSource,
 		SharesWriter:           shareWriter,
+		ShareUnmountRunner:     shareUnmountRunner,
 		SoftwareInventory:      softwareInventorySource,
 		Topology:               topologySource,
 		TopologyWriter:         topologyWriter,

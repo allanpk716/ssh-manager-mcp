@@ -25,7 +25,6 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 	addr, hostKey, stopServer := testsshd.Start(t, testsshd.Options{
 		Password: "login-pw", SudoPassword: "sudo-pw", Exec: linux.Handler,
 	})
-	t.Cleanup(stopServer)
 	host, portText, _ := strings.Cut(addr, ":")
 	port, _ := strconv.Atoi(portText)
 	if _, err := st.AddDevice("NAS", "共享存储提供方", ""); err != nil {
@@ -72,18 +71,19 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
 	})
 	return &unmountFixture{
-		store: st, linux: linux, handler: h,
+		store: st, linux: linux, handler: h, stopServer: stopServer,
 		shareID: share.ID, linuxID: linuxServerID, windowsID: windowsID,
 	}
 }
 
 type unmountFixture struct {
-	store     *store.Store
-	linux     *sharemounttest.LinuxServer
-	handler   sessionHandler
-	shareID   string
-	linuxID   string
-	windowsID string
+	store      *store.Store
+	linux      *sharemounttest.LinuxServer
+	handler    sessionHandler
+	stopServer func()
+	shareID    string
+	linuxID    string
+	windowsID  string
 }
 
 func (f *unmountFixture) confirmPath(serverID string) string {
@@ -299,5 +299,99 @@ func TestShareUnmountBusyListsProcessesAndForceSucceeds(t *testing.T) {
 	}
 	if !busySeen || !forcedSeen {
 		t.Fatalf("占用与强制的审计摘要不正确：%s / %s", rows[0].Command, rows[1].Command)
+	}
+}
+
+func TestShareUnmountUnavailableServerFailsImmediatelyWithAudit(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	// 关闭假服务器后再发起，模拟目标服务器不可达；页面不得排队重试。
+	fixture.stopServer()
+	t.Cleanup(fixture.stopServer)
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/unmount", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"server_id":  {fixture.linuxID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("不可达场景仍应先启动任务，状态码 = %d：\n%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilUnmountDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"连接目标服务器或执行固定卸载命令失败",
+		"任务已当场失败，未排队重试", "「检查残留」",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("不可达结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "占用挂载点的进程") || strings.Contains(page, "强制卸载") {
+		t.Fatalf("不可达失败不得呈现占用选择：\n%s", page)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-unmount"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("不可达时的卸载审计 = %+v", rows)
+	}
+	if !strings.Contains(rows[0].Command, `"result":"ssh-error"`) {
+		t.Fatalf("不可达时的审计摘要 = %s", rows[0].Command)
+	}
+}
+
+func TestShareUnmountWindowsServerIsRejectedAndAudited(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/unmount", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"server_id":  {fixture.windowsID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("Windows 卸载请求状态码 = %d：\n%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilUnmountDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"Windows 服务器不能执行共享存储卸载", "sshmgr 不在其上留下任何持久改动",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("Windows 拒绝页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "确认卸载") {
+		t.Fatalf("Windows 拒绝页不得提供确认按钮：\n%s", page)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-unmount"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("Windows 拒绝的卸载审计 = %+v", rows)
+	}
+	if !strings.Contains(rows[0].Command, `"result":"windows-unsupported"`) {
+		t.Fatalf("Windows 拒绝的审计摘要 = %s", rows[0].Command)
+	}
+}
+
+func TestShareUnmountExpiredTaskPromptsRestart(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	resp := fixture.handler.do(
+		http.MethodGet, fixture.confirmPath(fixture.linuxID)+"&task=missing-task", nil,
+	)
+	page := body(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("失效任务页状态码 = %d：\n%s", resp.StatusCode, page)
+	}
+	for _, want := range []string{
+		"卸载任务结果已失效", "重新确认并发起", "确认卸载",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("失效任务页缺少 %q：\n%s", want, page)
+		}
 	}
 }

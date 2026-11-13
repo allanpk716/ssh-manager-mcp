@@ -122,6 +122,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	if strings.Contains(detail, "db-1") || strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") ||
 		strings.Contains(detail, "桌面手动添加") ||
 		strings.Contains(detail, "可挂载范围勾选清单") || strings.Contains(detail, "预览可挂载范围变更") ||
+		strings.Contains(detail, "单台卸载") ||
 		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
 		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
 	}
@@ -129,6 +130,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	csrf := csrfToken(t, h)
 	writeTargets := []string{
 		"/ui/shares/new", "/ui/shares/" + datasetsID + "/edit", "/ui/shares/" + datasetsID + "/delete",
+		"/ui/shares/" + datasetsID + "/unmount",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {

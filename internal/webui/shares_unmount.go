@@ -73,7 +73,7 @@ func shareUnmountEntries(share *ShareRow) []ShareUnmountEntry {
 			DeviceName: server.DeviceName, ShellType: server.ShellType,
 			MountPoint:  server.MountPoint,
 			Windows:     models.NormalizeShellType(server.ShellType).IsWindows(),
-			ConfirmPath: "/ui/shares/" + share.ID + "/unmount?server=" + server.ID,
+			ConfirmPath: shareUnmountConfirmPath(share.ID, server.ID),
 		})
 	}
 	return entries
@@ -116,7 +116,7 @@ func (h *handler) shareUnmountView(r *http.Request, identifier, serverIdentifier
 			return &ShareUnmountView{
 				Share: detail, Server: server,
 				Windows:     models.NormalizeShellType(server.ShellType).IsWindows(),
-				ConfirmPath: "/ui/shares/" + detail.ID + "/unmount?server=" + server.ID,
+				ConfirmPath: shareUnmountConfirmPath(detail.ID, server.ID),
 			}, nil
 		}
 	}
@@ -210,13 +210,10 @@ func (h *handler) handleShareUnmountPost(w http.ResponseWriter, r *http.Request,
 		h.renderError(w, r, http.StatusInternalServerError, "启动卸载失败", "启动卸载任务失败，请稍后重试。")
 		return
 	}
-	h.renderUnmountTaskRedirect(w, r, view, taskID)
+	http.Redirect(w, r, view.ConfirmPath+"&task="+url.QueryEscape(taskID), http.StatusSeeOther)
 }
 
-// renderUnmountTaskRedirect 跳转到带任务标识的卸载任务页。
-func (h *handler) renderUnmountTaskRedirect(
-	w http.ResponseWriter, r *http.Request, view *ShareUnmountView, taskID string,
-) {
-	target := view.ConfirmPath + "&task=" + url.QueryEscape(taskID)
-	http.Redirect(w, r, target, http.StatusSeeOther)
+// shareUnmountConfirmPath 返回一台服务器的单台卸载确认页地址。
+func shareUnmountConfirmPath(shareID, serverID string) string {
+	return "/ui/shares/" + shareID + "/unmount?server=" + serverID
 }
