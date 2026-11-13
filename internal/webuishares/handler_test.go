@@ -140,6 +140,11 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 			t.Fatalf("客户端写路由 %s 不应存在，状态码=%d：\n%s", target, resp.StatusCode, respBody)
 		}
 	}
+	unmountPage := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/unmount?server="+linuxID, nil)
+	unmountBody := body(t, unmountPage)
+	if unmountPage.StatusCode != http.StatusNotFound || strings.Contains(unmountBody, "确认卸载") {
+		t.Fatalf("客户端不应提供单台卸载页，状态码=%d：\n%s", unmountPage.StatusCode, unmountBody)
+	}
 	guide := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/desktop", nil)
 	guideBody := body(t, guide)
 	if guide.StatusCode != http.StatusNotFound || strings.Contains(guideBody, "桌面手动添加") {
