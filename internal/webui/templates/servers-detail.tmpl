@@ -20,6 +20,50 @@
 <dt>注意原因</dt><dd>{{if .ServerDetail.AttentionReasons}}{{joinReasons .ServerDetail.AttentionReasons}}{{else}}无{{end}}</dd>
 <dt>修订号</dt><dd>{{.ServerDetail.Revision}}</dd>
 </dl>
+<section aria-labelledby="server-secrets-heading">
+<h2 id="server-secrets-heading">机密项</h2>
+<table class="server-table">
+<thead><tr><th scope="col">名字</th><th scope="col">备注</th><th scope="col">环境变量名</th></tr></thead>
+<tbody>
+{{range .ServerDetail.Secrets}}
+<tr><td>{{.Name}}</td><td>{{or .Note "-"}}</td><td>{{or .EnvironmentName "-"}}</td></tr>
+{{else}}<tr><td colspan="3">暂无可写入的机密项。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+<section aria-labelledby="server-shares-heading">
+<h2 id="server-shares-heading">共享存储</h2>
+<table class="server-table">
+<thead><tr><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载用户</th><th scope="col">挂载密码机密项</th><th scope="col">这台服务器的挂载点</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SharedStorages}}
+<tr><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{or .MountUser "-"}}</td><td>{{or .PasswordSecretName "-"}}</td><td>{{.MountPoint}}</td></tr>
+{{else}}<tr><td colspan="5">暂无可挂载的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+<section aria-labelledby="server-profiles-heading">
+<h2 id="server-profiles-heading">profile 授权</h2>
+<table class="server-table">
+<thead><tr><th scope="col">profile</th></tr></thead>
+<tbody>
+{{range .ServerDetail.Profiles}}
+<tr><td>{{.Name}}</td></tr>
+{{else}}<tr><td>暂无授予这台服务器的 profile。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+<aside aria-labelledby="sibling-shares-heading">
+<h2 id="sibling-shares-heading">同设备其他服务器条目带来的共享存储</h2>
+<table class="server-table">
+<thead><tr><th scope="col">来源服务器条目</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">这台机器上的挂载点</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SiblingSharedStorages}}
+<tr><td>{{.SourceServerName}}</td><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>
+{{else}}<tr><td colspan="4">同一设备没有其他服务器条目带来的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+</aside>
 <div class="inline-form server-actions">
 <a class="button-link" href="/ui/">返回服务器列表</a>
 {{if .Caps.CanWrite}}

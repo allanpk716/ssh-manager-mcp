@@ -71,6 +71,50 @@ func (s *stubServerStore) ServerDetail(_ string, identifier string) (*ServerDeta
 	return s.details[identifier], nil
 }
 
+// TestServerDetailShowsReverseReadGroups 校验详情页三组反向授权、空状态与
+// 同设备共享存储提示；页面只显示名字和备注，不显示机密项值。
+func TestServerDetailShowsReverseReadGroups(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-fine"].Secrets = []ServerDetailSecret{{
+		Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
+	}}
+	store.details["srv-fine"].SharedStorages = []ServerDetailSharedStorage{{
+		Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+		PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+	}}
+	store.details["srv-fine"].Profiles = []ServerDetailProfile{{Name: "运维"}}
+	store.details["srv-fine"].SiblingSharedStorages = []ServerDetailSiblingSharedStorage{{
+		ServerDetailSharedStorage: ServerDetailSharedStorage{
+			Name: "worker-data", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretName: "WORKER_PASSWORD", Drive: "X", MountPoint: "X:",
+		},
+		SourceServerName: "worker",
+	}}
+	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"机密项", "API_TOKEN", "接口令牌", "环境变量名",
+		"共享存储", "datasets", "NAS", "mount-user", "/mnt/sshmgr/datasets",
+		"profile 授权", "运维",
+		"同设备其他服务器条目带来的共享存储", "worker-data", "来源服务器条目", "worker",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器详情页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "ordinary-secret-value") {
+		t.Fatalf("服务器详情页不得显示机密项值：\n%s", page)
+	}
+
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无授予这台服务器的 profile"} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("服务器详情页空状态缺少 %q：\n%s", want, empty)
+		}
+	}
+}
+
 type stubServerWriter struct {
 	adds           []ServerAddForm
 	otherAdds      []OtherDeviceAddForm

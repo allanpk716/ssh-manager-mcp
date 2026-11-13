@@ -49,6 +49,52 @@ type ServerDetailView struct {
 	// 量；页面判断不得依赖界面文案。
 	AttentionReasons []string
 	Revision         int64
+	// Secrets 是这台服务器条目可写入的普通机密项，不包含共享存储的挂载
+	// 密码机密项，也不包含任何机密项值。
+	Secrets []ServerDetailSecret
+	// SharedStorages 是这台服务器条目可挂载的共享存储；同一个挂载密码机
+	// 密项驱动多个共享时逐项展示。
+	SharedStorages []ServerDetailSharedStorage
+	// Profiles 是授予这台服务器条目的访问配置组。
+	Profiles []ServerDetailProfile
+	// SiblingSharedStorages 是同一台设备的其他服务器条目带来的共享存储
+	// 可见性提示，不并入这台条目自己的授权分组。
+	SiblingSharedStorages []ServerDetailSiblingSharedStorage
+}
+
+// ServerDetailSecret 是服务器详情页机密项组的一行，不携带值、哈希或版本
+// 号。
+type ServerDetailSecret struct {
+	ID              string
+	Name            string
+	Note            string
+	EnvironmentName string
+}
+
+// ServerDetailSharedStorage 是服务器详情页共享存储组的一行。
+type ServerDetailSharedStorage struct {
+	ID                 string
+	Name               string
+	ProviderDeviceName string
+	MountUser          string
+	PasswordSecretID   string
+	PasswordSecretName string
+	Drive              string
+	MountPoint         string
+}
+
+// ServerDetailProfile 是服务器详情页 profile 授权组的一行。
+type ServerDetailProfile struct {
+	ID   string
+	Name string
+}
+
+// ServerDetailSiblingSharedStorage 是同设备共享存储提示区的一行，并注明
+// 授权来源的服务器条目。
+type ServerDetailSiblingSharedStorage struct {
+	ServerDetailSharedStorage
+	SourceServerID   string
+	SourceServerName string
 }
 
 // ServerWriteSource 描述一次服务器写操作的来源地址；适配器把它写进审计行

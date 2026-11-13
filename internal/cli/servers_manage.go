@@ -115,6 +115,12 @@ func serversShowCmd() *cobra.Command {
 				Role: detail.Server.Role, Caveats: detail.Server.Caveats, Tags: detail.Server.Tags,
 				ExposeHost: detail.Server.ExposeHost, DeviceName: detail.DeviceName,
 				HasDevice: detail.HasDevice, AttentionReasons: detail.AttentionReasons,
+				Reverse: &serverReverseDetailText{
+					Secrets:               detail.Secrets,
+					SharedStorages:        detail.SharedStorages,
+					Profiles:              detail.Profiles,
+					SiblingSharedStorages: detail.SiblingSharedStorages,
+				},
 			})
 			return nil
 		},
@@ -136,6 +142,16 @@ type serverDetailText struct {
 	DeviceName                                               string
 	HasDevice                                                bool
 	AttentionReasons                                         []string
+	// Reverse 是单机与权威端的反向授权分组；客户端本地快照后续只填裁剪
+	// 后的机密项与共享存储两组，未装配时保持空指针。
+	Reverse *serverReverseDetailText
+}
+
+type serverReverseDetailText struct {
+	Secrets               []servermanage.DetailSecret
+	SharedStorages        []servermanage.DetailSharedStorage
+	Profiles              []servermanage.DetailProfile
+	SiblingSharedStorages []servermanage.DetailSiblingSharedStorage
 }
 
 // writeServerDetail 是单机与客户端共用的详情排版；字段来源不同，内容一致。
@@ -193,6 +209,50 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 		attention = strings.Join(labels, "、")
 	}
 	fmt.Fprintf(w, "注意原因：%s\n", attention)
+	if d.Reverse == nil {
+		return
+	}
+	fmt.Fprintln(w, "机密项：")
+	if len(d.Reverse.Secrets) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, secret := range d.Reverse.Secrets {
+		fmt.Fprintf(w, "  %s：备注 %s；环境变量名 %s\n", secret.Name,
+			textOrDefault(secret.Note), textOrDefault(secret.EnvironmentName))
+	}
+	fmt.Fprintln(w, "共享存储：")
+	if len(d.Reverse.SharedStorages) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, share := range d.Reverse.SharedStorages {
+		fmt.Fprintf(
+			w, "  %s：提供方设备 %s；挂载用户 %s；挂载密码机密项 %s；挂载点 %s\n",
+			share.Name, textOrDefault(share.ProviderDeviceName), textOrDefault(share.MountUser),
+			textOrDefault(share.PasswordSecretName), share.MountPoint,
+		)
+	}
+	fmt.Fprintln(w, "profile 授权：")
+	if len(d.Reverse.Profiles) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, profile := range d.Reverse.Profiles {
+		fmt.Fprintf(w, "  %s\n", profile.Name)
+	}
+	fmt.Fprintln(w, "同设备其他服务器条目带来的共享存储：")
+	if len(d.Reverse.SiblingSharedStorages) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, share := range d.Reverse.SiblingSharedStorages {
+		fmt.Fprintf(w, "  %s：来源服务器条目 %s；这台机器上的挂载点 %s\n",
+			share.Name, share.SourceServerName, share.MountPoint)
+	}
+}
+
+func textOrDefault(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }
 
 // showSnapshotServer 在客户端角色上按本地快照输出详情。

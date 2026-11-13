@@ -153,6 +153,92 @@ func TestServersShowOnClientSnapshot(t *testing.T) {
 	}
 }
 
+// TestServersShowReverseGroups 从根命令进入，校验单机 `servers show` 输出与
+// 详情页同一份反向查询结果，且不包含机密项值。
+func TestServersShowReverseGroups(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("workstation", "同一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: device.ID,
+		ShellType: models.ShellPowerShell,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecretWithEnvironmentName(
+		"API_TOKEN", "接口令牌", []byte("ordinary-secret-value"), "API_TOKEN", store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"DATASET_PASSWORD", "挂载密码", []byte("share-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"WORKER_PASSWORD", "工作机挂载密码", []byte("worker-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets(
+		[]string{"API_TOKEN", "DATASET_PASSWORD"}, []string{"web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"WORKER_PASSWORD"}, []string{"worker"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "workstation", User: "mount-user",
+		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "worker-data", Device: "workstation", User: "mount-user",
+		PasswordSecret: "WORKER_PASSWORD", Drive: "Y",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("运维")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{primary}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := runCli(t, "servers", "show", "web")
+	for _, want := range []string{
+		"机密项：", "API_TOKEN", "接口令牌", "环境变量名 API_TOKEN",
+		"共享存储：", "datasets", "提供方设备 workstation", "挂载用户 mount-user",
+		"挂载密码机密项 DATASET_PASSWORD", "挂载点 /mnt/sshmgr/datasets",
+		"profile 授权：", "运维",
+		"同设备其他服务器条目带来的共享存储：", "worker-data", "来源服务器条目 worker",
+		"这台机器上的挂载点 Y:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("servers show 反向视图缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, secretValue := range []string{"ordinary-secret-value", "share-secret-value", "worker-secret-value"} {
+		if strings.Contains(out, secretValue) {
+			t.Fatalf("servers show 不得输出机密项值 %q：\n%s", secretValue, out)
+		}
+	}
+}
+
 // TestServersRmPreviewAndYes 校验删除预览、非交互保护与 --yes 执行。
 func TestServersRmPreviewAndYes(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)

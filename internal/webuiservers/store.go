@@ -122,7 +122,7 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 	if err != nil || detail == nil {
 		return nil, err
 	}
-	return &webui.ServerDetailView{
+	view := &webui.ServerDetailView{
 		ID: detail.Server.ID, Name: detail.Server.Name, User: detail.Server.User,
 		Host: detail.Server.Host, Port: detail.Server.Port,
 		Shell:          string(models.NormalizeShellType(string(detail.Server.ShellType))),
@@ -134,7 +134,37 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		DeviceName: detail.DeviceName, HasDevice: detail.HasDevice,
 		AttentionReasons: detail.AttentionReasons,
 		Revision:         detail.Server.Revision,
-	}, nil
+	}
+	for _, secret := range detail.Secrets {
+		view.Secrets = append(view.Secrets, webui.ServerDetailSecret{
+			ID: secret.ID, Name: secret.Name, Note: secret.Note,
+			EnvironmentName: secret.EnvironmentName,
+		})
+	}
+	for _, share := range detail.SharedStorages {
+		view.SharedStorages = append(view.SharedStorages, webui.ServerDetailSharedStorage{
+			ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+			MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+			PasswordSecretName: share.PasswordSecretName,
+			Drive:              share.Drive, MountPoint: share.MountPoint,
+		})
+	}
+	for _, profile := range detail.Profiles {
+		view.Profiles = append(view.Profiles, webui.ServerDetailProfile{ID: profile.ID, Name: profile.Name})
+	}
+	for _, share := range detail.SiblingSharedStorages {
+		view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
+			ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
+				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+				PasswordSecretName: share.PasswordSecretName,
+				Drive:              share.Drive, MountPoint: share.MountPoint,
+			},
+			SourceServerID:   share.SourceServerID,
+			SourceServerName: share.SourceServerName,
+		})
+	}
+	return view, nil
 }
 
 // writerAdapter 是 Web UI 修改服务器数据的适配器。
