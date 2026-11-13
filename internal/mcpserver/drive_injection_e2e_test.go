@@ -488,7 +488,7 @@ func TestNetworkDriveInjectionAllCandidatesUnavailableWaitsForExpiry(t *testing.
 		t.Fatalf("remote commands = %d, want two probe and mapping pairs plus one plain command: %#v",
 			len(commands), commands)
 	}
-	if strings.Contains(commands[4], "New-SmbMapping") {
+	if strings.Contains(commands[4], "WNetAddConnection2") {
 		t.Fatalf("command with all candidates unavailable still injected: %q", commands[4])
 	}
 
@@ -711,7 +711,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if err := st.AddPolicyRule(policy.CustomRule{
 		ID:          "DRIVE-INJECTION-LEAK",
 		Shells:      []models.ShellType{shellType},
-		Regex:       `New-SmbMapping|probe-one|SSHMGR-SMBMAP`,
+		Regex:       `WNetAddConnection2|probe-one|SSHMGR-SMBMAP`,
 		Disposition: policy.DispositionBlock,
 		Explanation: "test rule that catches an injection step leaked into policy",
 	}); err != nil {
@@ -818,11 +818,11 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 	}
 	wrapped := commands[1]
 	for _, want := range []string{
-		"New-SmbMapping",
+		"WNetAddConnection2",
 		`AddArgument('\\192.0.2.10\datasets')`,
 		"AddArgument('mount-user')",
 		"AddArgument('S:')",
-		"-Persistent $false",
+		"[SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)",
 		userCommand,
 	} {
 		if !strings.Contains(wrapped, want) {
@@ -831,6 +831,9 @@ func TestNetworkDriveInjectionExecCommandPowerShell(t *testing.T) {
 	}
 	if strings.Contains(wrapped, `AddArgument('\\100.64.10.10`) {
 		t.Fatalf("physical network address was not preferred: %q", wrapped)
+	}
+	if strings.Contains(wrapped, "New-SmbMapping") {
+		t.Fatalf("wrapped command still uses New-SmbMapping:\n%s", wrapped)
 	}
 	if strings.Contains(wrapped, networkDriveTestPassword) {
 		t.Fatalf("wrapped command leaked the mount password")
@@ -940,7 +943,7 @@ func TestNetworkDriveInjectionTotalBudgetSkippedShare(t *testing.T) {
 	probeCount := countNetworkDriveProbeCommands(commands)
 	mapCount := 0
 	for _, command := range commands {
-		if strings.Contains(command, "New-SmbMapping") {
+		if strings.Contains(command, "WNetAddConnection2") {
 			mapCount++
 		}
 	}
@@ -1061,7 +1064,7 @@ func TestNetworkDriveInjectionBackgroundStreamingRemovesStatusLines(t *testing.T
 	gotCommands, gotInputs := append([]string(nil), commands...), append([][]byte(nil), standardInputs...)
 	commandMu.Unlock()
 	if len(gotCommands) != 2 || !strings.Contains(gotCommands[0], "probe-one ") ||
-		!strings.Contains(gotCommands[1], "New-SmbMapping") {
+		!strings.Contains(gotCommands[1], "WNetAddConnection2") {
 		t.Fatalf("background commands = %#v, want one probe and one wrapped command", gotCommands)
 	}
 	if len(gotInputs[1]) != len(networkDriveTestPassword) || string(gotInputs[1]) != networkDriveTestPassword {
@@ -1287,8 +1290,8 @@ func TestNetworkDriveInjectionWindowsSudoDoesNotInject(t *testing.T) {
 		t.Fatalf("exec_context(sudo) uninjected drives = %#v", contextOutput.UninjectedNetworkDrives)
 	}
 	commands, inputs := fixture.fake.recorded()
-	if len(commands) != 2 || strings.Contains(commands[0], "New-SmbMapping") ||
-		strings.Contains(commands[1], "New-SmbMapping") {
+	if len(commands) != 2 || strings.Contains(commands[0], "WNetAddConnection2") ||
+		strings.Contains(commands[1], "WNetAddConnection2") {
 		t.Fatalf("sudo commands unexpectedly injected a network drive: %#v", commands)
 	}
 	for _, input := range inputs {
@@ -1320,7 +1323,7 @@ func TestNetworkDriveInjectionWindowsSudoDoesNotInject(t *testing.T) {
 		t.Fatalf("exec_background(sudo) stdout = %q", final.Stdout)
 	}
 	commands, _ = backgroundFixture.fake.recorded()
-	if len(commands) != 1 || strings.Contains(commands[0], "New-SmbMapping") {
+	if len(commands) != 1 || strings.Contains(commands[0], "WNetAddConnection2") {
 		t.Fatalf("background sudo commands unexpectedly injected a network drive: %#v", commands)
 	}
 }
@@ -1367,7 +1370,7 @@ func TestNetworkDriveInjectionBackgroundAuthenticationFailurePauses(t *testing.T
 	if len(commands) != 3 {
 		t.Fatalf("commands = %#v, want probe/mapping then one plain paused command", commands)
 	}
-	if strings.Contains(commands[2], "New-SmbMapping") || len(inputs) != 3 || len(inputs[2]) != 0 {
+	if strings.Contains(commands[2], "WNetAddConnection2") || len(inputs) != 3 || len(inputs[2]) != 0 {
 		t.Fatalf("paused background command still injected: command=%q standard input=%q", commands[2], inputs[2])
 	}
 	for _, command := range commands {
@@ -1571,7 +1574,7 @@ func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
 		t.Fatalf("relay_file description missing the Windows local-copy exception: %s", descriptions["relay_file"])
 	}
 	for _, want := range []string{
-		"Windows maps the fixed drive with New-SmbMapping in the same SSH command session and then runs robocopy",
+		"Windows maps the fixed drive with WNetAddConnection2 in the same SSH command session and then runs robocopy",
 		"whose exit codes 0 through 7 are treated as success and 8 or higher as failure",
 		"The Windows drive letter is visible only for that copy session and leaves no persistent mapping",
 	} {
@@ -1665,11 +1668,11 @@ func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
 	for _, want := range []string{
-		"New-SmbMapping",
+		"WNetAddConnection2",
 		`AddArgument('\\192.0.2.10\datasets')`,
 		"AddArgument('mount-user')",
 		"AddArgument('S:')",
-		"-Persistent $false",
+		"[SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)",
 		fmt.Sprintf("New-Object byte[] %d", len(networkDriveTestPassword)),
 		`$__sshmgr_process.StartInfo.Arguments = '/d /s /c "' + 'dir S:\datasets' + '"'`,
 	} {
@@ -1847,7 +1850,7 @@ func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) 
 	if !ok {
 		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
-	if !strings.Contains(script, "$env:HF_TOKEN") || !strings.Contains(script, "New-SmbMapping") ||
+	if !strings.Contains(script, "$env:HF_TOKEN") || !strings.Contains(script, "WNetAddConnection2") ||
 		!strings.Contains(script, `'/d /s /c "' + 'set HF_TOKEN' + '"'`) {
 		t.Fatalf("cmd 注入脚本必须先读机密项、再映射盘符、最后运行用户命令：\n%s", script)
 	}
@@ -2005,7 +2008,7 @@ func TestNetworkDriveInjectionUnsafeRegistrationWarnsButRunsCommand(t *testing.T
 		t.Fatalf("stdout = %q, want %q", output.Stdout, want)
 	}
 	commands, _ := fixture.fake.recorded()
-	if len(commands) != 1 || strings.Contains(commands[0], "New-SmbMapping") {
+	if len(commands) != 1 || strings.Contains(commands[0], "WNetAddConnection2") {
 		t.Fatalf("unsafe registration reached the mapping wrapper: %#v", commands)
 	}
 }
@@ -2070,7 +2073,7 @@ func TestNetworkDriveInjectionSkipsServerOutsideWritableList(t *testing.T) {
 	if len(commands) != 1 {
 		t.Fatalf("remote commands = %#v, want only the user command", commands)
 	}
-	if strings.Contains(commands[0], "New-SmbMapping") || strings.Contains(commands[0], "probe-one") {
+	if strings.Contains(commands[0], "WNetAddConnection2") || strings.Contains(commands[0], "probe-one") {
 		t.Fatalf("server outside the writable list received an injection step: %q", commands[0])
 	}
 	if len(inputs[0]) != 0 {
@@ -2140,7 +2143,7 @@ func TestNetworkDriveInjectionStopsAfterServerLeavesWritableList(t *testing.T) {
 	if len(commands) != 3 {
 		t.Fatalf("remote commands = %#v, want one probe and one mapping before revoke, then only the user command", commands)
 	}
-	if strings.Contains(commands[2], "probe-one") || strings.Contains(commands[2], "New-SmbMapping") ||
+	if strings.Contains(commands[2], "probe-one") || strings.Contains(commands[2], "WNetAddConnection2") ||
 		strings.Contains(commands[2], "SSHMGR-SMBMAP") {
 		t.Fatalf("command after revoke still contains an injection step: %q", commands[2])
 	}
@@ -2189,7 +2192,7 @@ func TestNetworkDriveInjectionLeavesPosixServerUnchanged(t *testing.T) {
 	if len(commands) != 1 {
 		t.Fatalf("remote commands = %#v, want only the user command", commands)
 	}
-	if strings.Contains(commands[0], "New-SmbMapping") || strings.Contains(commands[0], "probe-one") {
+	if strings.Contains(commands[0], "WNetAddConnection2") || strings.Contains(commands[0], "probe-one") {
 		t.Fatalf("POSIX server received a Windows injection step: %q", commands[0])
 	}
 	if len(inputs[0]) != 0 {
@@ -2373,7 +2376,7 @@ func TestNetworkDriveInjectionAuthenticationFailurePausesOnlyFailedShare(t *test
 	}
 	wrappedCommands := make([]string, 0, 2)
 	for _, command := range commands {
-		if strings.Contains(command, "New-SmbMapping") {
+		if strings.Contains(command, "WNetAddConnection2") {
 			wrappedCommands = append(wrappedCommands, command)
 		}
 	}
@@ -2435,7 +2438,7 @@ func TestNetworkDriveInjectionAuthenticationPauseCoversAllServers(t *testing.T) 
 	if len(commands) != 3 {
 		t.Fatalf("remote commands = %#v, want one probe and one mapping on the first server only", commands)
 	}
-	if strings.Contains(commands[2], "New-SmbMapping") || strings.Contains(commands[2], "probe-one") {
+	if strings.Contains(commands[2], "WNetAddConnection2") || strings.Contains(commands[2], "probe-one") {
 		t.Fatalf("second server received the paused share mapping:\n%s", commands[2])
 	}
 	if len(inputs[2]) != 0 {
@@ -2534,7 +2537,7 @@ func TestNetworkDriveInjectionNoCommonNetworkWarnsWithoutProbe(t *testing.T) {
 	}
 	commands, inputs := fixture.fake.recorded()
 	if len(commands) != 1 || strings.Contains(commands[0], "probe-one") ||
-		strings.Contains(commands[0], "New-SmbMapping") {
+		strings.Contains(commands[0], "WNetAddConnection2") {
 		t.Fatalf("disjoint topology must not probe or inject: %#v", commands)
 	}
 	if len(inputs[0]) != 0 {
@@ -2563,7 +2566,7 @@ func TestNetworkDriveInjectionNoDeviceWarnsWithoutProbe(t *testing.T) {
 	}
 	commands, inputs := fixture.fake.recorded()
 	if len(commands) != 1 || strings.Contains(commands[0], "probe-one") ||
-		strings.Contains(commands[0], "New-SmbMapping") {
+		strings.Contains(commands[0], "WNetAddConnection2") {
 		t.Fatalf("server without a device must not probe or inject: %#v", commands)
 	}
 	if len(inputs[0]) != 0 {
@@ -2603,7 +2606,7 @@ func TestNetworkDriveInjectionAllCandidatesUnreachableWarnsSafely(t *testing.T) 
 	if probes := countNetworkDriveProbeCommands(commands); probes != 1 {
 		t.Fatalf("probe commands = %d, want 1: %#v", probes, commands)
 	}
-	if strings.Contains(commands[1], "New-SmbMapping") {
+	if strings.Contains(commands[1], "WNetAddConnection2") {
 		t.Fatalf("all-unreachable selection still injected: %q", commands[1])
 	}
 }

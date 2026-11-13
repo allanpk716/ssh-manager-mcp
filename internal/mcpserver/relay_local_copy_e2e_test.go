@@ -796,9 +796,9 @@ func TestRelayFileWindowsPowerShellLocalCopySuccess(t *testing.T) {
 	if len(scripts) != 1 {
 		t.Fatalf("封装内脚本数 = %d，期待一个盘符映射脚本和一个拷贝脚本：%q", len(scripts), wrapped)
 	}
-	if !strings.Contains(wrapped, "New-SmbMapping") ||
+	if !strings.Contains(wrapped, "WNetAddConnection2") ||
 		!strings.Contains(wrapped, `AddArgument('\\192.0.2.10\datasets')`) ||
-		!strings.Contains(wrapped, "-Persistent $false") ||
+		!strings.Contains(wrapped, "[SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)") ||
 		!strings.Contains(scripts[0], "robocopy") {
 		t.Fatalf("盘符映射与 robocopy 不在同一条命令封装内：%s", wrapped)
 	}
@@ -912,9 +912,9 @@ func TestRelayFileWindowsCmdLocalCopyTargetShare(t *testing.T) {
 	if !ok {
 		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
-	if !strings.Contains(injectionScript, "New-SmbMapping") ||
+	if !strings.Contains(injectionScript, "WNetAddConnection2") ||
 		!strings.Contains(injectionScript, `AddArgument('\\192.0.2.10\datasets')`) ||
-		!strings.Contains(injectionScript, "-Persistent $false") {
+		!strings.Contains(injectionScript, "[SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)") {
 		t.Fatalf("cmd 注入脚本缺少盘符映射：\n%s", injectionScript)
 	}
 	if copyScripts := encodedCommandScripts(injectionScript); len(copyScripts) != 1 ||
@@ -1390,7 +1390,7 @@ func TestRelayFileWindowsLocalCopyMappingFailures(t *testing.T) {
 		}
 		commands := environment.fake.recordedCommands()
 		inputs := environment.fake.recordedInputs()
-		if len(commands) != 3 || strings.Contains(commands[2], "New-SmbMapping") {
+		if len(commands) != 3 || strings.Contains(commands[2], "WNetAddConnection2") {
 			t.Fatalf("认证失败暂停后仍尝试旧密码或选址：%q", commands)
 		}
 		if len(inputs) != 3 || string(inputs[2]) != "" {
