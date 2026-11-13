@@ -335,15 +335,7 @@ func sharesUnmountCmd() *cobra.Command {
 }
 
 func parseSharedStorageDirectories(values []string) ([]models.SharedStorageDirectory, error) {
-	out := make([]models.SharedStorageDirectory, 0, len(values))
-	for _, value := range values {
-		purpose, path, found := strings.Cut(value, "=")
-		if !found {
-			return nil, fmt.Errorf("目录约定 %q 缺少等号，格式为 用途=子路径", value)
-		}
-		out = append(out, models.SharedStorageDirectory{Purpose: purpose, Path: path})
-	}
-	return out, nil
+	return store.ParseSharedStorageDirectoryLines(values)
 }
 
 func printSharedStorageSummary(out io.Writer, share *models.SharedStorage) {

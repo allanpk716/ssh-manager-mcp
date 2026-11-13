@@ -1,0 +1,37 @@
+{{define "content"}}
+<section class="shares-page">
+<h1>共享存储</h1>
+{{if not .Caps.CanWrite}}<p class="readonly-notice">只显示本客户端可用的部分，修改请到权威端。</p>{{end}}
+<form class="filter-form" method="get" action="/ui/shares/">
+<label for="share-device">按提供方设备筛选</label>
+<select id="share-device" name="device">
+<option value="">全部提供方设备</option>
+{{range .ShareDeviceOptions}}<option value="{{.}}"{{if eq $.ShareFilterDevice .}} selected{{end}}>{{.}}</option>{{end}}
+</select>
+<label for="share-server">按服务器条目筛选</label>
+<select id="share-server" name="server">
+<option value="">全部服务器条目</option>
+{{range .ShareServerOptions}}<option value="{{.Name}}"{{if eq $.ShareFilterServer .Name}} selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<button type="submit">筛选</button>
+</form>
+<div class="inline-form">
+{{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/new">新增共享存储</a>{{end}}
+</div>
+<table class="server-table">
+<thead><tr><th>共享名</th><th>提供方设备</th><th>盘符</th><th>版本号</th><th>可挂载服务器数量</th><th>操作</th></tr></thead>
+<tbody>
+{{range .Shares}}
+<tr>
+<td><a href="/ui/shares/{{.ID}}">{{.Name}}</a></td>
+<td>{{.DeviceName}}</td>
+<td>{{.Drive}}:</td>
+<td>{{.Version}}</td>
+<td>{{.MountableCount}}</td>
+<td><a href="/ui/shares/{{.ID}}">详情</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+</section>
+{{end}}

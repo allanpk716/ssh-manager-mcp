@@ -19,6 +19,31 @@ var (
 	ErrSharedStorageDriveInvalid = errors.New("盘符不合法：只接受 D 到 Z 的单个字母（大小写均可），登记后存为大写")
 )
 
+// SharedStorageValidationError 表示共享存储登记输入校验失败。错误文字只
+// 描述规则本身，可以直接展示给操作者。
+type SharedStorageValidationError struct {
+	Err error
+}
+
+func (e *SharedStorageValidationError) Error() string { return e.Err.Error() }
+func (e *SharedStorageValidationError) Unwrap() error { return e.Err }
+
+// IsSharedStorageValidationError 判断错误是否属于共享存储登记输入校验失
+// 败；其余错误可能带内部细节，调用方必须改用通用文案。
+func IsSharedStorageValidationError(err error) bool {
+	var validation *SharedStorageValidationError
+	if errors.As(err, &validation) {
+		return true
+	}
+	return errors.Is(err, ErrSharedStorageNameExists) ||
+		errors.Is(err, ErrSharedStorageDriveExists) ||
+		errors.Is(err, ErrSharedStorageDriveInvalid)
+}
+
+func sharedStorageValidation(err error) error {
+	return &SharedStorageValidationError{Err: err}
+}
+
 // SharedStorageInput 是一次共享存储登记的完整输入。目录约定保持给定顺序。
 type SharedStorageInput struct {
 	Name           string
@@ -88,6 +113,23 @@ func normalizeSharedStorageDirectories(directories []models.SharedStorageDirecto
 	return out
 }
 
+// ParseSharedStorageDirectoryLines 把「用途=子路径」形式的目录约定输入解析
+// 成目录结构。命令行与 Web UI 共用这一份解析，解析后的进一步校验仍由
+// 新增与修改入口完成。
+func ParseSharedStorageDirectoryLines(values []string) ([]models.SharedStorageDirectory, error) {
+	out := make([]models.SharedStorageDirectory, 0, len(values))
+	for _, value := range values {
+		purpose, path, found := strings.Cut(value, "=")
+		if !found {
+			return nil, &SharedStorageValidationError{
+				Err: fmt.Errorf("目录约定 %q 缺少等号，格式为 用途=子路径", value),
+			}
+		}
+		out = append(out, models.SharedStorageDirectory{Purpose: purpose, Path: path})
+	}
+	return out, nil
+}
+
 // AddSharedStorage 登记一处 SMB 共享存储。提供方设备、挂载密码机密项、
 // 共享名与盘符全部校验通过后才落库；数据行与审计行在同一个事务提交。
 func (s *Store) AddSharedStorage(input SharedStorageInput, source WriteSource) (*models.SharedStorage, error) {
@@ -96,19 +138,19 @@ func (s *Store) AddSharedStorage(input SharedStorageInput, source WriteSource) (
 	}
 	name := strings.TrimSpace(input.Name)
 	if err := validateTopologyName("共享", name); err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 	user := strings.TrimSpace(input.User)
 	if user == "" {
-		return nil, errors.New("挂载账号用户名不能为空")
+		return nil, &SharedStorageValidationError{Err: errors.New("挂载账号用户名不能为空")}
 	}
 	drive, err := ValidateSharedStorageDrive(input.Drive)
 	if err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 	directories := normalizeSharedStorageDirectories(input.Directories)
 	if err := validateSharedStorageDirectories(directories); err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 	directoriesJSON, err := json.Marshal(directories)
 	if err != nil {
@@ -127,13 +169,13 @@ func (s *Store) AddSharedStorage(input SharedStorageInput, source WriteSource) (
 	}
 	secret, err := sharedStorageSecretTx(tx, input.PasswordSecret)
 	if err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 	if err := ensureSharedStorageNameAvailableTx(tx, name, ""); err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 	if err := ensureSharedStorageDriveAvailableTx(tx, drive, ""); err != nil {
-		return nil, err
+		return nil, sharedStorageValidation(err)
 	}
 
 	share := &models.SharedStorage{
@@ -270,7 +312,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	if changes.Name != nil {
 		newName := strings.TrimSpace(*changes.Name)
 		if err := validateTopologyName("共享", newName); err != nil {
-			return nil, err
+			return nil, sharedStorageValidation(err)
 		}
 		if err := ensureSharedStorageNameAvailableTx(tx, newName, share.ID); err != nil {
 			return nil, err
@@ -289,7 +331,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	if changes.User != nil {
 		user := strings.TrimSpace(*changes.User)
 		if user == "" {
-			return nil, errors.New("挂载账号用户名不能为空")
+			return nil, &SharedStorageValidationError{Err: errors.New("挂载账号用户名不能为空")}
 		}
 		share.MountUser = user
 		editedFields["user"] = share.MountUser
@@ -305,10 +347,10 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	if changes.Drive != nil {
 		drive, err := ValidateSharedStorageDrive(*changes.Drive)
 		if err != nil {
-			return nil, err
+			return nil, sharedStorageValidation(err)
 		}
 		if err := ensureSharedStorageDriveAvailableTx(tx, drive, share.ID); err != nil {
-			return nil, err
+			return nil, sharedStorageValidation(err)
 		}
 		share.Drive = drive
 		editedFields["drive"] = share.Drive
@@ -316,7 +358,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 	if changes.Directories != nil {
 		directories := normalizeSharedStorageDirectories(*changes.Directories)
 		if err := validateSharedStorageDirectories(directories); err != nil {
-			return nil, err
+			return nil, sharedStorageValidation(err)
 		}
 		share.Directories = directories
 		editedFields["directories"] = directoryAuditValue(share.Directories)
@@ -528,7 +570,9 @@ func decodeSharedStorageDirectories(directoriesJSON string) ([]models.SharedStor
 func sharedStorageDeviceTx(tx *sql.Tx, name string) (*models.Device, error) {
 	device, err := deviceByNameTx(tx, name)
 	if errors.Is(err, ErrDeviceNotFound) {
-		return nil, fmt.Errorf("提供方设备 %q 不存在：请先执行 sshmgr devices add 登记设备", name)
+		return nil, &SharedStorageValidationError{
+			Err: fmt.Errorf("提供方设备 %q 不存在：请先执行 sshmgr devices add 登记设备", name),
+		}
 	}
 	return device, err
 }
@@ -539,7 +583,9 @@ func sharedStorageSecretTx(tx *sql.Tx, name string) (struct{ ID, Name string }, 
 		`SELECT id,name FROM secrets WHERE name_lower=?`, strings.ToLower(strings.TrimSpace(name)),
 	).Scan(&out.ID, &out.Name)
 	if errors.Is(err, sql.ErrNoRows) {
-		return out, fmt.Errorf("挂载密码机密项 %q 不存在：请先执行 sshmgr secrets add 登记机密项", name)
+		return out, &SharedStorageValidationError{
+			Err: fmt.Errorf("挂载密码机密项 %q 不存在：请先执行 sshmgr secrets add 登记机密项", name),
+		}
 	}
 	return out, err
 }

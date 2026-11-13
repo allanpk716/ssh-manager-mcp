@@ -125,6 +125,11 @@ type Config struct {
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	SecretsWriter SecretWriter
+	// Shares 是共享存储页读取来源；三种角色都必须提供。
+	Shares ShareSource
+	// SharesWriter 是共享存储写操作来源。单机与权威端必须提供；客户端
+	// 不提供，写路由不存在。
+	SharesWriter ShareWriter
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
@@ -262,6 +267,11 @@ type capabilities struct {
 	CanManageProjects bool
 	// CanManageSecrets 控制机密项写操作；客户端只保留只读列表入口。
 	CanManageSecrets bool
+	// ShowSharesArea 控制是否显示「共享存储」区域入口；只有配置了共享存
+	// 储读取来源时才显示。
+	ShowSharesArea bool
+	// CanManageShares 控制共享存储写操作；客户端只保留只读列表入口。
+	CanManageShares bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
 	// ShowOpsArea 控制是否显示「运维」区域入口。
@@ -290,6 +300,8 @@ type capabilities struct {
 func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
+	caps.ShowSharesArea = cfg.Shares != nil
+	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil
 	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil
@@ -399,6 +411,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
 		h.registerSecretRoutes()
+		h.registerShareRoutes()
 		h.registerSoftwareInventoryRoutes()
 		h.registerOpsRoutes()
 	}

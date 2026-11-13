@@ -65,6 +65,14 @@ type pageData struct {
 	SecretAuthorizationTargets       []SecretAuthorizationCell
 	SecretAuthorizationReturnTo      string
 	SecretAuthorizationNotice        string
+	Shares                           []ShareRow
+	ShareFilterDevice                string
+	ShareFilterServer                string
+	ShareDeviceOptions               []string
+	ShareServerOptions               []ServerRow
+	ShareDetail                      *ShareRow
+	ShareDetailError                 string
+	ShareDetailNotice                string
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
 	SoftwareInventorySearchRows      []SoftwareInventorySearchRow
