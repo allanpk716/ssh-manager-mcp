@@ -136,8 +136,7 @@ func TestShareRevokeBusyListsProcessesAndForceCleanupSucceeds(t *testing.T) {
 	fixture.linux.ForceSucceeds = true
 	force := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
 		"csrf_token": {csrf}, "share_id": {fixture.shareID},
-		"server_id": {fixture.linuxID}, "server_name": {"linux-web"},
-		"server_shell": {"posix"}, "mount_point": {"/mnt/sshmgr/datasets"},
+		"server_id":     {fixture.linuxID},
 		"retry_cleanup": {"1"}, "force": {"1"},
 	})
 	if force.StatusCode != http.StatusSeeOther {
@@ -462,4 +461,46 @@ func (h authorityHandler) doMultipart(
 
 func (f *unmountFixture) revokePath(serverID string) string {
 	return "/ui/shares/" + f.shareID + "/revoke?server=" + serverID
+}
+
+// TestShareRevokeCleanupRetryLooksUpServerFieldsFromRegistration 验证强制
+// 清理重试只接收服务器标识，伪造的服务器名、系统类型与挂载点不会进入任
+// 务结果。
+func TestShareRevokeCleanupRetryLooksUpServerFieldsFromRegistration(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{
+		{ProcessID: "1234", User: "worker", Command: "python"},
+	}
+	csrf := csrfToken(t, fixture.handler)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrf}, "server_id": {fixture.linuxID}, "unmount": {"1"},
+	})
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	if !strings.Contains(page, "强制清理挂载点") {
+		t.Fatalf("占用结果页应提供强制清理入口：\n%s", page)
+	}
+
+	fixture.linux.ForceSucceeds = true
+	force := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrf}, "share_id": {fixture.shareID},
+		"server_id": {fixture.linuxID}, "server_name": {"伪造服务器名"},
+		"server_shell": {"伪造系统类型"}, "mount_point": {"/forged/mount"},
+		"retry_cleanup": {"1"}, "force": {"1"},
+	})
+	if force.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动强制清理状态码 = %d：%s", force.StatusCode, body(t, force))
+	}
+	forcePage := waitUntilRevokeDone(t, fixture.handler, force.Header.Get("Location"))
+	if !strings.Contains(forcePage, "linux-web") {
+		t.Fatalf("强制清理结果应显示登记里的服务器名：\n%s", forcePage)
+	}
+	for _, forged := range []string{"伪造服务器名", "伪造系统类型", "/forged/mount"} {
+		if strings.Contains(forcePage, forged) {
+			t.Fatalf("强制清理结果不得使用表单伪造字段 %q：\n%s", forged, forcePage)
+		}
+	}
+	if fixture.linux.State().Mounted {
+		t.Fatalf("强制清理后挂载应被移除：%+v", fixture.linux.State())
+	}
 }

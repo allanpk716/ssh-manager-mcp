@@ -29,9 +29,6 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="share_id" value="{{.ShareRevoke.Share.ID}}">
 <input type="hidden" name="server_id" value="{{.ShareRevoke.Task.ServerID}}">
-<input type="hidden" name="server_name" value="{{.ShareRevoke.Task.ServerName}}">
-<input type="hidden" name="server_shell" value="{{.ShareRevoke.Task.ServerShell}}">
-<input type="hidden" name="mount_point" value="{{.ShareRevoke.Task.MountPoint}}">
 <input type="hidden" name="retry_cleanup" value="1">
 <input type="hidden" name="force" value="1">
 <button type="submit">强制清理挂载点</button>

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // ShareRevokeEntry 是共享存储详情页撤销授权区域的一台服务器条目。
@@ -251,21 +252,38 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 	http.Redirect(w, r, view.ConfirmPath+"&task="+url.QueryEscape(taskID), http.StatusSeeOther)
 }
 
+// handleShareRevokeCleanupPost 处理占用挂载后的强制清理重试。表单只提交
+// 服务器标识；服务器名、系统类型与挂载点一律从登记信息回查，回查不到就
+// 拒绝，避免伪造字段直接进入任务。
 func (h *handler) handleShareRevokeCleanupPost(w http.ResponseWriter, r *http.Request, identifier string) {
 	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
 	if err != nil {
 		h.renderShareReadError(w, r, err)
 		return
 	}
-	if detail.ID != r.PostFormValue("share_id") || r.PostFormValue("server_id") == "" {
+	serverID := strings.TrimSpace(r.PostFormValue("server_id"))
+	if detail.ID != r.PostFormValue("share_id") || serverID == "" {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的清理任务不存在。")
 		return
 	}
+	server, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), serverID)
+	if err != nil {
+		h.logError(r, "回查强制清理的服务器登记", err)
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器登记失败",
+			"读取服务器登记失败，请稍后重试。")
+		return
+	}
+	if server == nil || server.ID != serverID {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的清理任务不存在。")
+		return
+	}
+	shellType := models.NormalizeShellType(server.Shell)
 	taskID, err := h.cfg.ShareRevokeRunner.StartShareRevoke(ShareRevokeRequest{
 		ShareID: detail.ID, ShareName: detail.Name,
-		ServerID: r.PostFormValue("server_id"), ServerName: r.PostFormValue("server_name"),
-		ServerShell: r.PostFormValue("server_shell"), MountPoint: r.PostFormValue("mount_point"),
-		Force: r.PostFormValue("force") == "1", CleanupOnly: true,
+		ServerID: server.ID, ServerName: server.Name,
+		ServerShell: string(shellType),
+		MountPoint:  store.SharedStorageMountPoint(detail.Drive, detail.Name, shellType),
+		Force:       r.PostFormValue("force") == "1", CleanupOnly: true,
 		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
 	})
 	if err != nil {
