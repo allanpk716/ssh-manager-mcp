@@ -201,6 +201,84 @@ func TestShareScopeRemovalPreviewOffersRevokeAndUnmountAfterRecentCheck(t *testi
 	}
 }
 
+func TestShareRevokeUnavailableServerFailsImmediatelyWithAudit(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	fixture.stopServer()
+	t.Cleanup(fixture.stopServer)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)}, "server_id": {fixture.linuxID},
+	})
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"连接目标服务器或执行固定撤销命令失败", "任务已当场失败，未排队重试", "「检查残留」",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("不可达撤销授权结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "占用挂载点的进程") || strings.Contains(page, "强制清理挂载点") {
+		t.Fatalf("不可达失败不得呈现占用选择：\n%s", page)
+	}
+	share, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil || share.Version != 2 || len(share.MountableServers) != 1 ||
+		share.ChangeNote != "共享已从服务器撤销" {
+		t.Fatalf("不可达时登记撤销应保留：%+v %v", share, err)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke", "share-revoke-remote"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("不可达撤销授权应有登记与远端两条审计：%+v", rows)
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.1" {
+			t.Fatalf("不可达撤销授权审计来源不正确：%+v", row)
+		}
+	}
+	var remoteRow *store.AuditRow
+	for index := range rows {
+		if rows[index].Action == "share-revoke-remote" {
+			remoteRow = &rows[index]
+			break
+		}
+	}
+	if remoteRow == nil || !strings.Contains(remoteRow.Command, `"result":"ssh-error"`) ||
+		remoteRow.Status != "error" {
+		t.Fatalf("不可达远端审计不正确：%+v", rows)
+	}
+}
+
+func TestShareRevokeWindowsOnlyChangesRegistration(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)}, "server_id": {fixture.windowsID},
+	})
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"撤销授权完成", "本次只修改登记", "各客户端同步快照后停止注入",
+		"长期离线的客户端同步前仍会注入", "真正的撤销手段是更换共享密码",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("Windows 撤销授权结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	share, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil || len(share.MountableServers) != 1 || share.MountableServers[0].Name != "linux-web" {
+		t.Fatalf("Windows 撤销授权后的登记不正确：%+v %v", share, err)
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil || len(rows) != 0 {
+		t.Fatalf("Windows 撤销授权不应发起远端清理：%+v %v", rows, err)
+	}
+}
+
 func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *testing.T) {
 	fixture := newUnmountFixture(t)
 	if _, err := fixture.store.AddServer(&models.Server{
