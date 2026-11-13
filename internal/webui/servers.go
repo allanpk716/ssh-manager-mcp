@@ -63,6 +63,9 @@ type ServerDetailView struct {
 	SharedStorageChoices []ServerDetailSharedStorageChoice
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []ServerDetailProfile
+	// ProfileChoices 是这台服务器条目可调整的全部访问配置组与当前授权
+	// 状态；客户端来源可以不填充，模板不向客户端显示表单。
+	ProfileChoices []ServerDetailProfileChoice
 	// ShowDeliveryRecords 表示当前角色能否查看下发记录；单机与权威端为真，
 	// 客户端为假。
 	ShowDeliveryRecords bool
@@ -117,6 +120,12 @@ type ServerDetailSharedStorageChoice struct {
 type ServerDetailProfile struct {
 	ID   string
 	Name string
+}
+
+// ServerDetailProfileChoice 是固定服务器条目上一个访问配置组的编辑勾选项。
+type ServerDetailProfileChoice struct {
+	ServerDetailProfile
+	Checked bool
 }
 
 // ServerDetailSiblingSharedStorage 是同设备共享存储提示区的一行，并注明

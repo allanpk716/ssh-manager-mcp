@@ -98,6 +98,10 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 		Checked: true,
 	}}
 	store.details["srv-fine"].Profiles = []ServerDetailProfile{{Name: "运维"}}
+	store.details["srv-fine"].ProfileChoices = []ServerDetailProfileChoice{{
+		ServerDetailProfile: ServerDetailProfile{Name: "运维"},
+		Checked:             true,
+	}}
 	store.details["srv-fine"].SiblingSharedStorages = []ServerDetailSiblingSharedStorage{{
 		ServerDetailSharedStorage: ServerDetailSharedStorage{
 			Name: "worker-data", ProviderDeviceName: "NAS", MountUser: "mount-user",
@@ -123,7 +127,7 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	}
 
 	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
-	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无授予这台服务器的 profile"} {
+	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无可选 profile"} {
 		if !strings.Contains(empty, want) {
 			t.Fatalf("服务器详情页空状态缺少 %q：\n%s", want, empty)
 		}

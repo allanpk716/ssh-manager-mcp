@@ -61,6 +61,35 @@ type AccessGrantChange struct {
 	Removed []AccessServerRef
 }
 
+// AccessProfileRef 是反向授权结果里对一个 profile 的引用。
+type AccessProfileRef struct {
+	ID   string
+	Name string
+}
+
+// ServerProfileAuthorizationPreview 是服务器详情页 profile 授权组的差异。
+type ServerProfileAuthorizationPreview struct {
+	ServerID   string
+	ServerName string
+	Current    []AccessProfileRef
+	Desired    []AccessProfileRef
+	Added      []AccessProfileRef
+	Removed    []AccessProfileRef
+	Summary    string
+}
+
+// ServerProfileAuthorizationApplyResult 表示一次服务器详情页 profile 授权确
+// 认的结果。
+type ServerProfileAuthorizationApplyResult struct {
+	Preview ServerProfileAuthorizationPreview
+	Applied bool
+}
+
+// ServerProfileAuthorizationConflict 表示预览之后相关授权被其他入口修改。
+type ServerProfileAuthorizationConflict struct {
+	Latest ServerProfileAuthorizationPreview
+}
+
 // AccessGrantConflict 表示授权表单打开后，别的入口已经改过授权范围。
 type AccessGrantConflict struct {
 	ProfileName string
@@ -100,6 +129,8 @@ type AccessStore interface {
 	AddProfile(name string, source AccessWriteSource) error
 	DeleteProfile(id string, source AccessWriteSource) (*AccessProfileInUse, error)
 	SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error)
+	PreviewServerProfileAuthorization(serverID string, desired []string) (ServerProfileAuthorizationPreview, error)
+	ApplyServerProfileAuthorization(serverID string, desired []string, summary string, source AccessWriteSource) (ServerProfileAuthorizationApplyResult, *ServerProfileAuthorizationConflict, error)
 	ListProjects(includeRevoked bool) ([]AccessProjectSummary, error)
 	AddProject(name, profileID string, source AccessWriteSource) (AccessProjectToken, error)
 	RotateProject(id string, source AccessWriteSource) (AccessProjectToken, error)
@@ -123,15 +154,17 @@ type AccessWriteSource struct {
 
 const (
 	// accessRootPath 是「访问」区域的入口；客户端只有这里的提示页。
-	accessRootPath          = "/ui/access/"
-	accessProfilesPath      = "/ui/access/profiles"
-	accessProfileDeletePath = "/ui/access/profiles/delete"
-	accessProfilesPrefix    = "/ui/access/profiles/"
-	accessDeviceCodesPath   = "/ui/access/device-codes"
-	accessDeviceCodesPrefix = "/ui/access/device-codes/"
-	accessPairingPath       = "/ui/access/pairing"
-	accessPairingListPath   = "/ui/access/pairing/list"
-	accessPairingPrefix     = "/ui/access/pairing/"
+	accessRootPath           = "/ui/access/"
+	accessProfilesPath       = "/ui/access/profiles"
+	accessProfileDeletePath  = "/ui/access/profiles/delete"
+	accessProfilesPrefix     = "/ui/access/profiles/"
+	serverProfilePreviewPath = "/ui/servers/profile-authorization/preview"
+	serverProfileConfirmPath = "/ui/servers/profile-authorization/confirm"
+	accessDeviceCodesPath    = "/ui/access/device-codes"
+	accessDeviceCodesPrefix  = "/ui/access/device-codes/"
+	accessPairingPath        = "/ui/access/pairing"
+	accessPairingListPath    = "/ui/access/pairing/list"
+	accessPairingPrefix      = "/ui/access/pairing/"
 )
 
 // registerAccessRoutes 按本机角色注册访问区域路由。客户端只保留区域提示
@@ -144,6 +177,8 @@ func (h *handler) registerAccessRoutes() {
 	h.mux.HandleFunc(accessProfilesPath, h.requireSession(h.handleAccessProfiles))
 	h.mux.HandleFunc(accessProfileDeletePath, h.requireSession(h.handleAccessProfileDelete))
 	h.mux.HandleFunc(accessProfilesPrefix, h.requireSession(h.handleAccessProfileGrants))
+	h.mux.HandleFunc(serverProfilePreviewPath, h.requireSession(h.handleServerProfileAuthorizationPreview))
+	h.mux.HandleFunc(serverProfileConfirmPath, h.requireSession(h.handleServerProfileAuthorizationConfirm))
 	h.mux.HandleFunc(accessProjectsPath, h.requireSession(h.handleAccessProjects))
 	h.mux.HandleFunc(projectRotatePath, h.requireSession(h.handleAccessProjectRotate))
 	h.mux.HandleFunc(projectDisablePath, h.requireSession(h.handleAccessProjectDisable))
