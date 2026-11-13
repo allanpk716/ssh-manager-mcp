@@ -265,9 +265,8 @@ type networkDriveProbeExecutor interface {
 // buildNetworkDriveInjectionPlan 按目标服务器求出要注入的共享。规则与
 // mount_share 的授权判定一致：服务器在共享挂载密码机密项的可写入服务器列
 // 表内、共享对当前 profile 可见、能读到密码，再经共同网络候选规划与目标
-// 机上的 445 探测选出地址。PowerShell 服务器直接执行映射封装；cmd 服务器
-// 由封装启动 PowerShell 子进程执行映射。非 Windows 服务器返回空计划，行
-// 为不变。
+// 机上的 445 探测选出地址。PowerShell 与 cmd 服务器都在 PowerShell 进程内
+// 执行映射封装。非 Windows 服务器返回空计划，行为不变。
 func buildNetworkDriveInjectionPlan(
 	ctx context.Context, st *store.Store, profileID string,
 	server *models.Server, privileged bool, executor networkDriveProbeExecutor,

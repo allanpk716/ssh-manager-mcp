@@ -608,13 +608,8 @@ func runRecordedPowerShellCommand(t *testing.T, command string, stdinBytes []byt
 }
 
 func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
-	// 产品的 cmd 注入封装是多行的，真实 Windows OpenSSH 用 cmd /c 执行时
-	// 换行后的语句全部被丢弃，注入不生效。修好前跳过，见 issue #284。
-	t.Skip("cmd 注入封装经 cmd /c 执行时换行后被丢弃，见 issue #284")
-	const secretValue = `cmd-secret-%-^&!-"中文"`
-	// 封装读取完机密值后会把代码页恢复到原值；用户命令输出前再切到
-	// UTF-8，保证遮蔽逻辑收到的是机密值的原始字节。
-	const userCommand = "chcp 65001 >NUL & set HF_TOKEN"
+	const secretValue = `cmd-secret-%-中文`
+	const userCommand = `chcp 65001 >NUL & echo %HF_TOKEN% "quoted" ^& echo second & exit 42`
 	st := newStore(t)
 	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -652,7 +647,8 @@ func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
 		t.Fatalf("exec_command failed: %+v", result.Content)
 	}
 	var output struct {
-		Stdout string `json:"stdout"`
+		Stdout   string `json:"stdout"`
+		ExitCode int    `json:"exit_code"`
 	}
 	unmarshalToolJSON(t, result, &output)
 
@@ -662,23 +658,31 @@ func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
 	if strings.Contains(gotCommand, secretValue) {
 		t.Fatalf("remote command leaked secret value: %q", gotCommand)
 	}
-	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "set /p HF_TOKEN=") {
-		t.Fatalf("remote command does not retain the cmd injection and user command: %q", gotCommand)
+	if strings.Contains(gotCommand, userCommand) || strings.Contains(gotCommand, "HF_TOKEN") {
+		t.Fatalf("remote command should contain only the fixed bootstrap: %q", gotCommand)
 	}
-	restore := strings.Index(gotCommand, "chcp %__sshmgr_original_code_page%")
-	userCommandStart := strings.Index(gotCommand, userCommand)
-	if restore < 0 || userCommandStart < restore {
-		t.Fatalf("cmd injection must restore the original code page before the user command: %q", gotCommand)
+	if bootstrap := encodedCommandScripts(gotCommand); len(bootstrap) != 1 ||
+		!strings.HasPrefix(bootstrap[0], "$ProgressPreference='SilentlyContinue'") {
+		t.Fatalf("remote command is not the fixed PowerShell bootstrap: %q", gotCommand)
 	}
-	if wantStdin := secretValue + "\r\n"; string(gotStdin) != wantStdin {
-		t.Fatalf("remote standard input = %q, want the value followed by a line break", gotStdin)
+	injectionScript, values, ok := splitWindowsCmdInjectionFrames(gotStdin)
+	if !ok {
+		t.Fatalf("remote standard input has no script frame: %q", gotStdin)
+	}
+	if !strings.Contains(injectionScript, "$env:HF_TOKEN") ||
+		!strings.Contains(injectionScript, `'/d /s /c "' + '`+userCommand+`' + '"'`) {
+		t.Fatalf("cmd injection script does not set the secret and run the user command:\n%s", injectionScript)
+	}
+	if string(values) != secretValue {
+		t.Fatalf("remote standard input values = %q, want only the secret value", values)
 	}
 	if runtime.GOOS == "windows" {
-		if !strings.Contains(output.Stdout, "{{sshmgr-secret:API_TOKEN}}") || strings.Contains(output.Stdout, secretValue) {
+		if !strings.Contains(output.Stdout, `{{sshmgr-secret:API_TOKEN}} "quoted" & echo second`) ||
+			strings.Contains(output.Stdout, secretValue) || output.ExitCode != 42 {
 			t.Fatalf("stdout = %q", output.Stdout)
 		}
-	} else if output.Stdout != "ran" {
-		t.Fatalf("stdout = %q", output.Stdout)
+	} else if output.Stdout != "ran" || output.ExitCode != 0 {
+		t.Fatalf("stdout = %q exit = %d", output.Stdout, output.ExitCode)
 	}
 }
 

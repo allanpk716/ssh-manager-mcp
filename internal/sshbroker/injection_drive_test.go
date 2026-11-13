@@ -4,6 +4,11 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf16"
@@ -38,7 +43,7 @@ func TestPrepareExecNetworkDrivePowerShellAssembly(t *testing.T) {
 		"-Password $d",
 		"-Persistent $false",
 		"BeginInvoke",
-		"Wait(3000)",
+		"AsyncWaitHandle.WaitOne(3000)",
 		"AddArgument('S:')",
 		`AddArgument('\\192.0.2.10\datasets')`,
 		"AddArgument('mount''user')",
@@ -120,113 +125,266 @@ func TestPrepareExecNetworkDrivePowerShellTotalBudget(t *testing.T) {
 	}
 }
 
-// TestPrepareExecNetworkDriveWindowsCmdAssembly 钉住 cmd 服务器上网络盘符
-// 注入的拼装形态：映射由独立的 PowerShell 子进程用 -EncodedCommand 执行，
-// 密码只按长度走标准输入；网络盘符密码先读，环境变量值后读，帧顺序与封
-// 装脚本读取顺序一致。cmd 的 set /p 可能一次读走整行之后的字节，因此它
-// 必须排在精确读帧的映射步骤之后。每个共享单独一个子进程，避免多个
-// -EncodedCommand 合并后超过 cmd 单行命令长度上限。
-func TestPrepareExecNetworkDriveWindowsCmdAssembly(t *testing.T) {
+// TestPrepareExecWindowsCmdUsesShortPowerShellBootstrap 钉住 cmd 服务器上所有
+// 注入形态共用的短命令：命令行只含固定引导脚本，注入脚本与用户命令走第
+// 一条标准输入帧，长度不随机密项、共享数量或用户命令增长。
+func TestPrepareExecWindowsCmdUsesShortPowerShellBootstrap(t *testing.T) {
 	environmentValue := []byte("cmd-value-%-^&!-中文")
 	password := []byte("drive-p@ss%'\"|()中文\r\n")
 	secondPassword := []byte("second-drive-p@ss")
-	const userCommand = `dir S:\datasets`
+	longShareName := "long-" + strings.Repeat("share-", 100)
+	longUserCommand := "echo " + strings.Repeat("x", 6000) + " & exit 42"
+
+	tests := []struct {
+		name        string
+		userCommand string
+		items       []ExecInjection
+		wantScript  []string
+		wantValues  []byte
+	}{
+		{
+			name:        "仅机密项环境变量",
+			userCommand: `set HF_TOKEN`,
+			items: []ExecInjection{
+				EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: environmentValue},
+			},
+			wantScript: []string{"$env:HF_TOKEN", "New-Object byte[] 22"},
+			wantValues: environmentValue,
+		},
+		{
+			name:        "一个网络盘符",
+			userCommand: `dir S:\datasets`,
+			items: []ExecInjection{NetworkDriveInjection{
+				ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
+				UserName: "mount-user", Password: password,
+				StatusMarker: "3f2a9c8d1b7e4056",
+			}},
+			wantScript: []string{
+				`AddArgument('\\192.0.2.10\datasets')`,
+				"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0",
+			},
+			wantValues: password,
+		},
+		{
+			name:        "机密项与两个网络盘符",
+			userCommand: `dir S:\datasets T:\reports`,
+			items: []ExecInjection{
+				EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: environmentValue},
+				NetworkDriveInjection{
+					ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
+					UserName: "mount-user", Password: password,
+					StatusMarker: "3f2a9c8d1b7e4056",
+				},
+				NetworkDriveInjection{
+					ShareName: "reports", Drive: "T", Address: "192.0.2.20",
+					UserName: "mount-user", Password: secondPassword,
+					StatusMarker: "3f2a9c8d1b7e4057",
+				},
+			},
+			wantScript: []string{
+				"$env:HF_TOKEN",
+				`AddArgument('\\192.0.2.10\datasets')`,
+				`AddArgument('\\192.0.2.20\reports')`,
+				"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0",
+				"SSHMGR-SMBMAP:3f2a9c8d1b7e4057:1",
+			},
+			wantValues: append(append([]byte{}, environmentValue...), append(password, secondPassword...)...),
+		},
+		{
+			name:        "长共享名与长用户命令",
+			userCommand: longUserCommand,
+			items: []ExecInjection{NetworkDriveInjection{
+				ShareName: longShareName, Drive: "L", Address: "192.0.2.30",
+				UserName: "mount-user", Password: password,
+				StatusMarker: "3f2a9c8d1b7e4058",
+			}},
+			wantScript: []string{
+				`AddArgument('\\192.0.2.30\` + longShareName + `')`,
+				PowerShellSingleQuote(longUserCommand),
+			},
+			wantValues: password,
+		},
+	}
+
+	var fixedCommand string
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			prepared, err := prepareExec(testCase.userCommand, ExecInjectionOptions{
+				ShellType:   models.ShellWindowsCmd,
+				TargetLayer: ExecLayerNormal,
+				Items:       testCase.items,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fixedCommand == "" {
+				fixedCommand = prepared.command
+			} else if prepared.command != fixedCommand {
+				t.Fatalf("cmd 引导命令随注入内容变化：\n第一次：%q\n本次：%q", fixedCommand, prepared.command)
+			}
+			if len(prepared.command) >= 1500 {
+				t.Fatalf("cmd 引导命令长度 = %d，期待低于 1500", len(prepared.command))
+			}
+			if strings.ContainsRune(prepared.command, '\n') || strings.ContainsRune(prepared.command, '\r') {
+				t.Fatalf("cmd 引导命令不是单行：%q", prepared.command)
+			}
+			for _, character := range prepared.command {
+				if character > 0x7f {
+					t.Fatalf("cmd 引导命令含非 ASCII 字符 %q", character)
+				}
+			}
+
+			bootstrap := decodeWindowsEncodedCommand(t, windowsCmdEncodedPayload(t, prepared.command))
+			if !strings.HasPrefix(bootstrap, "$ProgressPreference='SilentlyContinue'") {
+				t.Fatalf("引导脚本必须先关闭进度输出：\n%s", bootstrap)
+			}
+			if !strings.Contains(bootstrap, "function Read-SshmgrFrame") {
+				t.Fatalf("引导脚本缺少不会与内置别名冲突的读帧函数：\n%s", bootstrap)
+			}
+
+			script, values := splitWindowsCmdInjectionFrames(t, prepared.frames)
+			for _, want := range append([]string{
+				"$__sshmgr_process.StartInfo.FileName = $env:ComSpec",
+				`$__sshmgr_process.StartInfo.Arguments = '/d /s /c "' + ` + PowerShellSingleQuote(testCase.userCommand) + ` + '"'`,
+				"$__sshmgr_process.StartInfo.UseShellExecute = $false",
+				"[void]$__sshmgr_process.Start()",
+				"exit $__sshmgr_process.ExitCode",
+			}, testCase.wantScript...) {
+				if !strings.Contains(script, want) {
+					t.Fatalf("cmd 注入脚本缺少 %q：\n%s", want, script)
+				}
+			}
+			if !bytes.Equal(values, testCase.wantValues) {
+				t.Fatalf("标准输入值 = %q，期待 %q", values, testCase.wantValues)
+			}
+		})
+	}
+}
+
+func TestPrepareExecWindowsCmdRejectsInvalidUserCommand(t *testing.T) {
+	for name, command := range map[string]string{
+		"空字节":      "echo " + string([]byte{0}),
+		"非法 UTF-8": "echo " + string([]byte{0xff}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := prepareExec(command, ExecInjectionOptions{
+				ShellType:   models.ShellWindowsCmd,
+				TargetLayer: ExecLayerNormal,
+				Items: []ExecInjection{
+					EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: []byte("value")},
+				},
+			})
+			if err == nil {
+				t.Fatal("prepareExec 接受了非法的 cmd 用户命令")
+			}
+		})
+	}
+}
+
+// TestPrepareExecWindowsCmdQuotesUserCommand 钉住用户命令进入子 cmd 前的
+// PowerShell 单引号转义；ASCII 单引号与弯单引号都必须保持字面量语义。
+func TestPrepareExecWindowsCmdQuotesUserCommand(t *testing.T) {
+	const userCommand = `echo '‘’‚‛ ^& "quoted" %HF_TOKEN%`
 	prepared, err := prepareExec(userCommand, ExecInjectionOptions{
 		ShellType:   models.ShellWindowsCmd,
 		TargetLayer: ExecLayerNormal,
 		Items: []ExecInjection{
-			EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: environmentValue},
-			NetworkDriveInjection{
-				ShareName: "datasets", Drive: "S", Address: "192.0.2.10",
-				UserName: "mount-user", Password: password,
-				StatusMarker: "3f2a9c8d1b7e4056",
-			},
-			NetworkDriveInjection{
-				ShareName: "reports", Drive: "T", Address: "192.0.2.10",
-				UserName: "mount-user", Password: secondPassword,
-				StatusMarker: "3f2a9c8d1b7e4057",
-			},
+			EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: []byte("value")},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := prepared.command
-	for _, want := range []string{
-		"set /p HF_TOKEN=",
-		"chcp %__sshmgr_original_code_page% >NUL",
-		"powershell -NoProfile -NonInteractive -EncodedCommand ",
-		userCommand,
-	} {
-		if !strings.Contains(command, want) {
-			t.Fatalf("wrapped cmd command missing %q:\n%s", want, command)
-		}
-	}
-	restore := strings.Index(command, "chcp %__sshmgr_original_code_page%")
-	firstEncoded := strings.Index(command, "powershell -NoProfile -NonInteractive -EncodedCommand ")
-	environmentRead := strings.Index(command, "set /p HF_TOKEN=")
-	userStart := strings.Index(command, userCommand)
-	if firstEncoded < 0 || environmentRead < firstEncoded || restore < environmentRead || userStart < restore {
-		t.Fatalf("cmd command must map drives, read environment values, then run the user command:\n%s", command)
-	}
-
-	encodedPayloads := windowsCmdEncodedPayloads(t, command)
-	if len(encodedPayloads) != 2 {
-		t.Fatalf("EncodedCommand payload count = %d, want one per share", len(encodedPayloads))
-	}
-	for index, payload := range encodedPayloads {
-		script := decodeWindowsEncodedCommand(t, payload)
-		for _, want := range []string{"New-SmbMapping", "-Persistent $false", "BeginInvoke", "Wait(3000)"} {
-			if !strings.Contains(script, want) {
-				t.Fatalf("EncodedCommand script %d missing %q:\n%s", index, want, script)
-			}
-		}
-		if !strings.Contains(script, "$__sshmgr_started_ticks = [Int64]$env:__sshmgr_drive_started") ||
-			!strings.Contains(script, "$__sshmgr_can_map = ($__sshmgr_elapsed + 3000) -le 10000") ||
-			!strings.Contains(script, "$__sshmgr_status = 'skipped'") {
-			t.Fatalf("EncodedCommand script %d missing the total injection budget:\n%s", index, script)
-		}
-		if bytes.Contains([]byte(script), password) || bytes.Contains([]byte(script), secondPassword) {
-			t.Fatalf("EncodedCommand script %d leaked a password:\n%s", index, script)
-		}
-	}
-	if !strings.Contains(decodeWindowsEncodedCommand(t, encodedPayloads[0]), `AddArgument('\\192.0.2.10\datasets')`) ||
-		!strings.Contains(decodeWindowsEncodedCommand(t, encodedPayloads[0]), "SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0") {
-		t.Fatalf("first EncodedCommand script does not map datasets:\n%s", decodeWindowsEncodedCommand(t, encodedPayloads[0]))
-	}
-	if !strings.Contains(decodeWindowsEncodedCommand(t, encodedPayloads[1]), `AddArgument('\\192.0.2.10\reports')`) ||
-		!strings.Contains(decodeWindowsEncodedCommand(t, encodedPayloads[1]), "SSHMGR-SMBMAP:3f2a9c8d1b7e4057:1") {
-		t.Fatalf("second EncodedCommand script does not map reports with its plan index:\n%s", decodeWindowsEncodedCommand(t, encodedPayloads[1]))
-	}
-	for _, line := range strings.Split(command, "\n") {
-		if strings.Contains(line, "-EncodedCommand ") && len(line) > 8191 {
-			t.Fatalf("EncodedCommand line is %d characters, above cmd limit", len(line))
-		}
-	}
-
-	wantFrames := append([]byte{}, password...)
-	wantFrames = append(wantFrames, secondPassword...)
-	wantFrames = append(wantFrames, environmentValue...)
-	wantFrames = append(wantFrames, '\r', '\n')
-	if !bytes.Equal(prepared.frames, wantFrames) {
-		t.Fatalf("standard input frames = %q, want both passwords, then environment value and line break", prepared.frames)
-	}
-	if bytes.Contains([]byte(command), password) || bytes.Contains([]byte(command), secondPassword) {
-		t.Fatalf("wrapped cmd command leaked a password:\n%s", command)
+	script, _ := splitWindowsCmdInjectionFrames(t, prepared.frames)
+	want := `'/d /s /c "' + ` + PowerShellSingleQuote(userCommand) + ` + '"'`
+	if !strings.Contains(script, want) {
+		t.Fatalf("cmd 注入脚本里的用户命令转义不正确，期待 %q：\n%s", want, script)
 	}
 }
 
-func windowsCmdEncodedPayloads(t *testing.T, command string) []string {
+// TestPrepareExecWindowsCmdBootstrapWithLocalPowerShell 在本机安装 PowerShell 7
+// 时执行固定引导脚本：机密值先进入环境，再由子进程读取，用户命令退出码原
+// 样返回；帧提前结束时引导脚本返回内部失败码。
+func TestPrepareExecWindowsCmdBootstrapWithLocalPowerShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// 这里用 POSIX shell 脚本冒充 ComSpec，Windows 上无法执行；真实 cmd
+		// 的行为由 mcpserver 的 TestSecretEnvironmentInjectionWindowsCmd 覆盖。
+		t.Skip("替身 ComSpec 是 POSIX shell 脚本，只在非 Windows 主机上运行")
+	}
+	powerShellPath, err := exec.LookPath("pwsh")
+	if err != nil {
+		t.Skip("本机没有 pwsh，跳过 PowerShell 引导脚本执行检查")
+	}
+	const secretValue = "bootstrap-secret"
+	const userCommand = `printf '%s\n' "$HF_TOKEN"; exit 42`
+	prepared, err := prepareExec(userCommand, ExecInjectionOptions{
+		ShellType:   models.ShellWindowsCmd,
+		TargetLayer: ExecLayerNormal,
+		Items: []ExecInjection{
+			EnvironmentInjection{EnvironmentName: "HF_TOKEN", Value: []byte(secretValue)},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fakeComSpec := filepath.Join(t.TempDir(), "fake-cmd")
+	if err := os.WriteFile(fakeComSpec, []byte("#!/bin/sh\nshift 3\neval \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	encoded := strings.TrimPrefix(prepared.command, "powershell -NoProfile -NonInteractive -EncodedCommand ")
+	run := func(stdinBytes []byte) (string, string, int) {
+		localShell := exec.Command(powerShellPath, "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded)
+		localShell.Env = append(os.Environ(), "ComSpec="+fakeComSpec)
+		localShell.Stdin = bytes.NewReader(stdinBytes)
+		stdout := &bytes.Buffer{}
+		stderr := &bytes.Buffer{}
+		localShell.Stdout = stdout
+		localShell.Stderr = stderr
+		if err := localShell.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				return stdout.String(), stderr.String(), exitErr.ExitCode()
+			}
+			t.Fatal(err)
+		}
+		return stdout.String(), stderr.String(), 0
+	}
+
+	stdout, stderr, exitCode := run(prepared.frames)
+	if stdout != secretValue+"\n" || stderr != "" || exitCode != 42 {
+		t.Fatalf("引导执行结果 stdout=%q stderr=%q exit=%d", stdout, stderr, exitCode)
+	}
+	stdout, stderr, exitCode = run(prepared.frames[:4])
+	if stdout != "" || stderr != "" || exitCode != windowsCmdInjectionFailureExitCode {
+		t.Fatalf("提前结束帧结果 stdout=%q stderr=%q exit=%d", stdout, stderr, exitCode)
+	}
+	script, _ := splitWindowsCmdInjectionFrames(t, prepared.frames)
+	stdout, stderr, exitCode = run(prepared.frames[:8+len(script)+1])
+	if stdout != "" || stderr != "" || exitCode != windowsCmdInjectionFailureExitCode {
+		t.Fatalf("机密值帧提前结束结果 stdout=%q stderr=%q exit=%d", stdout, stderr, exitCode)
+	}
+}
+
+func windowsCmdEncodedPayload(t *testing.T, command string) string {
 	t.Helper()
 	const prefix = "powershell -NoProfile -NonInteractive -EncodedCommand "
-	var payloads []string
-	for _, line := range strings.Split(command, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		if encoded, ok := strings.CutPrefix(line, prefix); ok {
-			payloads = append(payloads, encoded)
-		}
+	encoded, ok := strings.CutPrefix(command, prefix)
+	if !ok {
+		t.Fatalf("cmd 命令不是 PowerShell EncodedCommand：%q", command)
 	}
-	return payloads
+	return encoded
+}
+
+func splitWindowsCmdInjectionFrames(t *testing.T, frames []byte) (string, []byte) {
+	t.Helper()
+	if len(frames) < 8 {
+		t.Fatalf("标准输入帧过短：%q", frames)
+	}
+	length, err := strconv.Atoi(string(frames[:8]))
+	if err != nil || length < 0 || 8+length > len(frames) {
+		t.Fatalf("cmd 脚本帧头部 %q 非法：%v", frames[:8], err)
+	}
+	return string(frames[8 : 8+length]), frames[8+length:]
 }
 
 func decodeWindowsEncodedCommand(t *testing.T, encoded string) string {

@@ -203,10 +203,18 @@ func (environment *relayLocalCopyEnv) serveCommand(
 	mapStatus := environment.fake.mapStatus
 	environment.fake.mu.Unlock()
 
+	effectiveCommand := command
+	if strings.HasPrefix(command, "powershell -NoProfile -NonInteractive -EncodedCommand ") {
+		scripts := encodedCommandScripts(command)
+		if injectionScript, _, ok := splitWindowsCmdInjectionFrames(stdinBytes); ok {
+			scripts = append(scripts, injectionScript)
+		}
+		effectiveCommand = strings.Join(scripts, "\n")
+	}
+
 	switch {
-	case strings.Contains(command, "probe-one ") ||
-		strings.Contains(strings.Join(encodedCommandScripts(command), "\n"), "probe-one "):
-		probeCommand := strings.Join(encodedCommandScripts(command), "\n")
+	case strings.Contains(effectiveCommand, "probe-one "):
+		probeCommand := effectiveCommand
 		if probeCommand == "" {
 			probeCommand = command
 		}
@@ -214,8 +222,8 @@ func (environment *relayLocalCopyEnv) serveCommand(
 			fmt.Fprintf(stdout, "SSHMGR-PROBE %s ok 2 \n", match[1])
 		}
 		return 0
-	case strings.Contains(command, "New-SmbMapping") || strings.Contains(command, "-EncodedCommand "):
-		return environment.serveWindowsCopyCommand(command, mapStatus, stdout, stderr)
+	case strings.Contains(effectiveCommand, "New-SmbMapping") || strings.Contains(effectiveCommand, "-EncodedCommand "):
+		return environment.serveWindowsCopyCommand(effectiveCommand, mapStatus, stdout, stderr)
 	case strings.TrimSpace(command) == "uname -s":
 		stdout.Write([]byte(environment.fake.systemName + "\n"))
 		return 0

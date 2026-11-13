@@ -904,15 +904,25 @@ func TestRelayFileWindowsCmdLocalCopyTargetShare(t *testing.T) {
 	if len(commands) != 2 {
 		t.Fatalf("cmd 远端命令数 = %d，期待选址探测与一条同会话封装命令：%q", len(commands), commands)
 	}
-	scripts := encodedCommandScripts(commands[1])
-	if len(scripts) != 2 {
-		t.Fatalf("cmd 封装内脚本数 = %d，期待盘符映射与拷贝各一个：%q", len(scripts), commands[1])
+	if bootstrap := encodedCommandScripts(commands[1]); len(bootstrap) != 1 {
+		t.Fatalf("cmd 引导脚本数 = %d，期待一个固定引导脚本：%q", len(bootstrap), commands[1])
 	}
-	if !strings.Contains(scripts[0], "New-SmbMapping") ||
-		!strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\datasets')`) ||
-		!strings.Contains(scripts[0], "-Persistent $false") ||
-		!strings.Contains(scripts[1], "robocopy") {
-		t.Fatalf("cmd 封装脚本没有先后包含盘符映射与 robocopy：%q", scripts)
+	inputs := environment.fake.recordedInputs()
+	injectionScript, values, ok := splitWindowsCmdInjectionFrames(inputs[1])
+	if !ok {
+		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
+	}
+	if !strings.Contains(injectionScript, "New-SmbMapping") ||
+		!strings.Contains(injectionScript, `AddArgument('\\192.0.2.10\datasets')`) ||
+		!strings.Contains(injectionScript, "-Persistent $false") {
+		t.Fatalf("cmd 注入脚本缺少盘符映射：\n%s", injectionScript)
+	}
+	if copyScripts := encodedCommandScripts(injectionScript); len(copyScripts) != 1 ||
+		!strings.Contains(copyScripts[0], "robocopy") {
+		t.Fatalf("cmd 用户命令脚本缺少 robocopy：%q", injectionScript)
+	}
+	if string(values) != "mount-password" {
+		t.Fatalf("cmd 标准输入值 = %q，期待只有挂载密码", values)
 	}
 	if content, err := os.ReadFile(environment.hostPath(targetRemote)); err != nil ||
 		string(content) != "cmd payload" {

@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -123,6 +124,11 @@ type preparedExec struct {
 	frames  []byte
 }
 
+// windowsCmdInjectionFailureExitCode 是 cmd 固定引导脚本或生成的注入脚本自
+// 身失败时使用的退出码。用户命令也可以主动返回同一个退出码；这里的常量
+// 只用于在代码与报告中说明 sshmgr 内部失败路径的取值。
+const windowsCmdInjectionFailureExitCode = 120
+
 func prepareExec(command string, options ExecInjectionOptions) (preparedExec, error) {
 	return prepareExecForTargetLayer(command, options, ExecLayerNormal)
 }
@@ -190,12 +196,14 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 		return drives[i].ShareName < drives[j].ShareName
 	})
 
+	if options.ShellType == models.ShellWindowsCmd {
+		return prepareWindowsCmdExec(command, environments, drives)
+	}
+
 	var wrapper strings.Builder
 	stdinDelimiter := ""
 	if options.ShellType == models.ShellPowerShell {
 		writePowerShellWrapper(&wrapper, environments, drives)
-	} else if options.ShellType == models.ShellWindowsCmd {
-		writeWindowsCmdWrapper(&wrapper, environments, drives)
 	} else {
 		if len(drives) > 0 {
 			return preparedExec{}, fmt.Errorf("network drive injection requires a Windows shell type")
@@ -213,6 +221,73 @@ func prepareExecForTargetLayer(command string, options ExecInjectionOptions, tar
 		frames = append([]byte(stdinDelimiter+"\n"), frames...)
 	}
 	return preparedExec{command: wrapper.String(), frames: frames}, nil
+}
+
+// prepareWindowsCmdExec 保持发往 SSH 的命令短且只含 ASCII 字符。完整注入
+// 脚本和用户命令改走第一条标准输入帧，因为 Windows OpenSSH 只把 cmd 命令
+// 的一行交给执行，cmd 命令行还有较低长度上限。
+func prepareWindowsCmdExec(command string, environments []EnvironmentInjection, drives []NetworkDriveInjection) (preparedExec, error) {
+	if strings.IndexByte(command, 0) >= 0 {
+		return preparedExec{}, fmt.Errorf("cmd command has a zero byte")
+	}
+	if !utf8.ValidString(command) {
+		return preparedExec{}, fmt.Errorf("cmd command is not valid UTF-8")
+	}
+
+	injectionScript := strings.Builder{}
+	injectionScript.WriteString("$__sshmgr_input_stream = $__sshmgr_stream\n")
+	injectionScript.WriteString("$__sshmgr_utf8 = New-Object System.Text.UTF8Encoding($false, $true)\n")
+	injectionScript.WriteString("$__sshmgr_read = 0\n")
+	injectionScript.WriteString("$__sshmgr_count = 0\n")
+	writePowerShellEnvironmentFrames(&injectionScript, environments)
+	writePowerShellNetworkDrives(&injectionScript, drives)
+	injectionScript.WriteString("Remove-Variable __sshmgr_utf8\n")
+	injectionScript.WriteString("Remove-Variable __sshmgr_read\n")
+	injectionScript.WriteString("Remove-Variable __sshmgr_count -ErrorAction SilentlyContinue\n")
+	injectionScript.WriteString("$__sshmgr_process = New-Object System.Diagnostics.Process\n")
+	injectionScript.WriteString("$__sshmgr_process.StartInfo.FileName = $env:ComSpec\n")
+	injectionScript.WriteString("$__sshmgr_process.StartInfo.Arguments = '/d /s /c \"' + " + PowerShellSingleQuote(command) + " + '\"'\n")
+	injectionScript.WriteString("$__sshmgr_process.StartInfo.UseShellExecute = $false\n")
+	injectionScript.WriteString("[void]$__sshmgr_process.Start()\n")
+	injectionScript.WriteString("$__sshmgr_process.WaitForExit()\n")
+	injectionScript.WriteString("exit $__sshmgr_process.ExitCode\n")
+
+	script := injectionScript.String()
+	if len(script) > 99999999 {
+		return preparedExec{}, fmt.Errorf("cmd injection script is too large")
+	}
+	scriptFrame := make([]byte, 8+len(script))
+	copy(scriptFrame, fmt.Sprintf("%08d", len(script)))
+	copy(scriptFrame[8:], script)
+
+	values := buildInjectionFrames(models.ShellWindowsCmd, environments, drives)
+	frames := make([]byte, 0, len(scriptFrame)+len(values))
+	frames = append(frames, scriptFrame...)
+	frames = append(frames, values...)
+	return preparedExec{
+		command: PowerShellEncodedCommand(windowsCmdBootstrapScript()),
+		frames:  frames,
+	}, nil
+}
+
+// windowsCmdBootstrapScript 读取第一条标准输入帧，并在 PowerShell 进程内执
+// 行。这个引导脚本固定不变：不随机密项数量、网络共享数量或用户命令增长。
+func windowsCmdBootstrapScript() string {
+	return `$ProgressPreference='SilentlyContinue'
+trap { exit ` + strconv.Itoa(windowsCmdInjectionFailureExitCode) + ` }
+$__sshmgr_stream = [Console]::OpenStandardInput()
+function Read-SshmgrFrame([int]$size) {
+  $frame = New-Object byte[] $size
+  $offset = 0
+  while ($offset -lt $size) {
+    $count = $__sshmgr_stream.Read($frame, $offset, $size - $offset)
+    if ($count -le 0) { throw 'frame ended' }
+    $offset += $count
+  }
+  $frame
+}
+$size = [int][Text.Encoding]::ASCII.GetString((Read-SshmgrFrame 8))
+& ([scriptblock]::Create([Text.Encoding]::UTF8.GetString((Read-SshmgrFrame $size))))`
 }
 
 // validateNetworkDriveInjection 是网络盘符注入项的最后防线。注入计划层
@@ -289,26 +364,16 @@ func isWindowsShellType(shellType models.ShellType) bool {
 }
 
 // buildInjectionFrames 把注入值按封装脚本的读取顺序写进标准输入。
-// cmd 先让 PowerShell 子进程按长度读取挂载密码，再由 set /p 逐行读取环
-// 境变量值（每个值后补一次行分隔）；PowerShell 顺序保持为先读环境变量，
-// 再读各共享挂载密码，二者都不补分隔。
+// Windows PowerShell 与 cmd 的注入脚本都先读取环境变量值，再读取各共
+// 享挂载密码；cmd 的注入脚本本体另有一个独立的标准输入帧，由调用方拼
+// 在这些值之前。
 func buildInjectionFrames(shellType models.ShellType, environments []EnvironmentInjection, drives []NetworkDriveInjection) []byte {
 	var frames []byte
-	if shellType == models.ShellWindowsCmd {
-		for _, drive := range drives {
-			frames = append(frames, drive.Password...)
-		}
-	}
 	for _, environment := range environments {
 		frames = append(frames, environment.Value...)
-		if shellType == models.ShellWindowsCmd {
-			frames = append(frames, '\r', '\n')
-		}
 	}
-	if shellType != models.ShellWindowsCmd {
-		for _, drive := range drives {
-			frames = append(frames, drive.Password...)
-		}
+	for _, drive := range drives {
+		frames = append(frames, drive.Password...)
 	}
 	return frames
 }
@@ -384,7 +449,9 @@ func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInj
 	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(drive.UserName))
 	wrapper.WriteString("    $null = $__sshmgr_pipeline.AddArgument($__sshmgr_password)\n")
 	wrapper.WriteString("    $__sshmgr_task = $__sshmgr_pipeline.BeginInvoke()\n")
-	fmt.Fprintf(wrapper, "    if (-not $__sshmgr_task.Wait(%d)) {\n", NetworkDriveMappingTimeout.Milliseconds())
+	// BeginInvoke 返回的 PowerShellAsyncResult 没有 Wait 方法，只能等它的
+	// 等待句柄（Windows PowerShell 5.1 实测）。
+	fmt.Fprintf(wrapper, "    if (-not $__sshmgr_task.AsyncWaitHandle.WaitOne(%d)) {\n", NetworkDriveMappingTimeout.Milliseconds())
 	wrapper.WriteString("      $__sshmgr_status = 'timeout'\n")
 	wrapper.WriteString("      $__sshmgr_timed_out = $true\n")
 	wrapper.WriteString("      try { $null = $__sshmgr_pipeline.BeginStop($null, $null) } catch { }\n")
@@ -446,6 +513,16 @@ func writePowerShellWrapper(wrapper *strings.Builder, environments []Environment
 	wrapper.WriteString("$__sshmgr_utf8 = New-Object System.Text.UTF8Encoding($false, $true)\n")
 	wrapper.WriteString("$__sshmgr_read = 0\n")
 	wrapper.WriteString("$__sshmgr_count = 0\n")
+	writePowerShellEnvironmentFrames(wrapper, environments)
+	writePowerShellNetworkDrives(wrapper, drives)
+	wrapper.WriteString("Remove-Variable __sshmgr_input_stream\n")
+	wrapper.WriteString("Remove-Variable __sshmgr_utf8\n")
+	wrapper.WriteString("Remove-Variable __sshmgr_read\n")
+	// 网络盘符段落已经删过它，这里只在没有网络盘符时才真正删除。
+	wrapper.WriteString("Remove-Variable __sshmgr_count -ErrorAction SilentlyContinue\n")
+}
+
+func writePowerShellEnvironmentFrames(wrapper *strings.Builder, environments []EnvironmentInjection) {
 	for _, environment := range environments {
 		length := len(environment.Value)
 		fmt.Fprintf(wrapper, "$__sshmgr_bytes = New-Object byte[] %d\n", length)
@@ -457,51 +534,6 @@ func writePowerShellWrapper(wrapper *strings.Builder, environments []Environment
 		fmt.Fprintf(wrapper, "$env:%s = $__sshmgr_utf8.GetString($__sshmgr_bytes, 0, %d)\n", environment.EnvironmentName, length)
 		wrapper.WriteString("Remove-Variable __sshmgr_bytes\n")
 		wrapper.WriteString("$__sshmgr_read = 0\n")
-	}
-	writePowerShellNetworkDrives(wrapper, drives)
-	wrapper.WriteString("Remove-Variable __sshmgr_input_stream\n")
-	wrapper.WriteString("Remove-Variable __sshmgr_utf8\n")
-	wrapper.WriteString("Remove-Variable __sshmgr_read\n")
-	wrapper.WriteString("Remove-Variable __sshmgr_count\n")
-}
-
-// writeWindowsCmdWrapper 先由 PowerShell 子进程按长度精确读取网络盘符密
-// 码并完成映射，再在读环境变量值期间切到 UTF-8 代码页，用 set /p 逐行读
-// 取值，读完恢复原代码页，最后执行用户命令。顺序不能颠倒：cmd 的 set /p
-// 从管道读一行时可能读走行尾之后的字节，会吞掉后面的密码帧。
-func writeWindowsCmdWrapper(wrapper *strings.Builder, environments []EnvironmentInjection, drives []NetworkDriveInjection) {
-	wrapper.WriteString(`for /f "tokens=2 delims=:" %A in ('chcp') do set "__sshmgr_original_code_page=%A"` + "\n")
-	wrapper.WriteString(`for /f "delims=" %A in ('powershell -NoProfile -NonInteractive -Command "[DateTime]::UtcNow.Ticks"') do set "__sshmgr_drive_started=%A"` + "\n")
-	writeWindowsCmdNetworkDrives(wrapper, drives)
-	wrapper.WriteString("set \"__sshmgr_drive_started=\"\n")
-	wrapper.WriteString("chcp 65001 >NUL\n")
-	for _, environment := range environments {
-		fmt.Fprintf(wrapper, "set \"%s=\"\n", environment.EnvironmentName)
-		fmt.Fprintf(wrapper, "set /p %s=\n", environment.EnvironmentName)
-	}
-	wrapper.WriteString("chcp %__sshmgr_original_code_page% >NUL\n")
-	wrapper.WriteString("set \"__sshmgr_original_code_page=\"\n")
-}
-
-// writeWindowsCmdNetworkDrives 为每个共享启动一个 PowerShell 子进程执行映
-// 射。脚本经 -EncodedCommand 传给子进程，避免 cmd 解析换行、引号、百分号
-// 等字符；每次只携带一个共享，防止多个脚本合并后超过 cmd 单行长度上限。
-// 子进程继承 cmd 的标准输入，按长度读走自己的密码帧，剩余字节留给后续共
-// 享和用户命令。
-func writeWindowsCmdNetworkDrives(wrapper *strings.Builder, drives []NetworkDriveInjection) {
-	for index, drive := range drives {
-		script := strings.Builder{}
-		script.WriteString("$__sshmgr_input_stream = [Console]::OpenStandardInput()\n")
-		script.WriteString("$__sshmgr_utf8 = New-Object System.Text.UTF8Encoding($false, $true)\n")
-		script.WriteString("$__sshmgr_read = 0\n")
-		script.WriteString("$__sshmgr_count = 0\n")
-		writePowerShellNetworkDrive(&script, drive, index)
-		script.WriteString("Remove-Variable __sshmgr_input_stream\n")
-		script.WriteString("Remove-Variable __sshmgr_utf8\n")
-		script.WriteString("Remove-Variable __sshmgr_read\n")
-		script.WriteString("Remove-Variable __sshmgr_count\n")
-		wrapper.WriteString(PowerShellEncodedCommand(script.String()))
-		wrapper.WriteString("\n")
 	}
 }
 
@@ -530,8 +562,9 @@ func bytesContainZero(value []byte) bool {
 	return false
 }
 
-// WindowsCmdValueHasLineBreak 判断一个环境变量值是否含有 cmd 的 set /p
-// 无法完整读回的回车或换行字节。
+// WindowsCmdValueHasLineBreak 判断一个环境变量值是否含有回车或换行字节。
+// cmd 注入继续沿用既有输入契约并拒绝这类值，避免改变调用方已依赖的行
+// 为与警告文案。
 func WindowsCmdValueHasLineBreak(value []byte) bool {
 	return bytes.IndexByte(value, '\r') >= 0 || bytes.IndexByte(value, '\n') >= 0
 }
