@@ -25,9 +25,13 @@ type WebUIListenerStatus struct {
 // WebUIListenerOptions 是 Web UI 监听管理者的注入点。Bind 与 Serve 分开，
 // 测试可以观察绑定与关闭，不需要真的处理 HTTPS 流量。
 type WebUIListenerOptions struct {
-	Port            int
-	Plan            func() (webui.ListenPlan, error)
-	Bind            func(address string) (net.Listener, error)
+	Port int
+	Plan func() (webui.ListenPlan, error)
+	Bind func(address string) (net.Listener, error)
+	// InitialListener is an already-open listener consumed on the first Sync
+	// when its address is in the plan. It lets callers hand over a listener
+	// bound to a system-assigned port without closing and rebinding it.
+	InitialListener net.Listener
 	Serve           func(net.Listener) error
 	SetAllowedHosts func([]string)
 	Log             func(format string, arguments ...any)
@@ -35,12 +39,13 @@ type WebUIListenerOptions struct {
 }
 
 type webUIListenerManager struct {
-	options WebUIListenerOptions
-	mu      sync.Mutex
-	active  map[string]net.Listener
-	pending map[string]time.Time
-	hintLog bool
-	closed  bool
+	options         WebUIListenerOptions
+	initialListener net.Listener
+	mu              sync.Mutex
+	active          map[string]net.Listener
+	pending         map[string]time.Time
+	hintLog         bool
+	closed          bool
 }
 
 // NewWebUIListenerManager 构造监听管理者。它不立即绑定；调用方在启动时调用
@@ -52,9 +57,10 @@ func NewWebUIListenerManager(options WebUIListenerOptions) *webUIListenerManager
 		}
 	}
 	return &webUIListenerManager{
-		options: options,
-		active:  map[string]net.Listener{},
-		pending: map[string]time.Time{},
+		options:         options,
+		initialListener: options.InitialListener,
+		active:          map[string]net.Listener{},
+		pending:         map[string]time.Time{},
 	}
 }
 
@@ -86,7 +92,14 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 		if retryAt, ok := m.pending[address]; ok && now.Before(retryAt) {
 			continue
 		}
-		listener, bindErr := m.options.Bind(net.JoinHostPort(address, strconv.Itoa(m.options.Port)))
+		var listener net.Listener
+		var bindErr error
+		if m.initialListener != nil && listenerPlanAddress(m.initialListener) == address {
+			listener = m.initialListener
+			m.initialListener = nil
+		} else {
+			listener, bindErr = m.options.Bind(net.JoinHostPort(address, strconv.Itoa(m.options.Port)))
+		}
 		if bindErr != nil {
 			m.pending[address] = now.Add(30 * time.Second)
 			m.logLocked("sshmgr serve: Web UI 绑定 %s 失败，30 秒后重试：%v", address, bindErr)
@@ -136,6 +149,17 @@ func (m *webUIListenerManager) Sync(now time.Time) (WebUIListenerStatus, error) 
 		NextRetry:          nextRetry,
 		NeedsManualListen:  plan.NeedsManualListen,
 	}, nil
+}
+
+func listenerPlanAddress(listener net.Listener) string {
+	if address, ok := listener.Addr().(*net.TCPAddr); ok {
+		return address.IP.String()
+	}
+	host, _, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		return listener.Addr().String()
+	}
+	return host
 }
 
 // Run 周期性重新计算监听地址。固定轮询避免要求 vault 提供专门的变更通知。
