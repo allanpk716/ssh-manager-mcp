@@ -130,6 +130,63 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	}
 }
 
+// TestServerDetailShowsReadOnlyDeliveryRecords 校验详情页第四组展示记录列
+// 表与可展开详情，不提供任何编辑或删除入口；客户端页面整组隐藏。
+func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-fine"].ShowDeliveryRecords = true
+	store.details["srv-fine"].DeliveryRecords = []SecretDeliveryRecordRow{{
+		ServerName: "fine", Path: "/etc/app/config.yml",
+		Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("5", 64),
+		WrittenAt: time.Unix(1760000900, 0), InitiatingDeviceName: "office-laptop",
+		InitiatingInstanceName: "agent-a",
+		Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+	}}
+	store.details["srv-fine"].SiblingDeliveryRecords = []ServerDetailSiblingDeliveryRecord{{
+		SecretDeliveryRecordRow: SecretDeliveryRecordRow{
+			ServerName: "worker", Path: "/etc/worker/config.yml",
+			Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("6", 64),
+			WrittenAt: time.Unix(1760001000, 0), InitiatingDeviceName: "worker-laptop",
+			InitiatingInstanceName: "agent-b",
+			Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+		},
+		SourceServerID: "srv-worker", SourceServerName: "worker",
+	}}
+	store.details["srv-bare"].ShowDeliveryRecords = true
+	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"下发记录", "/etc/app/config.yml", "OLD_TOKEN", "引用的机密项已删除",
+		"写入时间", "office-laptop", "agent-a", "<details", "模板原文",
+		"token: {{sshmgr-secret:OLD_TOKEN}}", strings.Repeat("5", 64), "值版本号", "OLD_TOKEN：2",
+		"同设备其他服务器条目带来的下发文件", "来源服务器条目", "worker",
+		"/etc/worker/config.yml", "worker-laptop", "agent-b",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器详情页下发记录缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"编辑下发记录", "删除下发记录", "清理下发记录"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("下发记录组必须只读，页面不得包含 %q：\n%s", forbidden, page)
+		}
+	}
+
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	if !strings.Contains(empty, "暂无写到这台服务器的下发记录。") {
+		t.Fatalf("服务器详情页下发记录空状态不明确：\n%s", empty)
+	}
+
+	clientHandler, clientCookie := newServersTestHandler(t, RoleClient, store, &stubServerWriter{})
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
+	for _, forbidden := range []string{"下发记录", "同设备其他服务器条目带来的下发文件"} {
+		if strings.Contains(clientPage, forbidden) {
+			t.Fatalf("客户端服务器详情不得显示 %q：\n%s", forbidden, clientPage)
+		}
+	}
+}
+
 type stubServerWriter struct {
 	adds           []ServerAddForm
 	otherAdds      []OtherDeviceAddForm

@@ -241,7 +241,9 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}}, "")
 	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "n", Name: "笔记本实例服务器", User: "u", Host: "192.0.2.20", Port: 22, CredentialID: "c", Role: "r"},
-	}}, "laptop")
+	}, SecretDeliveryRecords: []store.SnapshotSecretDeliveryRecord{{
+		ID: "record", ServerID: "n", Path: "/etc/app/config.yml", PathKey: "/etc/app/config.yml",
+	}}}, "laptop")
 
 	got, err := clientUIServerSource{}.Servers("laptop")
 	if err != nil {
@@ -263,6 +265,9 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}
 	if detail == nil || detail.ID != "n" {
 		t.Fatalf("服务器详情应读取指定实例快照，实际：%+v", detail)
+	}
+	if detail.ShowDeliveryRecords || len(detail.DeliveryRecords) != 0 || len(detail.SiblingDeliveryRecords) != 0 {
+		t.Fatalf("客户端 Web UI 不得装配下发记录：%+v", detail)
 	}
 }
 

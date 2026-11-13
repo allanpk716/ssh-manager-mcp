@@ -15,6 +15,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/servermanage"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/termdetect"
 	"ssh-manager-mcp/internal/webui"
 )
@@ -116,10 +117,12 @@ func serversShowCmd() *cobra.Command {
 				ExposeHost: detail.Server.ExposeHost, DeviceName: detail.DeviceName,
 				HasDevice: detail.HasDevice, AttentionReasons: detail.AttentionReasons,
 				Reverse: &serverReverseDetailText{
-					Secrets:               detail.Secrets,
-					SharedStorages:        detail.SharedStorages,
-					Profiles:              detail.Profiles,
-					SiblingSharedStorages: detail.SiblingSharedStorages,
+					Secrets:                detail.Secrets,
+					SharedStorages:         detail.SharedStorages,
+					Profiles:               detail.Profiles,
+					DeliveryRecords:        detail.DeliveryRecords,
+					SiblingSharedStorages:  detail.SiblingSharedStorages,
+					SiblingDeliveryRecords: detail.SiblingDeliveryRecords,
 				},
 			})
 			return nil
@@ -148,10 +151,12 @@ type serverDetailText struct {
 }
 
 type serverReverseDetailText struct {
-	Secrets               []servermanage.DetailSecret
-	SharedStorages        []servermanage.DetailSharedStorage
-	Profiles              []servermanage.DetailProfile
-	SiblingSharedStorages []servermanage.DetailSiblingSharedStorage
+	Secrets                []servermanage.DetailSecret
+	SharedStorages         []servermanage.DetailSharedStorage
+	Profiles               []servermanage.DetailProfile
+	DeliveryRecords        []store.SecretDeliveryRecord
+	SiblingSharedStorages  []servermanage.DetailSiblingSharedStorage
+	SiblingDeliveryRecords []store.SecretDeliveryRecord
 }
 
 // writeServerDetail 是单机与客户端共用的详情排版；字段来源不同，内容一致。
@@ -238,6 +243,20 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 	for _, profile := range d.Reverse.Profiles {
 		fmt.Fprintf(w, "  %s\n", profile.Name)
 	}
+	fmt.Fprintln(w, "下发记录：")
+	if len(d.Reverse.DeliveryRecords) == 0 {
+		fmt.Fprintln(w, "  暂无写到这台服务器的下发记录。")
+	}
+	for _, record := range d.Reverse.DeliveryRecords {
+		fmt.Fprintf(
+			w, "  %s：机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+			record.Path, serverDeliverySecrets(record.Secrets),
+			record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
+			record.InitiatingDeviceName, record.InitiatingInstanceName,
+		)
+		fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
+		fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+	}
 	fmt.Fprintln(w, "同设备其他服务器条目带来的共享存储：")
 	if len(d.Reverse.SiblingSharedStorages) == 0 {
 		fmt.Fprintln(w, "  无")
@@ -246,6 +265,32 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 		fmt.Fprintf(w, "  %s：来源服务器条目 %s；这台机器上的挂载点 %s\n",
 			share.Name, share.SourceServerName, share.MountPoint)
 	}
+	fmt.Fprintln(w, "同设备其他服务器条目带来的下发文件：")
+	if len(d.Reverse.SiblingDeliveryRecords) == 0 {
+		fmt.Fprintln(w, "  无")
+	}
+	for _, record := range d.Reverse.SiblingDeliveryRecords {
+		fmt.Fprintf(
+			w, "  %s：来源服务器条目 %s；机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+			record.Path, record.ServerName, serverDeliverySecrets(record.Secrets),
+			record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
+			record.InitiatingDeviceName, record.InitiatingInstanceName,
+		)
+		fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
+		fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+	}
+}
+
+func serverDeliverySecrets(secrets []store.SecretDeliverySecretRecord) string {
+	names := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		name := secret.Name
+		if secret.Deleted {
+			name += "（引用的机密项已删除）"
+		}
+		names = append(names, fmt.Sprintf("%s（值版本号 %d）", name, secret.ValueVersion))
+	}
+	return strings.Join(names, ", ")
 }
 
 func textOrDefault(value string) string {

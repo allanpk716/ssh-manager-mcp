@@ -1,7 +1,10 @@
 package servermanage
 
 import (
+	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -144,5 +147,123 @@ func TestDetailReverseViewSummarizesAuthorizations(t *testing.T) {
 	}
 	if len(after) != len(before) {
 		t.Fatalf("读取服务器详情不应写审计：before=%d after=%d", len(before), len(after))
+	}
+}
+
+// TestDetailReverseViewIncludesDeliveryRecords 校验服务器详情第四组只读消
+// 费既有的下发记录查询：同路径只保留最新一条，兄弟条目的记录只进入同设备
+// 可见性提示。
+func TestDetailReverseViewIncludesDeliveryRecords(t *testing.T) {
+	m := newTestManager(t)
+	device, err := m.st.AddDevice("workstation", "同一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary := mustAddServer(t, m, &models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	sibling := mustAddServer(t, m, &models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err := m.st.AddSecret(
+		"API_TOKEN", "接口令牌", []byte("ordinary-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.AddSecret(
+		"OLD_TOKEN", "已下线令牌", []byte("deleted-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.AllowSecrets(
+		[]string{"API_TOKEN", "OLD_TOKEN"}, []string{"web", "worker"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := m.st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.GrantServers(profileID, []string{primary, sibling}); err != nil {
+		t.Fatal(err)
+	}
+	record := func(serverID, path, secretName, digest string, writtenAt int64, version int64) store.SecretDeliveryRecordInput {
+		return store.SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:" + secretName + "}}"),
+			FileSHA256: digest, WrittenAt: time.Unix(writtenAt, 0),
+			Secrets:              []store.SecretDeliverySecret{{Name: secretName, ValueVersion: version}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}
+	}
+	if _, err := m.st.RecordSecretDelivery(record(
+		primary, "/etc/app/config.yml", "API_TOKEN", strings.Repeat("4", 64), 1760000800, 1,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.st.RecordSecretDelivery(record(
+		primary, "/etc/app/config.yml", "API_TOKEN", strings.Repeat("5", 64), 1760000900, 2,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.st.RecordSecretDelivery(record(
+		primary, "/etc/app/old.yml", "OLD_TOKEN", strings.Repeat("6", 64), 1760000700, 1,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	workerRecord := record(
+		sibling, "/etc/worker/config.yml", "API_TOKEN", strings.Repeat("7", 64), 1760001000, 2,
+	)
+	workerRecord.InitiatingDeviceName = "worker-laptop"
+	workerRecord.InitiatingInstanceName = "agent-b"
+	if _, err := m.st.RecordSecretDelivery(workerRecord, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.DeleteSecret("OLD_TOKEN", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	before, err := m.st.QueryAudit(store.AuditFilter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := m.Detail(primary)
+	if err != nil || detail == nil {
+		t.Fatalf("读取服务器详情失败：detail=%+v err=%v", detail, err)
+	}
+	want, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: primary})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(want) != 2 {
+		t.Fatalf("测试准备应留下两条最新记录：%+v", want)
+	}
+	if !reflect.DeepEqual(detail.DeliveryRecords, want) {
+		t.Fatalf("详情下发记录应与按服务器查询结果一致：\nwant %+v\ngot  %+v", want, detail.DeliveryRecords)
+	}
+	if len(detail.DeliveryRecords) != 2 ||
+		detail.DeliveryRecords[0].Path != "/etc/app/config.yml" ||
+		detail.DeliveryRecords[0].WrittenAt.Unix() != 1760000900 ||
+		detail.DeliveryRecords[0].FileSHA256 != strings.Repeat("5", 64) ||
+		detail.DeliveryRecords[0].Secrets[0].ValueVersion != 2 {
+		t.Fatalf("同一路径应只保留最新下发记录：%+v", detail.DeliveryRecords)
+	}
+	if len(detail.DeliveryRecords) < 2 || !detail.DeliveryRecords[1].Secrets[0].Deleted {
+		t.Fatalf("已删除机密项的记录应保留并带删除标注：%+v", detail.DeliveryRecords)
+	}
+	if len(detail.SiblingDeliveryRecords) != 1 ||
+		detail.SiblingDeliveryRecords[0].Path != "/etc/worker/config.yml" ||
+		detail.SiblingDeliveryRecords[0].ServerName != "worker" ||
+		detail.SiblingDeliveryRecords[0].InitiatingDeviceName != "worker-laptop" ||
+		detail.SiblingDeliveryRecords[0].InitiatingInstanceName != "agent-b" {
+		t.Fatalf("同设备下发记录提示不正确：%+v", detail.SiblingDeliveryRecords)
+	}
+	after, err := m.st.QueryAudit(store.AuditFilter{Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Fatalf("读取下发记录组不应写审计：before=%d after=%d", len(before), len(after))
 	}
 }

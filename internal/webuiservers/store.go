@@ -9,6 +9,7 @@ import (
 	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/servermanage"
+	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
 )
 
@@ -177,6 +178,17 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 	for _, profile := range detail.Profiles {
 		view.Profiles = append(view.Profiles, webui.ServerDetailProfile{ID: profile.ID, Name: profile.Name})
 	}
+	view.ShowDeliveryRecords = true
+	for _, record := range detail.DeliveryRecords {
+		view.DeliveryRecords = append(view.DeliveryRecords, deliveryRecordRow(record))
+	}
+	for _, record := range detail.SiblingDeliveryRecords {
+		view.SiblingDeliveryRecords = append(view.SiblingDeliveryRecords, webui.ServerDetailSiblingDeliveryRecord{
+			SecretDeliveryRecordRow: deliveryRecordRow(record),
+			SourceServerID:          record.ServerID,
+			SourceServerName:        record.ServerName,
+		})
+	}
 	for _, share := range detail.SiblingSharedStorages {
 		view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
 			ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
@@ -190,6 +202,22 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		})
 	}
 	return view, nil
+}
+
+func deliveryRecordRow(record store.SecretDeliveryRecord) webui.SecretDeliveryRecordRow {
+	row := webui.SecretDeliveryRecordRow{
+		ServerName: record.ServerName, Path: record.Path, Template: string(record.Template),
+		FileSHA256: record.FileSHA256, WrittenAt: record.WrittenAt,
+		InitiatingDeviceName:   record.InitiatingDeviceName,
+		InitiatingInstanceName: record.InitiatingInstanceName,
+		Secrets:                make([]webui.SecretDeliverySecretRow, 0, len(record.Secrets)),
+	}
+	for _, secret := range record.Secrets {
+		row.Secrets = append(row.Secrets, webui.SecretDeliverySecretRow{
+			Name: secret.Name, ValueVersion: secret.ValueVersion, Deleted: secret.Deleted,
+		})
+	}
+	return row
 }
 
 // writerAdapter 是 Web UI 修改服务器数据的适配器。
