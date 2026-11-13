@@ -292,14 +292,15 @@ func TestShareDetailMountScopeChecklistPreviewsAndConfirmsAuthorization(t *testi
 		t.Fatalf("可挂载范围勾选清单的初始状态不正确：\n%s", detail)
 	}
 
+	cellPrefix := "cell__" + secretID + "__"
 	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
-		"csrf_token":                            {csrfToken(t, h)},
-		"return_to":                             {"/ui/shares/" + datasetsID},
-		"secret_id":                             {secretID},
-		"server_id":                             {linuxWebID, linuxDBID, windowsWebID},
-		"cell__" + secretID + "__" + linuxWebID: {"0"},
-		"cell__" + secretID + "__" + linuxDBID:  {"1"},
-		"cell__" + secretID + "__" + windowsWebID: {"1"},
+		"csrf_token":              {csrfToken(t, h)},
+		"return_to":               {"/ui/shares/" + datasetsID},
+		"secret_id":               {secretID},
+		"server_id":               {linuxWebID, linuxDBID, windowsWebID},
+		cellPrefix + linuxWebID:   {"0"},
+		cellPrefix + linuxDBID:    {"1"},
+		cellPrefix + windowsWebID: {"1"},
 	})
 	previewBody := body(t, preview)
 	if preview.StatusCode != http.StatusOK {
