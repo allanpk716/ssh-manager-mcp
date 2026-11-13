@@ -17,8 +17,9 @@ import (
 )
 
 // TestPrepareExecNetworkDrivePowerShellAssembly 钉住 PowerShell 服务器上网络
-// 盘符注入的拼装形态：映射经异步调用执行、密码只走标准输入、封装脚本里
-// 不出现双引号（Windows OpenSSH 对 PowerShell 命令文本会剥掉双引号）。
+// 盘符注入的拼装形态：WNetAddConnection2 经异步调用执行、返回码决定状态、
+// 密码只走标准输入、封装脚本里不出现双引号（Windows OpenSSH 对 PowerShell
+// 命令文本会剥掉双引号）。
 func TestPrepareExecNetworkDrivePowerShellAssembly(t *testing.T) {
 	password := []byte("drive-p@ss%'\"|中文\r\n")
 	const userCommand = `Get-ChildItem S:\datasets`
@@ -36,12 +37,11 @@ func TestPrepareExecNetworkDrivePowerShellAssembly(t *testing.T) {
 	}
 	command := prepared.command
 	for _, want := range []string{
-		"New-SmbMapping",
-		"-LocalPath $a",
-		"-RemotePath $b",
-		"-UserName $c",
-		"-Password $d",
-		"-Persistent $false",
+		"Add-Type -Namespace SshmgrNative -Name Mpr",
+		"WNetAddConnection2(NetResource resource, string password, string username, int flags)",
+		"[SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)",
+		"if ($__sshmgr_return -eq 0) { $__sshmgr_status = 'ok' } else { $__sshmgr_status = 'error-' + $__sshmgr_return }",
+		"if ($__sshmgr_return -isnot [int]) { throw 'sshmgr network drive injection returned no integer result' }",
 		"BeginInvoke",
 		"AsyncWaitHandle.WaitOne(3000)",
 		"AddArgument('S:')",
@@ -60,13 +60,16 @@ func TestPrepareExecNetworkDrivePowerShellAssembly(t *testing.T) {
 	if strings.Contains(command, "\"") {
 		t.Fatalf("wrapped command contains a double quote:\n%s", command)
 	}
+	if strings.Contains(command, "New-SmbMapping") {
+		t.Fatalf("wrapped command still uses New-SmbMapping:\n%s", command)
+	}
 	if !bytes.Equal(prepared.frames, password) {
 		t.Fatalf("standard input frames = %q, want only the password", prepared.frames)
 	}
 }
 
 // TestPrepareExecNetworkDriveTimeoutStopIsAsynchronous 钉住超时分支的生成
-// 形态：发起异步停止后立刻回传状态行，不等待 New-SmbMapping 返回，也不同
+// 形态：发起异步停止后立刻回传状态行，不等待映射调用返回，也不同
 // 步释放仍在停止中的 PowerShell 管道。地址不可达时同步停止可能阻塞约
 // 10 秒，会使 3 秒上限失效。
 func TestPrepareExecNetworkDriveTimeoutStopIsAsynchronous(t *testing.T) {
@@ -90,6 +93,43 @@ func TestPrepareExecNetworkDriveTimeoutStopIsAsynchronous(t *testing.T) {
 	}
 	if strings.Contains(command, "$__sshmgr_pipeline.Stop()") {
 		t.Fatalf("wrapped command uses synchronous pipeline stop:\n%s", command)
+	}
+}
+
+// TestPrepareExecNetworkDriveAddsWNetTypeOnce 钉住 WNetAddConnection2 的类型
+// 声明只出现一次；声明失败时每个共享都走 error-wrapper，且仍会读走自己的
+// 密码帧，保证后续注入与用户命令可以继续。
+func TestPrepareExecNetworkDriveAddsWNetTypeOnce(t *testing.T) {
+	first := newNetworkDriveInjection()
+	second := newNetworkDriveInjection()
+	second.ShareName = "reports"
+	second.Drive = "T"
+	second.Password = []byte("second-drive-password")
+	second.StatusMarker = "3f2a9c8d1b7e4057"
+	prepared, err := prepareExec("Get-ChildItem S:\\ T:\\", ExecInjectionOptions{
+		ShellType:   models.ShellPowerShell,
+		TargetLayer: ExecLayerNormal,
+		Items:       []ExecInjection{first, second},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(prepared.command, "Add-Type -Namespace SshmgrNative -Name Mpr"); got != 1 {
+		t.Fatalf("Add-Type declaration count = %d, want 1:\n%s", got, prepared.command)
+	}
+	for _, want := range []string{
+		"if ($__sshmgr_can_map -and $__sshmgr_wnet_ready) {",
+		"} elseif (-not $__sshmgr_wnet_ready) {\n  $__sshmgr_status = 'error-wrapper'",
+		"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0",
+		"SSHMGR-SMBMAP:3f2a9c8d1b7e4057:1",
+	} {
+		if !strings.Contains(prepared.command, want) {
+			t.Fatalf("wrapped command missing %q:\n%s", want, prepared.command)
+		}
+	}
+	wantFrames := append(append([]byte{}, first.Password...), second.Password...)
+	if !bytes.Equal(prepared.frames, wantFrames) {
+		t.Fatalf("standard input frames = %q, want both passwords", prepared.frames)
 	}
 }
 
@@ -160,6 +200,7 @@ func TestPrepareExecWindowsCmdUsesShortPowerShellBootstrap(t *testing.T) {
 				StatusMarker: "3f2a9c8d1b7e4056",
 			}},
 			wantScript: []string{
+				"WNetAddConnection2",
 				`AddArgument('\\192.0.2.10\datasets')`,
 				"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0",
 			},
@@ -183,6 +224,7 @@ func TestPrepareExecWindowsCmdUsesShortPowerShellBootstrap(t *testing.T) {
 			},
 			wantScript: []string{
 				"$env:HF_TOKEN",
+				"WNetAddConnection2",
 				`AddArgument('\\192.0.2.10\datasets')`,
 				`AddArgument('\\192.0.2.20\reports')`,
 				"SSHMGR-SMBMAP:3f2a9c8d1b7e4056:0",

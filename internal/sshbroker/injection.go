@@ -399,7 +399,7 @@ func PowerShellSingleQuote(value string) string {
 	return builder.String()
 }
 
-// NetworkDriveMappingTimeout 是远端 New-SmbMapping 异步调用的等待上限。
+// NetworkDriveMappingTimeout 是远端 WNetAddConnection2 异步调用的等待上限。
 // 地址不可达时该调用可能要约 10 秒才失败，3 秒上限保证注入步骤不会拖垮
 // 用户命令（#206 真机结论）。
 const NetworkDriveMappingTimeout = 3 * time.Second
@@ -408,18 +408,46 @@ const NetworkDriveMappingTimeout = 3 * time.Second
 // 定总时长上限。这个时间属于用户命令超时的一部分，不再额外延长 SSH 会话。
 const NetworkDriveInjectionTotalTimeout = 10 * time.Second
 
-// writePowerShellNetworkDrives 为每个共享写一段映射脚本：按长度从标准输
-// 入读出密码字节，经 PowerShell 异步调用执行 New-SmbMapping（密码只存在
-// 进程内变量里，不出现在任何进程命令行），用带随机标记的状态行回传结
-// 果，再继续执行后续注入与用户命令。超时时只发起异步停止，不等待它完
-// 成，也不同步释放管道。任何映射失败都只体现在状态行里，不会中断用户
-// 命令。
+// writePowerShellNetworkDrives 先声明一次 Windows 网络连接函数，再为每个
+// 共享写一段映射脚本：按长度从标准输入读出密码字节，经 PowerShell 异步
+// 调用执行 WNetAddConnection2（密码只存在进程内变量里，不出现在任何进
+// 程命令行），用带随机标记的状态行回传结果，再继续执行后续注入与用户
+// 命令。超时时只发起异步停止，不等待它完成，也不同步释放管道。任何映
+// 射失败都只体现在状态行里，不会中断用户命令。
 func writePowerShellNetworkDrives(wrapper *strings.Builder, drives []NetworkDriveInjection) {
+	if len(drives) == 0 {
+		return
+	}
 	wrapper.WriteString("$__sshmgr_injection_started = [DateTime]::UtcNow.Ticks\n")
+	writePowerShellWNetType(wrapper)
 	for index, drive := range drives {
 		writePowerShellNetworkDrive(wrapper, drive, index)
 	}
+	wrapper.WriteString("Remove-Variable __sshmgr_wnet_ready -ErrorAction SilentlyContinue\n")
 	wrapper.WriteString("Remove-Variable __sshmgr_injection_started -ErrorAction SilentlyContinue\n")
+}
+
+// writePowerShellWNetType 声明调用 mpr.dll 的 Windows 网络连接函数。同一
+// 条注入脚本里所有共享共用这一份类型定义；类型已存在时跳过声明。声明失
+// 败只记录在就绪变量里，后续每个共享都会回传 error-wrapper。
+func writePowerShellWNetType(wrapper *strings.Builder) {
+	wrapper.WriteString("$__sshmgr_wnet_ready = $false\n")
+	wrapper.WriteString("if (-not ('SshmgrNative.Mpr' -as [type])) {\n")
+	wrapper.WriteString("  try {\n")
+	wrapper.WriteString("    $__sshmgr_wnet_definition = @'\n")
+	wrapper.WriteString("[StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]\n")
+	wrapper.WriteString("public class NetResource { public int Scope; public int Type; public int DisplayType; public int Usage; public string LocalName; public string RemoteName; public string Comment; public string Provider; }\n")
+	wrapper.WriteString("[DllImport('mpr.dll', CharSet = CharSet.Unicode)]\n")
+	wrapper.WriteString("public static extern int WNetAddConnection2(NetResource resource, string password, string username, int flags);\n")
+	wrapper.WriteString("'@\n")
+	wrapper.WriteString("    $__sshmgr_wnet_definition = $__sshmgr_wnet_definition.Replace('''mpr.dll''', [string][char]34 + 'mpr.dll' + [string][char]34)\n")
+	wrapper.WriteString("    $null = Add-Type -Namespace SshmgrNative -Name Mpr -MemberDefinition $__sshmgr_wnet_definition -ErrorAction Stop\n")
+	wrapper.WriteString("    $__sshmgr_wnet_ready = $true\n")
+	wrapper.WriteString("  } catch { }\n")
+	wrapper.WriteString("} else {\n")
+	wrapper.WriteString("  $__sshmgr_wnet_ready = $true\n")
+	wrapper.WriteString("}\n")
+	wrapper.WriteString("Remove-Variable __sshmgr_wnet_definition -ErrorAction SilentlyContinue\n")
 }
 
 func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInjection, index int) {
@@ -440,10 +468,10 @@ func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInj
 	wrapper.WriteString("Remove-Variable __sshmgr_bytes\n")
 	wrapper.WriteString("$__sshmgr_read = 0\n")
 	wrapper.WriteString("$__sshmgr_timed_out = $false\n")
-	wrapper.WriteString("if ($__sshmgr_can_map) {\n")
+	wrapper.WriteString("if ($__sshmgr_can_map -and $__sshmgr_wnet_ready) {\n")
 	wrapper.WriteString("  try {\n")
 	wrapper.WriteString("    $__sshmgr_pipeline = [PowerShell]::Create()\n")
-	wrapper.WriteString("    $null = $__sshmgr_pipeline.AddScript('param($a,$b,$c,$d) New-SmbMapping -LocalPath $a -RemotePath $b -UserName $c -Password $d -Persistent $false')\n")
+	wrapper.WriteString("    $null = $__sshmgr_pipeline.AddScript('param($a,$b,$c,$d) $resource = New-Object SshmgrNative.Mpr+NetResource; $resource.Type = 1; $resource.LocalName = $a; $resource.RemoteName = $b; [SshmgrNative.Mpr]::WNetAddConnection2($resource, $d, $c, 0)')\n")
 	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(drive.Drive+":"))
 	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(`\\`+drive.Address+`\`+drive.ShareName))
 	fmt.Fprintf(wrapper, "    $null = $__sshmgr_pipeline.AddArgument(%s)\n", PowerShellSingleQuote(drive.UserName))
@@ -457,18 +485,20 @@ func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInj
 	wrapper.WriteString("      try { $null = $__sshmgr_pipeline.BeginStop($null, $null) } catch { }\n")
 	wrapper.WriteString("    } else {\n")
 	wrapper.WriteString("      try {\n")
-	wrapper.WriteString("        $null = $__sshmgr_pipeline.EndInvoke($__sshmgr_task)\n")
-	wrapper.WriteString("        $__sshmgr_status = 'ok'\n")
+	wrapper.WriteString("        $__sshmgr_result = $__sshmgr_pipeline.EndInvoke($__sshmgr_task)\n")
+	wrapper.WriteString("        if ($__sshmgr_result.Count -ne 1) { throw 'sshmgr network drive injection returned no integer result' }\n")
+	wrapper.WriteString("        $__sshmgr_return = $__sshmgr_result[0]\n")
+	wrapper.WriteString("        if ($__sshmgr_return -isnot [int]) { throw 'sshmgr network drive injection returned no integer result' }\n")
+	wrapper.WriteString("        if ($__sshmgr_return -eq 0) { $__sshmgr_status = 'ok' } else { $__sshmgr_status = 'error-' + $__sshmgr_return }\n")
 	wrapper.WriteString("      } catch {\n")
-	wrapper.WriteString("        $__sshmgr_exception = $_.Exception;$__sshmgr_code = ''\n")
-	wrapper.WriteString("        while ($null -ne $__sshmgr_exception) { if ($null -ne $__sshmgr_exception.ErrorData) { $__sshmgr_code = [string]$__sshmgr_exception.ErrorData.error_Code; break }; $__sshmgr_exception = $__sshmgr_exception.InnerException }\n")
-	wrapper.WriteString("        if ($__sshmgr_code -eq '') { $__sshmgr_code = 'unknown' }\n")
-	wrapper.WriteString("        $__sshmgr_status = 'error-' + $__sshmgr_code\n")
+	wrapper.WriteString("        $__sshmgr_status = 'error-wrapper'\n")
 	wrapper.WriteString("      }\n")
 	wrapper.WriteString("    }\n")
 	wrapper.WriteString("  } catch {\n")
 	wrapper.WriteString("    $__sshmgr_status = 'error-wrapper'\n")
 	wrapper.WriteString("  }\n")
+	wrapper.WriteString("} elseif (-not $__sshmgr_wnet_ready) {\n")
+	wrapper.WriteString("  $__sshmgr_status = 'error-wrapper'\n")
 	wrapper.WriteString("} else {\n")
 	wrapper.WriteString("  $__sshmgr_status = 'skipped'\n")
 	wrapper.WriteString("}\n")
@@ -478,7 +508,7 @@ func writePowerShellNetworkDrive(wrapper *strings.Builder, drive NetworkDriveInj
 	wrapper.WriteString("if ($null -ne $__sshmgr_password) { Remove-Variable __sshmgr_password }\n")
 	wrapper.WriteString("if ($null -ne $__sshmgr_pipeline -and -not $__sshmgr_timed_out) { $__sshmgr_pipeline.Dispose() }\n")
 	fmt.Fprintf(wrapper, "Write-Output ('SSHMGR-SMBMAP:%s:%d:' + $__sshmgr_status)\n", drive.StatusMarker, index)
-	wrapper.WriteString("Remove-Variable __sshmgr_pipeline,__sshmgr_task,__sshmgr_status,__sshmgr_count,__sshmgr_exception,__sshmgr_code,__sshmgr_timed_out,__sshmgr_started_ticks,__sshmgr_elapsed,__sshmgr_can_map -ErrorAction SilentlyContinue\n")
+	wrapper.WriteString("Remove-Variable __sshmgr_pipeline,__sshmgr_task,__sshmgr_status,__sshmgr_result,__sshmgr_return,__sshmgr_count,__sshmgr_timed_out,__sshmgr_started_ticks,__sshmgr_elapsed,__sshmgr_can_map -ErrorAction SilentlyContinue\n")
 	wrapper.WriteString("$__sshmgr_read = 0\n")
 }
 

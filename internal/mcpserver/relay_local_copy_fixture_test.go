@@ -222,7 +222,7 @@ func (environment *relayLocalCopyEnv) serveCommand(
 			fmt.Fprintf(stdout, "SSHMGR-PROBE %s ok 2 \n", match[1])
 		}
 		return 0
-	case strings.Contains(effectiveCommand, "New-SmbMapping") || strings.Contains(effectiveCommand, "-EncodedCommand "):
+	case strings.Contains(effectiveCommand, "WNetAddConnection2") || strings.Contains(effectiveCommand, "-EncodedCommand "):
 		return environment.serveWindowsCopyCommand(effectiveCommand, mapStatus, stdout, stderr)
 	case strings.TrimSpace(command) == "uname -s":
 		stdout.Write([]byte(environment.fake.systemName + "\n"))
