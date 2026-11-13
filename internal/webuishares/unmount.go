@@ -48,8 +48,7 @@ func cloneShareUnmountTaskStatus(task *webui.ShareUnmountTaskStatus) *webui.Shar
 func (r *unmountRunner) StartShareUnmount(
 	request webui.ShareUnmountRequest,
 ) (string, error) {
-	if request.ShareID == "" || request.ShareName == "" ||
-		request.ServerID == "" || request.ServerName == "" {
+	if request.ShareName == "" || request.ServerID == "" || request.ServerName == "" {
 		return "", errors.New("共享存储与服务器条目不能为空")
 	}
 	id, err := newShareTaskID()

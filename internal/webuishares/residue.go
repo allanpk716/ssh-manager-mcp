@@ -54,8 +54,8 @@ func cloneShareResidueTaskStatus(task *webui.ShareResidueTaskStatus) *webui.Shar
 func (r *residueRunner) StartShareResidue(
 	request webui.ShareResidueRequest,
 ) (string, error) {
-	if request.ShareID == "" {
-		return "", errors.New("共享存储标识不能为空")
+	if !request.AllShares && request.ShareID == "" {
+		return "", errors.New("按共享检查时共享存储标识不能为空")
 	}
 	if !request.AllShares && request.ShareName == "" {
 		return "", errors.New("按共享检查时共享名不能为空")

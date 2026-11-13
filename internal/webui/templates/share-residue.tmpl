@@ -2,7 +2,7 @@
 <section class="share-residue-page"{{if or (and .ShareResidue.Task (eq .ShareResidue.Task.State "running")) (and .ShareResidue.Cleanup (eq .ShareResidue.Cleanup.State "running"))}} id="share-residue-task" hx-get="{{.ShareResidue.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
 <h1>{{if .ShareResidue.Task}}{{if eq .ShareResidue.Task.State "running"}}残留检查进行中{{else if eq .ShareResidue.Task.State "error"}}残留检查失败{{else}}残留检查完成{{end}}{{else if .ShareResidue.TaskInvalid}}残留检查任务结果已丢失{{else if .ShareResidue.Cleanup}}{{if eq .ShareResidue.Cleanup.State "running"}}残留清理进行中{{else}}清理结果{{end}}{{else}}共享存储残留检查{{end}}</h1>
 <dl class="detail-list">
-<dt>发起入口的共享存储</dt><dd>{{.ShareResidue.Share.Name}}</dd>
+{{if .ShareResidue.Share}}<dt>发起入口的共享存储</dt><dd>{{.ShareResidue.Share.Name}}</dd>{{end}}
 {{if .ShareResidue.Task}}<dt>检查范围</dt><dd>{{if .ShareResidue.Task.AllShares}}全部共享{{else}}{{.ShareResidue.Task.ShareName}}{{end}}</dd>{{end}}
 </dl>
 {{if .ShareResidue.TaskInvalid}}{{template "shareTaskLostNotice" "残留检查"}}{{end}}
@@ -30,7 +30,7 @@
 <li>
 <p><strong>{{$finding.ShareName}}</strong>：{{if $finding.RevokedMarkerOnly}}仅有撤销标记（撤销后的预期状态，不需要清理）{{else}}{{shareResidueFindingLabels $finding}}；{{shareResidueReasonLabel $finding.Reason}}{{end}}</p>
 {{if $finding.HasCleanup}}
-<form method="post" action="/ui/shares/{{$.ShareResidue.Share.ID}}/residue-cleanup" class="residue-cleanup-form">
+<form method="post" action="{{if $.ShareResidue.Share}}/ui/shares/{{$.ShareResidue.Share.ID}}/residue-cleanup{{else}}/ui/shares/residue-cleanup{{end}}" class="residue-cleanup-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <input type="hidden" name="share_name" value="{{$finding.ShareName}}">
 <input type="hidden" name="server_id" value="{{$server.ServerID}}">
@@ -73,7 +73,7 @@
 {{range .ShareResidue.Cleanup.BusyProcesses}}<tr><td>{{.ProcessID}}</td><td>{{.User}}</td><td>{{.Command}}</td></tr>{{end}}
 </tbody>
 </table>
-<form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue-cleanup" class="confirm-form">
+<form method="post" action="{{if .ShareResidue.Share}}/ui/shares/{{.ShareResidue.Share.ID}}/residue-cleanup{{else}}/ui/shares/residue-cleanup{{end}}" class="confirm-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="share_name" value="{{.ShareResidue.Cleanup.ShareName}}">
 <input type="hidden" name="server_id" value="{{.ShareResidue.Cleanup.ServerID}}">
@@ -82,7 +82,7 @@
 <input type="hidden" name="force" value="1">
 <button type="submit">强制清理</button>
 </form>
-<a class="button-link" href="/ui/shares/{{.ShareResidue.Share.ID}}/residue?scope={{if .ShareResidue.AllShares}}all{{else}}share{{end}}">稍后再试</a>
+<a class="button-link" href="{{if .ShareResidue.Share}}/ui/shares/{{.ShareResidue.Share.ID}}/residue?scope={{if .ShareResidue.AllShares}}all{{else}}share{{end}}{{else}}/ui/shares/residue{{end}}">稍后再试</a>
 </div>
 {{end}}
 {{if eq .ShareResidue.Cleanup.Result "ssh-error"}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；服务器恢复可达后可重新清理。</p></div>{{end}}
@@ -91,17 +91,19 @@
 </section>
 {{end}}
 <div class="inline-form">
+{{if .ShareResidue.Share}}
 <form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="scope" value="share">
 <button type="submit">重新检查本共享残留</button>
 </form>
-<form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue">
+{{end}}
+<form method="post" action="{{if .ShareResidue.Share}}/ui/shares/{{.ShareResidue.Share.ID}}/residue{{else}}/ui/shares/residue{{end}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="scope" value="all">
 <button type="submit">重新检查全部共享残留</button>
 </form>
-<a class="button-link" href="/ui/shares/{{.ShareResidue.Share.ID}}">返回共享存储详情</a>
+{{if .ShareResidue.Share}}<a class="button-link" href="/ui/shares/{{.ShareResidue.Share.ID}}">返回共享存储详情</a>{{else}}<a class="button-link" href="/ui/shares/">返回共享存储列表</a>{{end}}
 </div>
 </section>
 {{end}}

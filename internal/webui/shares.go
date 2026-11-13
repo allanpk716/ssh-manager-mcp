@@ -14,6 +14,11 @@ const (
 	sharesPath    = "/ui/shares/"
 	sharesNewPath = "/ui/shares/new"
 
+	// sharesResiduePath 与 sharesResidueCleanupPath 是共享存储列表页的
+	// 全部共享残留检查入口，不依赖任何一处共享登记。
+	sharesResiduePath        = "/ui/shares/residue"
+	sharesResidueCleanupPath = "/ui/shares/residue-cleanup"
+
 	// sharesSMBPrerequisites 与命令行 shares add 的新增前提提示保持同一
 	// 份文案口径。
 	sharesSMBPrerequisites = "前提：首版只支持 SMB；提供方设备需关闭『禁止同一 IP 多个连接』类限制。"
@@ -148,6 +153,12 @@ func (h *handler) registerShareRoutes() {
 	}
 	if h.caps.CanManageShares {
 		h.mux.HandleFunc(sharesNewPath, h.requireSession(h.handleShareNew))
+	}
+	if h.caps.CanCheckShareResidue {
+		h.mux.HandleFunc(sharesResiduePath, h.requireSession(h.handleShareResidueRoot))
+	}
+	if h.caps.CanCheckShareResidue && h.caps.CanUnmountShares {
+		h.mux.HandleFunc(sharesResidueCleanupPath, h.requireSession(h.handleShareResidueRootCleanup))
 	}
 	h.mux.HandleFunc(sharesPath, h.requireSession(h.handleShareDetailRoutes))
 }

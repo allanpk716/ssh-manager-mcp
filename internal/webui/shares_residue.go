@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -80,6 +81,88 @@ type ShareResidueView struct {
 	CleanupInvalid bool
 	AllShares      bool
 	PollPath       string
+}
+
+// handleShareResidueRoot 是共享存储列表页的「检查全部共享残留」入口，不
+// 依赖任何一处共享登记；共享全部删除后仍可用它兜底检查。
+func (h *handler) handleShareResidueRoot(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.handleShareResidueRootPage(w, r)
+	case http.MethodPost:
+		taskID, err := h.cfg.ShareResidueRunner.StartShareResidue(ShareResidueRequest{
+			AllShares: true,
+			Source:    ShareWriteSource{RemoteAddress: remoteIP(r)},
+		})
+		if err != nil {
+			h.logError(r, "启动共享存储残留检查任务失败", err)
+			h.renderError(w, r, http.StatusInternalServerError, "启动残留检查失败",
+				"启动残留检查任务失败，请稍后重试。")
+			return
+		}
+		http.Redirect(w, r, sharesResiduePath+"?task="+url.QueryEscape(taskID), http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "残留检查页只接受 GET 与 POST 请求。")
+	}
+}
+
+// handleShareResidueRootPage 渲染不依赖共享登记的残留检查任务页；任务与
+// 清理都按任务标识回查，不要求 Share 字段存在。
+func (h *handler) handleShareResidueRootPage(w http.ResponseWriter, r *http.Request) {
+	view := &ShareResidueView{AllShares: true}
+	taskIdentifier := strings.TrimSpace(r.URL.Query().Get("task"))
+	if taskIdentifier != "" {
+		status, ok := h.cfg.ShareResidueRunner.ShareResidueStatus(taskIdentifier)
+		if !ok || status == nil || !status.AllShares {
+			view.TaskInvalid = true
+		} else {
+			view.Task = status
+			view.AllShares = status.AllShares
+			view.PollPath = r.URL.RequestURI()
+		}
+	}
+	cleanupIdentifier := strings.TrimSpace(r.URL.Query().Get("cleanup"))
+	if cleanupIdentifier != "" {
+		status, ok := h.cfg.ShareUnmountRunner.ShareUnmountStatus(cleanupIdentifier)
+		if !ok || status == nil || status.ShareID != "" {
+			view.CleanupInvalid = true
+		} else {
+			view.Cleanup = status
+			view.PollPath = r.URL.RequestURI()
+		}
+	}
+	h.renderPage(w, r, http.StatusOK, "share-residue.tmpl", pageData{
+		Title: "全部共享残留检查", ShareResidue: view,
+	})
+}
+
+// handleShareResidueRootCleanup 对列表入口发现的残留直接启动与单台卸载
+// 相同的远端清理任务；共享登记可能已删除，因此任务不绑定共享标识。
+func (h *handler) handleShareResidueRootCleanup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "残留清理只接受 POST 请求。")
+		return
+	}
+	shareName := strings.TrimSpace(r.PostFormValue("share_name"))
+	serverID := strings.TrimSpace(r.PostFormValue("server_id"))
+	serverName := strings.TrimSpace(r.PostFormValue("server_name"))
+	if shareName == "" || serverID == "" || serverName == "" {
+		h.renderError(w, r, http.StatusBadRequest, "缺少清理目标",
+			"请从残留检查结果页选择要清理的共享与服务器。")
+		return
+	}
+	taskID, err := h.cfg.ShareUnmountRunner.StartShareUnmount(ShareUnmountRequest{
+		ShareName: shareName, ServerID: serverID, ServerName: serverName,
+		Force:  r.PostFormValue("force") == "1",
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
+	if err != nil {
+		h.logError(r, "启动共享存储残留清理任务失败", err)
+		h.renderError(w, r, http.StatusInternalServerError, "启动清理失败",
+			"启动残留清理任务失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, sharesResiduePath+"?cleanup="+url.QueryEscape(taskID), http.StatusSeeOther)
 }
 
 // handleShareResidue 渲染残留检查任务页，或启动一次按共享/全部共享的

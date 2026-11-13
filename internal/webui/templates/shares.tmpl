@@ -17,6 +17,12 @@
 </form>
 <div class="inline-form">
 {{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/new">新增共享存储</a>{{end}}
+{{if .Caps.CanCheckShareResidue}}
+<form method="post" action="/ui/shares/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">检查全部共享残留</button>
+</form>
+{{end}}
 </div>
 <table class="server-table">
 <thead><tr><th>共享名</th><th>提供方设备</th><th>盘符</th><th>版本号</th><th>可挂载服务器数量</th><th>操作</th></tr></thead>
