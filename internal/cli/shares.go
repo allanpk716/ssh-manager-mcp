@@ -207,6 +207,9 @@ func sharesShowCmd() *cobra.Command {
 		Short: "Show one registered shared storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if check {
+				if strings.TrimSpace(instance) != "" {
+					return errors.New("现场探测只能连接本机 vault 里的服务器，仅支持在单机或权威端本机运行，不支持 --instance；请去掉 --instance 后重试")
+				}
 				s, err := requireSharesVault()
 				if err != nil {
 					return err

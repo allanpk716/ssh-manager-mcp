@@ -291,3 +291,13 @@ func sharesCheckFakeServer(system, marker, output string) func(string, io.Reader
 		return "", "unexpected command: " + command, 90
 	}
 }
+
+func TestSharesShowCheckRejectsInstanceFlag(t *testing.T) {
+	withCliStoreEnv(t)
+
+	errText := runCliErr(t, "shares", "show", "datasets", "--check", "--instance", "work")
+	if !strings.Contains(errText, "现场探测") || !strings.Contains(errText, "--instance") ||
+		!strings.Contains(errText, "单机或权威端本机") {
+		t.Fatalf("--check 与 --instance 同用应给出明确错误：%s", errText)
+	}
+}
