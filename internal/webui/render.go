@@ -74,6 +74,7 @@ type pageData struct {
 	ShareDetailError                 string
 	ShareDetailNotice                string
 	ShareForm                        shareFormView
+	ShareEdit                        *shareEditView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
 	SoftwareInventorySearchRows      []SoftwareInventorySearchRow

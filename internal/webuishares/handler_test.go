@@ -342,3 +342,84 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 		t.Fatalf("盘符校验应原样展示存储层文案，状态码=%d：\n%s", badDrive.StatusCode, badDriveBody)
 	}
 }
+
+func TestShareEditUsesPartialUpdateAndShowsNewVersion(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	seedShare(t, st, "backup", "备份NAS", "BACKUP_PASSWORD", "Y", "linux-web")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	formPage := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/edit", nil)
+	formPageBody := body(t, formPage)
+	if formPage.StatusCode != http.StatusOK {
+		t.Fatalf("编辑表单状态码 = %d，页面：\n%s", formPage.StatusCode, formPageBody)
+	}
+	for _, want := range []string{
+		`value="datasets"`, `value="NAS"`, `value="mount-user"`, `value="NAS_MOUNT_PASSWORD"`,
+		`value="Z"`, "临时数据=tmp", `value="datasets 的备注"`, "变更说明",
+	} {
+		if !strings.Contains(formPageBody, want) {
+			t.Fatalf("编辑表单应预填当前值 %q：\n%s", want, formPageBody)
+		}
+	}
+
+	unchanged := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/edit", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Z"}, "directories": {"临时数据=tmp"}, "note": {"datasets 的备注"},
+		"change_note": {""},
+	})
+	unchangedBody := body(t, unchanged)
+	if unchanged.StatusCode != http.StatusOK ||
+		!strings.Contains(unchangedBody, "没有变化，未写入数据或审计") {
+		t.Fatalf("未变化的提交不应写数据或审计，状态码=%d：\n%s", unchanged.StatusCode, unchangedBody)
+	}
+	share, err := st.GetSharedStorage("datasets")
+	if err != nil || share.Version != 1 {
+		t.Fatalf("未变化提交不应推进版本号：%+v %v", share, err)
+	}
+
+	edited := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/edit", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"new-mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Z"}, "directories": {"临时数据=tmp\n长期数据=datasets"}, "note": {"datasets 的备注"},
+		"change_note": {"更新挂载账号"},
+	})
+	if edited.StatusCode != http.StatusSeeOther ||
+		edited.Header.Get("Location") != "/ui/shares/"+datasetsID+"?saved=1" {
+		t.Fatalf("编辑应跳回详情页，状态码=%d 跳转=%q：\n%s",
+			edited.StatusCode, edited.Header.Get("Location"), body(t, edited))
+	}
+	detail := h.do(http.MethodGet, edited.Header.Get("Location"), nil)
+	detailBody := body(t, detail)
+	if detail.StatusCode != http.StatusOK || !strings.Contains(detailBody, "已保存") ||
+		!strings.Contains(detailBody, "共享存储版本号") || !strings.Contains(detailBody, "2") ||
+		!strings.Contains(detailBody, "new-mount-user") || !strings.Contains(detailBody, "长期数据=datasets") ||
+		!strings.Contains(detailBody, "更新挂载账号") {
+		t.Fatalf("保存后详情页应显示新版本号与变更，状态码=%d：\n%s", detail.StatusCode, detailBody)
+	}
+	share, err = st.GetSharedStorage("datasets")
+	if err != nil || share.Version != 2 || share.MountUser != "new-mount-user" ||
+		share.ChangeNote != "更新挂载账号" || len(share.Directories) != 2 {
+		t.Fatalf("编辑后的 vault 最终状态不正确：%+v %v", share, err)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"share-edit"},
+	})
+	if err != nil || len(rows) != 1 || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("编辑审计不正确：%+v %v", rows, err)
+	}
+
+	conflictDrive := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/edit", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"new-mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Y"}, "directories": {"临时数据=tmp"}, "note": {"datasets 的备注"},
+	})
+	conflictBody := body(t, conflictDrive)
+	if conflictDrive.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(conflictBody, "盘符已存在") || !strings.Contains(conflictBody, "backup") {
+		t.Fatalf("盘符唯一校验应原样展示存储层文案，状态码=%d：\n%s", conflictDrive.StatusCode, conflictBody)
+	}
+}

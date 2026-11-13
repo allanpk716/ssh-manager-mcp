@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
@@ -152,6 +153,12 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 	switch suffix {
 	case "":
 		h.handleShareDetail(w, r, identifier)
+	case "edit":
+		if h.cfg.SharesWriter != nil {
+			h.handleShareEdit(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
@@ -223,7 +230,17 @@ func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, iden
 	}
 	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", pageData{
 		Title: "共享存储 " + detail.Name, ShareDetail: detail,
+		ShareDetailNotice: shareSavedNotice(r, detail),
 	})
+}
+
+// shareSavedNotice 在保存跳回详情页时提示新的共享存储版本号；普通浏览返
+// 回空串。
+func shareSavedNotice(r *http.Request, detail *ShareRow) string {
+	if r.URL.Query().Get("saved") != "1" {
+		return ""
+	}
+	return "已保存共享存储登记；共享存储版本号：" + strconv.FormatInt(detail.Version, 10) + "。"
 }
 
 func (h *handler) renderShareReadError(w http.ResponseWriter, r *http.Request, err error) {
@@ -314,4 +331,138 @@ func shareDirectoryLines(raw string) []string {
 		}
 	}
 	return out
+}
+
+// shareEditView 是编辑共享存储表单的展示数据；Form 保留 owner 提交或当前
+// 的值，ChangeNote 与命令行 --change-note 一一对应。
+type shareEditView struct {
+	Detail     *ShareRow
+	Form       shareFormView
+	ChangeNote string
+	Error      string
+}
+
+func (h *handler) handleShareEdit(w http.ResponseWriter, r *http.Request, identifier string) {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+		if err != nil {
+			h.renderShareReadError(w, r, err)
+			return
+		}
+		view := shareEditViewFromDetail(detail)
+		h.renderPage(w, r, http.StatusOK, "share-edit.tmpl", pageData{
+			Title: "编辑 " + detail.Name, ShareEdit: &view,
+		})
+	case http.MethodPost:
+		h.handleShareEditPost(w, r, identifier)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "编辑共享存储页只接受 GET 与 POST 请求。")
+	}
+}
+
+func shareEditViewFromDetail(detail *ShareRow) shareEditView {
+	return shareEditView{Detail: detail, Form: shareFormView{
+		Name: detail.Name, Device: detail.DeviceName, User: detail.MountUser,
+		PasswordSecret: detail.PasswordSecret, Drive: detail.Drive,
+		Directories: shareDirectoryText(detail.Directories), Note: detail.Note,
+	}, ChangeNote: detail.ChangeNote}
+}
+
+func shareDirectoryText(directories []ShareDirectoryView) string {
+	lines := make([]string, 0, len(directories))
+	for _, directory := range directories {
+		lines = append(lines, directory.Purpose+"="+directory.Path)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (h *handler) handleShareEditPost(w http.ResponseWriter, r *http.Request, identifier string) {
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	view := shareEditViewFromDetail(detail)
+	view.Form = shareAddFormFromRequest(r)
+	view.ChangeNote = r.PostFormValue("change_note")
+	changes, changed := shareEditChanges(view.Form, view.ChangeNote, detail)
+	if !changed {
+		h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", pageData{
+			Title: "共享存储 " + detail.Name, ShareDetail: detail,
+			ShareDetailNotice: "没有变化，未写入数据或审计。",
+		})
+		return
+	}
+	edited, err := h.cfg.SharesWriter.EditShare(identifier, changes, ShareWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		if message, ok := shareFormMessage(err); ok {
+			view.Error = message
+			h.renderPage(w, r, http.StatusBadRequest, "share-edit.tmpl", pageData{
+				Title: "编辑 " + detail.Name, ShareEdit: &view,
+			})
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "保存共享存储失败", "保存共享存储失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, sharesPath+edited.ID+"?saved=1", http.StatusSeeOther)
+}
+
+// shareEditChanges 按命令行部分更新语义生成变更：只有与当前值不同的字
+// 段进入变更；目录约定逐行解析后整体比较。
+func shareEditChanges(form shareFormView, changeNote string, current *ShareRow) (ShareEditForm, bool) {
+	changes := ShareEditForm{}
+	changed := false
+	if form.Name != current.Name {
+		changes.Name = &form.Name
+		changed = true
+	}
+	if form.Device != current.DeviceName {
+		changes.Device = &form.Device
+		changed = true
+	}
+	if form.User != current.MountUser {
+		changes.User = &form.User
+		changed = true
+	}
+	if form.PasswordSecret != current.PasswordSecret {
+		changes.PasswordSecret = &form.PasswordSecret
+		changed = true
+	}
+	if drive := strings.ToUpper(form.Drive); drive != current.Drive {
+		changes.Drive = &drive
+		changed = true
+	}
+	if directories := shareDirectoryLines(form.Directories); !sameDirectoryLines(directories, current.Directories) {
+		parsed := make([]models.SharedStorageDirectory, 0, len(directories))
+		for _, line := range directories {
+			purpose, path, _ := strings.Cut(line, "=")
+			parsed = append(parsed, models.SharedStorageDirectory{Purpose: purpose, Path: path})
+		}
+		changes.Directories = &parsed
+		changed = true
+	}
+	if form.Note != current.Note {
+		changes.Note = &form.Note
+		changed = true
+	}
+	if changeNote != current.ChangeNote {
+		changes.ChangeNote = &changeNote
+		changed = true
+	}
+	return changes, changed
+}
+
+func sameDirectoryLines(lines []string, directories []ShareDirectoryView) bool {
+	if len(lines) != len(directories) {
+		return false
+	}
+	for index, line := range lines {
+		purpose, path, _ := strings.Cut(line, "=")
+		if purpose != directories[index].Purpose || path != directories[index].Path {
+			return false
+		}
+	}
+	return true
 }

@@ -103,7 +103,11 @@ func (w writerSource) AddShare(form webui.ShareAddForm, source webui.ShareWriteS
 func (w writerSource) EditShare(identifier string, form webui.ShareEditForm, source webui.ShareWriteSource) (*webui.ShareRow, error) {
 	var row *webui.ShareRow
 	err := w.withStore(func(st *store.Store) error {
-		share, editErr := st.EditSharedStorage(identifier, store.SharedStorageChanges{
+		name, err := shareNameForWrite(st, identifier)
+		if err != nil {
+			return err
+		}
+		share, editErr := st.EditSharedStorage(name, store.SharedStorageChanges{
 			Name: form.Name, Device: form.Device, User: form.User,
 			PasswordSecret: form.PasswordSecret, Drive: form.Drive,
 			Directories: form.Directories, Note: form.Note, ChangeNote: form.ChangeNote,
@@ -120,9 +124,28 @@ func (w writerSource) EditShare(identifier string, form webui.ShareEditForm, sou
 
 func (w writerSource) DeleteShare(identifier string, source webui.ShareWriteSource) error {
 	return w.withStore(func(st *store.Store) error {
-		_, err := st.DeleteSharedStorage(identifier, store.WebUISource(source.RemoteAddress))
+		name, err := shareNameForWrite(st, identifier)
+		if err != nil {
+			return err
+		}
+		_, err = st.DeleteSharedStorage(name, store.WebUISource(source.RemoteAddress))
 		return shareFormError(err)
 	})
+}
+
+// shareNameForWrite 把页面路径里的标识符或共享名解析成存储层写入口需要
+// 的共享名；不存在时返回页面的共享存储不存在错误。
+func shareNameForWrite(st *store.Store, identifier string) (string, error) {
+	shares, err := st.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		return "", err
+	}
+	for _, share := range shares {
+		if share.ID == identifier || strings.EqualFold(share.Name, strings.TrimSpace(identifier)) {
+			return share.Name, nil
+		}
+	}
+	return "", &webui.ShareNotFoundError{Identifier: identifier}
 }
 
 func (w writerSource) withStore(operation func(st *store.Store) error) error {
