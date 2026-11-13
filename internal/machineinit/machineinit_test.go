@@ -90,7 +90,7 @@ func TestReadSnapshotOnInitializedServer(t *testing.T) {
 	if _, err := machineinit.Initialize(roles.RoleServer); err != nil {
 		t.Fatal(err)
 	}
-	probePort := freeLocalPort(t)
+	probePort := holdUnavailableLocalPort(t)
 	masterKey, err := os.ReadFile(os.Getenv("SSHMGR_FILEKEY_PATH"))
 	if err != nil {
 		t.Fatal(err)
@@ -137,13 +137,26 @@ func TestReadSnapshotOnInitializedServer(t *testing.T) {
 	}
 }
 
-func freeLocalPort(t *testing.T) int {
+// holdUnavailableLocalPort keeps a transmission control protocol listener open
+// until the test ends and closes every accepted connection. The port therefore
+// cannot be reused by another process, while a Web UI probe still sees no valid
+// service.
+func holdUnavailableLocalPort(t *testing.T) int {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
 	return listener.Addr().(*net.TCPAddr).Port
 }
 

@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/probe"
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
@@ -135,13 +137,23 @@ func (f *probeFixture) callProbe(t *testing.T, arguments map[string]any) (string
 // 不变；观察写入本地探测结果文件。
 func TestProbeConnectivitySelfOrigin(t *testing.T) {
 	fixture := newProbeFixture(t)
-	openListener, err := net.Listen("tcp", "[::1]:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = openListener.Close() })
-	openPort := openListener.Addr().(*net.TCPAddr).Port
 	t.Setenv("SSHMGR_SSH_ADDRESS_TIMEOUT", "250ms")
+	openPort := 445
+	previousWrapper := wrapProbeConnectivityService
+	wrapProbeConnectivityService = func(service *probe.Service) *probe.Service {
+		service.LocalDial = func(_ context.Context, address string, _ int, _ time.Duration) (time.Duration, error) {
+			switch address {
+			case "127.0.0.1":
+				return 0, syscall.ECONNREFUSED
+			case "::1":
+				return time.Millisecond, nil
+			default:
+				return 0, context.DeadlineExceeded
+			}
+		}
+		return service
+	}
+	t.Cleanup(func() { wrapProbeConnectivityService = previousWrapper })
 	for _, membership := range []struct {
 		network, address string
 	}{
@@ -158,8 +170,7 @@ func TestProbeConnectivitySelfOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 家A局域网使用 127.0.0.5（没有监听，连接被拒绝）；家B使用不可路由
-	// 地址（连接超时或无路由）；NetBird 使用开放端口所在地址。
+	// 家A局域网的拨号注入“连接被拒绝”；家B注入超时；NetBird 注入成功。
 	text, isError := fixture.callProbe(t, map[string]any{"from": "self", "targets": []string{"NAS:" + itoa(openPort)}})
 	if isError {
 		t.Fatalf("tool must return normally:\n%s", text)

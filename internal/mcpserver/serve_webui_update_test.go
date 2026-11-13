@@ -3,12 +3,10 @@ package mcpserver
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -48,21 +46,21 @@ func TestServeWebUIWiresAuthorityUpdateAndRestart(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	webPort := reserveLocalPort(t)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
-		t.Fatal(err)
-	}
-	mainPort := reserveLocalPort(t)
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 	serviceManager := &recordingServiceRestarter{}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- RunServe(ctx, st, fmt.Sprintf("127.0.0.1:%d", mainPort), "", "", ServeOpts{
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", ServeOpts{
 			ServiceRestarterFactory: func() (ops.ServiceRestarter, error) {
 				return serviceManager, nil
 			},
+			mainListener:     mainListener,
+			webUIListener:    webUIListener,
+			discoveryAddress: "127.0.0.1:0",
 		})
 	}()
 
@@ -70,7 +68,7 @@ func TestServeWebUIWiresAuthorityUpdateAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := fmt.Sprintf("https://127.0.0.1:%d", webPort)
+	base := "https://" + webUIListener.Addr().String()
 	client := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // 测试只验证接线，不校对自签证书。
 		Jar:       jar,

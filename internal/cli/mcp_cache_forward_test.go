@@ -1315,17 +1315,24 @@ func TestCacheForwardE2E_GenerationSwapKeepsThePin(t *testing.T) {
 	}
 }
 
-// TestCacheForwardE2E_ServeDownMainMessage is T6: the serve is GONE (closed
-// listener) — the §4 main message surfaces verbatim modulo the ssh handshake
-// wrap and Plan 31 redaction, carrying the REAL presented fingerprint.
+// TestCacheForwardE2E_ServeDownMainMessage is T6: the serve accepts the
+// connection and immediately closes it (no service on the port) — the §4 main
+// message surfaces verbatim modulo the ssh handshake wrap and Plan 31 redaction,
+// carrying the REAL presented fingerprint.
 func TestCacheForwardE2E_ServeDownMainMessage(t *testing.T) {
 	fx := newCacheFwdFixture(t)
-	dead := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
-	deadURL, deadPin := dead.URL, mcpserver.SPKIFingerprint(dead.Certificate())
-	dead.Close() // connection refused from here on
+	unavailable := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		connection, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			return
+		}
+		_ = connection.Close()
+	}))
+	defer unavailable.Close()
+	unavailableURL, unavailablePin := unavailable.URL, mcpserver.SPKIFingerprint(unavailable.Certificate())
 
 	cred := fx.cred
-	cred.URL, cred.Pin = deadURL, deadPin
+	cred.URL, cred.Pin = unavailableURL, unavailablePin
 	sess := fx.newBroker(t, nil, cred)
 
 	text, isErr := callExec(t, sess, fx.targetID, "hi")

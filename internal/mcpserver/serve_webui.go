@@ -105,6 +105,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	if err != nil {
 		return nil, err
 	}
+	injectedListener := serveOpts.webUIListener
+	if injectedListener != nil {
+		if tcpAddress, ok := injectedListener.Addr().(*net.TCPAddr); ok {
+			port = tcpAddress.Port
+		}
+	}
 	loopbackPlan := webui.ListenPlan{Addresses: []string{"127.0.0.1"}, NeedsManualListen: true}
 	plan, planErr := webUIListenPlan(st, manualListen)
 	logStartup := func(format string, arguments ...any) {
@@ -113,6 +119,9 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	if planErr != nil {
 		logStartup("推导 Web UI 监听地址失败，先只监听 127.0.0.1：%v", planErr)
 		plan = loopbackPlan
+	}
+	if injectedListener != nil {
+		plan.Addresses = appendListenerAddressOnce(plan.Addresses, listenerPlanAddress(injectedListener))
 	}
 	opsManager := ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))
 	updates := ops.NewUpdateService(ops.UpdateDependencies{Audit: opsManager.WriteUpdateAudit})
@@ -165,6 +174,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 			firstPlan = false
 			return currentPlan, err
 		},
+		InitialListener: injectedListener,
 		Serve: func(listener net.Listener) error {
 			server := &http.Server{Handler: handler}
 			return server.ServeTLS(listener, tlsCert, tlsKey)
@@ -182,6 +192,15 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		}
 	}()
 	return manager, nil
+}
+
+func appendListenerAddressOnce(addresses []string, address string) []string {
+	for _, existing := range addresses {
+		if existing == address {
+			return addresses
+		}
+	}
+	return append(addresses, address)
 }
 
 func webUISettingInputs(opts ServeOpts) ops.SettingInputs {

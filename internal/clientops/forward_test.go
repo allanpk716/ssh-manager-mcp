@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -248,23 +247,27 @@ func TestPinForwarder_Forward_RedirectNotFollowed(t *testing.T) {
 func TestPinForwarder_Forward_Unreachable_MainMessage(t *testing.T) {
 	blob, pub := newHostKey(t)
 	fp := ssh.FingerprintSHA256(pub)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	f, err := NewPinForwarder(CacheCred{
+		URL:   "https://authority.invalid",
+		Token: "devcode-1",
+		Pin:   testPin,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	addr := ln.Addr().String()
-	_ = ln.Close() // closed port → connection refused
-
-	f, err := NewPinForwarder(CacheCred{URL: "https://" + addr, Token: "devcode-1", Pin: testPin})
-	if err != nil {
-		t.Fatal(err)
-	}
+	f.client = &http.Client{Transport: alwaysFailingRoundTripper{}}
 	entry := fwdEntry("192.168.1.108", 22)
 	got := f.Forward(entry, store.EntryFallbackAddr(entry), blob)
 	want := forwardMainMessage("192.168.1.108", 22, fp)
 	if got == nil || got.Error() != want {
 		t.Fatalf("unreachable broker must render the main message:\n got: %v\nwant: %q", got, want)
 	}
+}
+
+type alwaysFailingRoundTripper struct{}
+
+func (alwaysFailingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("connection refused")
 }
 
 // TestPinForwarder_Forward_Timeout_MainMessage: a hanging broker must not hang

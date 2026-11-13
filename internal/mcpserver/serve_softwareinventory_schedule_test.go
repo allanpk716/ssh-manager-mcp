@@ -2,8 +2,6 @@ package mcpserver
 
 import (
 	"context"
-	"net"
-	"strconv"
 	"testing"
 	"time"
 
@@ -25,9 +23,8 @@ func swapSoftwareCollectionScheduler(
 // 动时启动软件清单采集调度服务，退出时干净收尾。
 func TestRunServeStartsAndStopsSoftwareCollectionScheduler(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleServer)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(reserveLocalPort(t))); err != nil {
-		t.Fatal(err)
-	}
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 	started := make(chan struct{}, 1)
 	stopped := make(chan struct{}, 1)
 	restore := swapSoftwareCollectionScheduler(func(ctx context.Context, got *store.Store) func() {
@@ -40,11 +37,10 @@ func TestRunServeStartsAndStopsSoftwareCollectionScheduler(t *testing.T) {
 	})
 	t.Cleanup(restore)
 
-	mainPort := reserveLocalPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- RunServe(ctx, st, net.JoinHostPort("127.0.0.1", strconv.Itoa(mainPort)), "", "", ServeOpts{})
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener))
 	}()
 	select {
 	case <-started:
@@ -72,6 +68,7 @@ func TestRunServeStartsAndStopsSoftwareCollectionScheduler(t *testing.T) {
 // 动采集调度服务：单机由 owner 用系统计划任务调用子命令。
 func TestRunServeSkipsSoftwareCollectionSchedulerOnStandalone(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleStandalone)
+	mainListener := openLocalTCPListener(t)
 	started := make(chan struct{}, 1)
 	restore := swapSoftwareCollectionScheduler(func(context.Context, *store.Store) func() {
 		started <- struct{}{}
@@ -79,12 +76,11 @@ func TestRunServeSkipsSoftwareCollectionSchedulerOnStandalone(t *testing.T) {
 	})
 	t.Cleanup(restore)
 
-	mainPort := reserveLocalPort(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	mainAddress := net.JoinHostPort("127.0.0.1", strconv.Itoa(mainPort))
-	go func() { done <- RunServe(ctx, st, mainAddress, "", "", ServeOpts{}) }()
+	mainAddress := mainListener.Addr().String()
+	go func() { done <- RunServe(ctx, st, mainAddress, "", "", serveOptionsForTest(mainListener, nil)) }()
 	waitTCPListener(t, mainAddress, done)
 	cancel()
 	select {
