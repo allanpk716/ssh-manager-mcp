@@ -315,7 +315,7 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 			return nil, sharedStorageValidation(err)
 		}
 		if err := ensureSharedStorageNameAvailableTx(tx, newName, share.ID); err != nil {
-			return nil, err
+			return nil, sharedStorageValidation(err)
 		}
 		share.Name = newName
 		editedFields["name"] = share.Name
