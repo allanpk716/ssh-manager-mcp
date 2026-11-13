@@ -5,13 +5,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuiservers"
@@ -422,4 +425,199 @@ func TestShareEditUsesPartialUpdateAndShowsNewVersion(t *testing.T) {
 		!strings.Contains(conflictBody, "盘符已存在") || !strings.Contains(conflictBody, "backup") {
 		t.Fatalf("盘符唯一校验应原样展示存储层文案，状态码=%d：\n%s", conflictDrive.StatusCode, conflictBody)
 	}
+}
+
+func TestShareDeleteShowsPreviewAndConfirms(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	mustServer(t, st, "windows-web", models.ShellPowerShell)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z",
+		"linux-web", "windows-web")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	preview := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/delete", nil)
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("删除预览状态码 = %d，页面：\n%s", preview.StatusCode, previewBody)
+	}
+	for _, want := range []string{
+		"删除 datasets", "可挂载服务器", "linux-web", "windows-web",
+		"只删除登记，不会去服务器上卸载", "检查残留", "单台卸载", "确认删除",
+	} {
+		if !strings.Contains(previewBody, want) {
+			t.Fatalf("删除预览缺少 %q：\n%s", want, previewBody)
+		}
+	}
+
+	deleted := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/delete", url.Values{
+		"csrf_token": {csrf},
+	})
+	deletedBody := body(t, deleted)
+	if deleted.StatusCode != http.StatusSeeOther || deleted.Header.Get("Location") != "/ui/shares/" {
+		t.Fatalf("删除应跳回列表，状态码=%d 跳转=%q：\n%s",
+			deleted.StatusCode, deleted.Header.Get("Location"), deletedBody)
+	}
+	if _, err := st.GetSharedStorage("datasets"); err == nil {
+		t.Fatal("删除后共享存储不应仍存在")
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"share-rm"},
+	})
+	if err != nil || len(rows) != 1 || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("删除审计不正确：%+v %v", rows, err)
+	}
+}
+
+type authorityHandler struct {
+	handler http.Handler
+	cookie  *http.Cookie
+}
+
+func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) authorityHandler {
+	t.Helper()
+	auth := vault.NewWebUIAuthStore(st)
+	if _, err := auth.SetAdminPasswordWithAudit([]byte("correct-password"), webui.AuditEvent{
+		Action: "admin.password_change", Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler, _, err := webui.NewAuthority(webui.Config{
+		Role: webui.RoleServer, Port: 18087,
+		Servers:                webuiservers.FromManager(servermanage.New(st)),
+		ServerWriter:           webuiservers.WriterFromManager(servermanage.New(st)),
+		Access:                 webuiaccess.FromManager(access.New(st)),
+		Shares:                 FromStore(openStoreForTest(st)),
+		SharesWriter:           WriterFromStore(openStoreForTest(st)),
+		Auth:                   auth,
+		AllowedHosts:           []string{"127.0.0.1"},
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		Now:                    func() time.Time { return *now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginPage := authorityGet(handler, "/ui/login")
+	loginBody := body(t, loginPage)
+	csrf := authorityHiddenValue(t, loginBody, "csrf_token")
+	form := url.Values{"csrf_token": {csrf}, "password": {"correct-password"}}
+	req := httptest.NewRequest(http.MethodPost, "/ui/login", strings.NewReader(form.Encode()))
+	req.Host = "127.0.0.1:18087"
+	req.RemoteAddr = "198.51.100.9:45678"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://127.0.0.1:18087")
+	for _, cookie := range loginPage.Cookies() {
+		req.AddCookie(cookie)
+	}
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	loggedIn := rec.Result()
+	_ = loggedIn.Body.Close()
+	if loggedIn.StatusCode != http.StatusSeeOther {
+		t.Fatalf("权威端登录失败，状态码=%d", loggedIn.StatusCode)
+	}
+	for _, cookie := range loggedIn.Cookies() {
+		if cookie.Name == "__Host-sshmgr_ui" {
+			return authorityHandler{handler: handler, cookie: cookie}
+		}
+	}
+	t.Fatal("权威端登录响应缺少会话 cookie")
+	return authorityHandler{}
+}
+
+func authorityGet(handler http.Handler, target string) *http.Response {
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Host = "127.0.0.1:18087"
+	req.RemoteAddr = "198.51.100.9:45678"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+func (h authorityHandler) do(method, target string, form url.Values) *http.Response {
+	reqBody := strings.NewReader("")
+	if form != nil {
+		reqBody = strings.NewReader(form.Encode())
+	}
+	req := httptest.NewRequest(method, target, reqBody)
+	req.Host = "127.0.0.1:18087"
+	req.RemoteAddr = "198.51.100.9:45678"
+	req.AddCookie(h.cookie)
+	if form != nil {
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "https://127.0.0.1:18087")
+	}
+	rec := httptest.NewRecorder()
+	h.handler.ServeHTTP(rec, req)
+	return rec.Result()
+}
+
+func authorityHiddenValue(t *testing.T, page, name string) string {
+	t.Helper()
+	pattern := regexp.MustCompile(`<input type="hidden" name="` + regexp.QuoteMeta(name) + `" value="([^"]*)"`)
+	match := pattern.FindStringSubmatch(page)
+	if match == nil {
+		t.Fatalf("页面缺少 %q 隐藏值：\n%s", name, page)
+	}
+	return match[1]
+}
+
+func TestAuthorityShareDeleteRequiresRecentReverify(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	now := time.Date(2026, 11, 13, 10, 0, 0, 0, time.Local)
+	h := newShareAuthorityHandler(t, st, &now)
+
+	preview := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/delete", nil)
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK || !strings.Contains(previewBody, "只删除登记，不会去服务器上卸载") {
+		t.Fatalf("权威端删除预览状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+
+	now = now.Add(6 * time.Minute)
+	confirm := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/delete", url.Values{
+		"csrf_token": {authorityPageCSRF(t, h, "/ui/shares/"+datasetsID+"/delete")},
+	})
+	confirmBody := body(t, confirm)
+	if confirm.StatusCode != http.StatusSeeOther ||
+		confirm.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape("/ui/shares/"+datasetsID+"/delete") {
+		t.Fatalf("未重新验证的删除应跳转重新验证，状态码=%d 跳转=%q：\n%s",
+			confirm.StatusCode, confirm.Header.Get("Location"), confirmBody)
+	}
+	if _, err := st.GetSharedStorage("datasets"); err != nil {
+		t.Fatalf("未重新验证前不应删除共享存储：%v", err)
+	}
+
+	reverify := h.do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {authorityPageCSRF(t, h, "/ui/reverify?next="+url.QueryEscape("/ui/shares/"+datasetsID+"/delete"))},
+		"password":   {"correct-password"},
+		"next":       {"/ui/shares/" + datasetsID + "/delete"},
+	})
+	if reverify.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证失败，状态码=%d：\n%s", reverify.StatusCode, body(t, reverify))
+	}
+	now = now.Add(2 * time.Minute)
+	deleted := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/delete", url.Values{
+		"csrf_token": {authorityPageCSRF(t, h, "/ui/shares/"+datasetsID+"/delete")},
+	})
+	deletedBody := body(t, deleted)
+	if deleted.StatusCode != http.StatusSeeOther || deleted.Header.Get("Location") != "/ui/shares/" {
+		t.Fatalf("重新验证后的删除应成功，状态码=%d：\n%s", deleted.StatusCode, deletedBody)
+	}
+	if _, err := st.GetSharedStorage("datasets"); err == nil {
+		t.Fatal("重新验证后应删除共享存储")
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"share-rm"},
+	})
+	if err != nil || len(rows) != 1 || rows[0].SourceIP != "198.51.100.9" {
+		t.Fatalf("权威端删除审计不正确：%+v %v", rows, err)
+	}
+}
+
+func authorityPageCSRF(t *testing.T, h authorityHandler, target string) string {
+	t.Helper()
+	page := body(t, h.do(http.MethodGet, target, nil))
+	return authorityHiddenValue(t, page, "csrf_token")
 }

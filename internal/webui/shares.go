@@ -159,6 +159,12 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "delete":
+		if h.cfg.SharesWriter != nil {
+			h.handleShareDelete(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
@@ -465,4 +471,44 @@ func sameDirectoryLines(lines []string, directories []ShareDirectoryView) bool {
 		}
 	}
 	return true
+}
+
+// handleShareDelete 渲染删除预览或处理确认提交。权威端要求最近 5 分钟内
+// 重新输入过管理员口令；单机回环模式没有管理员口令，直接放行。
+func (h *handler) handleShareDelete(w http.ResponseWriter, r *http.Request, identifier string) {
+	target := sharesPath + identifier
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+		if err != nil {
+			h.renderShareReadError(w, r, err)
+			return
+		}
+		h.renderPage(w, r, http.StatusOK, "share-delete.tmpl", pageData{
+			Title: "删除 " + detail.Name, ShareDeletePreview: detail,
+		})
+	case http.MethodPost:
+		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+			http.Redirect(w, r, reverifyPath(target+"/delete"), http.StatusSeeOther)
+			return
+		}
+		if err := h.cfg.SharesWriter.DeleteShare(
+			identifier, ShareWriteSource{RemoteAddress: remoteIP(r)},
+		); err != nil {
+			var missing *ShareNotFoundError
+			if errors.As(err, &missing) {
+				h.renderShareReadError(w, r, err)
+				return
+			}
+			if message, ok := shareFormMessage(err); ok {
+				h.renderError(w, r, http.StatusBadRequest, "删除共享存储失败", message)
+				return
+			}
+			h.renderError(w, r, http.StatusInternalServerError, "删除共享存储失败", "删除共享存储失败，请稍后重试。")
+			return
+		}
+		http.Redirect(w, r, sharesPath, http.StatusSeeOther)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "删除共享存储页只接受 GET 与 POST 请求。")
+	}
 }
