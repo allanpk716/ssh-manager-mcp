@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,9 +29,10 @@ const networkDriveTestPassword = `drive-p@ss%'\"|()中文` + "\r\n"
 const networkDriveSecondTestPassword = `second-drive-p@ss!%()` + "\r\n"
 const networkDriveEnvironmentValue = `cmd-env-%-!中文`
 
-// fakePowerShellDriveServer 模拟登记为 PowerShell 的 Windows 目标机：按固定
-// 探测命令的输出协议回报 445 探测结果，按命令文本里带随机标记的状态行格
-// 式回报映射结果，再输出用户命令的结果。它记录收到的每条命令与标准输入。
+// fakePowerShellDriveServer 模拟 Windows 目标机：按固定探测命令的输出协议
+// 回报 445 探测结果，按 PowerShell 命令文本或 cmd 脚本帧里带随机标记的状
+// 态行格式回报映射结果，再输出用户命令的结果。它记录收到的每条命令与标
+// 准输入。
 type fakePowerShellDriveServer struct {
 	mu sync.Mutex
 
@@ -52,6 +54,7 @@ var driveProbeInvocationPattern = regexp.MustCompile(`probe-one (\d+) (\S+) 445 
 var driveStatusMarkerPattern = regexp.MustCompile(`SSHMGR-SMBMAP:([0-9a-f]+):`)
 var driveEncodedStatusPattern = regexp.MustCompile(`SSHMGR-SMBMAP:([0-9a-f]+):(\d+):`)
 var driveArgumentPattern = regexp.MustCompile(`AddArgument\('([A-Z]):'\)`)
+var encodedCommandPattern = regexp.MustCompile(`powershell -NoProfile -NonInteractive -EncodedCommand ([A-Za-z0-9+/=]+)`)
 
 func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (string, string, int) {
 	stdinBytes, err := io.ReadAll(stdin)
@@ -68,8 +71,14 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 	f.mu.Unlock()
 
 	decodedCommand := command
+	powerShellScripts := encodedCommandScripts(command)
 	if strings.Contains(command, "-EncodedCommand ") {
-		decodedCommand = strings.Join(encodedCommandScripts(command), "\n")
+		bootstrapAndScripts := append([]string(nil), powerShellScripts...)
+		if injectionScript, _, ok := splitWindowsCmdInjectionFrames(stdinBytes); ok {
+			bootstrapAndScripts = append(bootstrapAndScripts, injectionScript)
+			powerShellScripts = bootstrapAndScripts
+		}
+		decodedCommand = strings.Join(bootstrapAndScripts, "\n")
 	}
 	if strings.Contains(decodedCommand, "probe-one ") {
 		output := strings.Builder{}
@@ -101,7 +110,7 @@ func (f *fakePowerShellDriveServer) handler(command string, stdin io.Reader) (st
 			time.Sleep(f.commandDelay)
 		}
 		stdout := strings.Builder{}
-		for _, script := range encodedCommandScripts(command) {
+		for _, script := range powerShellScripts {
 			for _, match := range driveEncodedStatusPattern.FindAllStringSubmatch(script, -1) {
 				status := mapStatus
 				var index int
@@ -164,14 +173,9 @@ func (f *fakePowerShellDriveServer) setMapStatus(status string) {
 }
 
 func encodedCommandScripts(command string) []string {
-	const prefix = "powershell -NoProfile -NonInteractive -EncodedCommand "
 	var scripts []string
-	for _, line := range strings.Split(command, "\n") {
-		line = strings.TrimSuffix(line, "\r")
-		encoded, ok := strings.CutPrefix(line, prefix)
-		if !ok {
-			continue
-		}
+	for _, match := range encodedCommandPattern.FindAllStringSubmatch(command, -1) {
+		encoded := match[1]
 		blob, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			continue
@@ -186,6 +190,19 @@ func encodedCommandScripts(command string) []string {
 		scripts = append(scripts, string(utf16.Decode(units)))
 	}
 	return scripts
+}
+
+// splitWindowsCmdInjectionFrames 解析 cmd 注入专用标准输入：前 8 字节是十
+// 进制脚本长度，随后是 UTF-8 注入脚本，最后是环境变量值与挂载密码。
+func splitWindowsCmdInjectionFrames(frames []byte) (string, []byte, bool) {
+	if len(frames) < 8 {
+		return "", nil, false
+	}
+	length, err := strconv.Atoi(string(frames[:8]))
+	if err != nil || length < 0 || 8+length > len(frames) {
+		return "", nil, false
+	}
+	return string(frames[8 : 8+length]), frames[8+length:], true
 }
 
 type networkDriveFixture struct {
@@ -1594,9 +1611,9 @@ func TestNetworkDriveToolDescriptionsExplainVisibility(t *testing.T) {
 }
 
 // TestNetworkDriveInjectionExecCommandWindowsCmd 覆盖 cmd 贯通路径：先选址，
-// 再由 cmd 启动 PowerShell 子进程映射盘符。cmd 在读取环境变量后先恢复原代
-// 码页；密码包含换行、引号、百分号、竖线与括号，仍只按长度经标准输入送
-// 达，不进入命令文本、返回或审计。
+// 再由短 PowerShell 引导命令读取脚本帧并在进程内映射盘符。密码包含换行、
+// 引号、百分号、竖线与括号，仍只按长度经标准输入送达，不进入命令文本、返
+// 回或审计。
 func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
 		setup.cmdTarget = true
@@ -1639,9 +1656,13 @@ func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 		t.Fatalf("remote commands = %#v, want one probe and one wrapped command", commands)
 	}
 	wrapped := commands[1]
-	scripts := encodedCommandScripts(wrapped)
-	if len(scripts) != 1 {
-		t.Fatalf("EncodedCommand scripts = %d, want one per share", len(scripts))
+	bootstrap := encodedCommandScripts(wrapped)
+	if len(bootstrap) != 1 || !strings.HasPrefix(bootstrap[0], "$ProgressPreference='SilentlyContinue'") {
+		t.Fatalf("cmd 引导命令 = %#v，期待固定 PowerShell 引导脚本", bootstrap)
+	}
+	script, values, ok := splitWindowsCmdInjectionFrames(inputs[1])
+	if !ok {
+		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
 	for _, want := range []string{
 		"New-SmbMapping",
@@ -1650,28 +1671,21 @@ func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 		"AddArgument('S:')",
 		"-Persistent $false",
 		fmt.Sprintf("New-Object byte[] %d", len(networkDriveTestPassword)),
+		`$__sshmgr_process.StartInfo.Arguments = '/d /s /c "' + 'dir S:\datasets' + '"'`,
 	} {
-		if !strings.Contains(scripts[0], want) {
-			t.Fatalf("EncodedCommand script missing %q:\n%s", want, scripts[0])
+		if !strings.Contains(script, want) {
+			t.Fatalf("cmd 注入脚本缺少 %q：\n%s", want, script)
 		}
 	}
-	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
-	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
-	userCommandStart := strings.Index(wrapped, userCommand)
-	if encodedStart < 0 || restore < encodedStart || userCommandStart < restore {
-		t.Fatalf("cmd wrapper must map drives before reading environment values and running the user command:\n%s", wrapped)
-	}
-	for _, line := range strings.Split(wrapped, "\n") {
-		if strings.Contains(line, "-EncodedCommand ") && len(line) > 8191 {
-			t.Fatalf("EncodedCommand line is %d characters, above cmd limit", len(line))
-		}
+	if strings.Contains(wrapped, "\n") || strings.Contains(wrapped, "\r") || len(wrapped) >= 1500 {
+		t.Fatalf("cmd 引导命令必须保持单行且低于 1500 字符：%q", wrapped)
 	}
 	if strings.Contains(wrapped, networkDriveTestPassword) ||
-		strings.Contains(scripts[0], networkDriveTestPassword) {
-		t.Fatal("wrapped command or EncodedCommand script leaked the mount password")
+		strings.Contains(script, networkDriveTestPassword) {
+		t.Fatal("wrapped command or cmd injection script leaked the mount password")
 	}
-	if string(inputs[1]) != networkDriveTestPassword {
-		t.Fatalf("wrapped command standard input = %q, want only the mount password", inputs[1])
+	if string(values) != networkDriveTestPassword {
+		t.Fatalf("cmd 标准输入值 = %q，期待只有挂载密码", values)
 	}
 
 	auditRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
@@ -1692,7 +1706,7 @@ func TestNetworkDriveInjectionExecCommandWindowsCmd(t *testing.T) {
 }
 
 // TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent 覆盖多个共
-// 享同时注入：每个共享单独选址、单独启动 PowerShell 子进程、单独回传状态；
+// 享同时注入：每个共享单独选址，在同一个脚本里按顺序映射并单独回传状态；
 // 一个共享盘符被占用不影响另一个共享映射成功。
 func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
@@ -1740,28 +1754,29 @@ func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.
 		t.Fatalf("remote commands = %d, want two probes and one wrapped command", len(commands))
 	}
 	wrapped := commands[len(commands)-1]
-	scripts := encodedCommandScripts(wrapped)
-	if len(scripts) != 2 {
-		t.Fatalf("EncodedCommand scripts = %d, want one per share", len(scripts))
+	if bootstrap := encodedCommandScripts(wrapped); len(bootstrap) != 1 {
+		t.Fatalf("cmd 引导脚本数 = %d，期待一个固定引导脚本：%q", len(bootstrap), wrapped)
 	}
-	if !strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\datasets')`) ||
-		!strings.Contains(scripts[1], `AddArgument('\\192.0.2.10\reports')`) {
-		t.Fatalf("EncodedCommand scripts do not cover both shares in frame order:\n%s\n%s", scripts[0], scripts[1])
+	script, values, ok := splitWindowsCmdInjectionFrames(inputs[len(inputs)-1])
+	if !ok {
+		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[len(inputs)-1])
 	}
-	for index, script := range scripts {
-		if strings.Contains(script, networkDriveTestPassword) ||
-			strings.Contains(script, networkDriveSecondTestPassword) {
-			t.Fatalf("EncodedCommand script %d leaked a password:\n%s", index, script)
-		}
+	if !strings.Contains(script, `AddArgument('\\192.0.2.10\datasets')`) ||
+		!strings.Contains(script, `AddArgument('\\192.0.2.10\reports')`) {
+		t.Fatalf("cmd 注入脚本没有按顺序覆盖两个共享：\n%s", script)
 	}
 	if strings.Contains(wrapped, networkDriveTestPassword) ||
 		strings.Contains(wrapped, networkDriveSecondTestPassword) {
 		t.Fatal("wrapped command leaked a mount password")
 	}
-	wantFrames := append([]byte{}, networkDriveTestPassword...)
-	wantFrames = append(wantFrames, networkDriveSecondTestPassword...)
-	if string(inputs[len(inputs)-1]) != string(wantFrames) {
-		t.Fatalf("standard input frames = %q, want both passwords in script order", inputs[len(inputs)-1])
+	if strings.Contains(script, networkDriveTestPassword) ||
+		strings.Contains(script, networkDriveSecondTestPassword) {
+		t.Fatal("cmd 注入脚本泄漏挂载密码")
+	}
+	wantValues := append([]byte{}, networkDriveTestPassword...)
+	wantValues = append(wantValues, networkDriveSecondTestPassword...)
+	if string(values) != string(wantValues) {
+		t.Fatalf("cmd 标准输入值 = %q，期待两个挂载密码按脚本顺序排列", values)
 	}
 
 	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
@@ -1783,9 +1798,8 @@ func TestNetworkDriveInjectionWindowsCmdMultipleSharesAreIndependent(t *testing.
 }
 
 // TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection 钉住两类注入
-// 在同一条 cmd 命令里的标准输入帧顺序：网络盘密码先按长度精确读取，环
-// 境变量值随后带行分隔读取；两类注入都进入同一个封装并留下各自的审计名
-// 单。
+// 在同一条 cmd 命令里的标准输入帧顺序：脚本帧之后环境变量值在前，网络盘
+// 密码在后，均按长度精确读取；两类注入都留下各自的审计名单。
 func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, func(setup *networkDriveSeedSetup) {
 		setup.cmdTarget = true
@@ -1829,27 +1843,24 @@ func TestNetworkDriveInjectionWindowsCmdMixesEnvironmentInjection(t *testing.T) 
 		t.Fatalf("remote commands = %d, want one probe and one wrapped command", len(commands))
 	}
 	wrapped := commands[1]
-	envRead := strings.Index(wrapped, "set /p HF_TOKEN=")
-	restore := strings.Index(wrapped, "chcp %__sshmgr_original_code_page%")
-	encodedStart := strings.Index(wrapped, "powershell -NoProfile -NonInteractive -EncodedCommand ")
-	if encodedStart < 0 || envRead < encodedStart || restore < envRead {
-		t.Fatalf("cmd wrapper must map the drive before reading the environment value:\n%s", wrapped)
+	script, values, ok := splitWindowsCmdInjectionFrames(inputs[1])
+	if !ok {
+		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
-	scripts := encodedCommandScripts(wrapped)
-	if len(scripts) != 1 || !strings.Contains(scripts[0], "New-SmbMapping") {
-		t.Fatalf("EncodedCommand scripts = %#v, want one network drive mapping script", scripts)
+	if !strings.Contains(script, "$env:HF_TOKEN") || !strings.Contains(script, "New-SmbMapping") ||
+		!strings.Contains(script, `'/d /s /c "' + 'set HF_TOKEN' + '"'`) {
+		t.Fatalf("cmd 注入脚本必须先读机密项、再映射盘符、最后运行用户命令：\n%s", script)
 	}
 	if strings.Contains(wrapped, networkDriveEnvironmentValue) ||
 		strings.Contains(wrapped, networkDriveTestPassword) ||
-		strings.Contains(scripts[0], networkDriveEnvironmentValue) ||
-		strings.Contains(scripts[0], networkDriveTestPassword) {
-		t.Fatal("wrapped command or EncodedCommand script leaked an injected value")
+		strings.Contains(script, networkDriveEnvironmentValue) ||
+		strings.Contains(script, networkDriveTestPassword) {
+		t.Fatal("wrapped command or cmd injection script leaked an injected value")
 	}
-	wantFrames := append([]byte{}, networkDriveTestPassword...)
-	wantFrames = append(wantFrames, networkDriveEnvironmentValue...)
-	wantFrames = append(wantFrames, '\r', '\n')
-	if string(inputs[1]) != string(wantFrames) {
-		t.Fatalf("standard input frames = %q, want mount password, then environment value and line break", inputs[1])
+	wantValues := append([]byte{}, networkDriveEnvironmentValue...)
+	wantValues = append(wantValues, networkDriveTestPassword...)
+	if string(values) != string(wantValues) {
+		t.Fatalf("cmd 标准输入值 = %q，期待环境变量值在前、挂载密码在后", values)
 	}
 
 	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
@@ -1924,12 +1935,15 @@ func TestNetworkDriveInjectionWindowsCmdRejectsInvalidUTF8Password(t *testing.T)
 			t.Fatalf("invalid-password share reached the target: %q", command)
 		}
 	}
-	if string(inputs[1]) != networkDriveSecondTestPassword {
-		t.Fatalf("wrapped command standard input = %q, want only the valid password", inputs[1])
+	script, values, ok := splitWindowsCmdInjectionFrames(inputs[1])
+	if !ok {
+		t.Fatalf("cmd 标准输入缺少脚本帧：%q", inputs[1])
 	}
-	scripts := encodedCommandScripts(commands[1])
-	if len(scripts) != 1 || !strings.Contains(scripts[0], `AddArgument('\\192.0.2.10\reports')`) {
-		t.Fatalf("EncodedCommand scripts = %#v, want only the reports share", scripts)
+	if string(values) != networkDriveSecondTestPassword {
+		t.Fatalf("cmd 标准输入值 = %q，期待只有合法共享的挂载密码", values)
+	}
+	if !strings.Contains(script, `AddArgument('\\192.0.2.10\reports')`) || strings.Contains(script, "datasets") {
+		t.Fatalf("cmd 注入脚本应只包含 reports 共享：\n%s", script)
 	}
 
 	rows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec"}})
