@@ -33,8 +33,35 @@
 </tbody>
 </table>
 {{else}}<p>（无）</p>{{end}}
+{{if .ShareAuthorization}}
+<form method="post" action="/ui/secrets/authorization/preview" class="share-scope-form" data-share-scope-form>
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="/ui/shares/{{.ShareDetail.ID}}">
+<input type="hidden" name="secret_id" value="{{.ShareAuthorization.SecretID}}">
+{{range .ShareAuthorization.Servers}}<input type="hidden" name="server_id" value="{{.ID}}">{{end}}
+<fieldset><legend>可挂载范围勾选清单</legend>
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th></tr></thead>
+<tbody>
+{{range .ShareAuthorization.Servers}}
+<tr data-share-scope-device="{{.DeviceName}}">
+<td>
+<label class="grant-choice"><input type="checkbox" name="cell__{{$.ShareAuthorization.SecretID}}__{{.ID}}" value="1"{{if .Checked}} checked{{end}}><span>{{.Name}}</span>
+{{if .SharesDeviceWithOtherEntries}}<small data-share-scope-warning hidden>同设备的其他条目可能也能读到挂载内容。</small>{{end}}
+</label>
+</td>
+<td>{{or .DeviceName "（未登记设备）"}}</td>
+<td>{{.ShellType}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+<button type="submit">预览可挂载范围变更</button>
+</fieldset>
+</form>
+{{end}}
 {{/*
-可挂载范围勾选清单（#256）、现场探测（#257）、挂载与卸载（#258）、撤销（#259）、
+现场探测（#257）、挂载与卸载（#258）、撤销（#259）、
 重选地址与残留检查（#260）、桌面手动添加引导（#261）在后续票挂载到本页。
 */}}
 </section>
