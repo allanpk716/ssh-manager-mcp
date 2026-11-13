@@ -335,3 +335,22 @@ func TestShareReselectWindowsServerIsRejectedAndAudited(t *testing.T) {
 		t.Fatalf("Windows 拒绝的审计摘要 = %s", rows[0].Command)
 	}
 }
+
+func TestShareReselectExpiredTaskPromptsRestart(t *testing.T) {
+	f := newReselectWebFixture(t, "192.0.2.10")
+
+	resp := f.handler.do(
+		http.MethodGet, f.confirmPath(f.linuxID)+"&task=missing-task", nil,
+	)
+	page := body(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("失效任务页状态码 = %d：\n%s", resp.StatusCode, page)
+	}
+	for _, want := range []string{
+		"重选任务结果已失效", "重新确认并发起", "确认重选",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("重选失效任务页缺少 %q：\n%s", want, page)
+		}
+	}
+}

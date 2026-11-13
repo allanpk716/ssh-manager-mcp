@@ -28,7 +28,7 @@
 <ul class="residue-findings">
 {{range $finding := $server.Findings}}
 <li>
-<p><strong>{{$finding.ShareName}}</strong>：{{shareResidueFindingLabels $finding}}；{{if $finding.RevokedMarkerOnly}}仅有撤销标记（撤销后的预期状态，不需要清理）{{else}}{{shareResidueReasonLabel $finding.Reason}}{{end}}</p>
+<p><strong>{{$finding.ShareName}}</strong>：{{if $finding.RevokedMarkerOnly}}仅有撤销标记（撤销后的预期状态，不需要清理）{{else}}{{shareResidueFindingLabels $finding}}；{{shareResidueReasonLabel $finding.Reason}}{{end}}</p>
 {{if $finding.HasCleanup}}
 <form method="post" action="/ui/shares/{{$.ShareResidue.Share.ID}}/residue-cleanup" class="residue-cleanup-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">

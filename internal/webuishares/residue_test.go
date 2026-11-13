@@ -398,3 +398,35 @@ func TestShareResidueCleanupBusyListsProcessesAndForceCleans(t *testing.T) {
 		t.Fatalf("强制清理后的远端状态 = %+v", state)
 	}
 }
+
+func TestShareResidueExpiredTasksPromptRestart(t *testing.T) {
+	f := newResidueWebFixture(t)
+
+	check := f.handler.do(http.MethodGet, "/ui/shares/"+f.shareID+"/residue?task=missing-task", nil)
+	checkBody := body(t, check)
+	if check.StatusCode != http.StatusOK {
+		t.Fatalf("失效检查任务页状态码 = %d：\n%s", check.StatusCode, checkBody)
+	}
+	for _, want := range []string{
+		"残留检查任务结果已丢失", "重新检查本共享残留", "重新检查全部共享残留",
+	} {
+		if !strings.Contains(checkBody, want) {
+			t.Fatalf("失效检查任务页缺少 %q：\n%s", want, checkBody)
+		}
+	}
+
+	cleanup := f.handler.do(
+		http.MethodGet, "/ui/shares/"+f.shareID+"/residue?cleanup=missing-task", nil,
+	)
+	cleanupBody := body(t, cleanup)
+	if cleanup.StatusCode != http.StatusOK {
+		t.Fatalf("失效清理任务页状态码 = %d：\n%s", cleanup.StatusCode, cleanupBody)
+	}
+	for _, want := range []string{
+		"清理任务结果已失效", "重新检查本共享残留",
+	} {
+		if !strings.Contains(cleanupBody, want) {
+			t.Fatalf("失效清理任务页缺少 %q：\n%s", want, cleanupBody)
+		}
+	}
+}
