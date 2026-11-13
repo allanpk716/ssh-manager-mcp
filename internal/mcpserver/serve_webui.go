@@ -124,6 +124,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		NewService: serveOpts.ServiceRestarterFactory,
 		Audit:      opsManager.WriteRestartAudit,
 	})
+	remoteTasks := webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx)
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers:                serveWebUIServerSource{store: st},
@@ -133,7 +134,8 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
 		Shares:                 webuishares.FromStore(openServeWebUIStore),
 		SharesWriter:           webuishares.WriterFromStore(openServeWebUIStore),
-		SharesRemoteTasks:      webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx),
+		SharesRemoteTasks:      remoteTasks,
+		ShareLatestChecks:      remoteTasks,
 		ShareUnmountRunner:     webuishares.UnmountTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		ShareRevokeRunner:      webuishares.RevokeTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		ShareReselectRunner:    webuishares.ReselectTasksFromStoreWithContext(openServeWebUIStore, ctx),

@@ -211,10 +211,13 @@ func openStoreForTest(st *store.Store) func() (*store.Store, func(), error) {
 	}
 }
 
-func newIntegrationHandler(t *testing.T, st *store.Store, remoteTasks ...webui.ShareRemoteTasks) sessionHandler {
+func newIntegrationHandler(
+	t *testing.T, st *store.Store, remoteTasks ...webui.ShareRemoteTasksWithLatestChecks,
+) sessionHandler {
 	return startIntegrationHandler(t, st, func(config *webui.Config) {
 		if len(remoteTasks) > 0 {
 			config.SharesRemoteTasks = remoteTasks[0]
+			config.ShareLatestChecks = remoteTasks[0]
 		}
 	})
 }

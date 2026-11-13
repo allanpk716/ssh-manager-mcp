@@ -22,7 +22,7 @@ type shareRemoteTaskStore struct {
 // 务只保存在当前进程内存里，后台执行时重新打开存储，避免长期占用句柄。
 func RemoteTasksFromStore(
 	open func() (*store.Store, func(), error),
-) webui.ShareRemoteTasks {
+) webui.ShareRemoteTasksWithLatestChecks {
 	return RemoteTasksFromStoreWithContext(open, context.Background())
 }
 
@@ -30,7 +30,7 @@ func RemoteTasksFromStore(
 // 继承 Web UI 服务的关闭上下文。
 func RemoteTasksFromStoreWithContext(
 	open func() (*store.Store, func(), error), ctx context.Context,
-) webui.ShareRemoteTasks {
+) webui.ShareRemoteTasksWithLatestChecks {
 	return &shareRemoteTaskStore{
 		open: open,
 		tasks: newShareTaskTable(

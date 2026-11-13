@@ -77,7 +77,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		secretWriter            webui.SecretWriter
 		shareSource             webui.ShareSource
 		shareWriter             webui.ShareWriter
-		shareRemoteTasks        webui.ShareRemoteTasks
+		shareRemoteTasks        webui.ShareRemoteTasksWithLatestChecks
 		shareUnmountRunner      webui.ShareUnmountRunner
 		shareRevokeRunner       webui.ShareRevokeRunner
 		shareReselectRunner     webui.ShareReselectRunner
@@ -190,6 +190,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		Shares:                 shareSource,
 		SharesWriter:           shareWriter,
 		SharesRemoteTasks:      shareRemoteTasks,
+		ShareLatestChecks:      shareRemoteTasks,
 		ShareUnmountRunner:     shareUnmountRunner,
 		ShareRevokeRunner:      shareRevokeRunner,
 		ShareReselectRunner:    shareReselectRunner,

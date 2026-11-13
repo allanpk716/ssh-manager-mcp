@@ -304,14 +304,10 @@ func (h *handler) shareRevokeView(
 func (h *handler) latestShareCheckMounted(
 	shareID, serverID string, shell models.ShellType,
 ) bool {
-	if shell.IsWindows() || h.cfg.SharesRemoteTasks == nil {
+	if shell.IsWindows() || h.cfg.ShareLatestChecks == nil {
 		return false
 	}
-	source, ok := h.cfg.SharesRemoteTasks.(ShareLatestCheckSource)
-	if !ok {
-		return false
-	}
-	results, ok := source.LatestShareCheck(shareID)
+	results, ok := h.cfg.ShareLatestChecks.LatestShareCheck(shareID)
 	if !ok {
 		return false
 	}

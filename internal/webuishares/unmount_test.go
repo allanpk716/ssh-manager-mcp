@@ -77,7 +77,9 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 	linux.ShareID = share.ID
 	linux.SeedManagedConfiguration("192.0.2.10", share.Version)
 	h := startIntegrationHandler(t, st, func(config *webui.Config) {
-		config.SharesRemoteTasks = RemoteTasksFromStore(openStoreForTest(st))
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(st))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
 		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
 		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(st))
 	})

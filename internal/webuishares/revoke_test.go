@@ -300,6 +300,9 @@ func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *test
 	newPassword := []byte("new-password-\x00-'\"-密码")
 	now := time.Date(2026, 11, 13, 12, 0, 0, 0, time.Local)
 	h := newShareAuthorityHandler(t, fixture.store, &now, func(config *webui.Config) {
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(fixture.store))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
 		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(fixture.store))
 	})
 	now = now.Add(6 * time.Minute)

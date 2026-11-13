@@ -82,6 +82,14 @@ type ShareRemoteTasks interface {
 	ShareRemoteTaskStatus(taskID string) (*ShareRemoteTaskStatus, bool)
 }
 
+// ShareRemoteTasksWithLatestChecks 是既能启动现场探测与单台挂载任务、又
+// 能读取最近一次现场探测结果的远端任务视图。装配处把同一个实例同时交给
+// SharesRemoteTasks 与 ShareLatestChecks 两个配置字段。
+type ShareRemoteTasksWithLatestChecks interface {
+	ShareRemoteTasks
+	ShareLatestCheckSource
+}
+
 // ShareRemoteTaskView 是任务页与任务片段的展示数据。Lost 为真时表示任务
 // 表里没有这个任务，页面提示可重新发起而不排队补跑。
 type ShareRemoteTaskView struct {
