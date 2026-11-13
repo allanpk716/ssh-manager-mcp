@@ -27,6 +27,12 @@ func bridgeCacheInstance() string {
 	return os.Getenv("SSHMGR_MCP_INSTANCE")
 }
 
+// wrapProbeConnectivityService 让测试包装连通探测服务，并注入确定性的本机
+// TCP 拨号函数。正式运行原样返回该服务。
+var wrapProbeConnectivityService = func(service *probe.Service) *probe.Service {
+	return service
+}
+
 // ProbeConnectivityForProfile 运行连通探测并写审计。起点或目标里的服务器
 // 编号必须在该授权范围内；只要工具正常返回，审计状态就是成功，单个目标
 // 不通不算失败。
@@ -57,6 +63,7 @@ func ProbeConnectivityForProfile(ctx context.Context, st *store.Store, projectID
 	if results, ok, pathErr := probeobserve.ResultsFor(instance); pathErr == nil && ok {
 		service.Results = results
 	}
+	service = wrapProbeConnectivityService(service)
 	report, probeErr := service.Probe(ctx, probe.Request{From: from, Targets: targets})
 	summary, originServerID = probe.AuditSummary(from, report, probeErr)
 	if probeErr != nil {

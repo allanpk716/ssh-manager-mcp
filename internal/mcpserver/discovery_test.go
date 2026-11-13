@@ -15,18 +15,8 @@ import (
 // offer = {"t":"offer","name","spki","tcp"} 只单播回源。开关逐包评估,关=不答;
 // 魔数/JSON 畸形静默。
 //
-// 这些测试绑定真实的 UDP 7878 端口。本机若正运行着 `sshmgr serve`(它也占
-// 这个端口),其中 3 个会失败;这是环境冲突,不是代码回归,停掉 serve 再跑即可。
-
-// mustResolve is the brief's helper: resolve a UDP address or fail the test.
-func mustResolve(t *testing.T, addr string) *net.UDPAddr {
-	t.Helper()
-	ra, err := net.ResolveUDPAddr("udp", addr)
-	if err != nil {
-		t.Fatalf("resolve %s: %v", addr, err)
-	}
-	return ra
-}
+// 这些测试把发现服务绑定到系统分配的本机回环 UDP 端口。并发测试进程与
+// 本机正式运行的 `sshmgr serve` 互不占用端口。
 
 // openProbeConn opens a client-side UDP packet conn on loopback for probing.
 func openProbeConn(t *testing.T) net.PacketConn {
@@ -59,14 +49,36 @@ func probeOnce(t *testing.T, conn net.PacketConn, payload []byte, addr *net.UDPA
 
 const tValidProbe = "sshmgr-disc-v1\n{\"t\":\"probe\"}\n"
 
+func startDiscoveryForTest(
+	t *testing.T,
+	name string,
+	advertisedTCPPort int,
+	enabled func() bool,
+) *net.UDPAddr {
+	t.Helper()
+	stop, address, err := StartDiscoveryAt(
+		context.Background(),
+		"127.0.0.1:0",
+		name,
+		advertisedTCPPort,
+		"sha256:ab",
+		enabled,
+	)
+	if err != nil {
+		t.Fatalf("StartDiscoveryAt: %v", err)
+	}
+	t.Cleanup(stop)
+	return address
+}
+
 // TestDiscovery_ProbeOfferUnicast pins the frozen happy path (brief Step 1):
 // a valid probe gets exactly one unicast offer carrying the serve's name,
 // SPKI pin and TCP port.
 func TestDiscovery_ProbeOfferUnicast(t *testing.T) {
-	stop := StartDiscovery(context.Background(), "nuc10", 7878, "sha256:ab", func() bool { return true })
-	defer stop()
+	advertisedTCPPort := 42424
+	address := startDiscoveryForTest(t, "nuc10", advertisedTCPPort, func() bool { return true })
 	conn := openProbeConn(t)
-	resp := probeOnce(t, conn, []byte(tValidProbe), mustResolve(t, "127.0.0.1:7878"), 2*time.Second)
+	resp := probeOnce(t, conn, []byte(tValidProbe), address, 2*time.Second)
 	if resp == nil {
 		t.Fatal("no offer within 2s for a valid probe")
 	}
@@ -87,7 +99,7 @@ func TestDiscovery_ProbeOfferUnicast(t *testing.T) {
 	if err := json.Unmarshal(bytes.TrimSpace(body), &offer); err != nil {
 		t.Fatalf("offer is not the frozen JSON shape: %v (%s)", err, resp)
 	}
-	if offer.T != "offer" || offer.Name != "nuc10" || offer.SPKI != "sha256:ab" || offer.TCP != 7878 {
+	if offer.T != "offer" || offer.Name != "nuc10" || offer.SPKI != "sha256:ab" || offer.TCP != advertisedTCPPort {
 		t.Fatalf("offer fields mismatch: %+v", offer)
 	}
 }
@@ -97,17 +109,16 @@ func TestDiscovery_ProbeOfferUnicast(t *testing.T) {
 // effect on the next probe without a serve restart), but enabled()==false
 // keeps every probe unanswered — the per-packet gate is the authority.
 func TestDiscovery_DisabledStillBoundButSilent(t *testing.T) {
-	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", func() bool { return false })
-	defer stop()
-	// 绑定即发生:disabled 状态下 0.0.0.0:7878 已被 responder 占住,第二个 bind 必败。
-	own, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: 7878})
+	address := startDiscoveryForTest(t, "n", 42424, func() bool { return false })
+	// 绑定即发生:disabled 状态下该系统分配端口已被应答器占住,第二个 bind 必败。
+	own, err := net.ListenUDP("udp", address)
 	if err == nil {
 		own.Close()
-		t.Fatal("StartDiscovery must bind udp/7878 even when disabled (off→on needs no restart)")
+		t.Fatal("StartDiscovery must bind its UDP address even when disabled (off→on needs no restart)")
 	}
 	// 逐包门:关=不答。
 	conn := openProbeConn(t)
-	if resp := probeOnce(t, conn, []byte(tValidProbe), mustResolve(t, "127.0.0.1:7878"), 400*time.Millisecond); resp != nil {
+	if resp := probeOnce(t, conn, []byte(tValidProbe), address, 400*time.Millisecond); resp != nil {
 		t.Fatalf("disabled discovery must not answer, got %s", resp)
 	}
 }
@@ -118,10 +129,9 @@ func TestDiscovery_DisabledStillBoundButSilent(t *testing.T) {
 func TestDiscovery_SwitchedOffMidFlight(t *testing.T) {
 	var on atomic.Bool
 	on.Store(true)
-	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", on.Load)
-	defer stop()
+	address := startDiscoveryForTest(t, "n", 42424, on.Load)
 	conn := openProbeConn(t)
-	addr := mustResolve(t, "127.0.0.1:7878")
+	addr := address
 	if resp := probeOnce(t, conn, []byte(tValidProbe), addr, 2*time.Second); resp == nil {
 		t.Fatal("enabled responder must answer")
 	}
@@ -136,10 +146,9 @@ func TestDiscovery_SwitchedOffMidFlight(t *testing.T) {
 // answer, while the same read loop still answers a following valid probe
 // (silence is selective, not a stalled loop).
 func TestDiscovery_GarbageSilent(t *testing.T) {
-	stop := StartDiscovery(context.Background(), "n", 7878, "sha256:ab", func() bool { return true })
-	defer stop()
+	address := startDiscoveryForTest(t, "n", 42424, func() bool { return true })
 	conn := openProbeConn(t)
-	addr := mustResolve(t, "127.0.0.1:7878")
+	addr := address
 	garbage := map[string]string{
 		"wrong magic": "other-disc-v1\n{\"t\":\"probe\"}\n",
 		"no magic":    "{\"t\":\"probe\"}\n",
@@ -163,7 +172,10 @@ func TestDiscovery_GarbageSilent(t *testing.T) {
 // fire it.
 func TestDiscovery_StopIdempotent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	stop := StartDiscovery(ctx, "n", 7878, "sha256:ab", func() bool { return true })
+	stop, _, err := StartDiscoveryAt(ctx, "127.0.0.1:0", "n", 42424, "sha256:ab", func() bool { return true })
+	if err != nil {
+		t.Fatalf("StartDiscoveryAt: %v", err)
+	}
 	cancel() // ctx path may invoke stop internally
 	stop()
 	stop() // must be a no-op, not a double-close panic
