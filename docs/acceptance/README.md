@@ -1,13 +1,13 @@
 # 真机验收册(Acceptance Playbook)
 
 > 发版后的真机验收按册执行:**agent 能跑的 agent 跑,owner 只跑人工保留面**。
-> 立项背景:2026-09-21 grilling「测试自助化」主轴定案;架构约束见 [ADR 0003](../adr/0003-tui-cli-parity-agent-testable.md)。
+> 立项背景:2026-09-21 grilling「测试自助化」主轴定案;架构约束见 [架构决策记录 0003](../adr/0003-tui-cli-parity-agent-testable.md)。
 
 ## 总则
 
 1. **执行者**:凡能经命令行(`sshmgr ...`,本机或远端)或 SSH 工具面(NUC10 / 目标机远程操作)完成的步骤,由 agent 代跑;证据标注「agent 代跑」后回写 [compat-matrix.md](../compat-matrix.md) / [backlog.md](../backlog.md)。
 2. **人工保留面**(永远不由 agent 代跑,机器代跑要么失去意义要么造假证据):
-   - **人工信任动作**:SAS 配对双屏人工比对。agent 自动化跑用 `SSHMGR_PAIR_ASSUME_SAS=1`,证据必须注明跳过;
+   - **人工信任动作**:短认证码(配对时两端屏幕显示的比对码)双屏人工比对。agent 自动化跑用 `SSHMGR_PAIR_ASSUME_SAS=1`,证据必须注明跳过;
    - **感官判断**:真终端观感目验(中文列对齐、光标常亮这类);
    - **物理操作**:拔网线、断电、设备本体操作。
 3. **安全护栏**:破坏性演练(清毒 `--clear`、吊销 revoke、删除实例)**一律打一次性靶子**——临时服务器条目、临时设备码、临时实例,不碰生产条目;跑完清理靶子并留清理证据。纯读操作(doctor、计数、指纹对照、audit)可直接上生产。
