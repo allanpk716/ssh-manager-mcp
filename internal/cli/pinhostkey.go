@@ -3,7 +3,6 @@ package cli
 import (
 	"bufio"
 	"bytes"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -284,26 +283,10 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 	return nil
 }
 
-// parseFingerprintFlag enforces the strict double check: the OpenSSH form
-// SHA256:<base64, unpadded> AND a decode to EXACTLY 32 bytes. Returns the
-// bytes to store (the canonical string itself) and the display string.
+// parseFingerprintFlag enforces the strict double check via the shared store
+// validator so the command line and the Web UI accept the same fingerprints.
 func parseFingerprintFlag(in string) ([]byte, string, error) {
-	fp := strings.TrimSpace(in)
-	rest, ok := strings.CutPrefix(fp, "SHA256:")
-	if !ok {
-		return nil, "", fmt.Errorf("--fingerprint must be the OpenSSH form SHA256:<base64, unpadded> (got %q)", fp)
-	}
-	raw, err := base64.RawStdEncoding.DecodeString(rest)
-	if err != nil {
-		return nil, "", fmt.Errorf("--fingerprint base64 is invalid (%v) — expected the unpadded standard-alphabet form ssh-keygen -lf prints", err)
-	}
-	if len(raw) != 32 {
-		return nil, "", fmt.Errorf("--fingerprint decodes to %d bytes, want exactly 32 (a SHA-256 digest) — is the string truncated or padded?", len(raw))
-	}
-	if base64.RawStdEncoding.EncodeToString(raw) != rest {
-		return nil, "", fmt.Errorf("--fingerprint is not in canonical SHA256:<base64, unpadded> form — re-check for stray characters")
-	}
-	return []byte(fp), fp, nil
+	return store.ParseFingerprintPin(in)
 }
 
 // knownHostsForm renders the entry address the way OpenSSH known_hosts spells

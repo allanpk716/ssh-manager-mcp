@@ -5,6 +5,7 @@ package webuiservers
 import (
 	"errors"
 	"strconv"
+	"time"
 
 	"ssh-manager-mcp/internal/importer"
 	"ssh-manager-mcp/internal/models"
@@ -185,6 +186,16 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		})
 	}
 	view.ShowDeliveryRecords = true
+	view.ShowHostKeyAnchor = true
+	if detail.HostKeyAnchor != nil {
+		view.HostKeyAnchor = &webui.ServerDetailHostKeyAnchor{
+			Fingerprint:   store.PinFingerprint(detail.HostKeyAnchor.Blob, detail.HostKeyAnchor.Format),
+			SourceLabel:   webui.HostKeyAnchorSourceLabel(detail.HostKeyAnchor.Source),
+			Device:        detail.HostKeyAnchor.Device,
+			HandshakeAddr: detail.HostKeyAnchor.HandshakeAddr,
+			PinnedAt:      time.Unix(detail.HostKeyAnchor.CreatedAt, 0),
+		}
+	}
 	for _, record := range detail.DeliveryRecords {
 		view.DeliveryRecords = append(view.DeliveryRecords, deliveryRecordRow(record))
 	}
@@ -649,6 +660,42 @@ func (w writerAdapter) CompleteServer(id string, form webui.ServerCompleteForm, 
 		return completeErr
 	})
 	return result, err
+}
+
+// ReplaceHostKeyPin 覆盖一个服务器条目的主机密钥锚；表单校验失败换成页
+// 面提示，条目不存在映射为 404。
+func (w writerAdapter) ReplaceHostKeyPin(id, fingerprint string, force bool, source webui.ServerWriteSource) error {
+	return withManager(w.open, func(manager *servermanage.Manager) error {
+		found, err := manager.ReplaceHostKeyPin(id, fingerprint, force, servermanage.WebUISource(source.RemoteAddress))
+		if err != nil {
+			var fieldErr *servermanage.FieldError
+			if errors.As(err, &fieldErr) {
+				return &webui.ServerFormError{Message: fieldErr.Page}
+			}
+			if errors.Is(err, store.ErrPinExists) {
+				return &webui.ServerFormError{Message: "这台服务器条目已有主机密钥锚，请刷新页面核对现有锚后再覆盖。"}
+			}
+			return err
+		}
+		if !found {
+			return webui.ErrServerNotFound
+		}
+		return nil
+	})
+}
+
+// ClearHostKeyPin 删除一个服务器条目的主机密钥锚；条目不存在映射为 404。
+func (w writerAdapter) ClearHostKeyPin(id string, source webui.ServerWriteSource) error {
+	return withManager(w.open, func(manager *servermanage.Manager) error {
+		found, err := manager.ClearHostKeyPin(id, servermanage.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return err
+		}
+		if !found {
+			return webui.ErrServerNotFound
+		}
+		return nil
+	})
 }
 
 // CompleteServerView 保存补全表单并换成页面数据。

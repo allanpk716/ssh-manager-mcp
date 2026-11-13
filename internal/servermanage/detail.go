@@ -40,6 +40,9 @@ type Detail struct {
 	ProfileChoices []DetailProfileChoice
 	// DeliveryRecords 是写到这台服务器条目的最新下发记录，只读展示。
 	DeliveryRecords []store.SecretDeliveryRecord
+	// HostKeyAnchor 是这个服务器条目当前的主机密钥锚及来源信息；条目尚
+	// 无锚时为空。同一设备的兄弟条目各有各的锚，不合并。
+	HostKeyAnchor *store.PinMeta
 	// SiblingSharedStorages 是同一台设备的其他服务器条目已授权、因此
 	// 在这台机器上也可见的共享存储；每项注明来源服务器条目。
 	SiblingSharedStorages []DetailSiblingSharedStorage
@@ -136,6 +139,11 @@ func (m *Manager) Detail(identifier string) (*Detail, error) {
 			detail.HasDevice = true
 		}
 	}
+	anchor, err := m.st.GetEntryPinMeta(srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	detail.HostKeyAnchor = anchor
 	if err := m.fillReverseView(detail); err != nil {
 		return nil, err
 	}

@@ -801,6 +801,11 @@ h1 {
   border-color: var(--color-danger-border);
 }
 
+button.danger {
+  color: #ff8589;
+  border-color: var(--color-danger-border);
+}
+
 .detail-list {
   display: grid;
   grid-template-columns: 160px 1fr;
