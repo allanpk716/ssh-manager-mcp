@@ -28,7 +28,7 @@
 
 | 册 | 覆盖 | 状态 |
 |---|---|---|
-| [release-87.md](./release-87.md) | 整体发版真机验收册（#87，正在汇总） | **建设中**：已先落机密项环境变量注入的 Windows PowerShell 与 cmd 读帧、进程命令行参数检查条目；其余条目待对应实现票补齐 |
+| [release-87.md](./release-87.md) | 整体发版真机验收册（#87）：机密项与 Windows 路径、网络拓扑与主机信任、共享存储、Web UI、初始化迁移、新旧版本混跑、备份迁移、人工保留面与发版检查 | **可执行**：条目与覆盖对照表已收口；发版前按册执行，运行记录写入 [runs/](./runs/)，放行判据见册末「发版检查清单」 |
 | [plan-52-exec-timeout-conn-kill.md](./plan-52-exec-timeout-conn-kill.md) | exec 超时断连拆除五项(A1–A5) | **待跑(owner 门,2026-10-09 夜链未执行)**:v0.20.1 发版+双端部署后按册执行——A1 有界返回(4090x2 ≤18 秒)/A2 残留如实记录后手工 kill/A3 后台任务进终态/A4 3090x2 对照无回归/A5 超时后正常往返 |
 | [bridge-hot-upgrade.md](./bridge-hot-upgrade.md) | v0.20.0 桥热升级(自动/触发换手/忙拒/崩溃收场/降级传播/doctor 行/重装护栏) | **首轮 agent 代跑 2026-10-08 全过**(真实无头 Claude Code 宿主两幕;A5 实测优于设计预期——无头宿主下次调用自动重拉桥);交互式 `/mcp` 重连上车留 owner(一次性引导动作)——证据见 [runs/2026-10-08-v0.20.0-hotupgrade-e2e.md](./runs/2026-10-08-v0.20.0-hotupgrade-e2e.md) |
 | [plan-48-pin-forwarding.md](./plan-48-pin-forwarding.md) | 锚定转发 / 带外锚定六项(spec §12) | **首轮 agent 代跑 2026-09-21**:A5 过;A1/A6 部分过(缺口已登记);A2/A3/A4 延后(A2 软隔离形态需按缓存客户端拓扑重述,见 backlog)——证据见 [runs/2026-09-21-plan48-pilot.md](./runs/2026-09-21-plan48-pilot.md) |
