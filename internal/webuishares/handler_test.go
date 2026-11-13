@@ -304,8 +304,8 @@ func TestSharesPageListsRowsAndFilters(t *testing.T) {
 
 func TestShareDetailShowsRegistrationFieldsWithoutSecretValue(t *testing.T) {
 	st := newIntegrationStore(t)
-	linuxID := mustServer(t, st, "linux-web", models.ShellPOSIX)
-	winID := mustServer(t, st, "windows-web", models.ShellPowerShell)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	mustServer(t, st, "windows-web", models.ShellPowerShell)
 	if _, err := st.AddDevice("NAS", "", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -325,8 +325,6 @@ func TestShareDetailShowsRegistrationFieldsWithoutSecretValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = linuxID
-	_ = winID
 	h := newIntegrationHandler(t, st)
 
 	page := h.do(http.MethodGet, "/ui/shares/"+share.ID, nil)
