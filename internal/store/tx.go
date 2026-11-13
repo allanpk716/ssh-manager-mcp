@@ -142,7 +142,7 @@ func (s *Store) AddServerWithCredentials(srv *models.Server, cred, sudo *models.
 		return "", err
 	}
 	defer tx.Rollback() // no-op after Commit
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "")
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "", true, WriteSource{})
 	if err != nil {
 		return "", err
 	}

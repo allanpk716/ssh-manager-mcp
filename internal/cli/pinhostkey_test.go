@@ -231,7 +231,7 @@ func TestPinHostkey_FingerprintStrict(t *testing.T) {
 }
 
 // TestPinHostkey_ExistingRefusalAndForce：已有锚不加 --force 拒绝并显示现存
-// 指纹与来源；--force 覆盖，审计带事务内读到的旧指纹；同地址兄弟条目的锚
+// 指纹与来源；--force 覆盖，审计带事务内读到的旧指纹；同一设备、同一端口的其他服务器条目的锚
 // 不受影响。
 func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 	_, mk := withCliStoreEnv(t)
@@ -268,7 +268,7 @@ func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fp="+fpB+" via=fingerprint forced=true was="+fpA {
 		t.Fatalf("force audit must carry in-tx old→new: %+v", rows)
 	}
-	// 兄弟条目的锚不受覆盖影响。
+	// 同设备同端口的其他服务器条目的锚不受覆盖影响。
 	if pin := entryPinAt(t, mk, "beta"); pin == nil || !pin.Matches(keyA.Marshal()) {
 		t.Fatalf("beta's anchor must survive alpha's force: %+v", pin)
 	}
@@ -296,7 +296,7 @@ func TestPinHostkey_ForceFreeSlot(t *testing.T) {
 	}
 }
 
-// TestPinHostkey_Clear：--clear 按条目删除锚并写审计；同地址兄弟条目与其它
+// TestPinHostkey_Clear：--clear 按条目删除锚并写审计；同一设备、同一端口的其他服务器条目与其它
 // 条目不受影响；重复清除幂等。
 func TestPinHostkey_Clear(t *testing.T) {
 	_, mk := withCliStoreEnv(t)

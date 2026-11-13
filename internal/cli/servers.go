@@ -67,6 +67,19 @@ func serversAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
+			if host == "" && device != "" {
+				memberships, err := s.ListNetworkMembershipsByRegistration(device)
+				if err != nil {
+					return err
+				}
+				if len(memberships) == 0 {
+					return errors.New("指定已有设备但没有网络成员时，必须提供兜底主机")
+				}
+				host, _ = servermanage.FallbackHostFromMemberships(memberships)
+			}
+			if host == "" && device == "" {
+				return errors.New("必须提供 --host，或提供 --device 并确保该设备已有网络成员")
+			}
 			// Audit summary (owner whitelist: name/host/port/user only —
 			// credential values are excluded by construction). Built once from
 			// the flags so the success and the failure rows share one shape.
@@ -139,7 +152,7 @@ func serversAddCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "server name (unique)")
-	c.Flags().StringVar(&host, "host", "", "hostname or IP")
+	c.Flags().StringVar(&host, "host", "", "hostname or IP; may be omitted when --device names a device with network memberships")
 	c.Flags().IntVar(&port, "port", 22, "port")
 	c.Flags().StringVar(&user, "user", "", "ssh user")
 	c.Flags().StringVar(&password, "password", "", "password auth (mutually exclusive with --key; omit both for a credential-less server)")
@@ -155,9 +168,8 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&caveats, "special-handling", "", "operational gotchas / special handling rules — the agent reads this BEFORE acting")
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
 	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd)")
-	c.Flags().StringVar(&device, "device", "", "关联的拓扑设备；不给时自动生成同名设备")
+	c.Flags().StringVar(&device, "device", "", "关联的已有拓扑设备；不给时自动生成同名设备，兜底主机可从它的物理局域网地址生成")
 	_ = c.MarkFlagRequired("name")
-	_ = c.MarkFlagRequired("host")
 	_ = c.MarkFlagRequired("user")
 	return c
 }

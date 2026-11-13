@@ -171,6 +171,56 @@ func TestTopologyWithoutSourceHidesNavigationAndRoutes(t *testing.T) {
 	}
 }
 
+func TestTopologyPageShowsTrayAddOnlyForWritableRoles(t *testing.T) {
+	cases := []struct {
+		name      string
+		role      Role
+		authority bool
+		wantAdd   bool
+	}{
+		{name: "standalone", role: RoleStandalone, wantAdd: true},
+		{name: "server", role: RoleServer, authority: true, wantAdd: true},
+		{name: "client", role: RoleClient},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var topologyWriter TopologyWriter
+			if tc.wantAdd {
+				topologyWriter = &stubTopologyWriter{}
+			}
+			handler, startup := newTopologyTestHandler(t, tc.role, &stubTopologySource{data: topologyFixture()}, "", topologyWriter)
+			var cookie *http.Cookie
+			if tc.authority {
+				cookie = authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+			} else {
+				response := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
+				cookies := response.Cookies()
+				response.Body.Close()
+				if len(cookies) != 1 {
+					t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
+				}
+				cookie = cookies[0]
+			}
+			host := "127.0.0.1:18080"
+			if tc.authority {
+				host = "127.0.0.1:7879"
+			}
+			page := authorityGet(t, handler, host, "/ui/topology/", cookie)
+			body := readResponseBody(t, page)
+			if tc.wantAdd {
+				want := `href="/ui/add?return_to=%2Fui%2Ftopology%2F"`
+				if !strings.Contains(body, want) || !strings.Contains(body, "data-topology-add") {
+					t.Fatalf("可写角色拓扑托盘应提供新增入口，缺少 %q：\n%s", want, body)
+				}
+				return
+			}
+			if strings.Contains(body, "data-topology-add") || strings.Contains(body, `href="/ui/add`) {
+				t.Fatalf("客户端拓扑页不应提供新增入口：\n%s", body)
+			}
+		})
+	}
+}
+
 func TestTopologyDataEndpointReturnsSourceJSON(t *testing.T) {
 	source := &stubTopologySource{data: topologyFixture()}
 	handler, startup := newTopologyTestHandler(t, RoleStandalone, source, "")

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -86,6 +87,66 @@ func TestDevicesMoveServerCoversAssociateAndMove(t *testing.T) {
 	}
 }
 
+// TestOtherDeviceWebUIAndCLICreateSameTopologyData 用同一种数据形状分别走
+// Web UI 背后的服务器管理模块与既有 devices 命令，证明不受管设备路径最终
+// 写的是同一份设备与网络成员数据。
+func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := servermanage.New(st).AddOtherDevice(servermanage.OtherDeviceAddRequest{
+		DeviceName: "Web 网络存储", Note: "共享照片与备份", SiteName: "家A",
+		Memberships: []servermanage.NetworkMembershipInput{
+			{Network: "家A局域网", Address: "192.168.1.70"},
+			{Network: "虚拟网", Address: "100.64.0.70"},
+		},
+	}, servermanage.WebUISource("192.0.2.7")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runCli(t, "devices", "add", "命令行网络存储", "--note", "共享照片与备份")
+	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "家A局域网", "--address", "192.168.1.71")
+	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "虚拟网", "--address", "100.64.0.71")
+
+	out := runCli(t, "devices", "show", "Web 网络存储")
+	for _, want := range []string{"备注：共享照片与备份", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("devices show 应显示 Web UI 保存的同一份数据，缺少 %q：\n%s", want, out)
+		}
+	}
+
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for _, name := range []string{"Web 网络存储", "命令行网络存储"} {
+		device, err := st.GetDevice(name)
+		if err != nil || device == nil || device.Note != "共享照片与备份" || device.ClientName != "" {
+			t.Fatalf("两条入口应保存同样的设备字段：%v %+v", err, device)
+		}
+		memberships, err := st.ListNetworkMembershipsByRegistration(name)
+		if err != nil || len(memberships) != 2 ||
+			memberships[0].NetworkName != "家A局域网" || memberships[1].NetworkName != "虚拟网" {
+			t.Fatalf("两条入口应保存同样的网络成员：%v %+v", err, memberships)
+		}
+	}
+}
+
 // TestServersAddCreatesOrUsesDevice 覆盖 servers add 的两种设备归属：不带
 // --device 时生成同名设备，设备名冲突则加数字后缀；带 --device 时关联已有
 // 设备。两种生成出来的设备都没有网络成员，因此出现在未归类列表。
@@ -110,7 +171,70 @@ func TestServersAddCreatesOrUsesDevice(t *testing.T) {
 	}
 }
 
-// TestServerDeviceAnchorCopySamePort 覆盖同端口兄弟条目的锚复制：新条目
+// TestServersAddUsesDevicePhysicalAddressAsFallback 覆盖命令行与表单一致的
+// 兜底主机规则：指定已有设备时可以不给主机地址；有物理局域网成员则取第一
+// 个物理地址，没有物理地址则保存为空。
+func TestServersAddUsesDevicePhysicalAddressAsFallback(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	runCli(t, "servers", "add", "--name", "web", "--user", "deploy", "--device", "工作站")
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv, err := st.GetServerByName("web")
+	if err != nil || srv == nil {
+		t.Fatalf("servers add 应保存服务器条目：%v %+v", err, srv)
+	}
+	if srv.Host != "192.168.1.20" {
+		t.Fatalf("兜底主机应取第一个物理局域网地址：%+v", srv)
+	}
+
+	if _, err := st.RemoveNetworkMembership("工作站", "家A局域网"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	runCli(t, "servers", "add", "--name", "db", "--user", "deploy", "--device", "工作站")
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	srv, err = st.GetServerByName("db")
+	if err != nil || srv == nil || srv.Host != "" {
+		t.Fatalf("没有物理局域网地址时兜底主机应为空：%v %+v", err, srv)
+	}
+}
+
+// TestServerDeviceAnchorCopySamePort 覆盖同一设备、同一端口的其他服务器条目的锚复制：新条目
 // 尚无锚时复制既有锚，命令输出、锚来源信息与审计都写明来源条目。
 func TestServerDeviceAnchorCopySamePort(t *testing.T) {
 	dbPath, masterKey := withCliStoreEnv(t)
@@ -139,10 +263,10 @@ func TestServerDeviceAnchorCopySamePort(t *testing.T) {
 	}
 	summary := topologyAuditSummary(t, rows[0])
 	wantSummary := map[string]any{
-		"entry":   "deploy",
-		"host":    "192.0.2.10:22",
-		"主机密钥指纹":  fingerprint,
-		"来源服务器条目": "root",
+		"entry":       "deploy",
+		"host":        "192.0.2.10:22",
+		"fingerprint": fingerprint,
+		"来源服务器条目":     "root",
 	}
 	if !reflect.DeepEqual(summary, wantSummary) {
 		t.Fatalf("anchor copy audit summary = %#v, want %#v", summary, wantSummary)
@@ -175,7 +299,7 @@ func TestDevicesMoveServerCopiesAnchor(t *testing.T) {
 	}
 }
 
-// TestServerDeviceAnchorCopyConflict 覆盖多个同端口兄弟条目的锚互不一致：
+// TestServerDeviceAnchorCopyConflict 覆盖同一设备、同一端口的多个服务器条目锚互不一致：
 // 不复制、不落锚，并在命令结果里逐项提示。
 func TestServerDeviceAnchorCopyConflict(t *testing.T) {
 	withCliStoreEnv(t)
@@ -189,7 +313,7 @@ func TestServerDeviceAnchorCopyConflict(t *testing.T) {
 
 	out := runCli(t, "servers", "add", "--name", "deploy", "--host", "192.0.2.10",
 		"--user", "deploy", "--device", "机器")
-	if !strings.Contains(out, "同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定") {
+	if !strings.Contains(out, "同一设备、同一端口的其他服务器条目主机密钥锚不一致，未复制；请手工确认后锚定") {
 		t.Fatalf("conflicting sibling anchors must be reported and not copied:\n%s", out)
 	}
 	out = runCli(t, "servers", "pin-hostkey", "deploy")

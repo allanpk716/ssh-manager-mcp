@@ -345,7 +345,7 @@ func printServerAnchorCopyResult(w io.Writer, result *store.ServerAnchorCopy) {
 		return
 	}
 	if result.AnchorConflict {
-		fmt.Fprintln(w, "同端口兄弟条目的主机密钥锚不一致，未复制；请手工确认后锚定")
+		fmt.Fprintln(w, "同一设备、同一端口的其他服务器条目主机密钥锚不一致，未复制；请手工确认后锚定")
 	}
 }
 

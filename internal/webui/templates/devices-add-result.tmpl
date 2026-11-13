@@ -1,0 +1,10 @@
+{{define "content"}}
+<section class="device-add-result">
+<h1>已保存其他设备</h1>
+<dl>
+<dt>设备</dt><dd>{{.OtherDeviceAddResult.DeviceName}}</dd>
+</dl>
+<p>这台设备没有服务器条目，不会生成主机密钥锚，也不进入服务器连接测试队列。</p>
+<div class="inline-form">{{if .OtherDeviceAddResult.ReturnTo}}<a class="button-link" href="{{.OtherDeviceAddResult.ReturnTo}}">返回网络拓扑</a>{{else}}<a class="button-link" href="/ui/topology/">查看网络拓扑</a><a class="button-link" href="/ui/">返回服务器列表</a>{{end}}</div>
+</section>
+{{end}}

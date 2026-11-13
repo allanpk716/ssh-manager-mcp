@@ -72,17 +72,38 @@ func (s *stubServerStore) ServerDetail(_ string, identifier string) (*ServerDeta
 }
 
 type stubServerWriter struct {
-	edits        []ServerEditForm
-	deletes      []string
-	importRuns   []stubImportRun
-	completes    []stubComplete
-	conflict     *ServerEditConflictView
-	plan         *ServerImportPlanView
-	run          *ServerImportRunView
-	completeErr  error
-	editErr      error
-	deleteDigest string
-	deleteErr    error
+	adds           []ServerAddForm
+	otherAdds      []OtherDeviceAddForm
+	edits          []ServerEditForm
+	deletes        []string
+	importRuns     []stubImportRun
+	completes      []stubComplete
+	conflict       *ServerEditConflictView
+	plan           *ServerImportPlanView
+	run            *ServerImportRunView
+	completeErr    error
+	editErr        error
+	deleteDigest   string
+	deleteErr      error
+	anchorCopied   bool
+	anchorFrom     string
+	anchorConflict bool
+}
+
+func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error) {
+	w.adds = append(w.adds, form)
+	return &ServerAddResultView{
+		Detail:       &ServerDetailView{ID: "srv-new", Name: form.Name, User: form.User, Host: form.Host, Port: form.Port},
+		DeviceName:   form.DeviceName,
+		ProfileNames: []string{"运维"},
+		AnchorCopied: w.anchorCopied, AnchorCopyFromServerName: w.anchorFrom,
+		AnchorCopyConflict: w.anchorConflict,
+	}, nil
+}
+
+func (w *stubServerWriter) AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error) {
+	w.otherAdds = append(w.otherAdds, form)
+	return &OtherDeviceAddResultView{DeviceName: form.Name}, nil
 }
 
 type stubImportRun struct {

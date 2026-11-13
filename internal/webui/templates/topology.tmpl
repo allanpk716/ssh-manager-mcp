@@ -22,6 +22,7 @@
 <div class="topology-canvas-wrap"><div id="topology-canvas" class="topology-canvas" role="application" aria-label="网络拓扑画布" data-view="physical"></div></div>
 <aside class="topology-tray" aria-label="未归类设备">
 <h2>未归类设备</h2>
+{{if .Caps.CanEditTopology}}<div class="topology-tray-add"><a data-topology-add href="/ui/add?return_to=%2Fui%2Ftopology%2F">新增</a></div>{{end}}
 <ul class="topology-tray-list"></ul>
 <p class="topology-tray-empty">全部设备都已归入物理局域网。</p>
 </aside>

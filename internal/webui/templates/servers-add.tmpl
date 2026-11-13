@@ -1,0 +1,114 @@
+{{define "content"}}
+<section class="{{if .ServerAdd.DeviceOnly}}device-add{{else}}server-add{{end}}">
+<h1>{{if .ServerAdd.DeviceOnly}}新增其他设备{{else}}新增服务器{{end}}</h1>
+{{if .ServerAdd.NeedsReverify}}<div class="operation-refusal"><p>提交任何非空凭据前需要重新验证管理员口令。<a href="{{.ServerAdd.ReverifyPath}}">重新验证管理员口令</a>。</p></div>{{end}}
+{{if .ServerAdd.Notice}}<div class="operation-refusal"><p>{{.ServerAdd.Notice}}</p></div>{{end}}
+<form method="post" action="{{if .ServerAdd.DeviceOnly}}/ui/devices/new{{else}}/ui/servers/new{{end}}" {{if .ServerAdd.DeviceOnly}}class="device-form"{{else}}enctype="multipart/form-data" class="server-form"{{end}}>
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="{{.ServerAdd.ReturnTo}}">
+{{if or .ServerAdd.HasCredential .ServerAdd.HasStagedCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if .ServerAdd.HasStagedCredential}}<div class="inline-form staged-credentials"><button type="submit" name="clear_staged_credentials" value="1">清除已暂存的凭据</button><span>清除后保留其他字段，登录凭据需重新填写。</span></div>{{end}}
+{{if .ServerAdd.DeviceOnly}}
+<fieldset>
+<legend>设备</legend>
+<div class="form-field"><label for="add-device-name">设备名</label><input id="add-device-name" name="device_name" value="{{.ServerAdd.Form.DeviceName}}" required></div>
+<div class="form-field"><label for="add-device-note">备注</label><textarea id="add-device-note" name="note" rows="3">{{.ServerAdd.Form.DeviceNote}}</textarea></div>
+</fieldset>
+{{else}}
+<fieldset>
+<legend>连接信息</legend>
+<div class="form-field"><label for="add-name">名称</label><input id="add-name" name="name" value="{{.ServerAdd.Form.Name}}" required></div>
+<div class="form-field"><label for="add-user">用户</label><input id="add-user" name="user" value="{{.ServerAdd.Form.User}}" required></div>
+<div class="form-field"><label for="add-host">兜底主机</label><input id="add-host" name="host" value="{{.ServerAdd.Form.Host}}" placeholder="可由第一个物理局域网地址生成"></div>
+<div class="form-field"><label for="add-port">端口</label><input id="add-port" name="port" value="{{.ServerAdd.Form.Port}}" inputmode="numeric" required></div>
+<div class="form-field"><label for="add-shell">shell 类型</label>
+<select id="add-shell" name="shell">
+<option value="auto" {{if eq .ServerAdd.Form.Shell "auto"}}selected{{end}}>保存后自动探测</option>
+<option value="posix" {{if eq .ServerAdd.Form.Shell "posix"}}selected{{end}}>posix</option>
+<option value="powershell" {{if eq .ServerAdd.Form.Shell "powershell"}}selected{{end}}>powershell</option>
+<option value="cmd" {{if eq .ServerAdd.Form.Shell "cmd"}}selected{{end}}>cmd</option>
+</select></div>
+</fieldset>
+<fieldset>
+<legend>凭据</legend>
+<div class="form-field"><label for="add-credential">登录凭据</label>
+<select id="add-credential" name="credential_action">
+<option value="none" {{if eq .ServerAdd.Form.CredentialAction "none"}}selected{{end}}>无凭据</option>
+<option value="password" {{if eq .ServerAdd.Form.CredentialAction "password"}}selected{{end}}>密码</option>
+<option value="key" {{if eq .ServerAdd.Form.CredentialAction "key"}}selected{{end}}>私钥</option>
+</select></div>
+<div class="form-field"><label for="add-password">密码</label><input id="add-password" name="password" type="password" autocomplete="new-password"></div>
+<div class="form-field choice"><label><input type="radio" name="key_source" value="paste" {{if ne .ServerAdd.Form.KeySource "file"}}checked{{end}}> 粘贴私钥</label></div>
+<div class="form-field"><label for="add-key">私钥内容</label><textarea id="add-key" name="key" rows="5" placeholder="粘贴私钥时填写；不在页面回显"></textarea></div>
+<div class="form-field choice"><label><input type="radio" name="key_source" value="file" {{if eq .ServerAdd.Form.KeySource "file"}}checked{{end}}> 选择文件</label></div>
+<div class="form-field"><label for="add-key-file">私钥文件</label><input id="add-key-file" name="key_file" type="file"></div>
+<div class="form-field"><label for="add-key-pass">私钥口令</label><input id="add-key-pass" name="key_passphrase" type="password" autocomplete="new-password"></div>
+<div class="form-field"><label for="add-sudo">sudo 密码</label><input id="add-sudo" name="sudo_password" type="password" autocomplete="new-password"></div>
+</fieldset>
+<fieldset>
+<legend>所属设备</legend>
+<div class="form-field choice"><label><input type="radio" id="device-new" name="device_choice" value="new" {{if eq .ServerAdd.Form.DeviceChoice "new"}}checked{{end}}> 新建设备</label></div>
+<div class="form-field new-device-fields"><label for="add-device-name">设备名</label><input id="add-device-name" name="device_name" value="{{.ServerAdd.Form.DeviceName}}" placeholder="留空时使用服务器名"></div>
+<div class="form-field choice"><label><input type="radio" id="device-existing" name="device_choice" value="existing" {{if eq .ServerAdd.Form.DeviceChoice "existing"}}checked{{end}}> 已有设备</label></div>
+<div class="form-field existing-device-fields"><label for="add-existing-device">已有设备</label>
+<select id="add-existing-device" name="existing_device">
+<option value="">请选择设备</option>
+{{range .ServerAdd.Devices}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.ExistingDeviceName .Name}}selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<p class="muted">选择已有设备时沿用它的站点与全部网络成员。</p></div>
+</fieldset>
+{{end}}
+<fieldset class="new-device-fields">
+<legend>站点与网络成员</legend>
+<p class="muted">不填这一组时，设备没有任何网络成员，会进入未归类设备托盘。</p>
+<div class="form-field"><label for="add-site">站点</label>
+<select id="add-site" name="site">
+<option value="">不填站点</option>
+{{range .ServerAdd.Sites}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.SiteName .Name}}selected{{end}}>{{.Name}}</option>{{end}}
+</select></div>
+<div class="form-field"><label for="add-physical-network">物理局域网</label>
+<select id="add-physical-network" name="physical_network">
+<option value="">不填</option>
+{{range .ServerAdd.Networks}}{{if eq .Type "physical"}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.PhysicalNetwork .Name}}selected{{end}}>{{.SiteName}} / {{.Name}}</option>{{end}}{{end}}
+</select></div>
+<div class="form-field"><label for="add-physical-address">物理局域网地址</label><input id="add-physical-address" name="physical_address" value="{{.ServerAdd.Form.PhysicalAddress}}"></div>
+<fieldset>
+<legend>虚拟局域网成员</legend>
+{{$form := .ServerAdd.Form}}
+{{range $index, $count := $.ServerAdd.VirtualMembers}}
+<div class="membership-row">
+<div class="form-field"><label for="add-virtual-network-{{$index}}">虚拟局域网</label>
+<select id="add-virtual-network-{{$index}}" name="virtual_network">
+<option value="">不填</option>
+{{range $.ServerAdd.Networks}}{{if eq .Type "virtual"}}<option value="{{.Name}}" {{if eq ($form.VirtualNetworkValue $index) .Name}}selected{{end}}>{{.Name}}</option>{{end}}{{end}}
+</select></div>
+<div class="form-field"><label for="add-virtual-address-{{$index}}">地址</label><input id="add-virtual-address-{{$index}}" name="virtual_address" value="{{($form.VirtualAddressValue $index)}}"></div>
+</div>
+{{end}}
+<div class="inline-form"><button type="submit" name="add_virtual_member" value="1">再添加一个虚拟局域网成员</button></div>
+</fieldset>
+</fieldset>
+{{if not .ServerAdd.DeviceOnly}}
+<details class="metadata-details">
+<summary>说明、标签与主机可见性</summary>
+<div class="form-field"><label for="add-description">说明</label><input id="add-description" name="description" value="{{.ServerAdd.Form.Description}}"></div>
+<div class="form-field"><label for="add-location">位置</label><input id="add-location" name="location" value="{{.ServerAdd.Form.Location}}" placeholder="站点内的具体位置"></div>
+<div class="form-field"><label for="add-hardware">硬件</label><input id="add-hardware" name="hardware" value="{{.ServerAdd.Form.Hardware}}"></div>
+<div class="form-field"><label for="add-services">服务</label><input id="add-services" name="services" value="{{.ServerAdd.Form.Services}}"></div>
+<div class="form-field"><label for="add-role">角色</label><input id="add-role" name="role" value="{{.ServerAdd.Form.Role}}"></div>
+<div class="form-field"><label for="add-caveats">注意事项</label><input id="add-caveats" name="special_handling" value="{{.ServerAdd.Form.Caveats}}"></div>
+<div class="form-field"><label for="add-tags">标签（逗号分隔）</label><input id="add-tags" name="tags" value="{{joinTags .ServerAdd.Form.Tags}}"></div>
+<div class="form-field choice"><label><input type="checkbox" name="expose_host" value="1" {{if .ServerAdd.Form.ExposeHost}}checked{{end}}> 向 agent 展示主机地址</label></div>
+</details>
+<details>
+<summary>profile 授权</summary>
+<p class="muted">不选择时保存成功，但没有任何 profile 能看到这台服务器。</p>
+<div class="profile-choices">
+{{range .ServerAdd.Profiles}}<label class="grant-choice"><input type="checkbox" name="profile_id" value="{{.ID}}" {{if ($.ServerAdd.Form.HasProfileID .ID)}}checked{{end}}> {{.Name}}</label>{{end}}
+</div>
+</details>
+{{end}}
+<div class="inline-form"><button type="submit">{{if .ServerAdd.DeviceOnly}}保存设备{{else}}保存并进入待连接测试{{end}}</button><a class="button-link" href="/ui/">取消</a></div>
+</form>
+</section>
+{{end}}

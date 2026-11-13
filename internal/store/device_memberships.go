@@ -16,18 +16,44 @@ var ErrNetworkMembershipNotFound = errors.New("设备在这个网络里没有网
 // AddNetworkMembership 把设备加入网络并登记地址。地址按去首尾空白后的小
 // 写形式保证同一网络内唯一；成员行与审计行同事务提交。
 func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*models.NetworkMembership, error) {
+	return s.addNetworkMembership(deviceName, networkName, address, WriteSource{})
+}
+
+// AddNetworkMembershipWithSource 与 AddNetworkMembership 相同，并把同一事务
+// 里的审计行标为指定来源。
+func (s *Store) AddNetworkMembershipWithSource(
+	deviceName, networkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
+	return s.addNetworkMembership(deviceName, networkName, address, source)
+}
+
+func (s *Store) addNetworkMembership(
+	deviceName, networkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
-	}
-	address = strings.TrimSpace(address)
-	if address == "" {
-		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	membership, err := s.addNetworkMembershipTx(tx, deviceName, networkName, address, source)
+	if err != nil {
+		return nil, err
+	}
+	return membership, tx.Commit()
+}
+
+// addNetworkMembershipTx 在调用方事务里登记一个网络成员；成员行与审计行
+// 随外层事务一起提交或回滚。
+func (s *Store) addNetworkMembershipTx(
+	tx *sql.Tx, deviceName, networkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
+	}
 	device, err := deviceByNameTx(tx, deviceName)
 	if err != nil {
 		return nil, err
@@ -84,10 +110,10 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(membership)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
-	return membership, tx.Commit()
+	return membership, nil
 }
 
 // AllVirtualNetworkAddresses 返回拓扑里所有设备在虚拟局域网中的成员地址。

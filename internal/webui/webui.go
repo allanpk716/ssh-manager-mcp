@@ -118,6 +118,8 @@ type Config struct {
 	// ServerWriter 是服务器页写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	ServerWriter ServerWriter
+	// ServerConnectionTester 启动并读取新增服务器后的自动连接测试任务。
+	ServerConnectionTester ServerConnectionTester
 	// Secrets 是机密项页读取来源；三种角色都必须提供。
 	Secrets SecretSource
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
@@ -350,6 +352,7 @@ type session struct {
 	clientInstance string
 	accessFlash    *AccessFlash
 	opsBackupFlash *OpsBackupFlash
+	serverAddDraft *serverAddDraft
 	generation     int64
 	lastActive     time.Time
 	lastVerified   time.Time
@@ -474,6 +477,9 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if isSecretValueUpload(r) {
 		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
 	}
+	if isAddFormPost(r) {
+		r.Body = http.MaxBytesReader(w, r.Body, serverAddFormMaxRequestBody)
+	}
 	hostOK := hostAllowed(r.Host, h.cfg.Port)
 	if h.cfg.Role == RoleServer {
 		hostOK = h.authorityHostAllowed(r.Host)
@@ -494,6 +500,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+func isAddFormPost(r *http.Request) bool {
+	return r.Method == http.MethodPost &&
+		(r.URL.Path == serverAddFormPath || r.URL.Path == deviceAddFormPath)
 }
 
 // writeRequestAllowed 统一校验所有写请求：非 GET、HEAD、OPTIONS 都必须来自
@@ -521,6 +532,14 @@ func (h *handler) writeRequestAllowed(w http.ResponseWriter, r *http.Request) bo
 		if parseErr != nil {
 			var tooLarge *http.MaxBytesError
 			if errors.As(parseErr, &tooLarge) {
+				if isAddFormPost(r) {
+					if r.URL.Path == deviceAddFormPath {
+						h.renderError(w, r, http.StatusRequestEntityTooLarge, "新增其他设备表单过大", "新增其他设备表单过大，已拒绝。")
+					} else {
+						h.renderError(w, r, http.StatusRequestEntityTooLarge, "新增服务器表单过大", "新增服务器表单过大，已拒绝。")
+					}
+					return false
+				}
 				h.renderError(w, r, http.StatusRequestEntityTooLarge, "上传内容过大", "机密项值上传的请求体超过限制，已拒绝。")
 				return false
 			}
@@ -558,11 +577,15 @@ func (h *handler) logError(r *http.Request, context string, err error) {
 }
 
 // parseFormForCSRF 解析请求体以便读取表单里的防跨站请求伪造令牌。多部分
-// 表单的内存阈值与机密项上传的请求体上限一致，保证文件部分不落临时文件；
-// 非多部分表单沿用标准解析。
+// 表单的内存阈值跟随请求自己的上限，保证文件部分不落临时文件；非多部分
+// 表单沿用标准解析。
 func parseFormForCSRF(r *http.Request) error {
 	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
-		return r.ParseMultipartForm(secretUploadMaxRequestBody)
+		maxMemory := int64(secretUploadMaxRequestBody)
+		if isAddFormPost(r) {
+			maxMemory = serverAddFormMaxRequestBody
+		}
+		return r.ParseMultipartForm(maxMemory)
 	}
 	return r.ParseForm()
 }

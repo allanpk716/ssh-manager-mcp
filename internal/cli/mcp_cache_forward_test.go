@@ -323,7 +323,7 @@ func callExec(t *testing.T, sess *mcp.ClientSession, serverID, command string) (
 // clientops verbatim test locks).
 func (fx *cacheFwdFixture) dialRefusedMainMessage() string {
 	fp := fx.fingerprint()
-	return "ssh dial: ssh: handshake failed: host key for [REDACTED] is unknown and cannot be pinned here (presented fingerprint: " + fp + "). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint " + fp
+	return "全部候选地址连接失败：\n兜底地址：ssh dial: ssh: handshake failed: host key for [REDACTED] is unknown and cannot be pinned here (presented fingerprint: " + fp + "). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint " + fp
 }
 
 // rawSQLiteStmt runs one parameterized statement on a second raw connection
@@ -1357,7 +1357,7 @@ func TestCacheForwardE2E_OldBroker404(t *testing.T) {
 	if !isErr {
 		t.Fatal("exec against an old broker must fail")
 	}
-	want := "ssh dial: ssh: handshake failed: the broker does not support pin forwarding (the owner must upgrade the broker to >= v0.15.0, then retry)"
+	want := "全部候选地址连接失败：\n兜底地址：ssh dial: ssh: handshake failed: the broker does not support pin forwarding (the owner must upgrade the broker to >= v0.15.0, then retry)"
 	if text != want {
 		t.Fatalf("404 text mismatch:\n got: %q\nwant: %q", text, want)
 	}
@@ -1411,7 +1411,7 @@ func TestCacheForwardE2E_ConflictBranches(t *testing.T) {
 		if !isErr {
 			t.Fatal("409 equal=false must fail the connection")
 		}
-		want := "ssh dial: ssh: handshake failed: the broker already has a different pin for [REDACTED] — run cache pull and retry; if it still fails, ask the owner to compare fingerprints (servers pin-hostkey)"
+		want := "全部候选地址连接失败：\n兜底地址：ssh dial: ssh: handshake failed: the broker already has a different pin for [REDACTED] — run cache pull and retry; if it still fails, ask the owner to compare fingerprints (servers pin-hostkey)"
 		if text != want {
 			t.Fatalf("409 equal=false text mismatch:\n got: %q\nwant: %q", text, want)
 		}
@@ -1447,10 +1447,10 @@ func TestCacheForwardE2E_ConflictBranches(t *testing.T) {
 }
 
 // TestCacheForwardE2E_HangingServeTimesOut is T8b: the serve accepts and never
-// responds — the forwarder's 10 s cap trips, the surfaced text is the §4 main
-// message, and the handshake (and the test) stay bounded. The 10 s wait is the
-// production constant by design (no test seam) — this is the suite's one slow
-// test.
+// responds — the forwarder's 10 s cap trips, the single candidate still gets
+// the unified per-address failure summary, and the handshake (and the test)
+// stay bounded. The 10 s wait is the production constant by design (no test
+// seam) — this is the suite's one slow test.
 func TestCacheForwardE2E_HangingServeTimesOut(t *testing.T) {
 	fx := newCacheFwdFixture(t)
 	hang := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1478,8 +1478,9 @@ func TestCacheForwardE2E_HangingServeTimesOut(t *testing.T) {
 	if elapsed > 25*time.Second {
 		t.Fatalf("the handshake hung %v — the 10 s forward cap must bound it", elapsed)
 	}
-	if text != fx.dialRefusedMainMessage() {
-		t.Fatalf("timeout text mismatch:\n got: %q\nwant: %q", text, fx.dialRefusedMainMessage())
+	want := "全部候选地址连接失败：\n兜底地址：连接超时"
+	if text != want {
+		t.Fatalf("timeout text mismatch:\n got: %q\nwant: %q", text, want)
 	}
 }
 

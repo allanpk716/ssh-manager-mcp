@@ -339,6 +339,9 @@ type ServerDialRequest struct {
 	// 首次信任（TOFU）回调，锚跟随条目；缓存模式下调用方传入锚定
 	// 转发的包装存储即可。
 	HostKeys HostKeyStore
+	// HostKeyWriteSource 标明首次锚定审计的来源；存储不支持来源时保持
+	// 既有审计形状。
+	HostKeyWriteSource store.WriteSource
 	// KeepAlive 为 true 时等价于原先的 ConnectKeepAlive：连接挂周期保活
 	// 循环（后台长任务与中继使用）。默认与原先的 Connect 相同，不挂循环。
 	KeepAlive bool
@@ -502,7 +505,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			}
 		}
 	}
-	hostKeyCallback, err := HostKeyTOFU(req.HostKeys, req.Server)
+	hostKeyCallback, err := HostKeyTOFUWithSource(req.HostKeys, req.Server, req.HostKeyWriteSource)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -565,9 +568,6 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		}
 		failures = append(failures, DialAttemptError{Candidate: candidate, Err: err})
 	}
-	if len(failures) == 1 && plan.FallbackOnlyReason == "" && !errors.Is(failures[0].Err, ErrHostKeyMismatch) {
-		return nil, nil, failures[0].Err
-	}
 	dialErr := &ServerDialError{Failures: failures, Port: req.Server.Port}
 	if plan.FallbackOnlyReason != "" {
 		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
@@ -575,7 +575,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			dialErr.Hint = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
 		}
 	}
-	return nil, nil, dialErr
+	return nil, notes, dialErr
 }
 
 func warnDialSuccessCacheFailure(action string, err error) {

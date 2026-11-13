@@ -57,6 +57,84 @@ type ServerWriteSource struct {
 	RemoteAddress string
 }
 
+// ServerAddForm 是新增服务器表单的提交值。凭据字段只在处理器内存中短暂保
+// 留，用于权威端重新验证后的一次续交；模板与审计都不回显它们。
+type ServerAddForm struct {
+	Name        string
+	User        string
+	Host        string
+	Port        int
+	Shell       string
+	Description string
+	Location    string
+	Hardware    string
+	Services    string
+	Role        string
+	Caveats     string
+	Tags        []string
+	ExposeHost  bool
+
+	CredentialAction string
+	Password         string
+	KeySource        string
+	KeyContent       string
+	KeyPassphrase    string
+	SudoPassword     string
+	KeyFileError     error
+
+	DeviceChoice        string
+	SiteName            string
+	DeviceName          string
+	ExistingDeviceName  string
+	PhysicalNetwork     string
+	PhysicalAddress     string
+	VirtualNetworkNames []string
+	VirtualAddresses    []string
+	// VirtualMemberRows 只在按下「再添加一个虚拟局域网成员」后使用，控制
+	// 服务端渲染的行数；正常保存请求不携带它。
+	VirtualMemberRows int
+	ProfileIDs        []string
+	DeviceNote        string
+	ReturnTo          string
+	// StagedCredential 表示这份表单值来自重新验证后的一次性暂存；只控制页
+	// 面提示，不随表单提交。
+	StagedCredential bool
+}
+
+// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与站点信息，
+// 不携带 SSH、凭据、profile、shell 或连接测试字段。
+type OtherDeviceAddForm struct {
+	Name                string
+	Note                string
+	SiteName            string
+	PhysicalNetwork     string
+	PhysicalAddress     string
+	VirtualNetworkNames []string
+	VirtualAddresses    []string
+}
+
+// OtherDeviceAddResultView 是不受管设备保存后的结果数据。
+type OtherDeviceAddResultView struct {
+	DeviceName string
+	ReturnTo   string
+}
+
+// ServerAddResultView 是新增成功后的结果页数据；连接测试任务提供轮询状态
+// 与保存事务携带的锚复制事实。
+type ServerAddResultView struct {
+	Detail                   *ServerDetailView
+	DeviceName               string
+	ProfileNames             []string
+	ProfileNamesUnavailable  bool
+	ConnectionTest           *ServerConnectionTestStatus
+	ConnectionTestNotice     string
+	ConnectionTestPollPath   string
+	AnchorCopied             bool
+	AnchorCopyFromServerName string
+	AnchorCopyConflict       bool
+	ReturnTo                 string
+}
+
 // ServerEditForm 是编辑提交。指针字段为 nil 表示这个字段没有变化；凭据动
 // 作是 keep、password、key、key-passphrase、clear 之一。
 type ServerEditForm struct {
@@ -227,6 +305,8 @@ type ServerCompleteResultView struct {
 // ServerWriter 是 Web UI 修改服务器数据的唯一入口。单机与权威端由服务器管
 // 理模块适配实现；客户端不注册写路由，也不实现这个接口。
 type ServerWriter interface {
+	AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error)
+	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
 	DeleteServer(identifier, digest string, source ServerWriteSource) error
@@ -240,11 +320,19 @@ type ServerWriter interface {
 
 const (
 	serversPrefix       = "/ui/servers/"
-	serversImportPath   = "/ui/servers/import"
-	serversPlanPath     = "/ui/servers/import/plan"
-	serversRunPath      = "/ui/servers/import/run"
-	serversCompletePath = "/ui/servers/complete"
-	serversResultPath   = "/ui/servers/complete/result"
+	serverAddTypePath   = "/ui/add"
+	serverAddFormPath   = "/ui/servers/new"
+	serverAddResultPath = "/ui/servers/new/result"
+	deviceAddFormPath   = "/ui/devices/new"
+	// serverAddFormMaxRequestBody 是服务器与其他设备新增表单自己的请求体
+	// 上限；机密项上传沿用更小的机密值上限与专属错误说明。
+	serverAddFormMaxRequestBody = 128 * 1024
+	deviceAddResultPath         = "/ui/devices/new/result"
+	serversImportPath           = "/ui/servers/import"
+	serversPlanPath             = "/ui/servers/import/plan"
+	serversRunPath              = "/ui/servers/import/run"
+	serversCompletePath         = "/ui/servers/complete"
+	serversResultPath           = "/ui/servers/complete/result"
 )
 
 // registerServerRoutes 注册服务器页路由。列表与详情所有角色可用；写路由只
@@ -254,6 +342,11 @@ func (h *handler) registerServerRoutes() {
 	if h.cfg.ServerWriter == nil {
 		return
 	}
+	h.mux.HandleFunc(serverAddTypePath, h.requireSession(h.handleServerAddType))
+	h.mux.HandleFunc(serverAddFormPath, h.requireSession(h.handleServerAddForm))
+	h.mux.HandleFunc(serverAddResultPath, h.requireSession(h.handleServerAddResult))
+	h.mux.HandleFunc(deviceAddFormPath, h.requireSession(h.handleOtherDeviceAddForm))
+	h.mux.HandleFunc(deviceAddResultPath, h.requireSession(h.handleOtherDeviceAddResult))
 	h.mux.HandleFunc(serversImportPath, h.requireSession(h.handleServerImport))
 	h.mux.HandleFunc(serversPlanPath, h.requireSession(h.handleServerImportPlan))
 	h.mux.HandleFunc(serversRunPath, h.requireSession(h.handleServerImportRun))
