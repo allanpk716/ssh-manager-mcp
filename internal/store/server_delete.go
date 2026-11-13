@@ -44,13 +44,14 @@ type DeliveryRecordImpact struct {
 // ServerDeletePreview 是服务器条目删除影响清单，只覆盖当前级联删除会动
 // 到的数据，包含会随条目一起消失的下发记录。
 type ServerDeletePreview struct {
-	Server       *models.Server
-	Device       *models.Device
-	HasDevice    bool
-	Anchors      []PinMeta
-	ProfileNames []string
-	SecretNames  []string
-	Credentials  []ServerDeleteCredential
+	Server             *models.Server
+	Device             *models.Device
+	HasDevice          bool
+	Anchors            []PinMeta
+	ProfileNames       []string
+	SharedStorageNames []string
+	SecretNames        []string
+	Credentials        []ServerDeleteCredential
 	// DeliveryRecords 是会随条目一起删除的机密项下发记录。
 	DeliveryRecords []DeliveryRecordImpact
 	digest          string
@@ -136,12 +137,24 @@ func serverDeletePreviewTx(tx *sql.Tx, id string) (*ServerDeletePreview, error) 
 		return nil, err
 	}
 	preview.ProfileNames = profiles
+	sharedStorages, err := serverDeleteSharedStoragesTx(tx, srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	sharedSecretIDs := make(map[string]bool, len(sharedStorages))
+	for _, share := range sharedStorages {
+		preview.SharedStorageNames = append(preview.SharedStorageNames, share.name)
+		sharedSecretIDs[share.secretID] = true
+	}
 	secrets, err := secretAllowsBeforeServerDelete(tx, srv.ID)
 	if err != nil {
 		return nil, err
 	}
 	sort.Slice(secrets, func(i, j int) bool { return secrets[i].name < secrets[j].name })
 	for _, secret := range secrets {
+		if sharedSecretIDs[secret.id] {
+			continue
+		}
 		preview.SecretNames = append(preview.SecretNames, secret.name)
 	}
 	impacts, err := serverDeleteCredentialImpactsTx(tx, srv)
@@ -227,6 +240,35 @@ func serverDeleteProfileNamesTx(tx *sql.Tx, serverID string) ([]string, error) {
 	return names, rows.Err()
 }
 
+type serverDeleteSharedStorage struct {
+	name     string
+	secretID string
+}
+
+// serverDeleteSharedStoragesTx 列出这台服务器条目删除后不再可挂载的共享存
+// 储。多个共享使用同一个挂载密码机密项时逐项返回。
+func serverDeleteSharedStoragesTx(tx *sql.Tx, serverID string) ([]serverDeleteSharedStorage, error) {
+	rows, err := tx.Query(`
+		SELECT share.name,share.password_secret_id
+		FROM shared_storages share
+		JOIN secret_server_allow allow ON allow.secret_id=share.password_secret_id
+		WHERE allow.server_id=?
+		ORDER BY share.name,share.id`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	shares := make([]serverDeleteSharedStorage, 0)
+	for rows.Next() {
+		var share serverDeleteSharedStorage
+		if err := rows.Scan(&share.name, &share.secretID); err != nil {
+			return nil, err
+		}
+		shares = append(shares, share)
+	}
+	return shares, rows.Err()
+}
+
 func serverDeleteCredentialImpactsTx(tx *sql.Tx, srv *models.Server) ([]ServerDeleteCredential, error) {
 	var impacts []ServerDeleteCredential
 	for _, item := range []struct{ id, kind string }{
@@ -290,7 +332,9 @@ func previewDigest(p *ServerDeletePreview) string {
 	for _, anchor := range p.Anchors {
 		fmt.Fprintf(&b, "%s:%s;", anchor.Source, PinFingerprint(anchor.Blob, anchor.Format))
 	}
-	fmt.Fprintf(&b, "|profiles=%s|secrets=%s", strings.Join(p.ProfileNames, ","), strings.Join(p.SecretNames, ","))
+	fmt.Fprintf(&b, "|profiles=%s|shared-storages=%s|secrets=%s",
+		strings.Join(p.ProfileNames, ","), strings.Join(p.SharedStorageNames, ","),
+		strings.Join(p.SecretNames, ","))
 	fmt.Fprint(&b, "|credentials=")
 	for _, cred := range p.Credentials {
 		fmt.Fprintf(&b, "%s:%s:%s:%t:%d;", cred.ID, cred.Kind, cred.Type, cred.Deleted, cred.References)

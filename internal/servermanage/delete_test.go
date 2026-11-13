@@ -149,3 +149,78 @@ func TestDeletePreviewGroupsAndConfirmedDelete(t *testing.T) {
 		t.Fatalf("不存在的服务器应安静返回：%+v %v", missing, err)
 	}
 }
+
+// TestDeletePreviewSeparatesSharedStorageFromSecrets 校验共享存储挂载授权在
+// 删除预览里单独成组，摘要覆盖这组影响；确认后服务器不再可挂载。
+func TestDeletePreviewSeparatesSharedStorageFromSecrets(t *testing.T) {
+	m := newTestManager(t)
+	device, err := m.st.AddDevice("NAS", "存放共享数据", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-secret"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.st.AddSecret("API_TOKEN", "接口令牌", []byte("api-secret"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	web := mustAddServer(t, m, &models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err := m.st.AllowSecrets([]string{"NAS_MOUNT_PASSWORD", "API_TOKEN"}, []string{"web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []store.SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := m.st.AddSharedStorage(input, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	preview, err := m.DeletePreview("web")
+	if err != nil || preview == nil {
+		t.Fatalf("读取删除预览失败：preview=%+v err=%v", preview, err)
+	}
+	if len(preview.SharedStorageNames) != 2 ||
+		preview.SharedStorageNames[0] != "datasets" ||
+		preview.SharedStorageNames[1] != "scratch" {
+		t.Fatalf("删除预览应逐项列出共享存储：%v", preview.SharedStorageNames)
+	}
+	if len(preview.SecretNames) != 1 || preview.SecretNames[0] != "API_TOKEN" {
+		t.Fatalf("共享存储挂载密码不得重复出现在普通机密项组：%v", preview.SecretNames)
+	}
+
+	if _, err := m.st.AddSharedStorage(store.SharedStorageInput{
+		Name: "models", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "X",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := m.Delete("web", preview.Digest, CLISource())
+	if !errors.Is(err, ErrDeletePreviewChanged) {
+		t.Fatalf("共享存储影响变化后应整体拒绝删除，实际 err=%v preview=%+v", err, fresh)
+	}
+	if fresh == nil || len(fresh.SharedStorageNames) != 3 {
+		t.Fatalf("拒绝删除时应返回包含最新共享存储的预览：%+v", fresh)
+	}
+	if still, _ := m.st.GetServer(web); still == nil {
+		t.Fatal("预览变化时不得删除服务器条目")
+	}
+
+	if _, err := m.Delete("web", fresh.Digest, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	shares, err := m.st.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, share := range shares {
+		for _, server := range share.MountableServers {
+			if server.ID == web {
+				t.Fatalf("确认删除后共享 %s 不应再可挂载到 web：%+v", share.Name, share.MountableServers)
+			}
+		}
+	}
+}

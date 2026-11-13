@@ -348,7 +348,24 @@ func TestServersShowDeliveryRecords(t *testing.T) {
 	}
 }
 
-// TestServersRmPreviewAndYes 校验删除预览、非交互保护与 --yes 执行。
+// runServersRmInteractive 把 `servers rm` 按交互终端驱动，便于测试确认输入。
+func runServersRmInteractive(t *testing.T, input string, args ...string) (string, error) {
+	t.Helper()
+	prevTTY := serversStdinIsTTY
+	serversStdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { serversStdinIsTTY = prevTTY })
+	root := NewRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetIn(strings.NewReader(input))
+	root.SetArgs(append([]string{"servers", "rm"}, args...))
+	err := root.Execute()
+	return out.String(), err
+}
+
+// TestServersRmPreviewConfirmAndYes 校验删除预览、非交互保护、交互确认与
+// --yes 执行。
 func TestServersRmPreviewAndYes(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)
 	st := openInspect(t, dbPath, mk)
@@ -358,6 +375,11 @@ func TestServersRmPreviewAndYes(t *testing.T) {
 	}
 	if _, err := st.AddServerWithCredentials(&models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "root", CredentialID: cid, Role: "r",
+	}, &models.Credential{ID: cid, Type: models.CredPassword}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServerWithCredentials(&models.Server{
+		Name: "script", Host: "192.0.2.11", Port: 22, User: "root", CredentialID: cid, Role: "r",
 	}, &models.Credential{ID: cid, Type: models.CredPassword}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -383,13 +405,37 @@ func TestServersRmPreviewAndYes(t *testing.T) {
 		t.Fatal("拒绝执行时不得删除服务器")
 	}
 
-	out := runCli(t, "servers", "rm", "--yes", "web")
-	for _, want := range []string{"team", "主机密钥锚", "登录凭据（密码）", "设备保留"} {
+	cancelled, err := runServersRmInteractive(t, "n\n", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cancelled, "已取消删除") {
+		t.Fatalf("交互输入非 y 时应取消删除：\n%s", cancelled)
+	}
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still == nil {
+		t.Fatal("交互取消时不得删除服务器")
+	}
+
+	confirmed, err := runServersRmInteractive(t, "y\n", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"team", "主机密钥锚", "登录凭据（密码）", "设备保留", "确认删除 web"} {
+		if !strings.Contains(confirmed, want) {
+			t.Fatalf("交互删除预览缺少 %q：\n%s", want, confirmed)
+		}
+	}
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still != nil {
+		t.Fatal("输入 y 后应删除服务器")
+	}
+
+	out := runCli(t, "servers", "rm", "--yes", "script")
+	for _, want := range []string{"删除影响预览：script", "登录凭据（密码）"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("删除预览缺少 %q：\n%s", want, out)
 		}
 	}
-	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still != nil {
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("script"); still != nil {
 		t.Fatal("--yes 应删除服务器")
 	}
 }
@@ -567,18 +613,29 @@ func TestServersListSharedCredentialBeforeWrite(t *testing.T) {
 	}
 }
 
-// TestServersRmPreviewListsDeliveryRecords `servers rm` 的删除影响预览列出
-// 会随条目删除的下发记录；确认删除后记录消失，输出不含机密项值。
-func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
+// TestServersRmPreviewListsSharedStorageAndDeliveryRecords `servers rm` 的删
+// 除影响预览列出共享存储与下发记录；确认删除后两组影响都消失，输出不含
+// 机密项值。
+func TestServersRmPreviewListsSharedStorageAndDeliveryRecords(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)
 	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("NAS", "存放共享数据", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	webID, err := st.AddServer(&models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "root", Role: "应用服务器",
+		DeviceID: device.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("login-secret-value-9f21"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-secret-value"), store.CLISource(),
+	); err != nil {
 		t.Fatal(err)
 	}
 	profileID, err := st.AddProfile("agents")
@@ -588,8 +645,18 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{webID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"web"}, store.CLISource()); err != nil {
+	if err := st.AllowSecrets(
+		[]string{"API_TOKEN", "NAS_MOUNT_PASSWORD"}, []string{"web"}, store.CLISource(),
+	); err != nil {
 		t.Fatal(err)
+	}
+	for _, input := range []store.SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
 		ServerID: webID, Path: "/etc/app/config.yml",
@@ -607,11 +674,15 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 
 	out := runCli(t, "servers", "rm", "--yes", "web")
 	for _, want := range []string{
-		"会随之删除的下发记录", "web：/etc/app/config.yml", "API_TOKEN",
+		"这台服务器不再可挂载的共享存储：datasets、scratch",
+		"会随之删除的下发记录：1 条", "web：/etc/app/config.yml", "API_TOKEN",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("servers rm 预览缺少 %q：\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "NAS_MOUNT_PASSWORD") {
+		t.Fatalf("servers rm 的普通机密项组不得重复列出共享存储挂载密码：\n%s", out)
 	}
 	if strings.Contains(out, "login-secret-value-9f21") {
 		t.Fatalf("servers rm 输出不得出现机密项值：\n%s", out)
@@ -623,5 +694,12 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("确认删除后下发记录应随服务器条目删除：%+v", records)
+	}
+	shares, err := after.ListSharedStorages(store.SharedStorageFilter{Server: webID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 0 {
+		t.Fatalf("确认删除后共享存储不应再按这台服务器筛出：%+v", shares)
 	}
 }
