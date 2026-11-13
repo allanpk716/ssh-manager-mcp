@@ -21,6 +21,7 @@ import (
 	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuishares"
 	"ssh-manager-mcp/internal/webuisoftwareinventory"
 	"ssh-manager-mcp/internal/webuitopology"
 )
@@ -127,6 +128,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		ServerConnectionTester: webuiservers.ConnectionTesterFromManagerWithContext(servermanage.New(st), ctx),
 		Secrets:                webuisecrets.FromManager(secretmanage.New(st)),
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
+		Shares: webuishares.FromStore(func() (*store.Store, func(), error) {
+			return st, func() {}, nil
+		}),
+		SharesWriter: webuishares.WriterFromStore(func() (*store.Store, func(), error) {
+			return st, func() {}, nil
+		}),
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
 			return st, func() {}, nil
 		}),

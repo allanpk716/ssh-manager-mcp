@@ -25,6 +25,7 @@ import (
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuishares"
 	"ssh-manager-mcp/internal/webuitopology"
 )
 
@@ -74,6 +75,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		opsSource               webui.OpsStore
 		secretSource            webui.SecretSource
 		secretWriter            webui.SecretWriter
+		shareSource             webui.ShareSource
+		shareWriter             webui.ShareWriter
 		softwareInventorySource webui.SoftwareInventorySource
 		topologySource          webui.TopologySource
 		topologyWriter          webui.TopologyWriter
@@ -116,6 +119,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		accessSource = standaloneUIAccessStore()
 		secretSource = standaloneUISecretStore()
 		secretWriter = standaloneUISecretWriter()
+		shareSource = webuishares.FromStore(openStoreForUI)
+		shareWriter = webuishares.WriterFromStore(openStoreForUI)
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		topologySource = webuitopology.FromStoreOpener(openStoreForUI)
 		topologyWriter = webuitopology.WriterFromOpener(openStoreForUI)
@@ -139,6 +144,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 			AllowRemoteOrigin: false,
 		})
 		secretSource = clientUISecretSource{}
+		shareSource = webuishares.FromClientSnapshot(clientops.LoadCacheSnapshotFor)
 		opsSource = webuiops.ClientPageStoreWithUpdates(
 			uiUpdateService(webui.RoleClient, resolvedInstance), uiClientPull)
 	default:
@@ -171,6 +177,8 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		ServerConnectionTester: serverTester,
 		Secrets:                secretSource,
 		SecretsWriter:          secretWriter,
+		Shares:                 shareSource,
+		SharesWriter:           shareWriter,
 		SoftwareInventory:      softwareInventorySource,
 		Topology:               topologySource,
 		TopologyWriter:         topologyWriter,
