@@ -163,6 +163,44 @@ func TestShareRevokeBusyListsProcessesAndForceCleanupSucceeds(t *testing.T) {
 	}
 }
 
+func TestShareScopeRemovalPreviewOffersRevokeAndUnmountAfterRecentCheck(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	started := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/check", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+	})
+	if started.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动现场探测状态码 = %d：\n%s", started.StatusCode, body(t, started))
+	}
+	waitRemoteTaskDone(t, fixture.handler, started.Header.Get("Location"))
+
+	views, err := fixture.store.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(views) != 1 {
+		t.Fatalf("读取挂载密码机密项失败：%v %+v", err, views)
+	}
+	preview := fixture.handler.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"return_to":  {"/ui/shares/" + fixture.shareID},
+		"secret_id":  {views[0].ID},
+		"server_id":  {fixture.linuxID, fixture.windowsID},
+		"cell__" + views[0].ID + "__" + fixture.linuxID:   {"0"},
+		"cell__" + views[0].ID + "__" + fixture.windowsID: {"1"},
+	})
+	page := body(t, preview)
+	wantLink := fixture.revokePath(fixture.linuxID) + "&amp;unmount=1"
+	for _, want := range []string{
+		"最近现场探测显示以下将移除的服务器仍挂载",
+		"linux-web", "同时卸载并撤销授权", `href="` + wantLink + `"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("可挂载范围确认页缺少同时卸载选项 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, fixture.revokePath(fixture.windowsID)+"&unmount=1") {
+		t.Fatalf("Windows 服务器不应提供同时卸载选项：\n%s", page)
+	}
+}
+
 func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *testing.T) {
 	fixture := newUnmountFixture(t)
 	if _, err := fixture.store.AddServer(&models.Server{

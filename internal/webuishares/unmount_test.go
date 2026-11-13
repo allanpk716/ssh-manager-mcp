@@ -1,6 +1,7 @@
 package webuishares
 
 import (
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -22,8 +23,16 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 	t.Helper()
 	st := newIntegrationStore(t)
 	linux := &sharemounttest.LinuxServer{ShareName: "datasets"}
+	linuxHandler := linux.Handler
+	linuxExec := func(command string, stdin io.Reader) (string, string, int) {
+		if strings.Contains(command, "SSHMGR-LINUX-CHECK") {
+			return "SSHMGR-LINUX-CHECK mode=full\n" +
+				"SSHMGR-LINUX-CHECK index=1 managed=yes share=datasets version=1 mounted=yes\n", "", 0
+		}
+		return linuxHandler(command, stdin)
+	}
 	addr, hostKey, stopServer := testsshd.Start(t, testsshd.Options{
-		Password: "login-pw", SudoPassword: "sudo-pw", Exec: linux.Handler,
+		Password: "login-pw", SudoPassword: "sudo-pw", Exec: linuxExec,
 	})
 	host, portText, _ := strings.Cut(addr, ":")
 	port, _ := strconv.Atoi(portText)
@@ -68,6 +77,7 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 	linux.ShareID = share.ID
 	linux.SeedManagedConfiguration("192.0.2.10", share.Version)
 	h := startIntegrationHandler(t, st, func(config *webui.Config) {
+		config.SharesRemoteTasks = RemoteTasksFromStore(openStoreForTest(st))
 		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
 		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(st))
 	})

@@ -20,6 +20,22 @@ type ShareRevokeEntry struct {
 	ConfirmPath string
 }
 
+// SecretAuthorizationShareRevoke 是可挂载范围确认页里的一条「移除授权且
+// 最近现场探测仍挂载」提示。
+type SecretAuthorizationShareRevoke struct {
+	ShareID     string
+	ShareName   string
+	ServerID    string
+	ServerName  string
+	ConfirmPath string
+}
+
+// ShareLatestCheckSource 由远端任务视图实现，返回一处共享存储最近一次完
+// 成的现场探测结果。
+type ShareLatestCheckSource interface {
+	LatestShareCheck(shareID string) ([]ShareCheckResult, bool)
+}
+
 // ShareRevokeRequest 是一次单台撤销授权请求。NewPassword 只存在于启动请
 // 求与后台调用参数里，不进入任务状态与页面结果。
 type ShareRevokeRequest struct {
@@ -280,10 +296,72 @@ func (h *handler) shareRevokeView(
 				Share: detail, Server: server,
 				Windows:     models.NormalizeShellType(server.ShellType).IsWindows(),
 				ConfirmPath: shareRevokeConfirmPath(detail.ID, server.ID),
+				RecentlyMounted: h.latestShareCheckMounted(
+					detail.ID, server.ID, models.NormalizeShellType(server.ShellType),
+				),
 			}, nil
 		}
 	}
 	return nil, nil
+}
+
+func (h *handler) latestShareCheckMounted(
+	shareID, serverID string, shell models.ShellType,
+) bool {
+	if shell.IsWindows() || h.cfg.SharesRemoteTasks == nil {
+		return false
+	}
+	source, ok := h.cfg.SharesRemoteTasks.(ShareLatestCheckSource)
+	if !ok {
+		return false
+	}
+	results, ok := source.LatestShareCheck(shareID)
+	if !ok {
+		return false
+	}
+	for _, result := range results {
+		if result.ServerID == serverID && result.Status == ShareCheckStatusMounted {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *handler) shareRevokeChoicesForAuthorization(
+	r *http.Request, returnTo string, preview SecretAuthorizationPreview,
+) []SecretAuthorizationShareRevoke {
+	if !h.caps.CanRevokeShares || h.cfg.SharesRemoteTasks == nil {
+		return nil
+	}
+	target, err := url.Parse(safeSecretReturnPath(returnTo))
+	if err != nil || target.Path == "" {
+		return nil
+	}
+	parts := strings.Split(strings.Trim(target.Path, "/"), "/")
+	if len(parts) != 3 || parts[0] != "ui" || parts[1] != "shares" || parts[2] == "" {
+		return nil
+	}
+	detail, readErr := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), parts[2])
+	if readErr != nil {
+		return nil
+	}
+	choices := make([]SecretAuthorizationShareRevoke, 0)
+	for _, change := range preview.Changes {
+		if change.SecretName != detail.PasswordSecret {
+			continue
+		}
+		for _, server := range change.Removed {
+			if !h.latestShareCheckMounted(detail.ID, server.ID, models.ShellType("")) {
+				continue
+			}
+			choices = append(choices, SecretAuthorizationShareRevoke{
+				ShareID: detail.ID, ShareName: detail.Name,
+				ServerID: server.ID, ServerName: server.Name,
+				ConfirmPath: shareRevokeConfirmPath(detail.ID, server.ID) + "&unmount=1",
+			})
+		}
+	}
+	return choices
 }
 
 func shareRevokeConfirmPath(shareID, serverID string) string {

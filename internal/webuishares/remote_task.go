@@ -16,11 +16,12 @@ import (
 const shareRemoteTaskRetention = 64
 
 type shareRemoteTaskStore struct {
-	ctx   context.Context
-	open  func() (*store.Store, func(), error)
-	mu    sync.Mutex
-	tasks map[string]*webui.ShareRemoteTaskStatus
-	order []string
+	ctx          context.Context
+	open         func() (*store.Store, func(), error)
+	mu           sync.Mutex
+	tasks        map[string]*webui.ShareRemoteTaskStatus
+	latestChecks map[string][]webui.ShareCheckResult
+	order        []string
 }
 
 // RemoteTasksFromStore 返回绑定存储打开函数的共享存储远端任务视图。任
@@ -41,6 +42,7 @@ func RemoteTasksFromStoreWithContext(
 	}
 	return &shareRemoteTaskStore{
 		ctx: ctx, open: open, tasks: map[string]*webui.ShareRemoteTaskStatus{},
+		latestChecks: map[string][]webui.ShareCheckResult{},
 	}
 }
 
@@ -93,6 +95,18 @@ func (s *shareRemoteTaskStore) ShareRemoteTaskStatus(
 	return &status, true
 }
 
+// LatestShareCheck 返回一处共享存储最近一次完成的现场探测结果。结果只
+// 保存在当前进程内存里，进程重启后需要重新探测。
+func (s *shareRemoteTaskStore) LatestShareCheck(shareID string) ([]webui.ShareCheckResult, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	results, ok := s.latestChecks[shareID]
+	if !ok {
+		return nil, false
+	}
+	return append([]webui.ShareCheckResult(nil), results...), true
+}
+
 func (s *shareRemoteTaskStore) run(
 	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest,
 ) {
@@ -135,6 +149,7 @@ func (s *shareRemoteTaskStore) runCheck(
 			ObservedAt: result.ObservedAt.Format(time.RFC3339),
 		})
 	}
+	s.latestChecks[request.ShareID] = append([]webui.ShareCheckResult(nil), task.CheckResult...)
 	s.pruneLocked()
 }
 

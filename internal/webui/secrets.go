@@ -460,11 +460,13 @@ func (h *handler) renderSecretPreviewPage(
 	w http.ResponseWriter, r *http.Request, status int, preview SecretAuthorizationPreview,
 	target []SecretAuthorizationCell, returnTo, notice string,
 ) {
-	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", pageData{
+	data := pageData{
 		Title: "机密项授权预览", SecretAuthorizationPreview: preview,
 		SecretAuthorizationTargets: target, SecretAuthorizationReturnTo: returnTo,
 		SecretAuthorizationNotice: notice,
-	})
+	}
+	data.SecretAuthorizationShareRevokes = h.shareRevokeChoicesForAuthorization(r, returnTo, preview)
+	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", data)
 }
 
 func secretTargetFromCells(r *http.Request) []SecretAuthorizationCell {
