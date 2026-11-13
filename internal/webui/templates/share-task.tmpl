@@ -1,0 +1,49 @@
+{{define "content"}}
+<section class="share-task"{{if and .ShareRemoteTask.Task (eq .ShareRemoteTask.Task.State "running")}} id="share-task" hx-get="{{.ShareRemoteTask.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>{{if .ShareRemoteTask.Lost}}共享存储任务结果已丢失{{else if eq .ShareRemoteTask.Task.Operation "check"}}{{if eq .ShareRemoteTask.Task.State "running"}}现场探测进行中{{else if eq .ShareRemoteTask.Task.State "error"}}现场探测失败{{else}}现场探测完成{{end}}{{else}}{{if eq .ShareRemoteTask.Task.State "running"}}挂载进行中{{else if eq .ShareRemoteTask.Task.State "error"}}挂载失败{{else}}挂载完成{{end}}{{end}}</h1>
+<p>共享存储：<strong>{{.ShareRemoteTask.Share.Name}}</strong></p>
+{{if .ShareRemoteTask.Lost}}
+<div class="notice notice-warning"><p>任务结果已丢失。任务只保存在当前 Web UI 进程内存里，进程重启后任务不排队补跑。</p></div>
+{{else if .ShareRemoteTask.Task.Message}}<div class="notice notice-error"><p>{{.ShareRemoteTask.Task.Message}}</p></div>{{end}}
+{{if and .ShareRemoteTask.Task (eq .ShareRemoteTask.Task.Operation "check") .ShareRemoteTask.Task.CheckResult}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>系统类型</th><th>现场状态</th><th>说明</th><th>观察时间</th></tr></thead>
+<tbody>
+{{range .ShareRemoteTask.Task.CheckResult}}
+<tr>
+<td>{{.ServerName}}</td>
+<td>{{shareSystemLabel .System}}</td>
+<td>{{shareCheckStatusLabel .Status}}</td>
+<td>{{.Notice}}{{if .Restricted}}（受限检测）{{end}}</td>
+<td>{{.ObservedAt}}</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else if and .ShareRemoteTask.Task (eq .ShareRemoteTask.Task.Operation "mount") .ShareRemoteTask.Task.MountResult}}
+<dl class="detail-list">
+<div><dt>服务器条目</dt><dd>{{.ShareRemoteTask.Task.MountResult.ServerName}}</dd></div>
+<div><dt>结果</dt><dd>{{shareMountActionLabel .ShareRemoteTask.Task.MountResult.Action}}</dd></div>
+<div><dt>挂载点</dt><dd>{{.ShareRemoteTask.Task.MountResult.MountPoint}}</dd></div>
+<div><dt>实际网络</dt><dd>{{.ShareRemoteTask.Task.MountResult.Network}}（第 {{.ShareRemoteTask.Task.MountResult.NetworkSequence}} 个地址）</dd></div>
+<div><dt>共享存储版本号</dt><dd>{{.ShareRemoteTask.Task.MountResult.Version}}</dd></div>
+</dl>
+{{if .ShareRemoteTask.Task.MountResult.Notices}}<div class="notice notice-warning"><ul>{{range .ShareRemoteTask.Task.MountResult.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{end}}
+<div class="inline-form">
+{{if .ShareRemoteTask.RestartCheck}}
+<form method="post" action="/ui/shares/{{.ShareRemoteTask.Share.ID}}/check">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">重新发起现场探测</button>
+</form>
+{{else if .ShareRemoteTask.RestartMount}}
+<form method="post" action="/ui/shares/{{.ShareRemoteTask.Share.ID}}/mount">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ShareRemoteTask.RestartServerID}}">
+<button type="submit">重新发起挂载</button>
+</form>
+{{end}}
+<a class="button-link" href="/ui/shares/{{.ShareRemoteTask.Share.ID}}">返回共享存储详情</a>
+</div>
+</section>
+{{end}}

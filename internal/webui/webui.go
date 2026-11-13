@@ -130,6 +130,9 @@ type Config struct {
 	// SharesWriter 是共享存储写操作来源。单机与权威端必须提供；客户端
 	// 不提供，写路由不存在。
 	SharesWriter ShareWriter
+	// SharesRemoteTasks 启动并读取共享存储远端操作任务。单机与权威端提
+	// 供；客户端不提供，任务路由不存在。
+	SharesRemoteTasks ShareRemoteTasks
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource

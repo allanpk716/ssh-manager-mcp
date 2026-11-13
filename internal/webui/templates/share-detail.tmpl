@@ -25,10 +25,10 @@
 <h2>可挂载服务器</h2>
 {{if .ShareDetail.MountableServers}}
 <table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th></tr></thead>
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th>{{if .ShareRemoteOperationsAvailable}}<th>现场操作</th>{{end}}</tr></thead>
 <tbody>
 {{range .ShareDetail.MountableServers}}
-<tr><td>{{.Name}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td></tr>
+<tr><td>{{.Name}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>{{if $.ShareRemoteOperationsAvailable}}<td>{{if isWindowsShell .ShellType}}<span>Windows 服务器不提供挂载按钮：盘符由每条命令执行前的会话内注入提供。</span>{{else}}<form method="post" action="/ui/shares/{{$.ShareDetail.ID}}/mount"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="server_id" value="{{.ID}}"><button type="submit">挂载</button></form>{{end}}</td>{{end}}</tr>
 {{end}}
 </tbody>
 </table>
@@ -61,9 +61,19 @@
 </form>
 {{end}}
 {{/*
-现场探测（#257）、挂载与卸载（#258）、撤销（#259）、
-重选地址与残留检查（#260）、桌面手动添加引导（#261）在后续票挂载到本页。
+挂载与卸载（#258）、撤销（#259）、重选地址与残留检查（#260）、
+桌面手动添加引导（#261）在后续票挂载到本页。
 */}}
+{{if .ShareRemoteOperationsAvailable}}
+<section class="share-remote-operations">
+<h3>现场运维</h3>
+<form method="post" action="/ui/shares/{{.ShareDetail.ID}}/check">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">现场探测</button>
+<p class="form-help">并发对已勾选的 Linux 与 macOS 服务器执行只读检测；Windows 服务器只标注不检测。</p>
+</form>
+</section>
+{{end}}
 </section>
 <div class="inline-form share-actions">
 {{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/{{.ShareDetail.ID}}/edit">编辑</a>

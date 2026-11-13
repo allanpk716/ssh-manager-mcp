@@ -117,6 +117,9 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	}
 	opsManager := ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))
 	updates := ops.NewUpdateService(ops.UpdateDependencies{Audit: opsManager.WriteUpdateAudit})
+	openServeWebUIStore := func() (*store.Store, func(), error) {
+		return st, func() {}, nil
+	}
 	restarts := ops.NewRestartService(ops.RestartDependencies{
 		NewService: serveOpts.ServiceRestarterFactory,
 		Audit:      opsManager.WriteRestartAudit,
@@ -128,12 +131,9 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		ServerConnectionTester: webuiservers.ConnectionTesterFromManagerWithContext(servermanage.New(st), ctx),
 		Secrets:                webuisecrets.FromManager(secretmanage.New(st)),
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
-		Shares: webuishares.FromStore(func() (*store.Store, func(), error) {
-			return st, func() {}, nil
-		}),
-		SharesWriter: webuishares.WriterFromStore(func() (*store.Store, func(), error) {
-			return st, func() {}, nil
-		}),
+		Shares:                 webuishares.FromStore(openServeWebUIStore),
+		SharesWriter:           webuishares.WriterFromStore(openServeWebUIStore),
+		SharesRemoteTasks:      webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
 			return st, func() {}, nil
 		}),

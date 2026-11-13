@@ -157,19 +157,43 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 		h.handleSharesRoot(w, r)
 		return
 	}
-	identifier := strings.TrimPrefix(r.URL.Path, sharesPath)
-	suffix := ""
-	if index := strings.LastIndex(identifier, "/"); index >= 0 {
-		suffix = identifier[index+1:]
-		identifier = identifier[:index]
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, sharesPath), "/")
+	identifier := parts[0]
+	if identifier == "" || len(parts) > 3 {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	if len(parts) == 3 && parts[1] == "task" && h.shareRemoteTasksAvailable() {
+		h.handleShareRemoteTask(w, r, identifier, parts[2])
+		return
+	}
+	if len(parts) == 3 {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
 	}
 	if identifier == "" || strings.Contains(identifier, "/") {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
+	suffix := ""
+	if len(parts) == 2 {
+		suffix = parts[1]
+	}
 	switch suffix {
 	case "":
 		h.handleShareDetail(w, r, identifier)
+	case "check":
+		if h.shareRemoteTasksAvailable() {
+			h.handleShareCheckStart(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "mount":
+		if h.shareRemoteTasksAvailable() {
+			h.handleShareMountStart(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	case "edit":
 		if h.cfg.SharesWriter != nil {
 			h.handleShareEdit(w, r, identifier)
@@ -185,6 +209,115 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
+}
+
+func (h *handler) shareRemoteTasksAvailable() bool {
+	return h.caps.CanManageShares && h.cfg.SharesRemoteTasks != nil
+}
+
+func (h *handler) handleShareCheckStart(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "现场探测只接受 POST 请求。")
+		return
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	taskID, err := h.cfg.SharesRemoteTasks.StartShareRemoteTask(ShareRemoteTaskRequest{
+		Operation: ShareRemoteOperationCheck, ShareID: detail.ID,
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
+	if err != nil {
+		h.logError(r, "启动共享存储现场探测任务", err)
+		h.renderError(w, r, http.StatusInternalServerError, "启动现场探测失败",
+			"启动现场探测失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, sharesPath+detail.ID+"/task/"+taskID, http.StatusSeeOther)
+}
+
+func (h *handler) handleShareMountStart(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "挂载操作只接受 POST 请求。")
+		return
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	serverID := strings.TrimSpace(r.PostFormValue("server_id"))
+	target := shareServerByID(detail.MountableServers, serverID)
+	if target == nil {
+		h.renderError(w, r, http.StatusNotFound, "服务器不在可挂载范围",
+			"服务器条目不在这处共享存储的可挂载范围内。")
+		return
+	}
+	if models.NormalizeShellType(target.ShellType).IsWindows() {
+		data, err := h.shareDetailData(r, detail)
+		if err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "读取共享存储详情失败",
+				"读取共享存储详情失败，请稍后重试。")
+			return
+		}
+		data.ShareDetailError = "Windows 服务器不能持久挂载共享存储；盘符由每条命令执行前的会话内注入提供，不需要单独挂载。"
+		h.renderPage(w, r, http.StatusBadRequest, "share-detail.tmpl", data)
+		return
+	}
+	taskID, err := h.cfg.SharesRemoteTasks.StartShareRemoteTask(ShareRemoteTaskRequest{
+		Operation: ShareRemoteOperationMount, ShareID: detail.ID, ServerID: serverID,
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
+	if err != nil {
+		h.logError(r, "启动共享存储挂载任务", err)
+		h.renderError(w, r, http.StatusInternalServerError, "启动挂载失败",
+			"启动挂载失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, sharesPath+detail.ID+"/task/"+taskID, http.StatusSeeOther)
+}
+
+func (h *handler) handleShareRemoteTask(
+	w http.ResponseWriter, r *http.Request, identifier, taskID string,
+) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "任务页只接受 GET 请求。")
+		return
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	view := &ShareRemoteTaskView{Share: detail}
+	status, ok := h.cfg.SharesRemoteTasks.ShareRemoteTaskStatus(taskID)
+	if !ok || status == nil || status.ShareID != detail.ID {
+		view.Lost = true
+		view.RestartCheck = true
+	} else {
+		view.Task = status
+		view.PollPath = sharesPath + detail.ID + "/task/" + status.ID
+		if status.Operation == ShareRemoteOperationMount && status.ServerID != "" {
+			view.RestartMount = true
+			view.RestartServerID = status.ServerID
+		} else {
+			view.RestartCheck = true
+		}
+	}
+	h.renderPage(w, r, http.StatusOK, "share-task.tmpl", pageData{
+		Title: "共享存储任务 · " + detail.Name, ShareRemoteTask: view,
+	})
+}
+
+func shareServerByID(servers []ShareServerView, id string) *ShareServerView {
+	for index := range servers {
+		if servers[index].ID == id {
+			return &servers[index]
+		}
+	}
+	return nil
 }
 
 func (h *handler) handleSharesRoot(w http.ResponseWriter, r *http.Request) {
@@ -255,19 +388,30 @@ func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, iden
 		h.renderShareReadError(w, r, err)
 		return
 	}
+	data, err := h.shareDetailData(r, detail)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取可挂载范围失败",
+			"读取可挂载范围失败，请稍后重试。")
+		return
+	}
+	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", data)
+}
+
+// shareDetailData 组装详情页数据；可写角色还组装可挂载范围勾选清单。
+func (h *handler) shareDetailData(r *http.Request, detail *ShareRow) (pageData, error) {
 	data := pageData{
 		Title: "共享存储 " + detail.Name, ShareDetail: detail,
-		ShareDetailNotice: shareSavedNotice(r, detail),
+		ShareDetailNotice:              shareSavedNotice(r, detail),
+		ShareRemoteOperationsAvailable: h.shareRemoteTasksAvailable(),
 	}
 	if h.caps.CanManageShares && h.cfg.Secrets != nil && h.cfg.SecretsWriter != nil {
 		scope, err := h.shareAuthorizationView(detail)
 		if err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "读取可挂载范围失败", "读取可挂载范围失败，请稍后重试。")
-			return
+			return data, err
 		}
 		data.ShareAuthorization = scope
 	}
-	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", data)
+	return data, nil
 }
 
 // shareAuthorizationView 读取全部服务器条目与挂载密码机密项的当前授权，

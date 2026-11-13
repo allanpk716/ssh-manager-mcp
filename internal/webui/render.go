@@ -74,6 +74,8 @@ type pageData struct {
 	ShareAuthorization               *ShareAuthorizationView
 	ShareDetailError                 string
 	ShareDetailNotice                string
+	ShareRemoteTask                  *ShareRemoteTaskView
+	ShareRemoteOperationsAvailable   bool
 	ShareForm                        shareFormView
 	ShareEdit                        *shareEditView
 	ShareDeletePreview               *ShareRow
@@ -204,6 +206,48 @@ var pageFuncs = template.FuncMap{
 			labels = append(labels, attentionReasonLabel(item))
 		}
 		return strings.Join(labels, "、")
+	},
+	"shareSystemLabel": func(system string) string {
+		switch system {
+		case "linux":
+			return "Linux"
+		case "darwin":
+			return "macOS"
+		case "windows":
+			return "Windows"
+		default:
+			return "系统未知"
+		}
+	},
+	"shareCheckStatusLabel": func(status string) string {
+		switch status {
+		case ShareCheckStatusMounted:
+			return "已挂载"
+		case ShareCheckStatusUnmounted:
+			return "未挂载"
+		case ShareCheckStatusSkipped:
+			return "不检测"
+		default:
+			return "不可达"
+		}
+	},
+	"shareMountActionLabel": func(action string) string {
+		switch action {
+		case "no-change":
+			return "无需改动"
+		case "first-mount-success":
+			return "首次挂载成功"
+		case "update-success":
+			return "更新挂载成功"
+		case "remount-success":
+			return "重新挂载成功"
+		default:
+			return action
+		}
+	},
+	"isWindowsShell": func(shell string) bool {
+		return shell == string(models.ShellPowerShell) ||
+			shell == string(models.ShellWindowsCmd)
 	},
 	"joinTags":               func(items []string) string { return strings.Join(items, ",") },
 	"formatUnixTime":         formatUnixTime,

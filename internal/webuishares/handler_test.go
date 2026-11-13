@@ -1,6 +1,7 @@
 package webuishares
 
 import (
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -117,6 +118,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	}
 	if strings.Contains(detail, "db-1") || strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") ||
 		strings.Contains(detail, "可挂载范围勾选清单") || strings.Contains(detail, "预览可挂载范围变更") ||
+		strings.Contains(detail, "现场运维") || strings.Contains(detail, "现场探测") ||
 		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
 		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
 	}
@@ -124,6 +126,8 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	csrf := csrfToken(t, h)
 	writeTargets := []string{
 		"/ui/shares/new", "/ui/shares/" + datasetsID + "/edit", "/ui/shares/" + datasetsID + "/delete",
+		"/ui/shares/" + datasetsID + "/check", "/ui/shares/" + datasetsID + "/mount",
+		"/ui/shares/" + datasetsID + "/task/missing",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {
@@ -175,20 +179,25 @@ func openStoreForTest(st *store.Store) func() (*store.Store, func(), error) {
 	}
 }
 
-func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
+func newIntegrationHandler(t *testing.T, st *store.Store, remoteTasks ...webui.ShareRemoteTasks) sessionHandler {
 	t.Helper()
+	var shareRemoteTasks webui.ShareRemoteTasks
+	if len(remoteTasks) > 0 {
+		shareRemoteTasks = remoteTasks[0]
+	}
 	handler, startup, err := webui.New(webui.Config{
 		Role: webui.RoleStandalone,
 		Servers: func() webui.ServerSource {
 			return webuiservers.FromManager(servermanage.New(st))
 		}(),
-		ServerWriter:  webuiservers.WriterFromManager(servermanage.New(st)),
-		Access:        webuiaccess.FromManager(access.New(st)),
-		Secrets:       webuisecrets.FromManager(secretmanage.New(st)),
-		SecretsWriter: webuisecrets.WriterFromManager(secretmanage.New(st)),
-		Shares:        FromStore(openStoreForTest(st)),
-		SharesWriter:  WriterFromStore(openStoreForTest(st)),
-		Port:          18086,
+		ServerWriter:      webuiservers.WriterFromManager(servermanage.New(st)),
+		Access:            webuiaccess.FromManager(access.New(st)),
+		Secrets:           webuisecrets.FromManager(secretmanage.New(st)),
+		SecretsWriter:     webuisecrets.WriterFromManager(secretmanage.New(st)),
+		Shares:            FromStore(openStoreForTest(st)),
+		SharesWriter:      WriterFromStore(openStoreForTest(st)),
+		SharesRemoteTasks: shareRemoteTasks,
+		Port:              18086,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -447,7 +456,11 @@ func mustSecret(t *testing.T, st *store.Store, name string) {
 
 func seedShare(t *testing.T, st *store.Store, name, device, secret, drive string, servers ...string) string {
 	t.Helper()
-	if _, err := st.AddDevice(device, "", ""); err != nil {
+	if _, err := st.GetDevice(device); errors.Is(err, store.ErrDeviceNotFound) {
+		if _, err := st.AddDevice(device, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	} else if err != nil {
 		t.Fatal(err)
 	}
 	mustSecret(t, st, secret)

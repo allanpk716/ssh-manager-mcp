@@ -34,8 +34,8 @@ func requireSharesVault() (*store.Store, error) {
 func newSharesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "shares", Short: "Manage registered shared storage"}
 	cmd.AddCommand(sharesAddCmd(), sharesEditCmd(), sharesRmCmd(), sharesListCmd(),
-		sharesShowCmd(), sharesUnmountCmd(), sharesRevokeCmd(), sharesReselectCmd(),
-		sharesResidueCmd())
+		sharesShowCmd(), sharesMountCmd(), sharesUnmountCmd(), sharesRevokeCmd(),
+		sharesReselectCmd(), sharesResidueCmd())
 	return cmd
 }
 
@@ -199,12 +199,32 @@ func sharesEditCmd() *cobra.Command {
 }
 
 func sharesShowCmd() *cobra.Command {
+	var check bool
 	var instance string
 	c := &cobra.Command{
 		Use:   "show NAME [--instance <name>]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Show one registered shared storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if check {
+				s, err := requireSharesVault()
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				share, err := s.GetSharedStorage(args[0])
+				if err != nil {
+					return err
+				}
+				report, err := sharemanage.New(s).Check(cmd.Context(), sharemanage.CheckRequest{
+					Share: share.Name,
+				})
+				if err != nil {
+					return err
+				}
+				printSharedStorageCheck(cmd.OutOrStdout(), report)
+				return nil
+			}
 			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
@@ -221,6 +241,7 @@ func sharesShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&check, "check", false, "并发现场探测已勾选服务器的挂载状态")
 	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
