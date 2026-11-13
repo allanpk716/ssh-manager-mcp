@@ -118,6 +118,16 @@ func ListEntries(manager *servermanage.Manager, attentionOnly bool) ([]webui.Ser
 	return rows, nil
 }
 
+// SharedStorageView 把服务器详情里的共享存储展示行换成 Web UI 视图。
+func SharedStorageView(share servermanage.DetailSharedStorage) webui.ServerDetailSharedStorage {
+	return webui.ServerDetailSharedStorage{
+		ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+		MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+		PasswordSecretName: share.PasswordSecretName,
+		Drive:              share.Drive, MountPoint: share.MountPoint,
+	}
+}
+
 // DetailView 把模块详情换成不含凭据内容的页面数据。
 func DetailView(manager *servermanage.Manager, identifier string) (*webui.ServerDetailView, error) {
 	detail, err := manager.Detail(identifier)
@@ -153,12 +163,7 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		})
 	}
 	for _, share := range detail.SharedStorages {
-		view.SharedStorages = append(view.SharedStorages, webui.ServerDetailSharedStorage{
-			ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
-			MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
-			PasswordSecretName: share.PasswordSecretName,
-			Drive:              share.Drive, MountPoint: share.MountPoint,
-		})
+		view.SharedStorages = append(view.SharedStorages, SharedStorageView(share))
 	}
 	for _, choice := range detail.SharedStorageChoices {
 		viewChoice := webui.ServerDetailSharedStorageChoice{
@@ -167,12 +172,7 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 			Checked:            choice.Checked,
 		}
 		for _, share := range choice.SharedStorages {
-			viewChoice.SharedStorages = append(viewChoice.SharedStorages, webui.ServerDetailSharedStorage{
-				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
-				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
-				PasswordSecretName: share.PasswordSecretName,
-				Drive:              share.Drive, MountPoint: share.MountPoint,
-			})
+			viewChoice.SharedStorages = append(viewChoice.SharedStorages, SharedStorageView(share))
 		}
 		view.SharedStorageChoices = append(view.SharedStorageChoices, viewChoice)
 	}
@@ -208,14 +208,9 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 	}
 	for _, share := range detail.SiblingSharedStorages {
 		view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
-			ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
-				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
-				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
-				PasswordSecretName: share.PasswordSecretName,
-				Drive:              share.Drive, MountPoint: share.MountPoint,
-			},
-			SourceServerID:   share.SourceServerID,
-			SourceServerName: share.SourceServerName,
+			ServerDetailSharedStorage: SharedStorageView(share.DetailSharedStorage),
+			SourceServerID:            share.SourceServerID,
+			SourceServerName:          share.SourceServerName,
 		})
 	}
 	return view, nil

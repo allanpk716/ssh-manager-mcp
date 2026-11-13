@@ -306,11 +306,15 @@ func TestServerDetailEditsSharedStorageAuthorization(t *testing.T) {
 	preview := authorizationRequest(handler, cookie, http.MethodPost, "/ui/secrets/authorization/preview", previewForm)
 	previewBody := authorizationBody(t, preview)
 	if preview.StatusCode != http.StatusOK ||
-		!strings.Contains(previewBody, "datasets") || !strings.Contains(previewBody, "scratch") ||
+		!strings.Contains(previewBody, "<th>共享存储名</th><th>新增可挂载</th><th>移除可挂载</th>") ||
+		!strings.Contains(previewBody, "<tr><td>datasets</td><td>无</td><td>是</td></tr>") ||
+		!strings.Contains(previewBody, "<tr><td>scratch</td><td>无</td><td>是</td></tr>") ||
+		!strings.Contains(previewBody, "<tr><td>media</td><td>是</td><td>无</td></tr>") ||
 		!strings.Contains(previewBody, "media") ||
+		strings.Contains(previewBody, "新增可写入服务器") ||
 		strings.Contains(previewBody, "DATASET_PASSWORD") || strings.Contains(previewBody, "MEDIA_PASSWORD") ||
 		strings.Contains(previewBody, "dataset-secret-value") || strings.Contains(previewBody, "media-secret-value") {
-		t.Fatalf("共享存储预览应按共享名呈现且不显示密码机密项名字或值，状态码=%d：\n%s", preview.StatusCode, previewBody)
+		t.Fatalf("共享存储预览应按共享名逐项列出挂载能力变化且不显示密码机密项名字或值，状态码=%d：\n%s", preview.StatusCode, previewBody)
 	}
 	summary := authorizationHiddenValues(previewBody, "summary")
 	targets := authorizationHiddenValues(previewBody, "target")

@@ -215,18 +215,19 @@ func TestServerDetailOverwritesAndClearsHostKeyAnchor(t *testing.T) {
 		t.Fatalf("删除审计应携带被删指纹并沿用命令行的空地址占位：%+v", clearRows)
 	}
 
-	// 条目尚无锚时，页面按钮是「锚定主机密钥」，提交走非覆盖语义：审计不
-	// 记 forced=true，也不记旧指纹。
+	// 条目尚无锚时不提供首次锚定入口；覆盖路由保留，但必须拒绝非覆盖提交。
 	created := hostKeyPost(t, handler, cookie, "/ui/servers/"+rootID+"/hostkey-pin",
 		hostKeyForm(csrf, [2]string{"fingerprint", oldAnchor.fingerprint}))
-	if created.StatusCode != http.StatusSeeOther ||
-		created.Header.Get("Location") != "/ui/servers/"+rootID+"?hostkey=updated" {
-		t.Fatalf("尚无锚时提交指纹应成功，状态码=%d 跳转=%q", created.StatusCode, created.Header.Get("Location"))
+	createdBody := authorizationBody(t, created)
+	if created.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(createdBody, "条目尚无主机密钥锚，不能覆盖") {
+		t.Fatalf("尚无锚时不应提供首次锚定入口，状态码=%d：\n%s", created.StatusCode, createdBody)
 	}
-	rows = hostKeyAuditRows(t, st, "pin-manual")
-	if len(rows) != 2 || !strings.Contains(rows[0].Command, "forced=false") ||
-		strings.Contains(rows[0].Command, "was=") {
-		t.Fatalf("尚无锚时的锚定审计应记 forced=false 且不含旧指纹：%+v", rows)
+	if rows = hostKeyAuditRows(t, st, "pin-manual"); len(rows) != 1 {
+		t.Fatalf("尚无锚时被拒绝的提交不得写锚定审计：%+v", rows)
+	}
+	if pin, err := st.GetEntryPinMeta(rootID); err != nil || pin != nil {
+		t.Fatalf("尚无锚时被拒绝的提交不得创建锚：%v %+v", err, pin)
 	}
 }
 
@@ -247,7 +248,7 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 
 	rootPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID)
 	for _, want := range []string{
-		"主机密钥锚", rootAnchor.fingerprint, "首次锚定", "学到锚的地址", "192.0.2.10:22", "锚定时间",
+		"主机密钥锚", rootAnchor.fingerprint, "首次信任", "学到锚的地址", "192.0.2.10:22", "锚定时间",
 	} {
 		if !strings.Contains(rootPage, want) {
 			t.Fatalf("root 条目详情页主机密钥锚信息缺少 %q：\n%s", want, rootPage)
@@ -273,6 +274,15 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 	}
 	if strings.Contains(barePage, rootAnchor.fingerprint) {
 		t.Fatalf("尚无锚的条目不得显示兄弟条目的锚：\n%s", barePage)
+	}
+	if !strings.Contains(barePage, "尚未锚定。首次信任或锚定转发") ||
+		strings.Contains(barePage, "首次连接即信任") {
+		t.Fatalf("尚无锚的说明必须使用领域词「首次信任」：\n%s", barePage)
+	}
+	for _, forbidden := range []string{"锚定主机密钥", "hostkey-pin"} {
+		if strings.Contains(barePage, forbidden) {
+			t.Fatalf("尚无锚的条目不得提供首次锚定入口 %q：\n%s", forbidden, barePage)
+		}
 	}
 }
 
@@ -415,11 +425,19 @@ func TestAuthorityHostKeyAnchorWritesRequireRecentPasswordVerification(t *testin
 	}
 }
 
-// TestClientServerDetailHasNoHostKeyAnchorArea 校验客户端详情页按客户端裁
-// 剪规则不显示主机密钥锚信息区，覆盖与删除写路由也不存在。
-func TestClientServerDetailHasNoHostKeyAnchorArea(t *testing.T) {
+// TestClientServerDetailShowsReadOnlyHostKeyAnchorArea 校验客户端详情页按
+// 本地快照只读显示主机密钥锚，覆盖与删除写路由不存在。
+func TestClientServerDetailShowsReadOnlyHostKeyAnchorArea(t *testing.T) {
 	detail := &webui.ServerDetailView{
 		ID: "srv-web", Name: "web", User: "deploy", Host: "192.0.2.10", Port: 22,
+		ShowHostKeyAnchor: true,
+		HostKeyAnchor: &webui.ServerDetailHostKeyAnchor{
+			Fingerprint:   "SHA256:" + strings.Repeat("a", 43),
+			SourceLabel:   "首次信任",
+			Device:        "office-laptop",
+			HandshakeAddr: "192.0.2.10:22",
+			PinnedAt:      time.Unix(1760000800, 0),
+		},
 	}
 	handler, startup, err := webui.New(webui.Config{
 		Role: webui.RoleClient, Port: 18084,
@@ -438,7 +456,16 @@ func TestClientServerDetailHasNoHostKeyAnchorArea(t *testing.T) {
 		t.Fatalf("应签发客户端会话 cookie，实际 %d", len(cookies))
 	}
 	page := hostKeyPage(t, handler, cookies[0], "/ui/servers/srv-web")
-	for _, forbidden := range []string{"主机密钥锚", "hostkey-pin", "hostkey-clear", "覆盖主机密钥锚", "删除主机密钥锚"} {
+	for _, want := range []string{
+		"主机密钥锚", "SHA256:" + strings.Repeat("a", 43), "首次信任",
+		"office-laptop", "192.0.2.10:22", "锚定时间",
+		"仅显示本地快照中的主机密钥锚，修改请到权威端。",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端详情页缺少只读主机密钥锚信息 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"hostkey-pin", "hostkey-clear", "覆盖主机密钥锚", "删除主机密钥锚"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("客户端详情页不得显示 %q：\n%s", forbidden, page)
 		}

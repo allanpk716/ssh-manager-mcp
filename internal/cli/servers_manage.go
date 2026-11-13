@@ -265,13 +265,11 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 		}
 		for _, record := range d.Reverse.DeliveryRecords {
 			fmt.Fprintf(
-				w, "  %s：机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
-				record.Path, serverDeliverySecrets(record.Secrets),
+				w, "  - 服务器条目 %s；路径 %s；机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+				record.ServerName, record.Path, secretDeliveryNames(record.Secrets),
 				record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
 				record.InitiatingDeviceName, record.InitiatingInstanceName,
 			)
-			fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
-			fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
 		}
 	}
 	fmt.Fprintln(w, "同设备其他服务器条目带来的共享存储：")

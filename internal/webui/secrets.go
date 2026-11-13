@@ -44,9 +44,8 @@ type SecretAuthorizationCell struct {
 
 // SecretAuthorizationServer 是授权差异里的一台服务器条目。
 type SecretAuthorizationServer struct {
-	ID                 string
-	Name               string
-	SharedStorageNames []string
+	ID   string
+	Name string
 }
 
 // SecretAuthorizationChange 是一个机密项的差异。
@@ -54,7 +53,7 @@ type SecretAuthorizationChange struct {
 	SecretID   string
 	SecretName string
 	// DisplayName 覆盖差异表第一列的默认机密项名；共享存储反向编辑用它
-	// 显示共享名，避免 owner 必须记忆挂载密码机密项名字。
+	// 逐行显示共享名，避免 owner 必须记忆挂载密码机密项名字。
 	DisplayName string
 	Added       []SecretAuthorizationServer
 	Removed     []SecretAuthorizationServer
@@ -509,26 +508,41 @@ func (h *handler) authorizationPreviewDisplay(
 			namesBySecret[choice.PasswordSecretID] = append(namesBySecret[choice.PasswordSecretID], share.Name)
 		}
 	}
-	for changeIndex := range preview.Changes {
-		change := &preview.Changes[changeIndex]
+	rows := make([]SecretAuthorizationChange, 0, len(preview.Changes))
+	for _, change := range preview.Changes {
 		names := namesBySecret[change.SecretID]
 		if len(names) == 0 {
+			rows = append(rows, change)
 			continue
 		}
 		sort.Strings(names)
-		change.DisplayName = strings.Join(names, "、")
-		for refIndex := range change.Added {
-			if change.Added[refIndex].ID == serverID {
-				change.Added[refIndex].SharedStorageNames = names
+		added := serverRefFor(change.Added, serverID)
+		removed := serverRefFor(change.Removed, serverID)
+		for _, name := range names {
+			row := SecretAuthorizationChange{SecretID: change.SecretID, DisplayName: name}
+			if added != nil {
+				row.Added = []SecretAuthorizationServer{*added}
 			}
-		}
-		for refIndex := range change.Removed {
-			if change.Removed[refIndex].ID == serverID {
-				change.Removed[refIndex].SharedStorageNames = names
+			if removed != nil {
+				row.Removed = []SecretAuthorizationServer{*removed}
 			}
+			rows = append(rows, row)
 		}
 	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].DisplayName < rows[j].DisplayName
+	})
+	preview.Changes = rows
 	return preview, nil
+}
+
+func serverRefFor(refs []SecretAuthorizationServer, serverID string) *SecretAuthorizationServer {
+	for i := range refs {
+		if refs[i].ID == serverID {
+			return &refs[i]
+		}
+	}
+	return nil
 }
 
 func (h *handler) renderSecretPreviewPage(

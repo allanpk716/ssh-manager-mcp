@@ -362,15 +362,23 @@ func TestServersShowDeliveryRecords(t *testing.T) {
 
 	out := runCli(t, "servers", "show", "web")
 	for _, want := range []string{
-		"下发记录：", "/etc/app/config.yml", "机密项 API_TOKEN（值版本号 2）",
+		"下发记录：", "- 服务器条目 web；路径 /etc/app/config.yml；机密项 API_TOKEN；",
 		"写入时间 2025-10-09", "发起设备 office-laptop", "实例 agent-a",
-		"模板原文：token: {{sshmgr-secret:API_TOKEN}}", "文件 SHA-256 哈希：" + strings.Repeat("5", 64),
-		"/etc/app/old.yml", "OLD_TOKEN（引用的机密项已删除）",
+		"/etc/app/old.yml", "OLD_TOKEN（已删除）",
 		"同设备其他服务器条目带来的下发文件：", "来源服务器条目 worker",
 		"/etc/worker/config.yml", "worker-laptop", "agent-b",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("servers show 下发记录缺少 %q：\n%s", want, out)
+		}
+	}
+	ownDeliveries := strings.Split(out, "同设备其他服务器条目带来的下发文件：")[0]
+	for _, forbidden := range []string{
+		"模板原文：", "文件 SHA-256 哈希：", "值版本号",
+		strings.Repeat("5", 64), strings.Repeat("6", 64),
+	} {
+		if strings.Contains(ownDeliveries, forbidden) {
+			t.Fatalf("servers show 的本条目下发记录列表不得展开详情字段 %q：\n%s", forbidden, ownDeliveries)
 		}
 	}
 	for _, secretValue := range []string{"ordinary-secret-value", "deleted-secret-value"} {

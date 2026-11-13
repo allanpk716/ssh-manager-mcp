@@ -167,6 +167,18 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 	if err != nil {
 		return err
 	}
+	allowCells := make([]store.SecretAllowCell, 0, len(secrets))
+	for _, secret := range secrets {
+		allowCells = append(allowCells, store.SecretAllowCell{SecretID: secret.ID, ServerID: srv.ID})
+	}
+	allowStates, err := m.st.SecretAllowStates(allowCells)
+	if err != nil {
+		return err
+	}
+	allowedBySecretID := make(map[string]bool, len(allowStates))
+	for _, state := range allowStates {
+		allowedBySecretID[state.SecretID] = state.Allow
+	}
 	for _, secret := range secrets {
 		if shareSecretIDs[secret.ID] {
 			continue
@@ -175,12 +187,9 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 			ID: secret.ID, Name: secret.Name, Note: secret.Note,
 			EnvironmentName: secret.EnvironmentName,
 		}}
-		for _, allowed := range secret.AllowedServers {
-			if allowed == srv.Name {
-				choice.Checked = true
-				detail.Secrets = append(detail.Secrets, choice.DetailSecret)
-				break
-			}
+		choice.Checked = allowedBySecretID[secret.ID]
+		if choice.Checked {
+			detail.Secrets = append(detail.Secrets, choice.DetailSecret)
 		}
 		detail.SecretChoices = append(detail.SecretChoices, choice)
 	}
@@ -215,12 +224,12 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 	if err != nil {
 		return err
 	}
+	serverDevices := make(map[string]string)
 	if srv.DeviceID != "" {
 		servers, err := m.st.ListServers()
 		if err != nil {
 			return err
 		}
-		serverDevices := make(map[string]string, len(servers))
 		for _, server := range servers {
 			serverDevices[server.ID] = server.DeviceID
 		}
@@ -231,7 +240,8 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		}
 	}
 
-	choicesBySecret := make(map[string]*DetailSharedStorageChoice)
+	choicesBySecret := make(map[string]DetailSharedStorageChoice)
+	choiceOrder := make([]string, 0, len(shares))
 	for _, share := range shares {
 		mountPoint := ""
 		checked := false
@@ -247,23 +257,24 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		if mountPoint == "" {
 			mountPoint = store.SharedStorageMountPoint(share.Drive, share.Name, srv.ShellType)
 		}
-		choice := choicesBySecret[share.PasswordSecretID]
-		if choice == nil {
-			choice = &DetailSharedStorageChoice{
+		choice, exists := choicesBySecret[share.PasswordSecretID]
+		if !exists {
+			choice = DetailSharedStorageChoice{
 				PasswordSecretID:   share.PasswordSecretID,
 				PasswordSecretName: share.PasswordSecretName,
 			}
 			choicesBySecret[share.PasswordSecretID] = choice
-			detail.SharedStorageChoices = append(detail.SharedStorageChoices, *choice)
+			choiceOrder = append(choiceOrder, share.PasswordSecretID)
 		}
 		choice.SharedStorages = append(choice.SharedStorages, detailSharedStorage(share, mountPoint))
-		choice.Checked = checked
+		choice.Checked = choice.Checked || checked
+		choicesBySecret[share.PasswordSecretID] = choice
 
 		if srv.DeviceID == "" {
 			continue
 		}
 		for _, mountable := range share.MountableServers {
-			if mountable.ID == srv.ID || mountable.DeviceName != detail.DeviceName {
+			if mountable.ID == srv.ID || serverDevices[mountable.ID] != srv.DeviceID {
 				continue
 			}
 			detail.SiblingSharedStorages = append(detail.SiblingSharedStorages, DetailSiblingSharedStorage{
@@ -280,10 +291,8 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		}
 		return left.Name < right.Name
 	})
-	for i := range detail.SharedStorageChoices {
-		if choice := choicesBySecret[detail.SharedStorageChoices[i].PasswordSecretID]; choice != nil {
-			detail.SharedStorageChoices[i] = *choice
-		}
+	for _, secretID := range choiceOrder {
+		detail.SharedStorageChoices = append(detail.SharedStorageChoices, choicesBySecret[secretID])
 	}
 	sort.Slice(detail.SharedStorageChoices, func(i, j int) bool {
 		left := detail.SharedStorageChoices[i].SharedStorages

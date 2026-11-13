@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/buildinfo"
@@ -247,6 +248,20 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			AttentionReasons: servermanage.ReasonLabels(models.ServerAttentionReasons(srv.CredentialID, srv.Role, tags)),
 			Revision:         srv.Revision,
 		}
+		view.ShowHostKeyAnchor = true
+		for _, anchor := range snap.EntryHostKeys {
+			if anchor.ServerID != srv.ID {
+				continue
+			}
+			view.HostKeyAnchor = &webui.ServerDetailHostKeyAnchor{
+				Fingerprint:   store.PinFingerprint(anchor.KeyBlob, anchor.PinFormat),
+				SourceLabel:   webui.HostKeyAnchorSourceLabel(anchor.PinSource),
+				Device:        anchor.PinDevice,
+				HandshakeAddr: anchor.HandshakeAddr,
+				PinnedAt:      time.Unix(anchor.CreatedAt, 0),
+			}
+			break
+		}
 		for _, secret := range reverse.Secrets {
 			view.Secrets = append(view.Secrets, webui.ServerDetailSecret{
 				ID: secret.ID, Name: secret.Name, Note: secret.Note,
@@ -254,23 +269,13 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			})
 		}
 		for _, share := range reverse.SharedStorages {
-			view.SharedStorages = append(view.SharedStorages, webui.ServerDetailSharedStorage{
-				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
-				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
-				PasswordSecretName: share.PasswordSecretName, Drive: share.Drive,
-				MountPoint: share.MountPoint,
-			})
+			view.SharedStorages = append(view.SharedStorages, webuiservers.SharedStorageView(share))
 		}
 		for _, share := range reverse.SiblingSharedStorages {
 			view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
-				ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
-					ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
-					MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
-					PasswordSecretName: share.PasswordSecretName, Drive: share.Drive,
-					MountPoint: share.MountPoint,
-				},
-				SourceServerID:   share.SourceServerID,
-				SourceServerName: share.SourceServerName,
+				ServerDetailSharedStorage: webuiservers.SharedStorageView(share.DetailSharedStorage),
+				SourceServerID:            share.SourceServerID,
+				SourceServerName:          share.SourceServerName,
 			})
 		}
 		return view, nil

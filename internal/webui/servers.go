@@ -80,8 +80,8 @@ type ServerDetailView struct {
 	// SiblingDeliveryRecords 是同一台设备的其他服务器条目写出的文件，仅
 	// 作为整台机器上的可见性提示。
 	SiblingDeliveryRecords []ServerDetailSiblingDeliveryRecord
-	// ShowHostKeyAnchor 表示当前角色能否查看主机密钥锚信息区；客户端按
-	// 裁剪规则不显示这一区。
+	// ShowHostKeyAnchor 表示当前角色能否查看主机密钥锚信息区；客户端只
+	// 读显示本地快照里的锚，不显示覆盖或删除入口。
 	ShowHostKeyAnchor bool
 	// HostKeyAnchor 是这个服务器条目自己的主机密钥锚；条目尚无锚时为
 	// 空，模板显示尚未锚定。
@@ -105,7 +105,7 @@ type ServerDetailHostKeyAnchor struct {
 func HostKeyAnchorSourceLabel(code string) string {
 	switch code {
 	case store.PinSourceTofu:
-		return "首次锚定"
+		return "首次信任"
 	case store.PinSourceForward:
 		return "锚定转发"
 	case store.PinSourceManual:
@@ -585,6 +585,10 @@ func (h *handler) handleServerHostKeyPin(w http.ResponseWriter, r *http.Request,
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
+	if detail.HostKeyAnchor == nil {
+		h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, "条目尚无主机密钥锚，不能覆盖。")
+		return
+	}
 	detailPath := "/ui/servers/" + url.PathEscape(detail.ID)
 	if !h.requireRecentReverify(w, r, detailPath) {
 		return
@@ -593,8 +597,7 @@ func (h *handler) handleServerHostKeyPin(w http.ResponseWriter, r *http.Request,
 		h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, "请输入要使用的主机密钥指纹。")
 		return
 	}
-	force := detail.HostKeyAnchor != nil
-	err = h.cfg.ServerWriter.ReplaceHostKeyPin(detail.ID, r.PostFormValue("fingerprint"), force, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	err = h.cfg.ServerWriter.ReplaceHostKeyPin(detail.ID, r.PostFormValue("fingerprint"), true, ServerWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
 		var formErr *ServerFormError
 		if errors.As(err, &formErr) {

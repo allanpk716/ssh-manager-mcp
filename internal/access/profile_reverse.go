@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -130,13 +131,7 @@ func (m *Manager) latestServerProfilePreviewWithoutMissing(
 	if err != nil {
 		return ServerProfileAuthorizationPreview{}, false, err
 	}
-	names := make(map[string]string, len(profiles))
-	ids := make(map[string]string, len(profiles))
-	for _, profile := range profiles {
-		names[profile.ID] = profile.Name
-		ids[profile.ID] = profile.ID
-		ids[profile.Name] = profile.ID
-	}
+	names, ids := profileIndexes(profiles)
 	remaining := make([]string, 0, len(desired))
 	for _, identifier := range desired {
 		if id, ok := ids[identifier]; ok {
@@ -193,13 +188,7 @@ func (m *Manager) profileNameIndex(desired []string) (map[string]string, []strin
 	if err != nil {
 		return nil, nil, err
 	}
-	names := make(map[string]string, len(profiles))
-	ids := make(map[string]string, len(profiles))
-	for _, profile := range profiles {
-		names[profile.ID] = profile.Name
-		ids[profile.Name] = profile.ID
-		ids[profile.ID] = profile.ID
-	}
+	names, ids := profileIndexes(profiles)
 	desiredIDs := make([]string, 0, len(desired))
 	for _, identifier := range desired {
 		id, ok := ids[identifier]
@@ -211,11 +200,22 @@ func (m *Manager) profileNameIndex(desired []string) (map[string]string, []strin
 	return names, desiredIDs, nil
 }
 
+func profileIndexes(profiles []*models.Profile) (namesByID, idsByIdentifier map[string]string) {
+	namesByID = make(map[string]string, len(profiles))
+	idsByIdentifier = make(map[string]string, len(profiles)*2)
+	for _, profile := range profiles {
+		namesByID[profile.ID] = profile.Name
+		idsByIdentifier[profile.ID] = profile.ID
+		idsByIdentifier[profile.Name] = profile.ID
+	}
+	return namesByID, idsByIdentifier
+}
+
 func serverProfileAuthorizationPreview(
 	server ServerRef, currentIDs, desiredIDs []string, names map[string]string,
 ) ServerProfileAuthorizationPreview {
-	currentSorted := normalizeStringSet(currentIDs)
-	desiredSorted := normalizeStringSet(desiredIDs)
+	currentSorted := store.NormalizeIDSet(currentIDs)
+	desiredSorted := store.NormalizeIDSet(desiredIDs)
 	currentSet := stringSet(currentSorted)
 	desiredSet := stringSet(desiredSorted)
 	preview := ServerProfileAuthorizationPreview{
@@ -254,19 +254,6 @@ func profileIDs(refs []ProfileRef) []string {
 	for _, ref := range refs {
 		out = append(out, ref.ID)
 	}
-	return out
-}
-
-func normalizeStringSet(values []string) []string {
-	seen := make(map[string]bool, len(values))
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		if !seen[value] {
-			seen[value] = true
-			out = append(out, value)
-		}
-	}
-	sort.Strings(out)
 	return out
 }
 

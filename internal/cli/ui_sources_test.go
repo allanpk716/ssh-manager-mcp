@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
@@ -272,8 +273,8 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 }
 
 // TestClientUIServerSourceAssemblesCroppedReverseGroups 验证客户端服务器详
-// 情只从本地快照装配机密项与共享存储两组，并且同设备提示不推断快照外的
-// 服务器条目。
+// 情只从本地快照装配机密项、共享存储与只读主机密钥锚，并且同设备提示不
+// 推断快照外的服务器条目。
 func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
 	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "web", Name: "网站", ShellType: "posix", DeviceID: "device-workstation"},
@@ -299,7 +300,12 @@ func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
 		Grants: []store.SnapshotGrant{
 			{ProfileID: "profile-1", ServerID: "web"},
 			{ProfileID: "profile-1", ServerID: "worker"},
-		}}, "")
+		}, EntryHostKeys: []store.SnapshotEntryHostKey{{
+			ServerID: "web", KeyBlob: []byte("SHA256:" + strings.Repeat("b", 43)),
+			CreatedAt: 1760000900, PinFormat: store.PinFormatFingerprint,
+			PinSource: store.PinSourceTofu, PinDevice: "office-laptop",
+			HandshakeAddr: "192.0.2.10:22",
+		}}}, "")
 
 	detail, err := clientUIServerSource{}.ServerDetail("", "网站")
 	if err != nil {
@@ -324,6 +330,14 @@ func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
 		detail.SiblingSharedStorages[0].SourceServerName != "工作进程" ||
 		detail.SiblingSharedStorages[0].MountPoint != "/mnt/sshmgr/worker-data" {
 		t.Fatalf("客户端详情同设备共享存储提示不正确：%+v", detail.SiblingSharedStorages)
+	}
+	if !detail.ShowHostKeyAnchor || detail.HostKeyAnchor == nil ||
+		detail.HostKeyAnchor.Fingerprint != "SHA256:"+strings.Repeat("b", 43) ||
+		detail.HostKeyAnchor.SourceLabel != "首次信任" ||
+		detail.HostKeyAnchor.Device != "office-laptop" ||
+		detail.HostKeyAnchor.HandshakeAddr != "192.0.2.10:22" ||
+		!detail.HostKeyAnchor.PinnedAt.Equal(time.Unix(1760000900, 0)) {
+		t.Fatalf("客户端详情主机密钥锚应只读来自本地快照：%+v", detail.HostKeyAnchor)
 	}
 	if len(detail.Profiles) != 0 || detail.ShowDeliveryRecords || len(detail.DeliveryRecords) != 0 ||
 		len(detail.SiblingDeliveryRecords) != 0 || len(detail.SecretChoices) != 0 ||

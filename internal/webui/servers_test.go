@@ -94,6 +94,9 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 		SharedStorages: []ServerDetailSharedStorage{{
 			Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
 			PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+		}, {
+			Name: "models", ProviderDeviceName: "NAS-B", MountUser: "model-mount-user",
+			PasswordSecretName: "DATASET_PASSWORD", Drive: "Y", MountPoint: "/mnt/sshmgr/models",
 		}},
 		Checked: true,
 	}}
@@ -124,6 +127,14 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	}
 	if strings.Contains(page, "ordinary-secret-value") {
 		t.Fatalf("服务器详情页不得显示机密项值：\n%s", page)
+	}
+	if strings.Count(page, `name="cell__secret-dataset__srv-fine"`) != 1 {
+		t.Fatalf("同一密码机密项只应提交一个勾选框：\n%s", page)
+	}
+	if !strings.Contains(page, "与 datasets、models 同一密码机密项") ||
+		!strings.Contains(page, "models") || !strings.Contains(page, "NAS-B") ||
+		!strings.Contains(page, "model-mount-user") || !strings.Contains(page, "/mnt/sshmgr/models") {
+		t.Fatalf("同一个密码机密项驱动的共享存储应各占一行并说明共用勾选：\n%s", page)
 	}
 
 	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")

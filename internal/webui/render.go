@@ -199,7 +199,14 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(labels, "、")
 	},
-	"joinTags":       func(items []string) string { return strings.Join(items, ",") },
+	"joinTags": func(items []string) string { return strings.Join(items, ",") },
+	"sharedStorageNames": func(items []ServerDetailSharedStorage) string {
+		names := make([]string, 0, len(items))
+		for _, item := range items {
+			names = append(names, item.Name)
+		}
+		return strings.Join(names, "、")
+	},
 	"formatUnixTime": formatUnixTime,
 	"formatTime":     func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
 	"formatOptionalTime": func(value *time.Time) string {

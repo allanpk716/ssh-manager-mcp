@@ -1,6 +1,8 @@
 package servermanage
 
 import (
+	"database/sql"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,6 +10,8 @@ import (
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
+
+	_ "modernc.org/sqlite"
 )
 
 // TestDetailReverseViewSummarizesAuthorizations 校验服务器详情以单个服务
@@ -103,6 +107,12 @@ func TestDetailReverseViewSummarizesAuthorizations(t *testing.T) {
 	if len(detail.SharedStorages) != 2 {
 		t.Fatalf("同一个密码机密项驱动的共享存储应逐项列出：%+v", detail.SharedStorages)
 	}
+	if len(detail.SharedStorageChoices) != 2 ||
+		len(detail.SharedStorageChoices[0].SharedStorages) != 2 ||
+		!detail.SharedStorageChoices[0].Checked ||
+		detail.SharedStorageChoices[0].PasswordSecretName != "DATASET_PASSWORD" {
+		t.Fatalf("共享存储编辑项应按挂载密码机密项归组且勾选状态只算一次：%+v", detail.SharedStorageChoices)
+	}
 	for i, want := range []string{"datasets", "models"} {
 		share := detail.SharedStorages[i]
 		if share.Name != want || share.ProviderDeviceName != "gpu-workstation" ||
@@ -147,6 +157,110 @@ func TestDetailReverseViewSummarizesAuthorizations(t *testing.T) {
 	}
 	if len(after) != len(before) {
 		t.Fatalf("读取服务器详情不应写审计：before=%d after=%d", len(before), len(after))
+	}
+}
+
+// TestDetailReverseViewComparesSiblingSharesByDeviceID 构造两台同名设备的
+// 既有数据：名字相同但标识符不同，不得把另一台设备的共享存储当成同设备兄
+// 弟条目。
+func TestDetailReverseViewComparesSiblingSharesByDeviceID(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "store.db")
+	key, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	openStore := func() *store.Store {
+		st, openErr := store.Open(dbPath, key)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		return st
+	}
+	st := openStore()
+	targetDevice, err := st.AddDevice("workstation", "目标设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDevice, err := st.AddDevice("other-workstation", "另一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("storage", "共享存储提供方", ""); err != nil {
+		t.Fatal(err)
+	}
+	targetServer, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: targetDevice.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = st.AddServer(&models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: otherDevice.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("DATASET_PASSWORD", "挂载密码", []byte("secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"DATASET_PASSWORD"}, []string{"worker"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "worker-data", Device: "storage", User: "mount-user",
+		PasswordSecret: "DATASET_PASSWORD", Drive: "X",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`PRAGMA foreign_keys=OFF`,
+		`CREATE TABLE devices_without_unique_name (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			name_lower TEXT NOT NULL,
+			note TEXT NOT NULL DEFAULT '',
+			client_token_id TEXT UNIQUE,
+			client_name TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			updated_at INTEGER NOT NULL
+		)`,
+		`INSERT INTO devices_without_unique_name SELECT * FROM devices`,
+		`DROP TABLE devices`,
+		`ALTER TABLE devices_without_unique_name RENAME TO devices`,
+		`UPDATE devices SET name='workstation', name_lower='workstation' WHERE id=?`,
+		`PRAGMA foreign_keys=ON`,
+	}
+	for _, statement := range statements {
+		var execErr error
+		if strings.Contains(statement, "?") {
+			_, execErr = raw.Exec(statement, otherDevice.ID)
+		} else {
+			_, execErr = raw.Exec(statement)
+		}
+		if execErr != nil {
+			t.Fatalf("准备同名设备失败：%s：%v", statement, execErr)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	st = openStore()
+	defer func() { _ = st.Close() }()
+	detail, err := New(st).Detail(targetServer)
+	if err != nil || detail == nil {
+		t.Fatalf("读取服务器详情失败：detail=%+v err=%v", detail, err)
+	}
+	if len(detail.SiblingSharedStorages) != 0 {
+		t.Fatalf("两台设备只是名字相同，不应当成同设备兄弟条目：%+v", detail.SiblingSharedStorages)
 	}
 }
 
