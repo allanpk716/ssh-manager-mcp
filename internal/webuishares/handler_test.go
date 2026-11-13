@@ -135,6 +135,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		"/ui/shares/" + datasetsID + "/check", "/ui/shares/" + datasetsID + "/mount",
 		"/ui/shares/" + datasetsID + "/task/missing",
 		"/ui/shares/" + datasetsID + "/unmount",
+		"/ui/shares/" + datasetsID + "/revoke",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {

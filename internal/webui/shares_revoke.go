@@ -218,8 +218,11 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 	}
 	changePassword := r.PostFormValue("change_password") == "1"
 	if changePassword && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		next := shareRevokeConfirmPath(view.Share.ID, view.Server.ID) +
-			"&unmount=1&change_password=1"
+		resume := url.Values{"change_password": {"1"}}
+		if r.PostFormValue("unmount") == "1" {
+			resume.Set("unmount", "1")
+		}
+		next := shareRevokeConfirmPath(view.Share.ID, view.Server.ID) + "&" + resume.Encode()
 		http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
 		return
 	}

@@ -307,10 +307,10 @@ func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *test
 
 	rejected := h.doMultipart(t, "/ui/shares/"+fixture.shareID+"/revoke", map[string]string{
 		"csrf_token": csrf, "server_id": fixture.linuxID,
-		"unmount": "1", "change_password": "1",
+		"change_password": "1",
 	}, "new_password_file", newPassword)
 	rejectedBody := body(t, rejected)
-	resume := fixture.revokePath(fixture.linuxID) + "&unmount=1&change_password=1"
+	resume := fixture.revokePath(fixture.linuxID) + "&change_password=1"
 	if rejected.StatusCode != http.StatusSeeOther ||
 		rejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape(resume) {
 		t.Fatalf("未重新验证的换密码撤销应跳转重新验证，状态码=%d 跳转=%q：\n%s",
@@ -330,14 +330,15 @@ func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *test
 			reverify.StatusCode, reverify.Header.Get("Location"), body(t, reverify))
 	}
 	resumedPage := body(t, h.do(http.MethodGet, resume, nil))
-	if !strings.Contains(resumedPage, `name="unmount" value="1" checked`) ||
-		!strings.Contains(resumedPage, `name="change_password" value="1" checked`) {
+	if strings.Contains(resumedPage, `name="unmount" value="1" checked`) ||
+		!strings.Contains(resumedPage, `name="change_password" value="1" checked`) ||
+		strings.Contains(resumedPage, "data-share-reveal-target hidden") {
 		t.Fatalf("重新验证后的撤销确认页应保留选项：\n%s", resumedPage)
 	}
 
 	confirmed := h.doMultipart(t, "/ui/shares/"+fixture.shareID+"/revoke", map[string]string{
 		"csrf_token": csrf, "server_id": fixture.linuxID,
-		"unmount": "1", "change_password": "1",
+		"change_password": "1",
 	}, "new_password_file", newPassword)
 	if confirmed.StatusCode != http.StatusSeeOther {
 		t.Fatalf("重新验证后的换密码撤销状态码=%d：\n%s",
@@ -349,6 +350,7 @@ func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *test
 		"仍可挂载的 Linux 与 macOS 服务器：linux-worker",
 		"这些服务器需要 agent 按新版本号重新挂载",
 		"桌面手动连接也需要更新密码",
+		"远端持久配置已删除，现有挂载保留",
 	} {
 		if !strings.Contains(taskPage, want) {
 			t.Fatalf("换密码撤销结果页缺少 %q：\n%s", want, taskPage)
@@ -358,6 +360,10 @@ func TestAuthorityShareRevokePasswordChangeRequiresReverifyAndHidesValue(t *test
 	secret, err := fixture.store.SecretValueForSharedStorageMount(views[0].ID)
 	if err != nil || !bytes.Equal(secret.Value, newPassword) {
 		t.Fatalf("新共享密码没有按原始字节保存：%v", err)
+	}
+	state := fixture.linux.State()
+	if !state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("不选择同时卸载时应删除配置并保留挂载：%+v", state)
 	}
 	allResponses := resumedPage + taskPage
 	for _, secretValue := range [][]byte{oldPassword, newPassword} {
