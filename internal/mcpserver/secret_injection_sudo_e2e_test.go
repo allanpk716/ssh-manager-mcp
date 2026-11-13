@@ -15,6 +15,7 @@ import (
 )
 
 func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "sudo-injected-secret-%-backslash-\\-value\n"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
@@ -96,6 +97,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 }
 
 func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const sudoPassword = "sudopw-that-must-not-become-a-value"
 	const secretValue = "sudo-nopasswd-secret-value"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
@@ -144,6 +146,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 }
 
 func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "sudo-background-injected-secret-value"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 

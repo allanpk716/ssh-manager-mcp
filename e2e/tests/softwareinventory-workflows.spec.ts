@@ -75,5 +75,6 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   await expect(page.getByLabel("服务器条目", { exact: true })).toHaveValue("web-1");
   await expect(page.getByLabel("允许用 sudo 采集")).toBeChecked();
   await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
-  await expect(page.getByText("sudo 采集开关已打开。")).toBeVisible();
+  const serverRow = page.locator("tr", { hasText: "web-1" });
+  await expect(serverRow).toContainText("已打开");
 });

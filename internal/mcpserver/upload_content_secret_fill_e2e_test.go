@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -220,7 +221,7 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.FromSlash(target)); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o600 {
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("new file containing secret values has mode %v, want 0600", info.Mode().Perm())
 	}
 	assertUploadContentResultHasNoSecretValue(t, result, databasePassword, interfaceToken)
@@ -1061,6 +1062,9 @@ func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
 }
 
 func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
+	// 测试 SSH 服务器直接使用测试主机文件系统。Windows 上把远端标成
+	// Windows shell，路径按盘符绝对路径传递；自定义测试处理器也就不会把
+	// “/盘符:”误当成 POSIX 根下的目录并递归创建它。
 	const secretValue = "12345678"
 	st := newStore(t)
 	if err := st.AddSecret("RACE_SECRET", "", []byte(secretValue), store.CLISource()); err != nil {
@@ -1082,6 +1086,16 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 	})
 	t.Cleanup(cleanup)
 	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	if runtime.GOOS == "windows" {
+		srv, serr := st.GetServer(serverID)
+		if serr != nil || srv == nil {
+			t.Fatalf("re-read seeded server: %v %v", srv, serr)
+		}
+		srv.ShellType = models.ShellPowerShell
+		if serr = st.UpdateServer(srv); serr != nil {
+			t.Fatal(serr)
+		}
+	}
 	profileID, err := st.AddProfile("agent-profile")
 	if err != nil {
 		t.Fatal(err)

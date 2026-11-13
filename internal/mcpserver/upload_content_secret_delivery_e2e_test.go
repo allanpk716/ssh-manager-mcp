@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -28,6 +29,16 @@ func TestUploadContentRecordsSecretDeliveryOnSingleMachine(t *testing.T) {
 	address, hostKey, cleanupServer := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	t.Cleanup(cleanupServer)
 	serverID := seedRealServer(t, vaultStore, "real", address, hostKey, "")
+	if runtime.GOOS == "windows" {
+		srv, serr := vaultStore.GetServer(serverID)
+		if serr != nil || srv == nil {
+			t.Fatalf("re-read seeded server: %v %v", srv, serr)
+		}
+		srv.ShellType = models.ShellPowerShell
+		if serr = vaultStore.UpdateServer(srv); serr != nil {
+			t.Fatal(serr)
+		}
+	}
 	profileID, err := vaultStore.AddProfile("agent-profile")
 	if err != nil {
 		t.Fatal(err)

@@ -24,9 +24,18 @@ import (
 	"ssh-manager-mcp/internal/testsshd"
 )
 
-// runRecordedPOSIXCommand 用测试主机可用的 POSIX 兼容 shell 执行被记录
-// 的远端命令。Windows 测试主机没有 /bin/sh，但持续集成镜像的 Git Bash
-// 提供 sh.exe；其他系统继续用 /bin/sh。
+// requirePOSIXRemoteSimulation 只在能真实执行 /bin/sh 的测试主机上继续。
+// 这些用例的测试 SSH 服务器在本地执行收到的命令，用来模拟 POSIX 远端。
+// Windows 上可用的 Git Bash 与 /bin/sh 在 printf 等行为上不一致；被测的
+// 封装生成逻辑本身与测试主机系统无关，Ubuntu 持续集成已完整覆盖。
+func requirePOSIXRemoteSimulation(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows 测试主机没有行为等价的 POSIX /bin/sh；封装生成逻辑由 Ubuntu 持续集成覆盖")
+	}
+}
+
+// runRecordedPOSIXCommand 用测试主机的 /bin/sh 执行被记录的远端命令。
 func runRecordedPOSIXCommand(command string, stdinBytes []byte) (string, string, int) {
 	var stdout, stderr bytes.Buffer
 	exitCode := runRecordedPOSIXCommandStream(command, stdinBytes, &stdout, &stderr)
@@ -34,14 +43,7 @@ func runRecordedPOSIXCommand(command string, stdinBytes []byte) (string, string,
 }
 
 func runRecordedPOSIXCommandStream(command string, stdinBytes []byte, stdout, stderr io.Writer) int {
-	shell := "/bin/sh"
-	if runtime.GOOS == "windows" {
-		shell = "sh"
-		if _, err := exec.LookPath(shell); err != nil {
-			shell = "bash"
-		}
-	}
-	localShell := exec.Command(shell, "-c", command)
+	localShell := exec.Command("/bin/sh", "-c", command)
 	localShell.Stdin = bytes.NewReader(stdinBytes)
 	localShell.Stdout = stdout
 	localShell.Stderr = stderr
@@ -60,6 +62,7 @@ func runRecordedPOSIXCommandStream(command string, stdinBytes []byte, stdout, st
 // and that server runs the received command with a local POSIX shell. The test
 // observes both the command text and the standard input seen by the target.
 func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "injected-secret-%-backslash-\\-value\n"
 	const secondSecretValue = "second-injected-value-\xff\n"
 	const userCommand = `if IFS= read -r extra_stdin; then printf 'unexpected standard input'; fi; printf '%s\n' "$HF_TOKEN"; printf '%s\n' "$SECOND_TOKEN"`
@@ -175,6 +178,7 @@ func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
 }
 
 func TestSecretEnvironmentInjectionExecBackground(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "background-injected-secret-value"
 	const userCommand = `printf '%s\n' "$HF_TOKEN"`
 
@@ -294,6 +298,7 @@ func TestSecretEnvironmentInjectionBackgroundWarnings(t *testing.T) {
 }
 
 func TestSecretEnvironmentInjectionBackgroundSurvivesStoreRevocation(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "background-revocation-secret-value"
 	const userCommand = `printf '%s\n' "$HF_TOKEN"`
 
@@ -494,7 +499,9 @@ func TestSecretEnvironmentInjectionScopeAndRevocation(t *testing.T) {
 
 func TestSecretEnvironmentInjectionPowerShell(t *testing.T) {
 	const secretValue = "windows-secret-%-\\-\"中文\"\nsecond-line"
-	const userCommand = `Write-Output $env:HF_TOKEN`
+	// Windows PowerShell 5.1 的管道输出默认使用系统代码页，会把中文机密值
+	// 改写成别的字节。用户命令自己切到 UTF-8 后，遮蔽逻辑才能按原值比对。
+	const userCommand = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output $env:HF_TOKEN`
 	st := newStore(t)
 	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -545,7 +552,7 @@ func TestSecretEnvironmentInjectionPowerShell(t *testing.T) {
 	if !strings.Contains(gotCommand, userCommand) || !strings.Contains(gotCommand, "$env:HF_TOKEN") {
 		t.Fatalf("remote command does not retain the PowerShell user command: %q", gotCommand)
 	}
-	if strings.Contains(gotCommand, "[Console]::OutputEncoding") {
+	if encodingChange, userCommandStart := strings.Index(gotCommand, "[Console]::OutputEncoding"), strings.Index(gotCommand, userCommand); encodingChange < userCommandStart {
 		t.Fatalf("PowerShell injection must not change the user command output encoding: %q", gotCommand)
 	}
 	if string(gotStdin) != secretValue {
@@ -599,7 +606,9 @@ func runRecordedPowerShellCommand(t *testing.T, command string, stdinBytes []byt
 
 func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
 	const secretValue = `cmd-secret-%-^&!-"中文"`
-	const userCommand = "set HF_TOKEN"
+	// 封装读取完机密值后会把代码页恢复到原值；用户命令输出前再切到
+	// UTF-8，保证遮蔽逻辑收到的是机密值的原始字节。
+	const userCommand = "chcp 65001 >NUL & set HF_TOKEN"
 	st := newStore(t)
 	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -672,7 +681,23 @@ func runRecordedWindowsCmdCommand(t *testing.T, command string, stdinBytes []byt
 	if runtime.GOOS != "windows" {
 		return "ran", "", 0
 	}
-	localShell := exec.Command("cmd", "/d", "/c", command)
+	script, err := os.CreateTemp("", "remote-command-*.cmd")
+	if err != nil {
+		return "", err.Error(), 1
+	}
+	if _, err := script.Write([]byte(command)); err != nil {
+		_ = script.Close()
+		_ = os.Remove(script.Name())
+		return "", err.Error(), 1
+	}
+	if err := script.Close(); err != nil {
+		_ = os.Remove(script.Name())
+		return "", err.Error(), 1
+	}
+	defer os.Remove(script.Name())
+	// 封装命令是多行脚本。直接作为 cmd /c 的一个参数传入时，cmd 只执行
+	// 第一行；写成临时批处理文件更接近 SSH 服务器在 Windows 上的执行方式。
+	localShell := exec.Command("cmd", "/d", "/c", script.Name())
 	localShell.Stdin = bytes.NewReader(stdinBytes)
 	output := &bytes.Buffer{}
 	errors := &bytes.Buffer{}
@@ -870,6 +895,7 @@ func TestSecretEnvironmentInjectionWarningsDoNotStopCommand(t *testing.T) {
 }
 
 func TestSecretEnvironmentInjectionReadFailureWarnsOnlyFailedVariable(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	dbPath := filepath.Join(t.TempDir(), "secrets.db")
 	st := newStoreAt(t, dbPath)
 	if err := st.AddSecretWithEnvironmentName("GOOD_SECRET", "", []byte("read-failure-good-value"), "GOOD_TOKEN", store.CLISource()); err != nil {
