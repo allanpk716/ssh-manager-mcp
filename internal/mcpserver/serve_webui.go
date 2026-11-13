@@ -134,6 +134,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Shares:                 webuishares.FromStore(openServeWebUIStore),
 		SharesWriter:           webuishares.WriterFromStore(openServeWebUIStore),
 		SharesRemoteTasks:      webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx),
+		ShareUnmountRunner:     webuishares.UnmountTasksFromStore(openServeWebUIStore),
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
 			return st, func() {}, nil
 		}),

@@ -17,19 +17,6 @@ var ErrWindowsMountUnsupported = errors.New(
 var ErrMountServerNotWritable = errors.New(
 	"服务器不在共享存储的可挂载范围内，请先在详情页勾选这台服务器")
 
-// Source 描述一次共享存储远端操作来自哪里：命令行，或 Web UI（附来源地
-// 址）。模块按它给审计行填来源列。
-type Source struct {
-	kind string
-	addr string
-}
-
-func CLISource() Source { return Source{kind: store.AuditSourceCLI} }
-
-func WebUISource(addr string) Source {
-	return Source{kind: store.AuditSourceWebUI, addr: addr}
-}
-
 // MountRequest 是一次单台服务器幂等挂载请求。Share 与 Server 都接受登记
 // 名或标识符。
 type MountRequest struct {
@@ -139,6 +126,9 @@ func (m *Manager) writeMountAudit(
 	share *models.SharedStorage, server *models.Server, remote *sharemount.Result,
 	operationErr error, source Source,
 ) error {
+	if source.kind == "" {
+		source = CLISource()
+	}
 	summary := map[string]any{
 		"share": share.Name, "server": server.Name, "version": share.Version,
 		"result": mountAuditResult(operationErr, remote),

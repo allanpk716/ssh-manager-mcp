@@ -206,6 +206,18 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "unmount":
+		if h.cfg.ShareUnmountRunner != nil {
+			h.handleShareUnmount(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "desktop":
+		if h.cfg.Role != RoleClient && h.cfg.Topology != nil {
+			h.handleShareDesktopGuide(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
@@ -410,6 +422,9 @@ func (h *handler) shareDetailData(r *http.Request, detail *ShareRow) (pageData, 
 			return data, err
 		}
 		data.ShareAuthorization = scope
+	}
+	if h.caps.CanUnmountShares {
+		data.ShareUnmountEntries = shareUnmountEntries(detail)
 	}
 	return data, nil
 }

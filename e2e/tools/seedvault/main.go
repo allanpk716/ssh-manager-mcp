@@ -328,6 +328,7 @@ func seedTopology(st *store.Store) error {
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "家NAS共享", Device: "NAS", User: "backup", PasswordSecret: "NAS_PASSWORD", Drive: "N",
+		Directories: []models.SharedStorageDirectory{{Purpose: "照片", Path: "photos"}},
 	}, store.CLISource()); err != nil {
 		return err
 	}

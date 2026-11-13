@@ -21,6 +21,7 @@ import (
 	"ssh-manager-mcp/internal/webuiaccess"
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuitopology"
 )
 
 func newIntegrationStore(t *testing.T) *store.Store {
@@ -79,6 +80,9 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		Shares: FromClientSnapshot(func(string) (*store.Snapshot, error) {
 			return snapshot, nil
 		}),
+		Topology: webuitopology.FromClientSnapshot(func(string) (*store.Snapshot, error) {
+			return snapshot, nil
+		}),
 		Port: 18088,
 	})
 	if err != nil {
@@ -117,8 +121,10 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		}
 	}
 	if strings.Contains(detail, "db-1") || strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") ||
+		strings.Contains(detail, "桌面手动添加") ||
 		strings.Contains(detail, "可挂载范围勾选清单") || strings.Contains(detail, "预览可挂载范围变更") ||
 		strings.Contains(detail, "现场运维") || strings.Contains(detail, "现场探测") ||
+		strings.Contains(detail, "单台卸载") ||
 		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
 		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
 	}
@@ -128,6 +134,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		"/ui/shares/new", "/ui/shares/" + datasetsID + "/edit", "/ui/shares/" + datasetsID + "/delete",
 		"/ui/shares/" + datasetsID + "/check", "/ui/shares/" + datasetsID + "/mount",
 		"/ui/shares/" + datasetsID + "/task/missing",
+		"/ui/shares/" + datasetsID + "/unmount",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {
@@ -136,6 +143,16 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		if resp.StatusCode != http.StatusNotFound {
 			t.Fatalf("客户端写路由 %s 不应存在，状态码=%d：\n%s", target, resp.StatusCode, respBody)
 		}
+	}
+	unmountPage := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/unmount?server="+linuxID, nil)
+	unmountBody := body(t, unmountPage)
+	if unmountPage.StatusCode != http.StatusNotFound || strings.Contains(unmountBody, "确认卸载") {
+		t.Fatalf("客户端不应提供单台卸载页，状态码=%d：\n%s", unmountPage.StatusCode, unmountBody)
+	}
+	guide := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/desktop", nil)
+	guideBody := body(t, guide)
+	if guide.StatusCode != http.StatusNotFound || strings.Contains(guideBody, "桌面手动添加") {
+		t.Fatalf("客户端不应提供桌面手动添加引导，状态码=%d：\n%s", guide.StatusCode, guideBody)
 	}
 }
 
@@ -180,25 +197,35 @@ func openStoreForTest(st *store.Store) func() (*store.Store, func(), error) {
 }
 
 func newIntegrationHandler(t *testing.T, st *store.Store, remoteTasks ...webui.ShareRemoteTasks) sessionHandler {
+	return startIntegrationHandler(t, st, func(config *webui.Config) {
+		if len(remoteTasks) > 0 {
+			config.SharesRemoteTasks = remoteTasks[0]
+		}
+	})
+}
+
+func startIntegrationHandler(
+	t *testing.T, st *store.Store, configure func(*webui.Config),
+) sessionHandler {
 	t.Helper()
-	var shareRemoteTasks webui.ShareRemoteTasks
-	if len(remoteTasks) > 0 {
-		shareRemoteTasks = remoteTasks[0]
-	}
-	handler, startup, err := webui.New(webui.Config{
+	config := webui.Config{
 		Role: webui.RoleStandalone,
 		Servers: func() webui.ServerSource {
 			return webuiservers.FromManager(servermanage.New(st))
 		}(),
-		ServerWriter:      webuiservers.WriterFromManager(servermanage.New(st)),
-		Access:            webuiaccess.FromManager(access.New(st)),
-		Secrets:           webuisecrets.FromManager(secretmanage.New(st)),
-		SecretsWriter:     webuisecrets.WriterFromManager(secretmanage.New(st)),
-		Shares:            FromStore(openStoreForTest(st)),
-		SharesWriter:      WriterFromStore(openStoreForTest(st)),
-		SharesRemoteTasks: shareRemoteTasks,
-		Port:              18086,
-	})
+		ServerWriter:  webuiservers.WriterFromManager(servermanage.New(st)),
+		Access:        webuiaccess.FromManager(access.New(st)),
+		Secrets:       webuisecrets.FromManager(secretmanage.New(st)),
+		SecretsWriter: webuisecrets.WriterFromManager(secretmanage.New(st)),
+		Shares:        FromStore(openStoreForTest(st)),
+		SharesWriter:  WriterFromStore(openStoreForTest(st)),
+		Topology:      webuitopology.FromStore(st),
+		Port:          18086,
+	}
+	if configure != nil {
+		configure(&config)
+	}
+	handler, startup, err := webui.New(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -569,6 +596,117 @@ func TestShareDetailShowsRegistrationFieldsWithoutSecretValue(t *testing.T) {
 	}
 }
 
+// TestShareDesktopGuideShowsStepsWithoutPassword 走共享存储详情页的公开
+// HTTP 接口验证桌面手动添加引导：推荐地址来自共同物理局域网，Windows 与
+// macOS 步骤完整，页面没有任何共享密码入口。
+func TestShareDesktopGuideShowsStepsWithoutPassword(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	shareID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	passwordValue := `<密码>&'"不回显`
+	if err := st.SetSecretValue("NAS_MOUNT_PASSWORD", []byte(passwordValue), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "虚拟网", Type: models.NetworkVirtual,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("NAS", "家A局域网", "192.168.1.10"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("NAS", "虚拟网", "100.64.0.10"); err != nil {
+		t.Fatal(err)
+	}
+	desktop, err := st.AddDevice("我的电脑", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("我的电脑", "家A局域网", "192.168.1.20"); err != nil {
+		t.Fatal(err)
+	}
+	cloudDesktop, err := st.AddDevice("云电脑", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newIntegrationHandler(t, st)
+
+	detailBody := body(t, h.do(http.MethodGet, "/ui/shares/"+shareID, nil))
+	if !strings.Contains(detailBody, `href="/ui/shares/`+shareID+`/desktop"`) ||
+		!strings.Contains(detailBody, "桌面手动添加") {
+		t.Fatalf("共享存储详情页应提供桌面手动添加入口：\n%s", detailBody)
+	}
+
+	page := h.do(http.MethodGet, "/ui/shares/"+shareID+"/desktop?device="+desktop.ID, nil)
+	pageBody := body(t, page)
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("桌面手动添加引导状态码 = %d，页面：\n%s", page.StatusCode, pageBody)
+	}
+	for _, want := range []string{
+		"桌面手动添加", "这台电脑是拓扑里哪台设备", "我的电脑", "这台电脑不在拓扑里",
+		"推荐地址", "192.168.1.10", "家A局域网",
+		"Windows", "Z:", `\\192.168.1.10\datasets`,
+		`\\192.168.1.10\datasets\tmp`,
+		`net use Z: \\192.168.1.10\datasets /user:mount-user * /persistent:yes`,
+		"资源管理器", "映射网络驱动器", "macOS", `smb://192.168.1.10/datasets`, "/Volumes/datasets",
+		"笔记本更换网络后，映射可能失效", "请输入你自己保存在密码管理器里的共享密码",
+	} {
+		if !strings.Contains(pageBody, want) {
+			t.Fatalf("桌面手动添加引导缺少 %q：\n%s", want, pageBody)
+		}
+	}
+	if strings.Contains(pageBody, "NAS_MOUNT_PASSWORD-value-不回显") ||
+		strings.Contains(pageBody, passwordValue) ||
+		strings.Contains(pageBody, "显示密码") || strings.Contains(pageBody, "复制密码") ||
+		strings.Contains(pageBody, "下载密码") || strings.Contains(pageBody, "下载脚本") ||
+		strings.Contains(pageBody, `type="password"`) {
+		t.Fatalf("桌面手动添加引导不得显示、复制或下载共享密码：\n%s", pageBody)
+	}
+
+	notInTopology := body(t, h.do(http.MethodGet, "/ui/shares/"+shareID+"/desktop?device=none", nil))
+	for _, want := range []string{
+		"这台电脑不在拓扑里", "100.64.0.10", "虚拟网", "192.168.1.10", "家A局域网",
+	} {
+		if !strings.Contains(notInTopology, want) {
+			t.Fatalf("电脑不在拓扑里时引导缺少 %q：\n%s", want, notInTopology)
+		}
+	}
+	if strings.Contains(notInTopology, "<h2>推荐地址</h2>") {
+		t.Fatalf("电脑不在拓扑里时不得显示推荐地址区块：\n%s", notInTopology)
+	}
+	if strings.Contains(notInTopology, passwordValue) {
+		t.Fatalf("电脑不在拓扑里的引导不得显示共享密码：\n%s", notInTopology)
+	}
+
+	noCommon := body(t, h.do(
+		http.MethodGet, "/ui/shares/"+shareID+"/desktop?device="+cloudDesktop.ID, nil,
+	))
+	if !strings.Contains(noCommon, "这台电脑与共享存储提供方设备没有共同网络，因此不给出推荐地址。") {
+		t.Fatalf("没有共同网络时引导应说明原因：\n%s", noCommon)
+	}
+	if strings.Contains(noCommon, "<h2>推荐地址</h2>") {
+		t.Fatalf("没有共同网络时不得显示推荐地址区块：\n%s", noCommon)
+	}
+	if strings.Contains(noCommon, passwordValue) {
+		t.Fatalf("没有共同网络的引导不得显示共享密码：\n%s", noCommon)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{Source: store.AuditSourceWebUI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("只读引导不应写 Web UI 审计：%+v", rows)
+	}
+}
+
 func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	st := newIntegrationStore(t)
 	mustServer(t, st, "linux-web", models.ShellPOSIX)
@@ -806,6 +944,7 @@ func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) aut
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
 		Shares:                 FromStore(openStoreForTest(st)),
 		SharesWriter:           WriterFromStore(openStoreForTest(st)),
+		Topology:               webuitopology.FromStore(st),
 		Auth:                   auth,
 		AllowedHosts:           []string{"127.0.0.1"},
 		CertificateFingerprint: "sha256:0123456789abcdef",
@@ -910,6 +1049,16 @@ func TestAuthorityShareDeleteRequiresRecentReverify(t *testing.T) {
 	previewBody := body(t, preview)
 	if preview.StatusCode != http.StatusOK || !strings.Contains(previewBody, "只删除登记，不会去服务器上卸载") {
 		t.Fatalf("权威端删除预览状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	detail := h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil)
+	detailBody := body(t, detail)
+	if detail.StatusCode != http.StatusOK || !strings.Contains(detailBody, "打开桌面手动添加引导") {
+		t.Fatalf("权威端共享存储详情应提供桌面手动添加入口，状态码=%d：\n%s", detail.StatusCode, detailBody)
+	}
+	guide := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/desktop?device=none", nil)
+	guideBody := body(t, guide)
+	if guide.StatusCode != http.StatusOK || !strings.Contains(guideBody, "桌面手动添加 datasets") {
+		t.Fatalf("权威端应提供桌面手动添加引导，状态码=%d：\n%s", guide.StatusCode, guideBody)
 	}
 
 	now = now.Add(6 * time.Minute)
