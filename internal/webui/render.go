@@ -42,6 +42,8 @@ type pageData struct {
 	NextSteps                         []NextStep
 	AttentionFilter                   bool
 	ServerDetail                      *ServerDetailView
+	ServerDetailNotice                string
+	ServerDetailNoticeKind            string
 	ServerEdit                        *serverEditView
 	ServerDeletePreview               *ServerDeletePreviewView
 	ServerDeleteNotice                string

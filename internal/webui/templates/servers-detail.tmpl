@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="server-detail">
 <h1>{{.ServerDetail.Name}}</h1>
+{{if .ServerDetailNotice}}<div class="notice notice-{{or .ServerDetailNoticeKind "error"}}"><p>{{.ServerDetailNotice}}</p></div>{{end}}
 <dl class="detail-list">
 <dt>标识符</dt><dd>{{.ServerDetail.ID}}</dd>
 <dt>连接</dt><dd>{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</dd>
@@ -20,6 +21,39 @@
 <dt>注意原因</dt><dd>{{if .ServerDetail.AttentionReasons}}{{joinReasons .ServerDetail.AttentionReasons}}{{else}}无{{end}}</dd>
 <dt>修订号</dt><dd>{{.ServerDetail.Revision}}</dd>
 </dl>
+{{if .ServerDetail.ShowHostKeyAnchor}}
+<section aria-labelledby="server-hostkey-anchor-heading">
+<h2 id="server-hostkey-anchor-heading">主机密钥锚</h2>
+{{if .ServerDetail.HostKeyAnchor}}
+<dl class="detail-list">
+<dt>主机密钥指纹</dt><dd>{{.ServerDetail.HostKeyAnchor.Fingerprint}}</dd>
+<dt>来源</dt><dd>{{.ServerDetail.HostKeyAnchor.SourceLabel}}</dd>
+<dt>转发设备</dt><dd>{{or .ServerDetail.HostKeyAnchor.Device "-"}}</dd>
+<dt>学到锚的地址</dt><dd>{{or .ServerDetail.HostKeyAnchor.HandshakeAddr "-"}}</dd>
+<dt>锚定时间</dt><dd>{{formatTime .ServerDetail.HostKeyAnchor.PinnedAt}}</dd>
+</dl>
+{{else}}
+<p>尚未锚定。首次连接即信任或锚定转发会记录这台服务器条目的主机密钥。</p>
+{{end}}
+{{if .Caps.CanWrite}}
+<div class="server-hostkey-actions">
+<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/hostkey-pin" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="server-hostkey-fingerprint">新主机密钥指纹（SHA256 开头的完整指纹）</label>
+<input type="text" id="server-hostkey-fingerprint" name="fingerprint" placeholder="SHA256:…" required>
+<button type="submit">{{if .ServerDetail.HostKeyAnchor}}覆盖主机密钥锚{{else}}锚定主机密钥{{end}}</button>
+</form>
+{{if .ServerDetail.HostKeyAnchor}}
+<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/hostkey-clear" class="inline-form confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label class="confirm-choice"><input type="checkbox" name="confirm" value="1" required>确认删除主机密钥锚</label>
+<button type="submit" class="danger">删除主机密钥锚</button>
+</form>
+{{end}}
+</div>
+{{end}}
+</section>
+{{end}}
 <section aria-labelledby="server-secrets-heading">
 <h2 id="server-secrets-heading">机密项</h2>
 {{if not .Caps.CanWrite}}<p class="readonly-notice">仅显示本客户端可用的部分，修改请到权威端。</p>{{end}}

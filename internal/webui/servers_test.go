@@ -208,6 +208,14 @@ type stubServerWriter struct {
 	anchorCopied   bool
 	anchorFrom     string
 	anchorConflict bool
+	pinWrites      []stubHostKeyWrite
+	clearWrites    []string
+}
+
+type stubHostKeyWrite struct {
+	id          string
+	fingerprint string
+	source      ServerWriteSource
 }
 
 func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error) {
@@ -309,6 +317,16 @@ func (w *stubServerWriter) CompleteServer(id string, form ServerCompleteForm, so
 		return nil, w.completeErr
 	}
 	return &ServerCompleteResultView{Detail: &ServerDetailView{ID: id, Name: "web", Role: form.RoleValue()}}, nil
+}
+
+func (w *stubServerWriter) ReplaceHostKeyPin(id, fingerprint string, force bool, source ServerWriteSource) error {
+	w.pinWrites = append(w.pinWrites, stubHostKeyWrite{id: id, fingerprint: fingerprint, source: source})
+	return nil
+}
+
+func (w *stubServerWriter) ClearHostKeyPin(id string, source ServerWriteSource) error {
+	w.clearWrites = append(w.clearWrites, id)
+	return nil
 }
 
 // newServersTestHandler 构造带可写来源的单机 Web UI，并完成启动令牌换会话。

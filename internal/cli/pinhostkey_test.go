@@ -13,6 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -470,5 +471,53 @@ func TestPinHostkey_FlagConflicts(t *testing.T) {
 		if n := len(pinAuditRows(t, mk, action)); n != 0 {
 			t.Fatalf("conflict refusals must not audit %s, got %d rows", action, n)
 		}
+	}
+}
+
+// TestPinHostkeyListMatchesWebUIAnchorWrites：Web UI 详情页的锚覆盖与删除走
+// 服务器管理模块的同一份存储写入口；pin-hostkey --list 的输出必须与页面背
+// 后的数据一致。
+func TestPinHostkeyListMatchesWebUIAnchorWrites(t *testing.T) {
+	_, mk := withCliStoreEnv(t)
+	seedPinServers(t, mk, models.Server{Name: "alpha", Host: "192.0.2.50", Port: 22, User: "u"})
+	_, fp := genHostKey(t)
+
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := servermanage.New(st)
+	found, err := manager.ReplaceHostKeyPin("alpha", fp, false, servermanage.WebUISource("127.0.0.1:12345"))
+	if err != nil || !found {
+		t.Fatalf("Web UI 覆盖锚失败：found=%t err=%v", found, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := runCli(t, "servers", "pin-hostkey", "--list")
+	for _, want := range []string{"entry=alpha", "fp=" + fp, "source=manual", "handshake=-"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("--list 应与 Web UI 覆盖结果一致，缺少 %q：\n%s", want, out)
+		}
+	}
+	rows := pinAuditRows(t, mk, "pin-manual")
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI {
+		t.Fatalf("Web UI 覆盖审计应标记 Web UI 来源：%+v", rows)
+	}
+
+	st, err = store.Open(os.Getenv("SSHMGR_STORE"), mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, err = servermanage.New(st).ClearHostKeyPin("alpha", servermanage.WebUISource("127.0.0.1:12345"))
+	if err != nil || !found {
+		t.Fatalf("Web UI 删除锚失败：found=%t err=%v", found, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out = runCli(t, "servers", "pin-hostkey", "--list")
+	if !strings.Contains(out, "no pins recorded") || strings.Contains(out, fp) {
+		t.Fatalf("Web UI 删除后 --list 不应再列出这把锚：\n%s", out)
 	}
 }
