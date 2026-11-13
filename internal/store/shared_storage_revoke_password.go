@@ -85,8 +85,8 @@ func (s *Store) RevokeSharedStorageMountAndPassword(
 	}
 	if _, err := tx.Exec(`
 		UPDATE shared_storages
-		   SET version=version-1, change_note='', updated_at=?
-		 WHERE password_secret_id=?`, at.Unix(), secretID,
+		   SET version=version-1, change_note=?, updated_at=?
+		WHERE password_secret_id=?`, sharedStorageRevokeChangeNote, at.Unix(), secretID,
 	); err != nil {
 		return nil, err
 	}
@@ -109,10 +109,13 @@ func (s *Store) RevokeSharedStorageMountAndPassword(
 	}, source); err != nil {
 		return nil, err
 	}
-	if err := writeAuditTx(tx, OwnerAuditRowAt(at, "share-revoke", map[string]any{
+	auditRow := OwnerAuditRowAt(at, "share-revoke", map[string]any{
 		"share": loaded.Name, "server": serverName, "version": loaded.Version,
 		"unmount": unmount, "force": force, "password_changed": true,
-	})); err != nil {
+	})
+	auditRow.Source = source.kind
+	auditRow.SourceIP = source.address
+	if err := writeAuditTx(tx, auditRow); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {

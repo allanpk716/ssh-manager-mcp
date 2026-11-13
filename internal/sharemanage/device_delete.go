@@ -76,7 +76,7 @@ func (m *Manager) DeleteDeviceCascading(
 				skippedCleanupCommands = append(skippedCleanupCommands,
 					fmt.Sprintf("shares unmount %s %s", share.Name, mountable.Name))
 				_ = m.writeRevokeRemoteAudit(mountable.Name, share.Name, item.Version,
-					true, false, item.Result, true)
+					true, false, item.Result, true, CLISource())
 				result.Results = append(result.Results, item)
 				continue
 			}
@@ -101,7 +101,7 @@ func (m *Manager) DeleteDeviceCascading(
 				item.Failed = true
 			}
 			_ = m.writeRevokeRemoteAudit(mountable.Name, share.Name, item.Version,
-				true, false, item.Result, item.Failed)
+				true, false, item.Result, item.Failed, CLISource())
 			result.Results = append(result.Results, item)
 		}
 	}

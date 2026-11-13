@@ -1,6 +1,26 @@
 {{define "content"}}
 <section class="share-revoke">
 <h1>撤销授权 {{.ShareRevoke.Share.Name}} · {{.ShareRevoke.Server.Name}}</h1>
+{{if .ShareRevoke.Task}}
+{{if eq .ShareRevoke.Task.State "running"}}<h2>撤销授权进行中</h2>{{else if eq .ShareRevoke.Task.State "error"}}<h2>撤销授权失败</h2>{{else}}<h2>撤销授权结果</h2>{{end}}
+<section{{if eq .ShareRevoke.Task.State "running"}} id="share-revoke-task" hx-get="{{.ShareRevoke.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+{{if .ShareRevoke.Task.FailureMessage}}<div class="notice notice-error"><p>{{.ShareRevoke.Task.FailureMessage}}</p></div>{{end}}
+{{if and .ShareRevoke.Task.Result (eq .ShareRevoke.Task.Result.Result "ssh-error")}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；登记变更已保留，可用「检查残留」兜底检查这台服务器。</p></div>{{end}}
+{{if .ShareRevoke.Task.Result}}
+<dl class="detail-list">
+<div><dt>结果</dt><dd>{{shareRevokeResultLabel .ShareRevoke.Task.Result.Result}}</dd></div>
+<div><dt>服务器条目</dt><dd>{{.ShareRevoke.Task.ServerName}}</dd></div>
+<div><dt>共享存储版本号</dt><dd>{{.ShareRevoke.Task.Result.Version}}</dd></div>
+</dl>
+{{if eq .ShareRevoke.Task.Result.Result "success"}}
+<div class="operation-result"><p>共享已从服务器撤销；{{if .ShareRevoke.Windows}}本次只修改登记。{{else if .ShareRevoke.Task.Result.Unmount}}远端持久配置已删除，挂载已卸载。{{else}}远端持久配置已删除，现有挂载保留。{{end}}</p></div>
+{{end}}
+{{if .ShareRevoke.Task.Result.Notices}}<div class="notice notice-warning"><ul>{{range .ShareRevoke.Task.Result.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{end}}
+</section>
+{{else if .ShareRevoke.TaskInvalid}}
+<div class="notice notice-warning"><p>撤销授权任务结果已失效（进程重启或任务被清理）；如需继续，请重新确认并发起。</p></div>
+{{else}}
 <div class="operation-refusal">
 <p>确认后会把这台服务器移出可挂载范围：共享存储版本号将加一，并产生「共享已从服务器撤销」的变更提示。</p>
 {{if .ShareRevoke.Windows}}
@@ -24,5 +44,6 @@
 <button type="submit">确认撤销授权</button>
 <a class="button-link" href="/ui/shares/{{.ShareRevoke.Share.ID}}">取消</a>
 </form>
+{{end}}
 </section>
 {{end}}

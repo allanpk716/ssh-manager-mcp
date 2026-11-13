@@ -41,6 +41,16 @@ func WebUISource(addr string) Source {
 	return Source{kind: store.AuditSourceWebUI, addr: addr}
 }
 
+func (source Source) storeSource() store.WriteSource {
+	if source.kind == store.AuditSourceWebUI {
+		return store.WebUISource(source.addr)
+	}
+	if source.kind == "" {
+		return store.CLISource()
+	}
+	return store.CLISource()
+}
+
 // New 返回挂在一个已解锁可写存储上的共享存储管理模块。
 func New(st *store.Store) *Manager {
 	return &Manager{store: st, mounter: &sharemount.Service{Store: st}}

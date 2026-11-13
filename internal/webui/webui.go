@@ -136,6 +136,9 @@ type Config struct {
 	// ShareUnmountRunner 启动并读取共享存储单台卸载任务。单机与权威端提
 	// 供；客户端不提供，卸载路由不存在。
 	ShareUnmountRunner ShareUnmountRunner
+	// ShareRevokeRunner 启动并读取共享存储单台撤销授权任务。单机与权
+	// 威端提供；客户端不提供，撤销授权路由不存在。
+	ShareRevokeRunner ShareRevokeRunner
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
@@ -317,7 +320,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSharesArea = cfg.Shares != nil
 	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
 	caps.CanUnmountShares = cfg.Shares != nil && cfg.ShareUnmountRunner != nil && cfg.Role != RoleClient
-	caps.CanRevokeShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
+	caps.CanRevokeShares = cfg.Shares != nil && cfg.ShareRevokeRunner != nil && cfg.Role != RoleClient
 	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil

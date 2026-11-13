@@ -2,8 +2,12 @@ package webuishares
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
+
+	"ssh-manager-mcp/internal/store"
 )
 
 func TestShareRevokeConfirmationExplainsRegistrationAndRemoteCleanup(t *testing.T) {
@@ -11,7 +15,7 @@ func TestShareRevokeConfirmationExplainsRegistrationAndRemoteCleanup(t *testing.
 
 	detail := body(t, fixture.handler.do(http.MethodGet, "/ui/shares/"+fixture.shareID, nil))
 	for _, want := range []string{
-		"撤销授权", `href="`+fixture.revokePath(fixture.linuxID)+`"`,
+		"撤销授权", `href="` + fixture.revokePath(fixture.linuxID) + `"`,
 	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("共享存储详情页的撤销授权区域缺少 %q：\n%s", want, detail)
@@ -41,7 +45,83 @@ func TestShareRevokeConfirmationExplainsRegistrationAndRemoteCleanup(t *testing.
 	}
 }
 
+func TestShareRevokeWithUnmountSucceedsAndAuditsWebUISource(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"server_id":  {fixture.linuxID},
+		"unmount":    {"1"},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动撤销授权任务状态码 = %d：\n%s", post.StatusCode, body(t, post))
+	}
+	taskPath := post.Header.Get("Location")
+	if !strings.Contains(taskPath, "task=") {
+		t.Fatalf("启动撤销授权任务应跳转到任务页：%s", taskPath)
+	}
+	page := waitUntilRevokeDone(t, fixture.handler, taskPath)
+	for _, want := range []string{
+		"撤销授权完成", "共享已从服务器撤销", "共享存储版本号", "2",
+		"远端持久配置已删除，挂载已卸载",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("撤销授权结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{
+		"DATASETS_MOUNT_PASSWORD-value-不回显", "mount-password", "login-pw", "sudo-pw", "192.0.2.10",
+	} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("撤销授权结果页泄露 %q：\n%s", forbidden, page)
+		}
+	}
+
+	share, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != 2 || share.ChangeNote != "共享已从服务器撤销" ||
+		len(share.MountableServers) != 1 || share.MountableServers[0].Name != "windows-web" {
+		t.Fatalf("撤销授权后的登记不正确：%+v", share)
+	}
+	state := fixture.linux.State()
+	if state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("撤销授权后的远端状态不正确：%+v", state)
+	}
+	for _, action := range []string{"secret-disallow", "share-revoke", "share-revoke-remote"} {
+		rows, err := fixture.store.QueryAudit(store.AuditFilter{
+			OwnerOnly: true, Actions: []string{action},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
+			rows[0].SourceIP != "192.0.2.1" || rows[0].Status != "ok" {
+			t.Fatalf("撤销授权审计 %s 不正确：%+v", action, rows)
+		}
+	}
+}
+
+func waitUntilRevokeDone(t *testing.T, h sessionHandler, taskPath string) string {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		resp := h.do(http.MethodGet, taskPath, nil)
+		page := body(t, resp)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("撤销授权任务页状态码 = %d：\n%s", resp.StatusCode, page)
+		}
+		if !strings.Contains(page, "撤销授权进行中") {
+			return page
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("撤销授权任务超时未完成：\n%s", page)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func (f *unmountFixture) revokePath(serverID string) string {
 	return "/ui/shares/" + f.shareID + "/revoke?server=" + serverID
 }
-

@@ -213,7 +213,7 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	case "revoke":
-		if h.caps.CanRevokeShares {
+		if h.cfg.ShareRevokeRunner != nil {
 			h.handleShareRevoke(w, r, identifier)
 			return
 		}

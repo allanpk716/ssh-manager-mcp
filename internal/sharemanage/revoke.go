@@ -22,6 +22,8 @@ type RevokeRequest struct {
 	// NewPassword 为 nil 表示不换密码；非空时与移出可挂载范围在同一
 	// 事务里提交，绝不进入结构化结果。
 	NewPassword []byte
+	// Source 标记这次撤销从哪类入口发起；零值按命令行来源处理。
+	Source Source
 }
 
 // RevokeResult 是撤销登记与远端清理的安全结论，不包含共享地址、挂载账号
@@ -78,14 +80,18 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 			server.Name, share.Name)
 	}
 
+	source := request.Source
+	if source.kind == "" {
+		source = CLISource()
+	}
 	var revoked *models.SharedStorage
 	if request.NewPassword == nil {
 		revoked, err = m.store.RevokeSharedStorageMount(
-			share.ID, server.ID, request.Unmount, request.Force, store.CLISource())
+			share.ID, server.ID, request.Unmount, request.Force, source.storeSource())
 	} else {
 		revoked, err = m.store.RevokeSharedStorageMountAndPassword(
 			share.ID, server.ID, request.Unmount, request.Force, request.NewPassword,
-			store.CLISource())
+			source.storeSource())
 	}
 	if err != nil {
 		return nil, err
@@ -127,12 +133,12 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 		result.Notices = append(result.Notices,
 			"登记变更已保留；服务器仍可能留有共享存储配置，可用 shares residue 检查、用 shares unmount 清理")
 		_ = m.writeRevokeRemoteAudit(server.Name, revoked.Name, result.Version,
-			request.Unmount, request.Force, result.Result, true)
+			request.Unmount, request.Force, result.Result, true, source)
 		return result, fmt.Errorf(
 			"%w\n登记变更已保留；服务器仍可能留有共享存储配置，可用 shares residue 检查、用 shares unmount 清理", err)
 	}
 	if err := m.writeRevokeRemoteAudit(server.Name, revoked.Name, result.Version,
-		request.Unmount, request.Force, result.Result, false); err != nil {
+		request.Unmount, request.Force, result.Result, false, source); err != nil {
 		return result, err
 	}
 	return result, nil
@@ -160,16 +166,17 @@ func windowsRevokeNotice() string {
 
 func (m *Manager) writeRevokeRemoteAudit(
 	serverName, shareName string, version int64, unmount, force bool,
-	result string, failed bool,
+	result string, failed bool, source Source,
 ) error {
 	summary := map[string]any{
 		"share": shareName, "server": serverName, "result": result,
 		"version": version, "unmount": unmount, "force": force,
 	}
+	row := store.OwnerAuditRow("share-revoke-remote", summary)
+	row.Source = source.kind
+	row.SourceIP = source.addr
 	if failed {
-		row := store.OwnerAuditRow("share-revoke-remote", summary)
 		row.Status = "error"
-		return m.store.WriteAudit(row)
 	}
-	return m.store.WriteOwnerAudit("share-revoke-remote", summary)
+	return m.store.WriteAudit(row)
 }

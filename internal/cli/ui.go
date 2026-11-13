@@ -79,6 +79,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		shareWriter             webui.ShareWriter
 		shareRemoteTasks        webui.ShareRemoteTasks
 		shareUnmountRunner      webui.ShareUnmountRunner
+		shareRevokeRunner       webui.ShareRevokeRunner
 		softwareInventorySource webui.SoftwareInventorySource
 		topologySource          webui.TopologySource
 		topologyWriter          webui.TopologyWriter
@@ -125,6 +126,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		shareWriter = webuishares.WriterFromStore(openStoreForUI)
 		shareRemoteTasks = webuishares.RemoteTasksFromStoreWithContext(openStoreForUI, uiContext)
 		shareUnmountRunner = webuishares.UnmountTasksFromStore(openStoreForUI)
+		shareRevokeRunner = webuishares.RevokeTasksFromStoreWithContext(openStoreForUI, uiContext)
 		softwareInventorySource = standaloneUISoftwareInventoryStore()
 		topologySource = webuitopology.FromStoreOpener(openStoreForUI)
 		topologyWriter = webuitopology.WriterFromOpener(openStoreForUI)
@@ -185,6 +187,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		SharesWriter:           shareWriter,
 		SharesRemoteTasks:      shareRemoteTasks,
 		ShareUnmountRunner:     shareUnmountRunner,
+		ShareRevokeRunner:      shareRevokeRunner,
 		SoftwareInventory:      softwareInventorySource,
 		Topology:               topologySource,
 		TopologyWriter:         topologyWriter,
