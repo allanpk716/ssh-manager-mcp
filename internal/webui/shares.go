@@ -212,6 +212,12 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "reselect":
+		if h.cfg.ShareReselectRunner != nil {
+			h.handleShareReselect(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	case "desktop":
 		if h.cfg.Role != RoleClient && h.cfg.Topology != nil {
 			h.handleShareDesktopGuide(w, r, identifier)
@@ -425,6 +431,9 @@ func (h *handler) shareDetailData(r *http.Request, detail *ShareRow) (pageData, 
 	}
 	if h.caps.CanUnmountShares {
 		data.ShareUnmountEntries = shareUnmountEntries(detail)
+	}
+	if h.caps.CanReselectShares {
+		data.ShareReselectEntries = shareReselectEntries(detail)
 	}
 	return data, nil
 }
