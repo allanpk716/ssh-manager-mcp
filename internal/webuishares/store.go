@@ -3,6 +3,7 @@
 package webuishares
 
 import (
+	"sort"
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
@@ -16,6 +17,123 @@ type storeSource struct {
 
 type writerSource struct {
 	open func() (*store.Store, func(), error)
+}
+
+// SnapshotSource 把客户端本地加密快照里的共享存储无值视图适配给 Web UI。
+// loader 由命令行按当前客户端实例提供；这里不读取任何机密项值。
+func SnapshotSource(load func(instance string) (*store.Snapshot, error)) webui.ShareSource {
+	return snapshotSource{load: load}
+}
+
+// FromClientSnapshot 与 SnapshotSource 相同；命名与服务器页、机密项页的
+// 客户端适配入口保持一致。
+func FromClientSnapshot(load func(instance string) (*store.Snapshot, error)) webui.ShareSource {
+	return SnapshotSource(load)
+}
+
+type snapshotSource struct {
+	load func(instance string) (*store.Snapshot, error)
+}
+
+func (s snapshotSource) ListShares(instance, device, server string) ([]webui.ShareRow, error) {
+	snapshot, err := s.load(instance)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]webui.ShareRow, 0, len(snapshot.SharedStorages))
+	for _, share := range snapshot.SharedStorages {
+		view := snapshotShareRow(snapshot, &share)
+		if device != "" && !strings.EqualFold(view.DeviceName, strings.TrimSpace(device)) {
+			continue
+		}
+		if server != "" && !shareRowHasServer(view, server) {
+			continue
+		}
+		rows = append(rows, view)
+	}
+	return rows, nil
+}
+
+func (s snapshotSource) ShareDetail(instance, identifier string) (*webui.ShareRow, error) {
+	rows, err := s.ListShares(instance, "", "")
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if row.ID == identifier || strings.EqualFold(row.Name, strings.TrimSpace(identifier)) {
+			return &row, nil
+		}
+	}
+	return nil, &webui.ShareNotFoundError{Identifier: identifier}
+}
+
+// snapshotShareRow 把快照里的一处共享存储整理成展示行。可挂载服务器与
+// 挂载密码机密项名字都按快照携带的关联推导；推导不出名字时显示占位说
+// 明，绝不读取值。
+func snapshotShareRow(snapshot *store.Snapshot, share *store.SnapshotSharedStorage) webui.ShareRow {
+	row := webui.ShareRow{
+		ID: share.ID, Name: share.Name, DeviceName: share.DeviceName,
+		Drive: share.Drive, Version: share.Version,
+		MountableServers: snapshotMountableServers(snapshot, share),
+		MountUser:        share.MountUser, Note: share.Note, ChangeNote: share.ChangeNote,
+	}
+	row.MountableCount = len(row.MountableServers)
+	row.PasswordSecret = "（本地快照未包含该机密项名字）"
+	for _, secret := range snapshot.Secrets {
+		if secret.ID == share.PasswordSecretID {
+			row.PasswordSecret = secret.Name
+			break
+		}
+	}
+	for _, directory := range share.Directories {
+		row.Directories = append(row.Directories, webui.ShareDirectoryView{
+			Purpose: directory.Purpose, Path: directory.Path,
+		})
+	}
+	return row
+}
+
+func snapshotMountableServers(snapshot *store.Snapshot, share *store.SnapshotSharedStorage) []webui.ShareServerView {
+	servers := make(map[string]store.SnapshotServer, len(snapshot.Servers))
+	for _, server := range snapshot.Servers {
+		servers[server.ID] = server
+	}
+	views := make([]webui.ShareServerView, 0)
+	for _, allow := range snapshot.SecretAllows {
+		if allow.SecretID != share.PasswordSecretID {
+			continue
+		}
+		server, ok := servers[allow.ServerID]
+		if !ok {
+			continue
+		}
+		shellType := models.NormalizeShellType(server.ShellType)
+		views = append(views, webui.ShareServerView{
+			ID: server.ID, Name: server.Name, DeviceName: snapshotDeviceName(snapshot, server.DeviceID),
+			ShellType:  string(shellType),
+			MountPoint: store.SharedStorageMountPoint(share.Drive, share.Name, shellType),
+		})
+	}
+	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
+	return views
+}
+
+func snapshotDeviceName(snapshot *store.Snapshot, deviceID string) string {
+	for _, device := range snapshot.Devices {
+		if device.ID == deviceID {
+			return device.Name
+		}
+	}
+	return ""
+}
+
+func shareRowHasServer(row webui.ShareRow, server string) bool {
+	for _, candidate := range row.MountableServers {
+		if candidate.ID == server || strings.EqualFold(candidate.Name, strings.TrimSpace(server)) {
+			return true
+		}
+	}
+	return false
 }
 
 // FromStore 把一个按请求打开的共享存储读取来源适配给 Web UI。

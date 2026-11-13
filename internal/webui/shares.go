@@ -226,6 +226,10 @@ func (h *handler) shareDeviceOptions(r *http.Request) ([]string, error) {
 
 func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, identifier string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		if h.cfg.SharesWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "共享存储详情只接受 GET 请求。")
 		return
 	}

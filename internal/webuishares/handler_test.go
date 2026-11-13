@@ -34,6 +34,103 @@ func newIntegrationStore(t *testing.T) *store.Store {
 	return st
 }
 
+type clientServerSource struct {
+	rows []webui.ServerRow
+}
+
+func (s clientServerSource) Servers(string) ([]webui.ServerRow, error) {
+	return s.rows, nil
+}
+
+func (s clientServerSource) ServerList(string, bool) ([]webui.ServerListEntry, error) {
+	return nil, nil
+}
+
+func (s clientServerSource) ServerDetail(string, string) (*webui.ServerDetailView, error) {
+	return nil, nil
+}
+
+func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testing.T) {
+	st := newIntegrationStore(t)
+	linuxID := mustServer(t, st, "linux-web", models.ShellPOSIX)
+	dbID := mustServer(t, st, "db-1", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web", "db-1")
+	seedShare(t, st, "backup", "备份NAS", "BACKUP_PASSWORD", "Y", "db-1")
+	manager := access.New(st)
+	profileID, err := manager.AddProfile("team-a", access.CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.GrantServers("team-a", []string{"linux-web"}, access.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := st.ExportSnapshotForProfile(profileID, true, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, startup, err := webui.New(webui.Config{
+		Role: webui.RoleClient,
+		Servers: clientServerSource{
+			rows: []webui.ServerRow{{ID: linuxID, Name: "linux-web"}, {ID: dbID, Name: "db-1"}},
+		},
+		Shares: FromClientSnapshot(func(string) (*store.Snapshot, error) {
+			return snapshot, nil
+		}),
+		Port: 18088,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, startup.URL("127.0.0.1:18088"), nil)
+	req.Host = "127.0.0.1:18088"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("应签发客户端会话 cookie，实际 %d", len(cookies))
+	}
+	h := sessionHandler{handler: handler, cookie: *cookies[0], host: "127.0.0.1:18088"}
+
+	page := body(t, h.do(http.MethodGet, "/ui/shares/", nil))
+	for _, want := range []string{
+		"共享存储", "datasets", "NAS", "Z", "版本号", "可挂载服务器数量", "1",
+		"只显示本客户端可用的部分，修改请到权威端。",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端共享存储列表缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "backup") || strings.Contains(page, "新增共享存储") {
+		t.Fatalf("客户端列表不得显示范围外共享或写入口：\n%s", page)
+	}
+
+	detail := body(t, h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil))
+	for _, want := range []string{
+		"datasets", "mount-user", "NAS_MOUNT_PASSWORD", "共享存储版本号",
+		"linux-web", "/mnt/sshmgr/datasets",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("客户端共享存储详情缺少 %q：\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "db-1") || strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") ||
+		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
+		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
+	}
+
+	csrf := csrfToken(t, h)
+	writeTargets := []string{
+		"/ui/shares/new", "/ui/shares/" + datasetsID + "/edit", "/ui/shares/" + datasetsID + "/delete",
+	}
+	for _, target := range writeTargets {
+		resp := h.do(http.MethodPost, target, url.Values{"csrf_token": {csrf}})
+		respBody := body(t, resp)
+		if resp.StatusCode != http.StatusNotFound {
+			t.Fatalf("客户端写路由 %s 不应存在，状态码=%d：\n%s", target, resp.StatusCode, respBody)
+		}
+	}
+}
+
 type sessionHandler struct {
 	handler http.Handler
 	cookie  http.Cookie
