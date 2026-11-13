@@ -1,9 +1,11 @@
 package webuishares
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -17,7 +19,7 @@ import (
 // 除后的兜底入口：列表为空仍能从列表页发起全部共享残留检查并查看结果。
 func TestSharesListOffersAllSharesResidueWithoutAnyShare(t *testing.T) {
 	st := newIntegrationStore(t)
-	mustServer(t, st, "linux-offline", models.ShellPOSIX)
+	mustImmediatelyClosedServer(t, st, "linux-offline")
 	h := startIntegrationHandler(t, st, func(config *webui.Config) {
 		config.ShareResidueRunner = ResidueTasksFromStore(openStoreForTest(st))
 		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
@@ -48,6 +50,44 @@ func TestSharesListOffersAllSharesResidueWithoutAnyShare(t *testing.T) {
 			t.Fatalf("全部共享残留检查页缺少 %q：\n%s", want, page)
 		}
 	}
+}
+
+// mustImmediatelyClosedServer 登记一台回环地址上已经关闭的端口。相比
+// TEST-NET 地址，连接会立即被操作系统拒绝，测试不依赖外部网络丢包，也
+// 不需要等默认 SSH 连接超时。
+func mustImmediatelyClosedServer(t *testing.T, st *store.Store, name string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, portText, splitErr := net.SplitHostPort(listener.Addr().String())
+	if closeErr := listener.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if splitErr != nil {
+		t.Fatal(splitErr)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialID, err := st.SetCredential(&models.Credential{
+		Type:   models.CredPassword,
+		Secret: []byte("server-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServer(&models.Server{
+		Name: name, Host: host, Port: port, User: "owner",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+		ShellType: models.ShellPOSIX,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return added
 }
 
 // TestSharesListAllSharesResidueCleanupRunsFromListEntry 覆盖列表入口发起

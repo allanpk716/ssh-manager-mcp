@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func TestBackupStatusJSON(t *testing.T) {
 	if payload.Config.Dir != backupDir || payload.Config.Keep != 5 ||
 		payload.Config.PassphraseFile != passFile || payload.Total != 1 ||
 		payload.Latest != "vault-20260102-000000.sme" || payload.Stale ||
-		payload.Verify != nil || payload.TaskProbed {
+		payload.Verify != nil || payload.TaskProbed != (runtime.GOOS == "windows") {
 		t.Fatalf("status --json 内容不符：%s", out)
 	}
 }

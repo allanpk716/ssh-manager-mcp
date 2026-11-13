@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -207,7 +208,15 @@ func (environment *relayShareFallbackEnv) serveCommand(
 }
 
 func (environment *relayShareFallbackEnv) hostPath(remotePath string) string {
-	return filepath.Join(environment.root, filepath.FromSlash(strings.TrimPrefix(remotePath, "/")))
+	relative := strings.TrimPrefix(remotePath, "/")
+	if runtime.GOOS == "windows" {
+		// Windows 盘符路径在虚拟文件系统内只是命名空间前缀；真实测试
+		// 文件位于临时根目录下。
+		if volume := filepath.VolumeName(relative); volume != "" {
+			relative = strings.TrimPrefix(relative[len(volume):], "/")
+		}
+	}
+	return filepath.Join(environment.root, filepath.FromSlash(relative))
 }
 
 func (fake *relayShareFallbackFake) recordedCommands() []string {

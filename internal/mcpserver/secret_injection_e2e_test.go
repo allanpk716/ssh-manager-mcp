@@ -24,6 +24,37 @@ import (
 	"ssh-manager-mcp/internal/testsshd"
 )
 
+// runRecordedPOSIXCommand 用测试主机可用的 POSIX 兼容 shell 执行被记录
+// 的远端命令。Windows 测试主机没有 /bin/sh，但持续集成镜像的 Git Bash
+// 提供 sh.exe；其他系统继续用 /bin/sh。
+func runRecordedPOSIXCommand(command string, stdinBytes []byte) (string, string, int) {
+	var stdout, stderr bytes.Buffer
+	exitCode := runRecordedPOSIXCommandStream(command, stdinBytes, &stdout, &stderr)
+	return stdout.String(), stderr.String(), exitCode
+}
+
+func runRecordedPOSIXCommandStream(command string, stdinBytes []byte, stdout, stderr io.Writer) int {
+	shell := "/bin/sh"
+	if runtime.GOOS == "windows" {
+		shell = "sh"
+		if _, err := exec.LookPath(shell); err != nil {
+			shell = "bash"
+		}
+	}
+	localShell := exec.Command(shell, "-c", command)
+	localShell.Stdin = bytes.NewReader(stdinBytes)
+	localShell.Stdout = stdout
+	localShell.Stderr = stderr
+	if err := localShell.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode()
+		}
+		_, _ = io.WriteString(stderr, err.Error())
+		return 1
+	}
+	return 0
+}
+
 // TestSecretEnvironmentInjectionExecCommand covers the main end-to-end seam:
 // the in-memory MCP client calls exec_command against an in-process SSH server,
 // and that server runs the received command with a local POSIX shell. The test
@@ -77,19 +108,7 @@ func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
 			remoteCommand, remoteStdin = command, stdinBytes
 			commandMu.Unlock()
 
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			output := &bytes.Buffer{}
-			errors := &bytes.Buffer{}
-			localShell.Stdout = output
-			localShell.Stderr = errors
-			if err := localShell.Run(); err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					return output.String(), errors.String(), exitErr.ExitCode()
-				}
-				return output.String(), errors.String() + err.Error(), 1
-			}
-			return output.String(), errors.String(), 0
+			return runRecordedPOSIXCommand(command, stdinBytes)
 		},
 	})
 	if err := st.AllowSecrets([]string{"API_TOKEN", "SECOND_TOKEN", "NO_ENV_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -179,18 +198,7 @@ func TestSecretEnvironmentInjectionExecBackground(t *testing.T) {
 			remoteCommand, remoteStdin = command, stdinBytes
 			commandMu.Unlock()
 
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			localShell.Stdout = stdout
-			localShell.Stderr = stderr
-			if err := localShell.Run(); err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					return exitErr.ExitCode()
-				}
-				_, _ = stderr.Write([]byte(err.Error()))
-				return 1
-			}
-			return 0
+			return runRecordedPOSIXCommandStream(command, stdinBytes, stdout, stderr)
 		},
 	})
 	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -312,22 +320,12 @@ func TestSecretEnvironmentInjectionBackgroundSurvivesStoreRevocation(t *testing.
 			callIndex := len(commands) - 1
 			commandMu.Unlock()
 
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			localShell.Stdout = stdout
-			localShell.Stderr = stderr
-			if err := localShell.Run(); err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					return exitErr.ExitCode()
-				}
-				_, _ = stderr.Write([]byte(err.Error()))
-				return 1
-			}
+			exitCode := runRecordedPOSIXCommandStream(command, stdinBytes, stdout, stderr)
 			if callIndex == 0 {
 				close(firstStarted)
 				<-releaseFirst
 			}
-			return 0
+			return exitCode
 		},
 	})
 	defer cleanup()
@@ -888,14 +886,7 @@ func TestSecretEnvironmentInjectionReadFailureWarnsOnlyFailedVariable(t *testing
 			if err != nil {
 				return "", err.Error(), 1
 			}
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			output := &bytes.Buffer{}
-			localShell.Stdout = output
-			if err := localShell.Run(); err != nil {
-				return output.String(), err.Error(), 1
-			}
-			return output.String(), "", 0
+			return runRecordedPOSIXCommand(command, stdinBytes)
 		},
 	})
 	if err := st.AllowSecrets([]string{"GOOD_SECRET", "BAD_SECRET"}, []string{"real"}, store.CLISource()); err != nil {

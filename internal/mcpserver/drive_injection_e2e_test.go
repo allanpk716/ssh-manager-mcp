@@ -1407,9 +1407,23 @@ func TestNetworkDriveInjectionBackgroundNetworkFailureUpdatesAddressCache(t *tes
 	if !strings.Contains(commands[3], `\\100.64.10.10\datasets`) {
 		t.Fatalf("second mapping did not use the next address: %q", commands[3])
 	}
-	endRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
-	if err != nil {
-		t.Fatal(err)
+	// 任务先对外进入终态，终态审计行随后在任务互斥锁外写入。这里等待
+	// 两行都落库，避免轮询任务状态恰好抢在第二条审计写入之前断言。
+	var endRows []store.AuditRow
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		endRows, err = fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(endRows) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("background end audit rows = %#v, want two rows", endRows)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	auditByTask := map[string]store.AuditRow{}
 	for _, row := range endRows {
@@ -1427,7 +1441,7 @@ func TestNetworkDriveInjectionBackgroundNetworkFailureUpdatesAddressCache(t *tes
 func TestNetworkDriveFileTransferAndForwardingDoNotInject(t *testing.T) {
 	fixture := seedNetworkDriveVault(t, nil)
 	localPath := filepath.Join(t.TempDir(), "source.txt")
-	remotePath := filepath.Join(t.TempDir(), "uploaded.txt")
+	remotePath := filepath.ToSlash(filepath.Join(t.TempDir(), "uploaded.txt"))
 	if err := os.WriteFile(localPath, []byte("transfer-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -1474,7 +1488,7 @@ func TestNetworkDriveFileTransferAndForwardingDoNotInject(t *testing.T) {
 	}
 
 	relaySource := filepath.Join(t.TempDir(), "relay-source.txt")
-	relayDestination := filepath.Join(t.TempDir(), "relay-destination.txt")
+	relayDestination := filepath.ToSlash(filepath.Join(t.TempDir(), "relay-destination.txt"))
 	if err := os.WriteFile(relaySource, []byte("relay-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}

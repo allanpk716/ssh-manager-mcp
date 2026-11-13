@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -54,8 +55,11 @@ func TestBackupConfigSetWritesConfigAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var command map[string]any
+	commandErr := json.Unmarshal([]byte(rows[0].Command), &command)
 	if len(rows) != 1 || rows[0].Action != "backup.config" || rows[0].Status != "ok" ||
-		rows[0].Source != store.AuditSourceCLI || !strings.Contains(rows[0].Command, `"dir":"`+newBackupDir+`"`) {
+		rows[0].Source != store.AuditSourceCLI || commandErr != nil ||
+		command["dir"] != newBackupDir || command["keep"] != float64(9) {
 		t.Fatalf("设置备份配置应写命令行来源审计行：%+v", rows)
 	}
 }
