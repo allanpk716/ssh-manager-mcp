@@ -218,6 +218,18 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 			return
 		}
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "residue":
+		if h.cfg.ShareResidueRunner != nil {
+			h.handleShareResidue(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	case "residue-cleanup":
+		if h.cfg.ShareResidueRunner != nil && h.cfg.ShareUnmountRunner != nil {
+			h.handleShareResidueCleanup(w, r, identifier)
+			return
+		}
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	case "desktop":
 		if h.cfg.Role != RoleClient && h.cfg.Topology != nil {
 			h.handleShareDesktopGuide(w, r, identifier)

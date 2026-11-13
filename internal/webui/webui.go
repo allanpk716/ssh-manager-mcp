@@ -139,6 +139,9 @@ type Config struct {
 	// ShareReselectRunner 启动并读取共享存储重选地址任务。单机与权威端
 	// 提供；客户端不提供，重选路由不存在。
 	ShareReselectRunner ShareReselectRunner
+	// ShareResidueRunner 启动并读取共享存储残留检查任务。单机与权威端
+	// 提供；客户端不提供，残留检查路由不存在。
+	ShareResidueRunner ShareResidueRunner
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
@@ -287,6 +290,9 @@ type capabilities struct {
 	// CanReselectShares 控制共享存储详情页的重选地址操作；只有提供重选
 	// 任务视图的可写角色可用。
 	CanReselectShares bool
+	// CanCheckShareResidue 控制共享存储详情页的残留检查；只有提供残留
+	// 检查任务视图的可写角色可用。
+	CanCheckShareResidue bool
 	// CanUseShareDesktopGuide 控制共享存储详情页的桌面手动添加引导；只有
 	// 单机与权威端且提供拓扑来源时可用。
 	CanUseShareDesktopGuide bool
@@ -322,6 +328,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
 	caps.CanUnmountShares = cfg.Shares != nil && cfg.ShareUnmountRunner != nil && cfg.Role != RoleClient
 	caps.CanReselectShares = cfg.Shares != nil && cfg.ShareReselectRunner != nil && cfg.Role != RoleClient
+	caps.CanCheckShareResidue = cfg.Shares != nil && cfg.ShareResidueRunner != nil && cfg.Role != RoleClient
 	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil

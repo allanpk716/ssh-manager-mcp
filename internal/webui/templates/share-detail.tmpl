@@ -60,7 +60,7 @@
 </fieldset>
 </form>
 {{end}}
-{{/* 撤销（#259）与残留检查（#260）在后续票挂载到本页。 */}}
+{{/* 撤销（#259）在后续票挂载到本页。 */}}
 {{if .Caps.CanReselectShares}}
 <section class="share-reselect">
 <h2>重选地址</h2>
@@ -76,6 +76,24 @@
 </tbody>
 </table>
 {{else}}<p>（无）</p>{{end}}
+</section>
+{{end}}
+{{if .Caps.CanCheckShareResidue}}
+<section class="share-residue">
+<h2>残留检查</h2>
+<p>逐台检测不在可挂载范围内却仍留有凭据文件、挂载配置或挂载的服务器；仅有撤销标记属于撤销后的预期状态。</p>
+<div class="inline-form">
+<form method="post" action="/ui/shares/{{.ShareDetail.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="share">
+<button type="submit">检查本共享残留</button>
+</form>
+<form method="post" action="/ui/shares/{{.ShareDetail.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="all">
+<button type="submit">检查全部共享残留</button>
+</form>
+</div>
 </section>
 {{end}}
 {{if .ShareRemoteOperationsAvailable}}
