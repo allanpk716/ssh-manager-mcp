@@ -42,7 +42,7 @@
 {{end}}
 </section>
 {{else if .ShareRevoke.TaskInvalid}}
-<div class="notice notice-warning"><p>撤销授权任务结果已失效（进程重启或任务被清理）；如需继续，请重新确认并发起。</p></div>
+{{template "shareTaskLostNotice" "撤销授权"}}
 {{else}}
 <div class="operation-refusal">
 <p>确认后会把这台服务器移出可挂载范围：共享存储版本号将加一，并产生「共享已从服务器撤销」的变更提示。</p>

@@ -5,8 +5,8 @@
 <dt>发起入口的共享存储</dt><dd>{{.ShareResidue.Share.Name}}</dd>
 {{if .ShareResidue.Task}}<dt>检查范围</dt><dd>{{if .ShareResidue.Task.AllShares}}全部共享{{else}}{{.ShareResidue.Task.ShareName}}{{end}}</dd>{{end}}
 </dl>
-{{if .ShareResidue.TaskInvalid}}<div class="notice notice-warning"><p>残留检查任务结果已失效（进程重启或任务被清理）；如需继续，请重新发起检查。</p></div>{{end}}
-{{if .ShareResidue.CleanupInvalid}}<div class="notice notice-warning"><p>清理任务结果已失效（进程重启或任务被清理）；如需继续，请重新检查后再清理。</p></div>{{end}}
+{{if .ShareResidue.TaskInvalid}}{{template "shareTaskLostNotice" "残留检查"}}{{end}}
+{{if .ShareResidue.CleanupInvalid}}{{template "shareTaskLostNotice" "清理"}}{{end}}
 {{if and .ShareResidue.Task (eq .ShareResidue.Task.State "running")}}
 <div class="notice notice-info"><p>正在逐台只读检测 Linux 与 macOS 服务器，请稍候；页面会自动刷新。</p></div>
 {{else if and .ShareResidue.Task (eq .ShareResidue.Task.State "error")}}

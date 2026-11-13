@@ -314,16 +314,27 @@ func loadPageTemplates() (map[string]parsedPage, error) {
 		return nil, fmt.Errorf("读取内嵌页面模板失败：%w", err)
 	}
 	pages := make(map[string]parsedPage)
+	var sharedPaths []string
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Name() == "layout.tmpl" {
 			continue
 		}
+		if strings.HasPrefix(entry.Name(), "_") {
+			sharedPaths = append(sharedPaths, "templates/"+entry.Name())
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "layout.tmpl" || strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
 		pagePath := "templates/" + entry.Name()
-		fragment, err := template.New(filepath.Base(pagePath)).Funcs(pageFuncs).ParseFS(templateFS, pagePath)
+		fragmentPaths := append([]string{pagePath}, sharedPaths...)
+		fragment, err := template.New(filepath.Base(pagePath)).Funcs(pageFuncs).ParseFS(templateFS, fragmentPaths...)
 		if err != nil {
 			return nil, fmt.Errorf("解析页面片段模板 %s 失败：%w", entry.Name(), err)
 		}
-		full, err := template.New("layout").Funcs(pageFuncs).ParseFS(templateFS, "templates/layout.tmpl", pagePath)
+		fullPaths := append([]string{"templates/layout.tmpl", pagePath}, sharedPaths...)
+		full, err := template.New("layout").Funcs(pageFuncs).ParseFS(templateFS, fullPaths...)
 		if err != nil {
 			return nil, fmt.Errorf("解析整页模板 %s 失败：%w", entry.Name(), err)
 		}

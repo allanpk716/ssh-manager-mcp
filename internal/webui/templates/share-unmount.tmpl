@@ -36,7 +36,7 @@
 </div>
 {{end}}
 {{else}}
-{{if .ShareUnmount.TaskInvalid}}<div class="notice notice-warning"><p>卸载任务结果已失效（进程重启或任务被清理）；如需继续，请重新确认并发起。</p></div>{{end}}
+{{if .ShareUnmount.TaskInvalid}}{{template "shareTaskLostNotice" "卸载"}}{{end}}
 {{if .ShareUnmount.Windows}}
 <div class="operation-refusal"><p>Windows 服务器不能执行共享存储卸载：sshmgr 不在其上留下任何持久改动。</p></div>
 {{else}}
