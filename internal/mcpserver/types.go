@@ -169,7 +169,7 @@ type ExecContextOutput struct {
 // DownloadInput is the download_file tool input.
 type DownloadInput struct {
 	ServerID string `json:"server_id" jsonschema:"server id from list_servers"`
-	Path     string `json:"path" jsonschema:"absolute path of the remote file to download: /dir/file, or a Windows drive path such as C:/dir/file; Windows backslashes such as C:\\dir\\file are accepted and converted to forward slashes"`
+	Path     string `json:"path" jsonschema:"absolute path of the remote file to download: /dir/file; on a Windows server, a Windows drive path such as C:/dir/file or C:\\dir\\file is also accepted and its backslashes are converted to forward slashes"`
 }
 
 // DownloadOutput is the download_file tool output.
@@ -186,7 +186,7 @@ type DownloadOutput struct {
 type UploadInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
 	LocalPath  string `json:"local_path" jsonschema:"absolute local path (on the machine the broker runs on) of the file or directory to push to the server; a directory is uploaded recursively, preserving relative paths"`
-	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server: /dir/file, or a Windows drive path such as C:/dir/file; Windows backslashes such as C:\\dir\\file are accepted and converted to forward slashes; its parent directory is created if it does not exist"`
+	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server: /dir/file; on a Windows server, a Windows drive path such as C:/dir/file or C:\\dir\\file is also accepted and its backslashes are converted to forward slashes; its parent directory is created if it does not exist"`
 }
 
 // UploadOutput is the upload_file tool output.
@@ -205,7 +205,7 @@ type UploadOutput struct {
 type UploadContentInput struct {
 	ServerID   string `json:"server_id" jsonschema:"server id from list_servers"`
 	Content    string `json:"content" jsonschema:"the file content to write (valid UTF-8 text; invalid UTF-8 bytes are replaced with U+FFFD — pass base64 here with encoding=base64 for exact bytes)"`
-	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server: /dir/file, or a Windows drive path such as C:/dir/file; Windows backslashes such as C:\\dir\\file are accepted and converted to forward slashes; its parent directory is created if missing; an existing file is overwritten"`
+	RemotePath string `json:"remote_path" jsonschema:"absolute destination path on the server: /dir/file; on a Windows server, a Windows drive path such as C:/dir/file or C:\\dir\\file is also accepted and its backslashes are converted to forward slashes; its parent directory is created if missing; an existing file is overwritten"`
 	Encoding   string `json:"encoding,omitempty" jsonschema:"how content is encoded: 'text' (default — the JSON-decoded string, written as UTF-8; NOT byte-exact: invalid sequences are already replaced with U+FFFD by JSON decoding) or 'base64' (decode first — exact bytes; SINGLE-LINE standard base64 with padding — CR/LF inside content is rejected). The cap applies to the DECODED byte count"`
 }
 

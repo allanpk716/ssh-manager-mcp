@@ -45,6 +45,13 @@ func (c *Client) Download(ctx context.Context, remotePath string, maxBytes int64
 		}
 	}()
 
+	// 远端大小只用于识别「非空文件读出 0 字节」；取不到时不做核对。/proc
+	// 一类文件报告大小为 0、正在增长的日志读出字节数会大于打开时的大小，
+	// 都不能按大小不符报错。
+	var remoteSize int64
+	if info, statErr := f.Stat(); statErr == nil {
+		remoteSize = info.Size()
+	}
 	_, copyErr := io.Copy(buf, f)
 	res := DownloadResult{Content: buf.buf.String(), Bytes: buf.total, Truncated: buf.truncated}
 	if ctx.Err() != nil {
@@ -52,6 +59,9 @@ func (c *Client) Download(ctx context.Context, remotePath string, maxBytes int64
 	}
 	if copyErr != nil {
 		return res, copyErr
+	}
+	if remoteSize > 0 && buf.total == 0 {
+		return res, fmt.Errorf("download %s: read 0 bytes, remote file size is %d bytes — check the remote path syntax", remotePath, remoteSize)
 	}
 	return res, nil
 }

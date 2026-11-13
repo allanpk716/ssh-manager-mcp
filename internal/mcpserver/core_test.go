@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/models"
@@ -461,26 +462,54 @@ func TestDownloadForProfileTruncatesLargeFile(t *testing.T) {
 func toSlash(p string) string { return filepath.ToSlash(p) }
 
 // TestNormalizeRemotePath 锁定远端路径规范化规则：Linux 和 macOS 的反斜杠
-// 是文件名字符，不能改写；只有盘符绝对路径才统一 Windows 分隔符。
+// 是文件名字符，不能改写；只有 Windows 目标上的盘符绝对路径才统一分隔符。
 func TestNormalizeRemotePath(t *testing.T) {
 	cases := []struct {
-		name string
-		in   string
-		want string
+		name    string
+		in      string
+		windows bool
+		want    string
 	}{
-		{"POSIX path keeps backslash", `/a\b`, `/a\b`},
-		{"uppercase Windows drive uses backslash", `C:\a\b`, `C:/a/b`},
-		{"lowercase Windows drive mixes separators", `c:/a\b`, `c:/a/b`},
-		{"relative path unchanged", `a\b`, `a\b`},
-		{"backslash-rooted path unchanged", `\a`, `\a`},
-		{"drive-relative path unchanged", `C:a`, `C:a`},
+		{"POSIX target keeps POSIX backslash", `/a\b`, false, `/a\b`},
+		{"POSIX target keeps Windows drive", `C:\a\b`, false, `C:\a\b`},
+		{"POSIX target keeps slash-rooted path", `/a/b`, false, `/a/b`},
+		{"Windows target keeps POSIX path", `/a\b`, true, `/a\b`},
+		{"Windows target converts uppercase drive", `C:\a\b`, true, `C:/a/b`},
+		{"Windows target converts mixed separators", `c:/a\b`, true, `c:/a/b`},
+		{"Windows target keeps relative path", `a\b`, true, `a\b`},
+		{"Windows target keeps backslash-rooted path", `\a`, true, `\a`},
+		{"Windows target keeps drive-relative path", `C:a`, true, `C:a`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := normalizeRemotePath(tc.in); got != tc.want {
-				t.Fatalf("normalizeRemotePath(%q) = %q, want %q", tc.in, got, tc.want)
+			if got := normalizeRemotePath(tc.in, tc.windows); got != tc.want {
+				t.Fatalf("normalizeRemotePath(%q, windows=%v) = %q, want %q", tc.in, tc.windows, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestUploadContentKeepsWindowsDrivePathOnPOSIXServer 确认非 Windows 目标
+// 不把盘符路径当作绝对路径；反斜杠必须保持原样进入审计。
+func TestUploadContentKeepsWindowsDrivePathOnPOSIXServer(t *testing.T) {
+	st, profileID, serverID, _ := ucSeed(t)
+	const remotePath = `C:\tmp\agent.txt`
+
+	_, err := UploadContentForProfile(
+		context.Background(), st, "proj-test", profileID, serverID,
+		"content", remotePath, "", 1<<20,
+	)
+	if err == nil || !strings.Contains(err.Error(), "must be an absolute path") {
+		t.Fatalf("POSIX server accepted Windows drive path: err=%v", err)
+	}
+
+	rows, readErr := st.AuditRows(1)
+	if readErr != nil {
+		t.Fatalf("read audit: %v", readErr)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" ||
+		rows[0].Command != "inline 0 bytes -> "+remotePath {
+		t.Fatalf("audit row = %+v, want unmodified path and error status", rows)
 	}
 }
 
@@ -518,7 +547,7 @@ func newWindowsPathToolFixture(t *testing.T, relativeSlashPath string) windowsPa
 		hostPath:       hostPath,
 		store:          newStore(t),
 	}
-	fixture.serverID = seedRealServer(t, fixture.store, "windows-path", addr, hostKey, "")
+	fixture.serverID = seedRealServerShell(t, fixture.store, "windows-path", addr, hostKey, models.ShellPowerShell)
 	fixture.profileID, _ = fixture.store.AddProfile("p")
 	_ = fixture.store.GrantServers(fixture.profileID, []string{fixture.serverID})
 	return fixture
@@ -585,6 +614,131 @@ func TestFileToolsNormalizeWindowsDriveRemotePaths(t *testing.T) {
 		if !seen {
 			t.Fatalf("missing normalized audit command %q; rows=%+v", command, rows)
 		}
+	}
+}
+
+// silentTransferSFTPHandlers 模拟一个有缺陷的 SFTP 服务器：打开操作成
+// 功，非空读或写也返回成功，但实际读到或落盘的字节数为零。
+type silentTransferSFTPHandlers struct {
+	reportedSize int64
+}
+
+func (h *silentTransferSFTPHandlers) Fileread(*sftp.Request) (io.ReaderAt, error) {
+	return emptyReaderAt{}, nil
+}
+
+func (h *silentTransferSFTPHandlers) Filewrite(*sftp.Request) (io.WriterAt, error) {
+	return discardWriterAt{}, nil
+}
+
+func (h *silentTransferSFTPHandlers) Filecmd(request *sftp.Request) error {
+	switch request.Method {
+	case "Mkdir", "Setstat":
+		return nil
+	default:
+		return os.ErrInvalid
+	}
+}
+
+func (h *silentTransferSFTPHandlers) Filelist(request *sftp.Request) (sftp.ListerAt, error) {
+	if request.Filepath == "/" || request.Filepath == "/silent" {
+		return &fileInfoLister{info: fixedFileInfo{name: filepath.Base(request.Filepath), mode: os.ModeDir | 0o755}}, nil
+	}
+	size := int64(0)
+	if request.Filepath == "/silent/download.txt" {
+		size = h.reportedSize
+	}
+	return &fileInfoLister{info: fixedFileInfo{name: filepath.Base(request.Filepath), size: size, mode: 0o644}}, nil
+}
+
+type emptyReaderAt struct{}
+
+func (emptyReaderAt) ReadAt([]byte, int64) (int, error) {
+	return 0, io.EOF
+}
+
+type discardWriterAt struct{}
+
+func (discardWriterAt) WriteAt(p []byte, _ int64) (int, error) {
+	return len(p), nil
+}
+
+type fixedFileInfo struct {
+	name string
+	size int64
+	mode os.FileMode
+}
+
+func (info fixedFileInfo) Name() string       { return info.name }
+func (info fixedFileInfo) Size() int64        { return info.size }
+func (info fixedFileInfo) Mode() os.FileMode  { return info.mode }
+func (info fixedFileInfo) ModTime() time.Time { return time.Unix(0, 0) }
+func (info fixedFileInfo) IsDir() bool        { return info.mode.IsDir() }
+func (info fixedFileInfo) Sys() any           { return nil }
+
+// TestFileToolsRejectSilentZeroByteTransfers 覆盖三个文件工具：读或写非空
+// 内容得到零字节时必须报错，upload_content 的审计状态必须是 error。
+func TestFileToolsRejectSilentZeroByteTransfers(t *testing.T) {
+	handlers := &silentTransferSFTPHandlers{reportedSize: 9}
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw",
+		SFTPHandlers: sftp.Handlers{
+			FileGet: handlers, FilePut: handlers, FileCmd: handlers, FileList: handlers,
+		},
+	})
+	t.Cleanup(cleanup)
+	st := newStore(t)
+	serverID := seedRealServer(t, st, "silent-sftp", addr, hostKey, "")
+	profileID, _ := st.AddProfile("p")
+	_ = st.GrantServers(profileID, []string{serverID})
+	ctx := context.Background()
+
+	_, err := UploadContentForProfile(
+		ctx, st, "proj-test", profileID, serverID, "payload", "/silent/content.txt", "", 1<<20,
+	)
+	if err == nil || !strings.Contains(err.Error(), "server reports 0 bytes, expected 7 bytes") ||
+		!strings.Contains(err.Error(), "check the remote path syntax") {
+		t.Fatalf("upload content error = %v, want zero-byte write mismatch", err)
+	}
+
+	localFile := filepath.Join(t.TempDir(), "source.txt")
+	if writeErr := os.WriteFile(localFile, []byte("uploaded"), 0o644); writeErr != nil {
+		t.Fatalf("write local source: %v", writeErr)
+	}
+	_, err = UploadForProfile(
+		ctx, st, "proj-test", profileID, serverID, localFile, "/silent/uploaded.txt",
+	)
+	if err == nil || !strings.Contains(err.Error(), "server reports 0 bytes, expected 8 bytes") {
+		t.Fatalf("upload file error = %v, want zero-byte write mismatch", err)
+	}
+
+	_, err = DownloadForProfile(ctx, st, "proj-test", profileID, serverID, "/silent/download.txt")
+	if err == nil || !strings.Contains(err.Error(), "read 0 bytes, remote file size is 9 bytes") {
+		t.Fatalf("download error = %v, want zero-byte read mismatch", err)
+	}
+
+	rows, readErr := st.AuditRows(10)
+	if readErr != nil {
+		t.Fatalf("read audit: %v", readErr)
+	}
+	foundContentError := false
+	foundUploadError := false
+	foundDownloadError := false
+	for _, row := range rows {
+		switch {
+		case row.Action == "upload-content" && row.Status == "error" &&
+			row.Command == "inline 7 bytes -> /silent/content.txt":
+			foundContentError = true
+		case row.Action == "upload" && row.Status == "error" &&
+			row.Command == localFile+" -> /silent/uploaded.txt":
+			foundUploadError = true
+		case row.Action == "download" && row.Status == "error" &&
+			row.Command == "/silent/download.txt":
+			foundDownloadError = true
+		}
+	}
+	if !foundContentError || !foundUploadError || !foundDownloadError {
+		t.Fatalf("missing file-tool error audit row; rows=%+v", rows)
 	}
 }
 
@@ -1612,10 +1766,10 @@ func TestUploadContentForProfileParamValidation(t *testing.T) {
 	} else if strings.Contains(err.Error(), "QU!J") {
 		t.Fatalf("invalid base64 error leaks content fragment: %q", err.Error())
 	}
-	// param error PRECEDES the gate: out-of-profile server + bad path → param
-	// error, not denied (spec rev3 §2 ①).
-	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, "not-granted", "x", "rel.txt", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
-		t.Fatalf("param-before-gate: err=%v", err)
+	// The profile gate precedes target-dependent path validation: an
+	// out-of-profile server is denied before its record is read.
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, "not-granted", "x", "rel.txt", "", 8); !errors.Is(err, ErrNotInProfile) {
+		t.Fatalf("gate-before-path: err=%v", err)
 	}
 
 	// audit rows for param failures carry %d = 0.
