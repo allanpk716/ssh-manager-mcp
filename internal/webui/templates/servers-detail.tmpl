@@ -22,6 +22,7 @@
 </dl>
 <section aria-labelledby="server-secrets-heading">
 <h2 id="server-secrets-heading">机密项</h2>
+{{if not .Caps.CanWrite}}<p class="readonly-notice">仅显示本客户端可用的部分，修改请到权威端。</p>{{end}}
 {{if .Caps.CanWrite}}
 <form method="post" action="/ui/secrets/authorization/preview" class="server-secret-authorization">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
@@ -40,11 +41,11 @@
 </form>
 {{else}}
 <table class="server-table">
-<thead><tr><th scope="col">名字</th><th scope="col">备注</th><th scope="col">环境变量名</th></tr></thead>
+<thead><tr><th scope="col">名字</th><th scope="col">备注</th></tr></thead>
 <tbody>
 {{range .ServerDetail.Secrets}}
-<tr><td>{{.Name}}</td><td>{{or .Note "-"}}</td><td>{{or .EnvironmentName "-"}}</td></tr>
-{{else}}<tr><td colspan="3">暂无可写入的机密项。</td></tr>{{end}}
+<tr><td>{{.Name}}</td><td>{{or .Note "-"}}</td></tr>
+{{else}}<tr><td colspan="2">暂无可写入的机密项。</td></tr>{{end}}
 </tbody>
 </table>
 {{end}}
@@ -85,6 +86,7 @@
 </table>
 {{end}}
 </section>
+{{if .Caps.CanWrite}}
 <section aria-labelledby="server-profiles-heading">
 <h2 id="server-profiles-heading">profile 授权</h2>
 <table class="server-table">
@@ -96,6 +98,7 @@
 </tbody>
 </table>
 </section>
+{{end}}
 {{if and .ServerDetail.ShowDeliveryRecords .Caps.CanWrite}}
 <section aria-labelledby="server-deliveries-heading">
 <h2 id="server-deliveries-heading">下发记录</h2>

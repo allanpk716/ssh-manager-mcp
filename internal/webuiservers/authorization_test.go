@@ -634,9 +634,19 @@ func (s authorizationClientServerSource) ServerDetail(string, string) (*webui.Se
 func TestClientServerDetailHasNoReverseAuthorizationWriteEntrance(t *testing.T) {
 	detail := &webui.ServerDetailView{
 		ID: "srv-web", Name: "web", User: "deploy", Host: "192.0.2.10", Port: 22,
-		Secrets: []webui.ServerDetailSecret{{ID: "secret-api", Name: "API_TOKEN"}},
+		Secrets: []webui.ServerDetailSecret{{
+			ID: "secret-api", Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN_FILE",
+		}},
 		SharedStorages: []webui.ServerDetailSharedStorage{{
-			ID: "share-datasets", Name: "datasets", PasswordSecretID: "secret-share",
+			ID: "share-datasets", Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretID: "secret-share", PasswordSecretName: "NAS_MOUNT_PASSWORD", MountPoint: "/mnt/sshmgr/datasets",
+		}},
+		SiblingSharedStorages: []webui.ServerDetailSiblingSharedStorage{{
+			ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
+				ID: "share-worker", Name: "worker-data", MountPoint: "/mnt/sshmgr/worker-data",
+			},
+			SourceServerID:   "srv-worker",
+			SourceServerName: "worker",
 		}},
 	}
 	handler, startup, err := webui.New(webui.Config{
@@ -662,15 +672,32 @@ func TestClientServerDetailHasNoReverseAuthorizationWriteEntrance(t *testing.T) 
 	client := authorizationRequest(handler, cookies[0], http.MethodGet, "/ui/servers/srv-web", nil)
 	page := authorizationBody(t, client)
 	if client.StatusCode != http.StatusOK ||
+		!strings.Contains(page, "仅显示本客户端可用的部分，修改请到权威端。") ||
+		!strings.Contains(page, "接口令牌") ||
 		strings.Contains(page, "authorization/preview") ||
 		strings.Contains(page, "预览机密项授权变更") ||
 		strings.Contains(page, "预览共享存储授权变更") ||
+		strings.Contains(page, "预览 profile 授权变更") ||
+		strings.Contains(page, "profile-authorization") ||
+		strings.Contains(page, "环境变量名") ||
+		strings.Contains(page, "profile 授权") ||
+		strings.Contains(page, "下发记录") ||
+		strings.Contains(page, "同设备其他服务器条目带来的下发文件") ||
+		strings.Contains(page, "/ui/servers/srv-web/edit") ||
+		strings.Contains(page, "/ui/servers/srv-web/delete") ||
 		!strings.Contains(page, "API_TOKEN") ||
-		!strings.Contains(page, "datasets") {
+		!strings.Contains(page, "datasets") ||
+		!strings.Contains(page, "NAS") ||
+		!strings.Contains(page, "mount-user") ||
+		!strings.Contains(page, "/mnt/sshmgr/datasets") ||
+		!strings.Contains(page, "同设备其他服务器条目带来的共享存储") ||
+		!strings.Contains(page, "worker-data") ||
+		!strings.Contains(page, "worker") {
 		t.Fatalf("客户端详情应只读展示两组内容且没有写入口，状态码=%d：\n%s", client.StatusCode, page)
 	}
 	for _, target := range []string{
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
+		"/ui/servers/profile-authorization/preview", "/ui/servers/profile-authorization/confirm",
 		"/ui/servers/srv-web/edit", "/ui/servers/srv-web/delete",
 	} {
 		response := authorizationRequest(handler, cookies[0], http.MethodPost, target, url.Values{

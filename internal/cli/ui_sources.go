@@ -235,7 +235,8 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			continue
 		}
 		tags := snapshotServerTags(srv.TagsRaw)
-		return &webui.ServerDetailView{
+		reverse := clientSnapshotReverseDetail(snap, srv)
+		view := &webui.ServerDetailView{
 			ID: srv.ID, Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
 			Shell:          string(models.NormalizeShellType(srv.ShellType)),
 			CredentialType: credentialType[srv.CredentialID], HasKeyPassphrase: hasPassphrase[srv.CredentialID],
@@ -245,7 +246,34 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			DeviceName: deviceNames[srv.DeviceID], HasDevice: deviceNames[srv.DeviceID] != "",
 			AttentionReasons: servermanage.ReasonLabels(models.ServerAttentionReasons(srv.CredentialID, srv.Role, tags)),
 			Revision:         srv.Revision,
-		}, nil
+		}
+		for _, secret := range reverse.Secrets {
+			view.Secrets = append(view.Secrets, webui.ServerDetailSecret{
+				ID: secret.ID, Name: secret.Name, Note: secret.Note,
+				EnvironmentName: secret.EnvironmentName,
+			})
+		}
+		for _, share := range reverse.SharedStorages {
+			view.SharedStorages = append(view.SharedStorages, webui.ServerDetailSharedStorage{
+				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+				PasswordSecretName: share.PasswordSecretName, Drive: share.Drive,
+				MountPoint: share.MountPoint,
+			})
+		}
+		for _, share := range reverse.SiblingSharedStorages {
+			view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
+				ServerDetailSharedStorage: webui.ServerDetailSharedStorage{
+					ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+					MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+					PasswordSecretName: share.PasswordSecretName, Drive: share.Drive,
+					MountPoint: share.MountPoint,
+				},
+				SourceServerID:   share.SourceServerID,
+				SourceServerName: share.SourceServerName,
+			})
+		}
+		return view, nil
 	}
 	return nil, nil
 }

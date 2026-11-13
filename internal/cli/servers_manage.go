@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -161,6 +162,9 @@ type serverReverseDetailText struct {
 	DeliveryRecords        []store.SecretDeliveryRecord
 	SiblingSharedStorages  []servermanage.DetailSiblingSharedStorage
 	SiblingDeliveryRecords []store.SecretDeliveryRecord
+	// ClientSnapshot 表示这组数据来自客户端本地快照；输出只保留裁剪后的
+	// 机密项与共享存储，不显示 profile 授权与下发记录。
+	ClientSnapshot bool
 }
 
 // writeServerDetail 是单机与客户端共用的详情排版；字段来源不同，内容一致。
@@ -221,13 +225,20 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 	if d.Reverse == nil {
 		return
 	}
+	if d.Reverse.ClientSnapshot {
+		fmt.Fprintln(w, "仅显示本客户端可用的部分，修改请到权威端。")
+	}
 	fmt.Fprintln(w, "机密项：")
 	if len(d.Reverse.Secrets) == 0 {
 		fmt.Fprintln(w, "  无")
 	}
 	for _, secret := range d.Reverse.Secrets {
-		fmt.Fprintf(w, "  %s：备注 %s；环境变量名 %s\n", secret.Name,
-			textOrDefault(secret.Note), textOrDefault(secret.EnvironmentName))
+		if d.Reverse.ClientSnapshot {
+			fmt.Fprintf(w, "  %s：备注 %s\n", secret.Name, textOrDefault(secret.Note))
+		} else {
+			fmt.Fprintf(w, "  %s：备注 %s；环境变量名 %s\n", secret.Name,
+				textOrDefault(secret.Note), textOrDefault(secret.EnvironmentName))
+		}
 	}
 	fmt.Fprintln(w, "共享存储：")
 	if len(d.Reverse.SharedStorages) == 0 {
@@ -240,26 +251,28 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 			textOrDefault(share.PasswordSecretName), share.MountPoint,
 		)
 	}
-	fmt.Fprintln(w, "profile 授权：")
-	if len(d.Reverse.Profiles) == 0 {
-		fmt.Fprintln(w, "  无")
-	}
-	for _, profile := range d.Reverse.Profiles {
-		fmt.Fprintf(w, "  %s\n", profile.Name)
-	}
-	fmt.Fprintln(w, "下发记录：")
-	if len(d.Reverse.DeliveryRecords) == 0 {
-		fmt.Fprintln(w, "  暂无写到这台服务器的下发记录。")
-	}
-	for _, record := range d.Reverse.DeliveryRecords {
-		fmt.Fprintf(
-			w, "  %s：机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
-			record.Path, serverDeliverySecrets(record.Secrets),
-			record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
-			record.InitiatingDeviceName, record.InitiatingInstanceName,
-		)
-		fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
-		fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+	if !d.Reverse.ClientSnapshot {
+		fmt.Fprintln(w, "profile 授权：")
+		if len(d.Reverse.Profiles) == 0 {
+			fmt.Fprintln(w, "  无")
+		}
+		for _, profile := range d.Reverse.Profiles {
+			fmt.Fprintf(w, "  %s\n", profile.Name)
+		}
+		fmt.Fprintln(w, "下发记录：")
+		if len(d.Reverse.DeliveryRecords) == 0 {
+			fmt.Fprintln(w, "  暂无写到这台服务器的下发记录。")
+		}
+		for _, record := range d.Reverse.DeliveryRecords {
+			fmt.Fprintf(
+				w, "  %s：机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+				record.Path, serverDeliverySecrets(record.Secrets),
+				record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
+				record.InitiatingDeviceName, record.InitiatingInstanceName,
+			)
+			fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
+			fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+		}
 	}
 	fmt.Fprintln(w, "同设备其他服务器条目带来的共享存储：")
 	if len(d.Reverse.SiblingSharedStorages) == 0 {
@@ -269,19 +282,21 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 		fmt.Fprintf(w, "  %s：来源服务器条目 %s；这台机器上的挂载点 %s\n",
 			share.Name, share.SourceServerName, share.MountPoint)
 	}
-	fmt.Fprintln(w, "同设备其他服务器条目带来的下发文件：")
-	if len(d.Reverse.SiblingDeliveryRecords) == 0 {
-		fmt.Fprintln(w, "  无")
-	}
-	for _, record := range d.Reverse.SiblingDeliveryRecords {
-		fmt.Fprintf(
-			w, "  %s：来源服务器条目 %s；机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
-			record.Path, record.ServerName, serverDeliverySecrets(record.Secrets),
-			record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
-			record.InitiatingDeviceName, record.InitiatingInstanceName,
-		)
-		fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
-		fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+	if !d.Reverse.ClientSnapshot {
+		fmt.Fprintln(w, "同设备其他服务器条目带来的下发文件：")
+		if len(d.Reverse.SiblingDeliveryRecords) == 0 {
+			fmt.Fprintln(w, "  无")
+		}
+		for _, record := range d.Reverse.SiblingDeliveryRecords {
+			fmt.Fprintf(
+				w, "  %s：来源服务器条目 %s；机密项 %s；写入时间 %s；发起设备 %s；实例 %s\n",
+				record.Path, record.ServerName, serverDeliverySecrets(record.Secrets),
+				record.WrittenAt.Format("2006-01-02 15:04:05 Z07:00"),
+				record.InitiatingDeviceName, record.InitiatingInstanceName,
+			)
+			fmt.Fprintf(w, "    模板原文：%s\n", record.Template)
+			fmt.Fprintf(w, "    文件 SHA-256 哈希：%s\n", record.FileSHA256)
+		}
 	}
 }
 
@@ -339,10 +354,115 @@ func showSnapshotServer(cmd *cobra.Command, identifier, instance string) error {
 			HasDevice: deviceNames[srv.DeviceID] != "",
 			AttentionReasons: models.ServerAttentionReasons(
 				srv.CredentialID, srv.Role, tags),
+			Reverse: clientSnapshotReverseDetail(snap, srv),
 		})
 		return nil
 	}
 	return fmt.Errorf("server %q not found in the local snapshot", identifier)
+}
+
+// clientSnapshotReverseDetail 从客户端本地快照装配服务器详情的裁剪视图。
+// 快照本身已经按本客户端的访问配置组裁剪；这里再按目标服务器条目筛出机
+// 密项与共享存储，并只用快照中仍可见的同一设备其他服务器条目推导共享存
+// 储提示。
+func clientSnapshotReverseDetail(snap *store.Snapshot, srv *store.SnapshotServer) *serverReverseDetailText {
+	if snap == nil || srv == nil {
+		return nil
+	}
+	view := &serverReverseDetailText{ClientSnapshot: true}
+	secretNames := make(map[string]string, len(snap.Secrets))
+	for _, secret := range snap.Secrets {
+		secretNames[secret.ID] = secret.Name
+	}
+	sharePasswordIDs := make(map[string]bool, len(snap.SharedStorages))
+	for _, share := range snap.SharedStorages {
+		sharePasswordIDs[share.PasswordSecretID] = true
+	}
+	allowed := make(map[string]map[string]bool, len(snap.Servers))
+	for _, row := range snap.SecretAllows {
+		if allowed[row.ServerID] == nil {
+			allowed[row.ServerID] = make(map[string]bool)
+		}
+		allowed[row.ServerID][row.SecretID] = true
+	}
+	serverVisible := make(map[string]bool, len(snap.Servers))
+	for _, row := range snap.Servers {
+		serverVisible[row.ID] = true
+	}
+	isAllowed := func(secretID, serverID string) bool {
+		if !serverVisible[serverID] {
+			return false
+		}
+		if serverSecrets := allowed[serverID]; serverSecrets != nil {
+			return serverSecrets[secretID]
+		}
+		return false
+	}
+	for _, secret := range snap.Secrets {
+		if !sharePasswordIDs[secret.ID] && isAllowed(secret.ID, srv.ID) {
+			view.Secrets = append(view.Secrets, servermanage.DetailSecret{
+				ID: secret.ID, Name: secret.Name, Note: secret.Note,
+				EnvironmentName: secret.EnvironmentName,
+			})
+		}
+	}
+	sort.Slice(view.Secrets, func(i, j int) bool {
+		if view.Secrets[i].Name != view.Secrets[j].Name {
+			return view.Secrets[i].Name < view.Secrets[j].Name
+		}
+		return view.Secrets[i].ID < view.Secrets[j].ID
+	})
+	for _, share := range snap.SharedStorages {
+		if !isAllowed(share.PasswordSecretID, srv.ID) {
+			continue
+		}
+		view.SharedStorages = append(view.SharedStorages, clientSnapshotSharedStorage(share, secretNames[share.PasswordSecretID], srv))
+	}
+	sort.Slice(view.SharedStorages, func(i, j int) bool {
+		if view.SharedStorages[i].Name != view.SharedStorages[j].Name {
+			return view.SharedStorages[i].Name < view.SharedStorages[j].Name
+		}
+		return view.SharedStorages[i].ID < view.SharedStorages[j].ID
+	})
+	if srv.DeviceID == "" {
+		return view
+	}
+	for _, sibling := range snap.Servers {
+		if sibling.ID == srv.ID || sibling.DeviceID != srv.DeviceID {
+			continue
+		}
+		for _, share := range snap.SharedStorages {
+			if !isAllowed(share.PasswordSecretID, sibling.ID) {
+				continue
+			}
+			view.SiblingSharedStorages = append(view.SiblingSharedStorages, servermanage.DetailSiblingSharedStorage{
+				DetailSharedStorage: clientSnapshotSharedStorage(share, secretNames[share.PasswordSecretID], &sibling),
+				SourceServerID:      sibling.ID,
+				SourceServerName:    sibling.Name,
+			})
+		}
+	}
+	sort.Slice(view.SiblingSharedStorages, func(i, j int) bool {
+		if view.SiblingSharedStorages[i].SourceServerName != view.SiblingSharedStorages[j].SourceServerName {
+			return view.SiblingSharedStorages[i].SourceServerName < view.SiblingSharedStorages[j].SourceServerName
+		}
+		if view.SiblingSharedStorages[i].Name != view.SiblingSharedStorages[j].Name {
+			return view.SiblingSharedStorages[i].Name < view.SiblingSharedStorages[j].Name
+		}
+		return view.SiblingSharedStorages[i].ID < view.SiblingSharedStorages[j].ID
+	})
+	return view
+}
+
+func clientSnapshotSharedStorage(share store.SnapshotSharedStorage, passwordSecretName string, srv *store.SnapshotServer) servermanage.DetailSharedStorage {
+	return servermanage.DetailSharedStorage{
+		ID: share.ID, Name: share.Name, ProviderDeviceName: share.DeviceName,
+		MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+		PasswordSecretName: passwordSecretName, Drive: share.Drive,
+		MountPoint: store.SharedStorageMountPoint(
+			share.Drive, share.Name, models.NormalizeShellType(srv.ShellType),
+		),
+	}
 }
 
 func jsonUnmarshalStrings(raw string, out *[]string) error {

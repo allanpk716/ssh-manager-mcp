@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -133,28 +134,72 @@ func TestServersShowDetail(t *testing.T) {
 
 // TestServersShowOnClientSnapshot 校验客户端 `servers show` 只读本地快照。
 func TestServersShowOnClientSnapshot(t *testing.T) {
-	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+	snapshot := &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "s1", Name: "snapshot-web", User: "root", Host: "192.0.2.10", Port: 22,
-			CredentialID: "c1", Role: "快照角色", TagsRaw: `["needs-passphrase"]`, ShellType: "posix"},
-	}}, "")
+			CredentialID: "c1", Role: "快照角色", TagsRaw: `["needs-passphrase"]`, ShellType: "posix",
+			DeviceID: "device-workstation"},
+		{ID: "s2", Name: "snapshot-worker", User: "root", Host: "192.0.2.11", Port: 22,
+			ShellType: "posix", DeviceID: "device-workstation"},
+	}, Devices: []store.SnapshotDevice{{ID: "device-workstation", Name: "workstation"}},
+		Secrets: []store.SnapshotSecret{
+			{ID: "secret-web", Name: "WEB_TOKEN", Note: "网站令牌", EnvironmentName: "WEB_TOKEN_FILE", Value: []byte("web-secret-value")},
+			{ID: "secret-worker", Name: "WORKER_TOKEN", Note: "工作进程令牌", EnvironmentName: "WORKER_TOKEN_FILE", Value: []byte("worker-secret-value")},
+			{ID: "secret-share", Name: "DATASET_MOUNT_PASSWORD", Note: "数据集挂载密码", Value: []byte("share-secret-value")},
+			{ID: "secret-worker-share", Name: "WORKER_MOUNT_PASSWORD", Note: "工作目录挂载密码", Value: []byte("worker-share-secret-value")},
+		}, SecretAllows: []store.SnapshotSecretAllow{
+			{SecretID: "secret-web", ServerID: "s1"},
+			{SecretID: "secret-worker", ServerID: "s2"},
+			{SecretID: "secret-share", ServerID: "s1"},
+			{SecretID: "secret-worker-share", ServerID: "s2"},
+		}, SharedStorages: []store.SnapshotSharedStorage{
+			{ID: "share-datasets", Name: "datasets", DeviceName: "workstation", MountUser: "mount-user", PasswordSecretID: "secret-share", Drive: "E"},
+			{ID: "share-worker-data", Name: "worker-data", DeviceName: "workstation", MountUser: "worker-mount-user", PasswordSecretID: "secret-worker-share", Drive: "F"},
+		}, Profiles: []store.SnapshotProfile{{ID: "profile-1", Name: "客户端配置组"}},
+		Grants: []store.SnapshotGrant{
+			{ProfileID: "profile-1", ServerID: "s1"},
+			{ProfileID: "profile-1", ServerID: "s2"},
+		},
+		SecretDeliveryRecords: []store.SnapshotSecretDeliveryRecord{{ID: "record-1", ServerID: "s1", Path: "/etc/app/config.yml"}},
+	}
+	seedClientCacheSnapshot(t, snapshot, "")
 	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "no-vault.db"))
 
 	out := runCli(t, "servers", "show", "snapshot-web")
-	for _, want := range []string{"snapshot-web", "root@192.0.2.10:22", "快照角色", "待补私钥口令"} {
+	for _, want := range []string{
+		"snapshot-web", "root@192.0.2.10:22", "快照角色", "待补私钥口令",
+		"仅显示本客户端可用的部分，修改请到权威端。", "机密项：", "WEB_TOKEN：备注 网站令牌",
+		"共享存储：", "datasets：提供方设备 workstation；挂载用户 mount-user",
+		"挂载密码机密项 DATASET_MOUNT_PASSWORD；挂载点 /mnt/sshmgr/datasets",
+		"同设备其他服务器条目带来的共享存储：", "worker-data：来源服务器条目 snapshot-worker",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("客户端详情缺少 %q：\n%s", want, out)
 		}
 	}
-	for _, forbidden := range []string{"下发记录：", "同设备其他服务器条目带来的下发文件："} {
+	for _, forbidden := range []string{
+		"profile 授权：", "下发记录：", "同设备其他服务器条目带来的下发文件：",
+		"环境变量名 WEB_TOKEN_FILE", "WORKER_TOKEN", "/etc/app/config.yml",
+		"web-secret-value", "share-secret-value", "worker-share-secret-value",
+	} {
 		if strings.Contains(out, forbidden) {
 			t.Fatalf("客户端 servers show 不得显示 %q：\n%s", forbidden, out)
 		}
 	}
 	if _, err := runCliWithInput(t, "", "servers", "show", "不在快照里"); err == nil {
 		t.Fatal("快照外的服务器应报错")
+	}
+	_, cacheSnapshot, _, _, err := clientops.CachePathsFor("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheSnapshot, []byte("corrupt-client-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCliWithInput(t, "", "servers", "show", "snapshot-web"); err == nil {
+		t.Fatal("本地快照读取失败时应报错，不得回退请求权威端")
 	}
 }
 

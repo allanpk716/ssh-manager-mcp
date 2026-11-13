@@ -271,6 +271,67 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}
 }
 
+// TestClientUIServerSourceAssemblesCroppedReverseGroups 验证客户端服务器详
+// 情只从本地快照装配机密项与共享存储两组，并且同设备提示不推断快照外的
+// 服务器条目。
+func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
+	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+		{ID: "web", Name: "网站", ShellType: "posix", DeviceID: "device-workstation"},
+		{ID: "worker", Name: "工作进程", ShellType: "posix", DeviceID: "device-workstation"},
+	}, Devices: []store.SnapshotDevice{{ID: "device-workstation", Name: "workstation"}},
+		Secrets: []store.SnapshotSecret{
+			{ID: "secret-web", Name: "WEB_TOKEN", Note: "网站令牌", EnvironmentName: "WEB_TOKEN_FILE"},
+			{ID: "secret-worker", Name: "WORKER_TOKEN", Note: "工作进程令牌"},
+			{ID: "secret-share", Name: "DATASET_MOUNT_PASSWORD", Note: "挂载密码"},
+			{ID: "secret-worker-share", Name: "WORKER_MOUNT_PASSWORD", Note: "工作目录挂载密码"},
+			{ID: "secret-missing-share", Name: "MISSING_SIBLING_MOUNT_PASSWORD", Note: "快照外同一设备其他服务器条目的挂载密码"},
+		}, SecretAllows: []store.SnapshotSecretAllow{
+			{SecretID: "secret-web", ServerID: "web"},
+			{SecretID: "secret-worker", ServerID: "worker"},
+			{SecretID: "secret-share", ServerID: "web"},
+			{SecretID: "secret-worker-share", ServerID: "worker"},
+			{SecretID: "secret-missing-share", ServerID: "missing-worker"},
+		}, SharedStorages: []store.SnapshotSharedStorage{
+			{ID: "share-datasets", Name: "datasets", DeviceName: "workstation", MountUser: "mount-user", PasswordSecretID: "secret-share", Drive: "E"},
+			{ID: "share-worker-data", Name: "worker-data", DeviceName: "workstation", MountUser: "worker-mount-user", PasswordSecretID: "secret-worker-share", Drive: "F"},
+			{ID: "share-missing-worker-data", Name: "missing-worker-data", DeviceName: "workstation", MountUser: "missing-mount-user", PasswordSecretID: "secret-missing-share", Drive: "G"},
+		}, Profiles: []store.SnapshotProfile{{ID: "profile-1", Name: "客户端配置组"}},
+		Grants: []store.SnapshotGrant{
+			{ProfileID: "profile-1", ServerID: "web"},
+			{ProfileID: "profile-1", ServerID: "worker"},
+		}}, "")
+
+	detail, err := clientUIServerSource{}.ServerDetail("", "网站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail == nil {
+		t.Fatal("应找到快照内服务器")
+	}
+	if len(detail.Secrets) != 1 || detail.Secrets[0].ID != "secret-web" ||
+		detail.Secrets[0].Name != "WEB_TOKEN" || detail.Secrets[0].Note != "网站令牌" {
+		t.Fatalf("客户端详情机密项裁剪不正确：%+v", detail.Secrets)
+	}
+	if len(detail.SharedStorages) != 1 || detail.SharedStorages[0].ID != "share-datasets" ||
+		detail.SharedStorages[0].Name != "datasets" || detail.SharedStorages[0].ProviderDeviceName != "workstation" ||
+		detail.SharedStorages[0].MountUser != "mount-user" ||
+		detail.SharedStorages[0].PasswordSecretName != "DATASET_MOUNT_PASSWORD" ||
+		detail.SharedStorages[0].MountPoint != "/mnt/sshmgr/datasets" {
+		t.Fatalf("客户端详情共享存储裁剪不正确：%+v", detail.SharedStorages)
+	}
+	if len(detail.SiblingSharedStorages) != 1 ||
+		detail.SiblingSharedStorages[0].Name != "worker-data" ||
+		detail.SiblingSharedStorages[0].SourceServerName != "工作进程" ||
+		detail.SiblingSharedStorages[0].MountPoint != "/mnt/sshmgr/worker-data" {
+		t.Fatalf("客户端详情同设备共享存储提示不正确：%+v", detail.SiblingSharedStorages)
+	}
+	if len(detail.Profiles) != 0 || detail.ShowDeliveryRecords || len(detail.DeliveryRecords) != 0 ||
+		len(detail.SiblingDeliveryRecords) != 0 || len(detail.SecretChoices) != 0 ||
+		len(detail.SharedStorageChoices) != 0 {
+		t.Fatalf("客户端详情不得装配 profile、下发记录或编辑选项：%+v", detail)
+	}
+}
+
 // TestClientUISecretSourceReadsSnapshot 是客户端角色的机密项读取来源：读取
 // 当前实例的本地快照，并只显示快照范围内的服务器。
 func TestClientUISecretSourceReadsSnapshot(t *testing.T) {
