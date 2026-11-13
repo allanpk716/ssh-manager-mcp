@@ -29,6 +29,8 @@ type ShareRevokeRequest struct {
 	MountPoint  string
 	Unmount     bool
 	Force       bool
+	// CleanupOnly 表示登记撤销已提交，只需继续完成占挂载后的强制清理。
+	CleanupOnly bool
 	NewPassword []byte
 	Source      ShareWriteSource
 }
@@ -177,6 +179,10 @@ func (h *handler) handleShareRevokePage(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.PostFormValue("retry_cleanup") == "1" {
+		h.handleShareRevokeCleanupPost(w, r, identifier)
+		return
+	}
 	view, err := h.shareRevokeView(r, identifier, r.PostFormValue("server_id"))
 	if err != nil {
 		h.renderShareReadError(w, r, err)
@@ -202,6 +208,34 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	http.Redirect(w, r, view.ConfirmPath+"&task="+url.QueryEscape(taskID), http.StatusSeeOther)
+}
+
+func (h *handler) handleShareRevokeCleanupPost(w http.ResponseWriter, r *http.Request, identifier string) {
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	if detail.ID != r.PostFormValue("share_id") || r.PostFormValue("server_id") == "" {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的清理任务不存在。")
+		return
+	}
+	taskID, err := h.cfg.ShareRevokeRunner.StartShareRevoke(ShareRevokeRequest{
+		ShareID: detail.ID, ShareName: detail.Name,
+		ServerID: r.PostFormValue("server_id"), ServerName: r.PostFormValue("server_name"),
+		ServerShell: r.PostFormValue("server_shell"), MountPoint: r.PostFormValue("mount_point"),
+		Force: r.PostFormValue("force") == "1", CleanupOnly: true,
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
+	if err != nil {
+		h.logError(r, "启动共享存储撤销授权清理任务失败", err)
+		h.renderError(w, r, http.StatusInternalServerError, "启动强制清理失败",
+			"启动强制清理任务失败，请稍后重试。")
+		return
+	}
+	path := shareRevokeConfirmPath(detail.ID, r.PostFormValue("server_id")) +
+		"&task=" + url.QueryEscape(taskID)
+	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
 func (h *handler) shareRevokeView(

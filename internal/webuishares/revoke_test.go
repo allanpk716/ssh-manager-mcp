@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/sharemounttest"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -99,6 +100,59 @@ func TestShareRevokeWithUnmountSucceedsAndAuditsWebUISource(t *testing.T) {
 		if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
 			rows[0].SourceIP != "192.0.2.1" || rows[0].Status != "ok" {
 			t.Fatalf("撤销授权审计 %s 不正确：%+v", action, rows)
+		}
+	}
+}
+
+func TestShareRevokeBusyListsProcessesAndForceCleanupSucceeds(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{
+		{ProcessID: "1234", User: "worker", Command: "python"},
+	}
+	csrf := csrfToken(t, fixture.handler)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrf}, "server_id": {fixture.linuxID}, "unmount": {"1"},
+	})
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"配置已删除，挂载点被占用并保留", "占用挂载点的进程",
+		"1234", "worker", "python", "强制清理挂载点", "稍后再试",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("撤销授权占用结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	if !fixture.linux.State().Mounted {
+		t.Fatalf("不强制时应保留挂载：%+v", fixture.linux.State())
+	}
+
+	fixture.linux.ForceSucceeds = true
+	force := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrf}, "share_id": {fixture.shareID},
+		"server_id": {fixture.linuxID}, "server_name": {"linux-web"},
+		"server_shell": {"posix"}, "mount_point": {"/mnt/sshmgr/datasets"},
+		"retry_cleanup": {"1"}, "force": {"1"},
+	})
+	if force.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动强制清理状态码 = %d：\n%s", force.StatusCode, body(t, force))
+	}
+	forcePage := waitUntilRevokeDone(t, fixture.handler, force.Header.Get("Location"))
+	if !strings.Contains(forcePage, "撤销授权完成") || !strings.Contains(forcePage, "强制执行") {
+		t.Fatalf("强制清理结果页：\n%s", forcePage)
+	}
+	if fixture.linux.State().Mounted {
+		t.Fatalf("强制清理后挂载应被移除：%+v", fixture.linux.State())
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke", "share-revoke-remote", "share-unmount"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.1" {
+			t.Fatalf("撤销授权占用与强制清理审计来源不正确：%+v", row)
 		}
 	}
 }

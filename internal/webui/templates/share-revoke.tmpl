@@ -15,6 +15,28 @@
 {{if eq .ShareRevoke.Task.Result.Result "success"}}
 <div class="operation-result"><p>共享已从服务器撤销；{{if .ShareRevoke.Windows}}本次只修改登记。{{else if .ShareRevoke.Task.Result.Unmount}}远端持久配置已删除，挂载已卸载。{{else}}远端持久配置已删除，现有挂载保留。{{end}}</p></div>
 {{end}}
+{{if .ShareRevoke.Task.Result.Force}}<div class="operation-result"><p>强制执行：已按你的确认继续清理占用挂载点。</p></div>{{end}}
+{{if eq .ShareRevoke.Task.Result.Result "busy"}}
+<div class="notice notice-warning">
+<p>占用挂载点的进程如下。强制清理会打断这些进程；也可以稍后再试。</p>
+<table class="server-table">
+<thead><tr><th>进程号</th><th>用户</th><th>命令名</th></tr></thead>
+<tbody>{{range .ShareRevoke.Task.Result.BusyProcesses}}<tr><td>{{.ProcessID}}</td><td>{{.User}}</td><td>{{.Command}}</td></tr>{{end}}</tbody>
+</table>
+</div>
+<form method="post" action="/ui/shares/{{.ShareRevoke.Share.ID}}/revoke" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="share_id" value="{{.ShareRevoke.Share.ID}}">
+<input type="hidden" name="server_id" value="{{.ShareRevoke.Task.ServerID}}">
+<input type="hidden" name="server_name" value="{{.ShareRevoke.Task.ServerName}}">
+<input type="hidden" name="server_shell" value="{{.ShareRevoke.Task.ServerShell}}">
+<input type="hidden" name="mount_point" value="{{.ShareRevoke.Task.MountPoint}}">
+<input type="hidden" name="retry_cleanup" value="1">
+<input type="hidden" name="force" value="1">
+<button type="submit">强制清理挂载点</button>
+</form>
+<div class="inline-form"><a class="button-link" href="{{.ShareRevoke.PollPath}}">稍后再试</a></div>
+{{end}}
 {{if .ShareRevoke.Task.Result.Notices}}<div class="notice notice-warning"><ul>{{range .ShareRevoke.Task.Result.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 {{end}}
 </section>

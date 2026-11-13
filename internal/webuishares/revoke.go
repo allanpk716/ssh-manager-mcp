@@ -86,6 +86,22 @@ func (r *revokeRunner) run(task *webui.ShareRevokeTaskStatus, request webui.Shar
 	var result *sharemanage.RevokeResult
 	err := withStore(r.open, func(st *store.Store) error {
 		var operationErr error
+		if request.CleanupOnly {
+			unmount, cleanupErr := sharemanage.New(st).Unmount(r.ctx, sharemanage.UnmountRequest{
+				Share: request.ShareName, Server: request.ServerID, Force: request.Force,
+				Source: sharemanage.WebUISource(request.Source.RemoteAddress),
+			})
+			if unmount != nil {
+				result = &sharemanage.RevokeResult{
+					ShareName: request.ShareName, ServerID: request.ServerID,
+					ServerName: request.ServerName, Result: unmount.Result,
+					Version: unmount.Version, Unmount: true, Force: request.Force,
+					BusyProcesses: unmount.BusyProcesses,
+					Notices:       unmount.Notices,
+				}
+			}
+			return cleanupErr
+		}
 		result, operationErr = sharemanage.New(st).Revoke(r.ctx, sharemanage.RevokeRequest{
 			Share: request.ShareName, Server: request.ServerID,
 			Unmount: request.Unmount, Force: request.Force,
