@@ -125,6 +125,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		strings.Contains(detail, "可挂载范围勾选清单") || strings.Contains(detail, "预览可挂载范围变更") ||
 		strings.Contains(detail, "现场运维") || strings.Contains(detail, "现场探测") ||
 		strings.Contains(detail, "单台卸载") ||
+		strings.Contains(detail, "重选地址") || strings.Contains(detail, "残留检查") ||
 		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
 		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
 	}
@@ -136,6 +137,9 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 		"/ui/shares/" + datasetsID + "/task/missing",
 		"/ui/shares/" + datasetsID + "/unmount",
 		"/ui/shares/" + datasetsID + "/revoke",
+		"/ui/shares/" + datasetsID + "/reselect",
+		"/ui/shares/" + datasetsID + "/residue",
+		"/ui/shares/" + datasetsID + "/residue-cleanup",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {
@@ -149,6 +153,16 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	unmountBody := body(t, unmountPage)
 	if unmountPage.StatusCode != http.StatusNotFound || strings.Contains(unmountBody, "确认卸载") {
 		t.Fatalf("客户端不应提供单台卸载页，状态码=%d：\n%s", unmountPage.StatusCode, unmountBody)
+	}
+	reselectPage := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/reselect?server="+linuxID, nil)
+	reselectBody := body(t, reselectPage)
+	if reselectPage.StatusCode != http.StatusNotFound || strings.Contains(reselectBody, "确认重选") {
+		t.Fatalf("客户端不应提供重选地址页，状态码=%d：\n%s", reselectPage.StatusCode, reselectBody)
+	}
+	residuePage := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/residue", nil)
+	residueBody := body(t, residuePage)
+	if residuePage.StatusCode != http.StatusNotFound || strings.Contains(residueBody, "检查本共享残留") {
+		t.Fatalf("客户端不应提供残留检查页，状态码=%d：\n%s", residuePage.StatusCode, residueBody)
 	}
 	guide := h.do(http.MethodGet, "/ui/shares/"+datasetsID+"/desktop", nil)
 	guideBody := body(t, guide)

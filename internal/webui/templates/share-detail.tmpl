@@ -60,7 +60,41 @@
 </fieldset>
 </form>
 {{end}}
-{{/* 撤销（#259）、重选地址与残留检查（#260）在后续票挂载到本页。 */}}
+{{if .Caps.CanReselectShares}}
+<section class="share-reselect">
+<h2>重选地址</h2>
+<p>对仍可连通的 Linux 与 macOS 服务器优先切回物理局域网地址；已是更优地址时不做改动。</p>
+{{if .ShareReselectEntries}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th><th>操作</th></tr></thead>
+<tbody>
+{{range .ShareReselectEntries}}
+<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>
+<td>{{if .Windows}}<span class="share-reselect-windows">Windows 服务器不提供重选：每条命令执行前本来就会重新选址。</span>{{else}}<a class="button-link" href="{{.ConfirmPath}}">重选地址</a>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（无）</p>{{end}}
+</section>
+{{end}}
+{{if .Caps.CanCheckShareResidue}}
+<section class="share-residue">
+<h2>残留检查</h2>
+<p>逐台检测不在可挂载范围内却仍留有凭据文件、挂载配置或挂载的服务器；仅有撤销标记属于撤销后的预期状态。</p>
+<div class="inline-form">
+<form method="post" action="/ui/shares/{{.ShareDetail.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="share">
+<button type="submit">检查本共享残留</button>
+</form>
+<form method="post" action="/ui/shares/{{.ShareDetail.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="all">
+<button type="submit">检查全部共享残留</button>
+</form>
+</div>
+</section>
+{{end}}
 {{if .ShareRemoteOperationsAvailable}}
 <section class="share-remote-operations">
 <h2>现场运维</h2>

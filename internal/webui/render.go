@@ -84,6 +84,9 @@ type pageData struct {
 	ShareUnmount                     *ShareUnmountView
 	ShareRevokeEntries               []ShareRevokeEntry
 	ShareRevoke                      *ShareRevokeView
+	ShareReselectEntries             []ShareReselectEntry
+	ShareReselect                    *ShareReselectView
+	ShareResidue                     *ShareResidueView
 	ShareDesktopGuide                *ShareDesktopGuideView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
@@ -272,6 +275,12 @@ var pageFuncs = template.FuncMap{
 	"shareUnmountResultLabel": shareUnmountResultLabel,
 	// shareRevokeResultLabel 把撤销授权任务结论分类换成页面文案。
 	"shareRevokeResultLabel": shareRevokeResultLabel,
+	// shareReselectResultLabel 把重选地址任务结论分类换成页面文案。
+	"shareReselectResultLabel": shareReselectResultLabel,
+	// 残留检查的固定分类与发现痕迹文案固定在 Go 端，模板只负责展示。
+	"shareResidueStatusLabel":   shareResidueStatusLabel,
+	"shareResidueReasonLabel":   shareResidueReasonLabel,
+	"shareResidueFindingLabels": shareResidueFindingLabels,
 	// secretCellName 与 secretTargetValue 把授权格字段名、确认目标的编码
 	// 格式固定在 Go 端一处，模板只负责展示。
 	"secretCellName":    secretCellName,

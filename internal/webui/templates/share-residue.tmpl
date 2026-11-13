@@ -1,0 +1,107 @@
+{{define "content"}}
+<section class="share-residue-page"{{if or (and .ShareResidue.Task (eq .ShareResidue.Task.State "running")) (and .ShareResidue.Cleanup (eq .ShareResidue.Cleanup.State "running"))}} id="share-residue-task" hx-get="{{.ShareResidue.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>{{if .ShareResidue.Task}}{{if eq .ShareResidue.Task.State "running"}}残留检查进行中{{else if eq .ShareResidue.Task.State "error"}}残留检查失败{{else}}残留检查完成{{end}}{{else if .ShareResidue.TaskInvalid}}残留检查任务结果已丢失{{else if .ShareResidue.Cleanup}}{{if eq .ShareResidue.Cleanup.State "running"}}残留清理进行中{{else}}清理结果{{end}}{{else}}共享存储残留检查{{end}}</h1>
+<dl class="detail-list">
+<dt>发起入口的共享存储</dt><dd>{{.ShareResidue.Share.Name}}</dd>
+{{if .ShareResidue.Task}}<dt>检查范围</dt><dd>{{if .ShareResidue.Task.AllShares}}全部共享{{else}}{{.ShareResidue.Task.ShareName}}{{end}}</dd>{{end}}
+</dl>
+{{if .ShareResidue.TaskInvalid}}<div class="notice notice-warning"><p>残留检查任务结果已失效（进程重启或任务被清理）；如需继续，请重新发起检查。</p></div>{{end}}
+{{if .ShareResidue.CleanupInvalid}}<div class="notice notice-warning"><p>清理任务结果已失效（进程重启或任务被清理）；如需继续，请重新检查后再清理。</p></div>{{end}}
+{{if and .ShareResidue.Task (eq .ShareResidue.Task.State "running")}}
+<div class="notice notice-info"><p>正在逐台只读检测 Linux 与 macOS 服务器，请稍候；页面会自动刷新。</p></div>
+{{else if and .ShareResidue.Task (eq .ShareResidue.Task.State "error")}}
+<div class="notice notice-error"><p>{{.ShareResidue.Task.FailureMessage}}</p></div>
+{{else if .ShareResidue.Task}}
+<p class="residue-summary">汇总：{{.ShareResidue.Task.Counts.Residue}} 台有残留，{{.ShareResidue.Task.Counts.MarkerOnly}} 台仅有撤销标记，{{.ShareResidue.Task.Counts.Unchecked}} 台未检查，{{.ShareResidue.Task.Counts.NoResidue}} 台无残留，{{.ShareResidue.Task.Counts.Skipped}} 台跳过。</p>
+{{if .ShareResidue.Task.Servers}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>系统类型</th><th>结论</th><th>说明</th><th>发现与清理</th></tr></thead>
+<tbody>
+{{range $server := .ShareResidue.Task.Servers}}
+<tr>
+<td>{{$server.ServerName}}</td>
+<td>{{shareSystemLabel $server.System}}</td>
+<td>{{shareResidueStatusLabel $server.Status}}</td>
+<td>{{if $server.Notice}}{{$server.Notice}}{{else if $server.Reason}}{{shareResidueReasonLabel $server.Reason}}{{else}}—{{end}}</td>
+<td>
+{{if $server.Findings}}
+<ul class="residue-findings">
+{{range $finding := $server.Findings}}
+<li>
+<p><strong>{{$finding.ShareName}}</strong>：{{if $finding.RevokedMarkerOnly}}仅有撤销标记（撤销后的预期状态，不需要清理）{{else}}{{shareResidueFindingLabels $finding}}；{{shareResidueReasonLabel $finding.Reason}}{{end}}</p>
+{{if $finding.HasCleanup}}
+<form method="post" action="/ui/shares/{{$.ShareResidue.Share.ID}}/residue-cleanup" class="residue-cleanup-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="share_name" value="{{$finding.ShareName}}">
+<input type="hidden" name="server_id" value="{{$server.ServerID}}">
+<input type="hidden" name="server_name" value="{{$server.ServerName}}">
+{{if $.ShareResidue.AllShares}}<input type="hidden" name="scope" value="all">{{else}}<input type="hidden" name="scope" value="share">{{end}}
+<button type="submit">清理</button>
+</form>
+{{end}}
+</li>
+{{end}}
+</ul>
+{{else}}—{{end}}
+</td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（没有可检查的服务器条目）</p>{{end}}
+{{end}}
+{{if .ShareResidue.Cleanup}}
+<section class="share-residue-cleanup-result">
+<h2>清理结果</h2>
+<dl class="detail-list">
+<div><dt>共享存储</dt><dd>{{.ShareResidue.Cleanup.ShareName}}</dd></div>
+<div><dt>服务器条目</dt><dd>{{.ShareResidue.Cleanup.ServerName}}</dd></div>
+</dl>
+{{if eq .ShareResidue.Cleanup.State "running"}}
+<div class="notice notice-info"><p>正在删除远端持久配置并清理挂载，请稍候；页面会自动刷新。</p></div>
+{{else}}
+<div class="operation-result">
+<p><strong>{{shareUnmountResultLabel .ShareResidue.Cleanup.Result}}</strong>{{if .ShareResidue.Cleanup.Force}}（强制执行）{{end}}{{if .ShareResidue.Cleanup.FailureMessage}}：{{.ShareResidue.Cleanup.FailureMessage}}{{end}}</p>
+{{if eq .ShareResidue.Cleanup.Result "success"}}<div class="notice notice-success"><p>远端持久挂载配置已删除，挂载点已清理；共享存储版本号：{{.ShareResidue.Cleanup.Version}}。</p></div>{{end}}
+{{if .ShareResidue.Cleanup.Notices}}<div class="notice notice-warning"><ul>{{range .ShareResidue.Cleanup.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if .ShareResidue.Cleanup.BusyProcesses}}
+<div class="share-residue-cleanup-busy">
+<p>占用挂载点的进程：</p>
+<table class="server-table">
+<thead><tr><th>进程号</th><th>用户</th><th>命令名</th></tr></thead>
+<tbody>
+{{range .ShareResidue.Cleanup.BusyProcesses}}<tr><td>{{.ProcessID}}</td><td>{{.User}}</td><td>{{.Command}}</td></tr>{{end}}
+</tbody>
+</table>
+<form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue-cleanup" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="share_name" value="{{.ShareResidue.Cleanup.ShareName}}">
+<input type="hidden" name="server_id" value="{{.ShareResidue.Cleanup.ServerID}}">
+<input type="hidden" name="server_name" value="{{.ShareResidue.Cleanup.ServerName}}">
+{{if .ShareResidue.AllShares}}<input type="hidden" name="scope" value="all">{{else}}<input type="hidden" name="scope" value="share">{{end}}
+<input type="hidden" name="force" value="1">
+<button type="submit">强制清理</button>
+</form>
+<a class="button-link" href="/ui/shares/{{.ShareResidue.Share.ID}}/residue?scope={{if .ShareResidue.AllShares}}all{{else}}share{{end}}">稍后再试</a>
+</div>
+{{end}}
+{{if eq .ShareResidue.Cleanup.Result "ssh-error"}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；服务器恢复可达后可重新清理。</p></div>{{end}}
+</div>
+{{end}}
+</section>
+{{end}}
+<div class="inline-form">
+<form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="share">
+<button type="submit">重新检查本共享残留</button>
+</form>
+<form method="post" action="/ui/shares/{{.ShareResidue.Share.ID}}/residue">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="scope" value="all">
+<button type="submit">重新检查全部共享残留</button>
+</form>
+<a class="button-link" href="/ui/shares/{{.ShareResidue.Share.ID}}">返回共享存储详情</a>
+</div>
+</section>
+{{end}}
