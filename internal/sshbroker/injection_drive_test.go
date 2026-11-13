@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -305,6 +306,11 @@ func TestPrepareExecWindowsCmdQuotesUserCommand(t *testing.T) {
 // 时执行固定引导脚本：机密值先进入环境，再由子进程读取，用户命令退出码原
 // 样返回；帧提前结束时引导脚本返回内部失败码。
 func TestPrepareExecWindowsCmdBootstrapWithLocalPowerShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// 这里用 POSIX shell 脚本冒充 ComSpec，Windows 上无法执行；真实 cmd
+		// 的行为由 mcpserver 的 TestSecretEnvironmentInjectionWindowsCmd 覆盖。
+		t.Skip("替身 ComSpec 是 POSIX shell 脚本，只在非 Windows 主机上运行")
+	}
 	powerShellPath, err := exec.LookPath("pwsh")
 	if err != nil {
 		t.Skip("本机没有 pwsh，跳过 PowerShell 引导脚本执行检查")
