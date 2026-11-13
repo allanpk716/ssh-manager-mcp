@@ -24,6 +24,23 @@ type Manager struct {
 	mounter *sharemount.Service
 }
 
+// Source 描述一次共享存储管理操作从哪里来：命令行，或 Web UI（附来源地
+// 址）。模块按它给审计行填来源列。
+type Source struct {
+	kind string
+	addr string
+}
+
+// CLISource 返回命令行来源。
+func CLISource() Source {
+	return Source{kind: store.AuditSourceCLI}
+}
+
+// WebUISource 返回 Web UI 来源，addr 是这次请求的来源地址。
+func WebUISource(addr string) Source {
+	return Source{kind: store.AuditSourceWebUI, addr: addr}
+}
+
 // New 返回挂在一个已解锁可写存储上的共享存储管理模块。
 func New(st *store.Store) *Manager {
 	return &Manager{store: st, mounter: &sharemount.Service{Store: st}}
@@ -34,6 +51,8 @@ type UnmountRequest struct {
 	Share  string
 	Server string
 	Force  bool
+	// Source 标记这次卸载来自哪类入口；零值按命令行来源处理。
+	Source Source
 }
 
 // UnmountResult 是一次卸载的安全结论，不包含共享地址、账号或密码。
@@ -75,7 +94,7 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		_ = m.writeUnmountAudit(server.Name, shareName, version, request.Force,
-			"windows-unsupported", true)
+			"windows-unsupported", true, request.Source)
 		return nil, ErrWindowsUnmountUnsupported
 	}
 	shareID := ""
@@ -97,16 +116,16 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 		result.BusyProcesses = remote.BusyProcesses
 		if inRange && remote.Result == "success" {
 			result.Notices = append(result.Notices,
-				"服务器仍在可挂载范围内，agent 之后仍可能重新挂载；彻底撤下请使用 shares revoke")
+				"服务器仍在可挂载范围内，agent 之后仍可能重新挂载；彻底撤下需先取消勾选，命令行等价面是 shares revoke")
 		}
 	}
 	if remoteErr != nil {
 		_ = m.writeUnmountAudit(server.Name, shareName, version,
-			request.Force, unmountAuditResult(remoteErr, remote), true)
+			request.Force, unmountAuditResult(remoteErr, remote), true, request.Source)
 		return nil, remoteErr
 	}
 	if err := m.writeUnmountAudit(server.Name, shareName, remote.Version,
-		request.Force, remote.Result, false); err != nil {
+		request.Force, remote.Result, false, request.Source); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -123,19 +142,25 @@ func sharedStorageHasMountableServer(share *models.SharedStorage, serverID strin
 
 func (m *Manager) writeUnmountAudit(
 	serverName, shareName string, version int64, force bool, result string, failed bool,
+	requestSource Source,
 ) error {
+	source := requestSource
+	if source.kind == "" {
+		source = CLISource()
+	}
 	summary := map[string]any{
 		"share": shareName, "server": serverName, "result": result, "force": force,
 	}
 	if version > 0 {
 		summary["version"] = version
 	}
+	row := store.OwnerAuditRow("share-unmount", summary)
 	if failed {
-		row := store.OwnerAuditRow("share-unmount", summary)
 		row.Status = "error"
-		return m.store.WriteAudit(row)
 	}
-	return m.store.WriteOwnerAudit("share-unmount", summary)
+	row.Source = source.kind
+	row.SourceIP = source.addr
+	return m.store.WriteAudit(row)
 }
 
 func unmountAuditResult(err error, remote *sharemount.UnmountResult) string {

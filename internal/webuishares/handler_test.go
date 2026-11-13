@@ -186,8 +186,14 @@ func openStoreForTest(st *store.Store) func() (*store.Store, func(), error) {
 }
 
 func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
+	return startIntegrationHandler(t, st, nil)
+}
+
+func startIntegrationHandler(
+	t *testing.T, st *store.Store, configure func(*webui.Config),
+) sessionHandler {
 	t.Helper()
-	handler, startup, err := webui.New(webui.Config{
+	config := webui.Config{
 		Role: webui.RoleStandalone,
 		Servers: func() webui.ServerSource {
 			return webuiservers.FromManager(servermanage.New(st))
@@ -200,7 +206,11 @@ func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
 		SharesWriter:  WriterFromStore(openStoreForTest(st)),
 		Topology:      webuitopology.FromStore(st),
 		Port:          18086,
-	})
+	}
+	if configure != nil {
+		configure(&config)
+	}
+	handler, startup, err := webui.New(config)
 	if err != nil {
 		t.Fatal(err)
 	}

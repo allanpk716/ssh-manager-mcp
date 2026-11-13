@@ -130,6 +130,9 @@ type Config struct {
 	// SharesWriter 是共享存储写操作来源。单机与权威端必须提供；客户端
 	// 不提供，写路由不存在。
 	SharesWriter ShareWriter
+	// ShareUnmountRunner 启动并读取共享存储单台卸载任务。单机与权威端提
+	// 供；客户端不提供，卸载路由不存在。
+	ShareUnmountRunner ShareUnmountRunner
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
@@ -272,6 +275,9 @@ type capabilities struct {
 	ShowSharesArea bool
 	// CanManageShares 控制共享存储写操作；客户端只保留只读列表入口。
 	CanManageShares bool
+	// CanUnmountShares 控制共享存储详情页的单台卸载操作；只有提供卸载
+	// 任务视图的可写角色可用。
+	CanUnmountShares bool
 	// CanUseShareDesktopGuide 控制共享存储详情页的桌面手动添加引导；只有
 	// 单机与权威端且提供拓扑来源时可用。
 	CanUseShareDesktopGuide bool
@@ -305,6 +311,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSecretsArea = cfg.Secrets != nil
 	caps.ShowSharesArea = cfg.Shares != nil
 	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
+	caps.CanUnmountShares = cfg.Shares != nil && cfg.ShareUnmountRunner != nil && cfg.Role != RoleClient
 	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil

@@ -61,9 +61,26 @@
 </form>
 {{end}}
 {{/*
-现场探测（#257）、挂载与卸载（#258）、撤销（#259）、
+现场探测与挂载（#257）、撤销（#259）、
 重选地址与残留检查（#260）在后续票挂载到本页。
 */}}
+{{if .Caps.CanUnmountShares}}
+<section class="share-unmount">
+<h2>单台卸载</h2>
+<p>对 Linux 与 macOS 服务器先删除远端持久挂载配置，再卸载挂载点；Windows 服务器没有持久改动需要清理。</p>
+{{if .ShareUnmountEntries}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th><th>操作</th></tr></thead>
+<tbody>
+{{range .ShareUnmountEntries}}
+<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>
+<td>{{if .Windows}}<span class="share-unmount-windows">Windows 服务器不提供卸载：sshmgr 不在其上留下任何持久改动。</span>{{else}}<a class="button-link" href="{{.ConfirmPath}}">卸载</a>{{end}}</td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（无）</p>{{end}}
+</section>
+{{end}}
 {{if .Caps.CanUseShareDesktopGuide}}
 <section class="share-desktop-guide-entry">
 <h2>桌面手动添加</h2>

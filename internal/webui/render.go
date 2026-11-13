@@ -77,6 +77,8 @@ type pageData struct {
 	ShareForm                        shareFormView
 	ShareEdit                        *shareEditView
 	ShareDeletePreview               *ShareRow
+	ShareUnmountEntries              []ShareUnmountEntry
+	ShareUnmount                     *ShareUnmountView
 	ShareDesktopGuide                *ShareDesktopGuideView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
@@ -219,6 +221,8 @@ var pageFuncs = template.FuncMap{
 	"declarationFormPath": declarationFormPath,
 	"addOne":              func(v int) int { return v + 1 },
 	"credentialLabel":     CredentialTypeLabel,
+	// shareUnmountResultLabel 把单台卸载任务结论分类换成页面文案。
+	"shareUnmountResultLabel": shareUnmountResultLabel,
 	// secretCellName 与 secretTargetValue 把授权格字段名、确认目标的编码
 	// 格式固定在 Go 端一处，模板只负责展示。
 	"secretCellName":    secretCellName,
