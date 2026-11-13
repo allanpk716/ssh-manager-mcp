@@ -17,7 +17,6 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -31,11 +30,8 @@ import (
 
 func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleServer)
-	mainPort := reserveLocalPort(t)
-	webPort := reserveLocalPort(t)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
-		t.Fatal(err)
-	}
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 	profileID, err := st.AddProfile("integration-ops")
 	if err != nil {
 		t.Fatal(err)
@@ -51,8 +47,10 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	mainAddress := net.JoinHostPort("127.0.0.1", strconv.Itoa(mainPort))
-	go func() { done <- RunServe(ctx, st, mainAddress, "", "", ServeOpts{}) }()
+	mainAddress := mainListener.Addr().String()
+	go func() {
+		done <- RunServe(ctx, st, mainAddress, "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 	waitTCPListener(t, mainAddress, done)
 
 	jar, err := cookiejar.New(nil)
@@ -71,7 +69,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 		},
 	}
 	mainURL := "https://" + mainAddress
-	webURL := "https://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(webPort))
+	webURL := "https://" + webUIListener.Addr().String()
 	csrfToken := loginThroughAuthorityWebUI(t, client, webURL, "correct-password")
 
 	pairClient := newPairClient(t, "integration-laptop", mainURL)

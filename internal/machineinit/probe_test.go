@@ -28,19 +28,19 @@ func TestProbeServeWebUI(t *testing.T) {
 	}
 	defer st.Close()
 
-	closedPort := freeLocalPort(t)
-	if err := st.SetSetting("serve.ui_port", strconv.Itoa(closedPort)); err != nil {
+	unavailablePort := holdUnavailableLocalPort(t)
+	if err := st.SetSetting("serve.ui_port", strconv.Itoa(unavailablePort)); err != nil {
 		t.Fatal(err)
 	}
 	silent, err := machineinit.ProbeServeWebUI()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !silent.Known || silent.Port != closedPort {
+	if !silent.Known || silent.Port != unavailablePort {
 		t.Fatalf("无服务时的探测结果应有端口：%+v", silent)
 	}
 	if silent.Running {
-		t.Fatalf("端口未监听时不应显示在运行：%+v", silent)
+		t.Fatalf("端口上没有 Web UI 服务时不应显示在运行：%+v", silent)
 	}
 	if !containsString(silent.Addresses, "127.0.0.1") {
 		t.Fatalf("地址列表应包含 127.0.0.1：%v", silent.Addresses)

@@ -125,6 +125,30 @@ type Config struct {
 	// SecretsWriter 是机密项写操作来源。单机与权威端必须提供；客户端不提
 	// 供，写路由不存在。
 	SecretsWriter SecretWriter
+	// Shares 是共享存储页读取来源；三种角色都必须提供。
+	Shares ShareSource
+	// SharesWriter 是共享存储写操作来源。单机与权威端必须提供；客户端
+	// 不提供，写路由不存在。
+	SharesWriter ShareWriter
+	// SharesRemoteTasks 启动并读取共享存储现场探测与单台挂载任务。单机
+	// 与权威端提供；客户端不提供，任务路由不存在。
+	SharesRemoteTasks ShareRemoteTasks
+	// ShareLatestChecks 读取一处共享存储最近一次完成的现场探测结果，供
+	// 撤销授权页与取消勾选联动卸载使用。提供撤销授权任务的可写角色必须
+	// 提供；客户端不提供。
+	ShareLatestChecks ShareLatestCheckSource
+	// ShareUnmountRunner 启动并读取共享存储单台卸载任务。单机与权威端提
+	// 供；客户端不提供，卸载路由不存在。
+	ShareUnmountRunner ShareUnmountRunner
+	// ShareRevokeRunner 启动并读取共享存储单台撤销授权任务。单机与权
+	// 威端提供；客户端不提供，撤销授权路由不存在。
+	ShareRevokeRunner ShareRevokeRunner
+	// ShareReselectRunner 启动并读取共享存储重选地址任务。单机与权威端
+	// 提供；客户端不提供，重选路由不存在。
+	ShareReselectRunner ShareReselectRunner
+	// ShareResidueRunner 启动并读取共享存储残留检查任务。单机与权威端
+	// 提供；客户端不提供，残留检查路由不存在。
+	ShareResidueRunner ShareResidueRunner
 	// SoftwareInventory 是软件清单页来源。单机与权威端提供；客户端不提
 	// 供，导航与路由都不出现。
 	SoftwareInventory SoftwareInventorySource
@@ -187,6 +211,19 @@ func (c Config) validate() error {
 	}
 	if c.Port <= 0 || c.Port > 65535 {
 		return fmt.Errorf("Web UI 监听端口非法：%d", c.Port)
+	}
+	if c.Role != RoleClient && c.ShareRevokeRunner != nil && c.ShareLatestChecks == nil {
+		return errors.New("提供共享存储撤销授权任务的 Web UI 必须提供最近现场探测来源")
+	}
+	if c.Role == RoleClient {
+		if c.SharesWriter != nil {
+			return errors.New("客户端 Web UI 不得提供共享存储写入来源")
+		}
+		if c.SharesRemoteTasks != nil || c.ShareUnmountRunner != nil ||
+			c.ShareRevokeRunner != nil || c.ShareReselectRunner != nil ||
+			c.ShareResidueRunner != nil {
+			return errors.New("客户端 Web UI 不得提供共享存储远端任务执行对象")
+		}
 	}
 	if c.Role == RoleServer {
 		if c.Auth == nil {
@@ -262,6 +299,25 @@ type capabilities struct {
 	CanManageProjects bool
 	// CanManageSecrets 控制机密项写操作；客户端只保留只读列表入口。
 	CanManageSecrets bool
+	// ShowSharesArea 控制是否显示「共享存储」区域入口；只有配置了共享存
+	// 储读取来源时才显示。
+	ShowSharesArea bool
+	// CanManageShares 控制共享存储写操作；客户端只保留只读列表入口。
+	CanManageShares bool
+	// CanUnmountShares 控制共享存储详情页的单台卸载操作；只有提供卸载
+	// 任务视图的可写角色可用。
+	CanUnmountShares bool
+	// CanRevokeShares 控制共享存储详情页的单台撤销授权操作。
+	CanRevokeShares bool
+	// CanReselectShares 控制共享存储详情页的重选地址操作；只有提供重选
+	// 任务视图的可写角色可用。
+	CanReselectShares bool
+	// CanCheckShareResidue 控制共享存储详情页的残留检查；只有提供残留
+	// 检查任务视图的可写角色可用。
+	CanCheckShareResidue bool
+	// CanUseShareDesktopGuide 控制共享存储详情页的桌面手动添加引导；只有
+	// 单机与权威端且提供拓扑来源时可用。
+	CanUseShareDesktopGuide bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
 	// ShowOpsArea 控制是否显示「运维」区域入口。
@@ -290,6 +346,13 @@ type capabilities struct {
 func capabilitiesForConfig(cfg Config) capabilities {
 	caps := capabilitiesForRole(cfg.Role)
 	caps.ShowSecretsArea = cfg.Secrets != nil
+	caps.ShowSharesArea = cfg.Shares != nil
+	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
+	caps.CanUnmountShares = cfg.Shares != nil && cfg.ShareUnmountRunner != nil && cfg.Role != RoleClient
+	caps.CanRevokeShares = cfg.Shares != nil && cfg.ShareRevokeRunner != nil && cfg.Role != RoleClient
+	caps.CanReselectShares = cfg.Shares != nil && cfg.ShareReselectRunner != nil && cfg.Role != RoleClient
+	caps.CanCheckShareResidue = cfg.Shares != nil && cfg.ShareResidueRunner != nil && cfg.Role != RoleClient
+	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil
 	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil
@@ -399,6 +462,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
 		h.registerSecretRoutes()
+		h.registerShareRoutes()
 		h.registerSoftwareInventoryRoutes()
 		h.registerOpsRoutes()
 	}
@@ -474,7 +538,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 样不向跨源目标透露引用地址。
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cache-Control", "no-store")
-	if isSecretValueUpload(r) {
+	if isSecretValueUpload(r) || isShareRevokePasswordUpload(r) {
 		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
 	}
 	if isAddFormPost(r) {

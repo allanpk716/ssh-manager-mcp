@@ -378,7 +378,7 @@ func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *htt
 	if r.Method == http.MethodPost {
 		target := secretTargetFromCells(r)
 		h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.PostFormValue("return_to")), "",
-			r.PostFormValue("authorization_view"), r.PostFormValue("server_id"))
+			r.PostFormValue("authorization_view"), r.PostFormValue("server_id"), nil)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -391,7 +391,8 @@ func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *htt
 		return
 	}
 	h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.URL.Query().Get("return_to")), "",
-		r.URL.Query().Get("authorization_view"), r.URL.Query().Get("server_id"))
+		r.URL.Query().Get("authorization_view"), r.URL.Query().Get("server_id"),
+		stringSet(r.URL.Query()["unmount"]))
 }
 
 func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *http.Request) {
@@ -410,9 +411,16 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 	}
 	view := r.PostFormValue("authorization_view")
 	serverID := r.PostFormValue("server_id")
-	if h.redirectSecretWriteToReverify(w, r, secretAuthorizationResumePath(target, r.PostFormValue("return_to"), view, serverID)) {
+	unmountServers := trimmedFormValues(r.PostForm["unmount_server"])
+	selectedUnmount := stringSet(unmountServers)
+	if h.redirectSecretWriteToReverify(w, r, secretAuthorizationResumePath(
+		target, r.PostFormValue("return_to"), view, serverID, unmountServers,
+	)) {
 		return
 	}
+	unmountTargets := h.shareUnmountTargetsForAuthorization(
+		r, safeSecretReturnPath(r.PostFormValue("return_to")), target, selectedUnmount,
+	)
 	result, conflict, err := h.cfg.SecretsWriter.ApplyAuthorization(
 		target, r.PostFormValue("summary"), SecretWriteSource{RemoteAddress: remoteIP(r)},
 	)
@@ -429,8 +437,17 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 		h.renderSecretPreviewPage(w, r, http.StatusConflict, latest, target,
 			safeSecretReturnPath(r.PostFormValue("return_to")),
 			view, serverID,
-			"机密项授权状态已被其他入口修改，请核对最新预览后再确认。")
+			"机密项授权状态已被其他入口修改，请核对最新预览后再确认。", selectedUnmount)
 		return
+	}
+	if result.Applied && len(unmountTargets) > 0 {
+		taskIDs := h.startAuthorizationUnmountTasks(
+			r, safeSecretReturnPath(r.PostFormValue("return_to")), unmountTargets,
+		)
+		if len(taskIDs) > 0 {
+			http.Redirect(w, r, shareUnmountBatchPath(unmountTargets[0].ShareID, taskIDs), http.StatusSeeOther)
+			return
+		}
 	}
 	notice := "没有变化，未写入数据或审计。"
 	if result.Applied {
@@ -442,7 +459,56 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 		return
 	}
 	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target,
-		safeSecretReturnPath(r.PostFormValue("return_to")), view, serverID, notice)
+		safeSecretReturnPath(r.PostFormValue("return_to")), view, serverID, notice, nil)
+}
+
+// shareUnmountTargetsForAuthorization 计算确认授权时允许联动卸载的服务
+// 器：必须来自共享存储详情页的授权编辑、确实在目标集合里被移除、最近
+// 现场探测已挂载或状态未知，且不是 Windows 服务器。伪造的勾选值不在计
+// 算结果里。
+func (h *handler) shareUnmountTargetsForAuthorization(
+	r *http.Request, returnTo string, target []SecretAuthorizationCell, selected map[string]bool,
+) []SecretAuthorizationShareUnmount {
+	if !h.caps.CanUnmountShares || len(selected) == 0 {
+		return nil
+	}
+	detail := h.shareFromAuthorizationReturnTo(r, returnTo)
+	if detail == nil {
+		return nil
+	}
+	preview, err := h.cfg.SecretsWriter.PreviewAuthorization(target)
+	if err != nil {
+		return nil
+	}
+	choices := h.shareUnmountChoicesForAuthorization(r, returnTo, preview, selected)
+	targets := make([]SecretAuthorizationShareUnmount, 0, len(choices))
+	for _, choice := range choices {
+		if choice.Selected && (choice.Mounted || choice.Unknown) {
+			targets = append(targets, choice)
+		}
+	}
+	return targets
+}
+
+// startAuthorizationUnmountTasks 对确认联动卸载的服务器逐台启动单台卸载
+// 任务，返回任务标识列表。卸载全部复用单台卸载任务机制。
+func (h *handler) startAuthorizationUnmountTasks(
+	r *http.Request, returnTo string, targets []SecretAuthorizationShareUnmount,
+) []string {
+	taskIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		taskID, err := h.cfg.ShareUnmountRunner.StartShareUnmount(ShareUnmountRequest{
+			ShareID: target.ShareID, ShareName: target.ShareName,
+			ServerID: target.ServerID, ServerName: target.ServerName,
+			Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+		})
+		if err != nil {
+			h.logError(r, "启动可挂载范围联动卸载任务", err)
+			continue
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs
 }
 
 // redirectSecretWriteToReverify 在权威端且最近未重新验证时，把机密项写操作
@@ -456,8 +522,11 @@ func (h *handler) redirectSecretWriteToReverify(w http.ResponseWriter, r *http.R
 }
 
 // secretAuthorizationResumePath 构造确认授权跳转重新验证后要回到的预览地
-// 址，保留返回路径与全部目标授权格。
-func secretAuthorizationResumePath(target []SecretAuthorizationCell, returnTo, view, serverID string) string {
+// 址，保留返回路径、全部目标授权格、服务器详情视图参数与已勾选的同时卸
+// 载服务器。
+func secretAuthorizationResumePath(
+	target []SecretAuthorizationCell, returnTo, view, serverID string, unmountServers []string,
+) string {
 	next := url.Values{"return_to": {safeSecretReturnPath(returnTo)}}
 	if view != "" {
 		next.Set("authorization_view", view)
@@ -468,11 +537,17 @@ func secretAuthorizationResumePath(target []SecretAuthorizationCell, returnTo, v
 	for _, cell := range target {
 		next.Add("target", encodeSecretTarget(cell))
 	}
+	for _, unmountServerID := range unmountServers {
+		if unmountServerID != "" {
+			next.Add("unmount", unmountServerID)
+		}
+	}
 	return secretsPreviewPath + "?" + next.Encode()
 }
 
 func (h *handler) renderSecretPreview(
-	w http.ResponseWriter, r *http.Request, target []SecretAuthorizationCell, returnTo, notice, view, serverID string,
+	w http.ResponseWriter, r *http.Request, target []SecretAuthorizationCell,
+	returnTo, notice, view, serverID string, selectedUnmount map[string]bool,
 ) {
 	preview, err := h.cfg.SecretsWriter.PreviewAuthorization(target)
 	if err != nil {
@@ -484,7 +559,8 @@ func (h *handler) renderSecretPreview(
 		h.renderError(w, r, http.StatusInternalServerError, "生成授权预览失败", "生成授权预览失败，请稍后重试。")
 		return
 	}
-	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target, returnTo, view, serverID, notice)
+	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target, returnTo, view, serverID,
+		notice, selectedUnmount)
 }
 
 // authorizationPreviewDisplay 把共享存储反向编辑的差异从挂载密码机密项名
@@ -548,13 +624,40 @@ func serverRefFor(refs []SecretAuthorizationServer, serverID string) *SecretAuth
 func (h *handler) renderSecretPreviewPage(
 	w http.ResponseWriter, r *http.Request, status int, preview SecretAuthorizationPreview,
 	target []SecretAuthorizationCell, returnTo, view, serverID, notice string,
+	selectedUnmount map[string]bool,
 ) {
-	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", pageData{
+	data := pageData{
 		Title: "机密项授权预览", SecretAuthorizationPreview: preview,
 		SecretAuthorizationTargets: target, SecretAuthorizationReturnTo: returnTo,
 		SecretAuthorizationView: view, SecretAuthorizationServerID: serverID,
 		SecretAuthorizationNotice: notice,
-	})
+	}
+	data.SecretAuthorizationShareUnmounts = h.shareUnmountChoicesForAuthorization(
+		r, returnTo, preview, selectedUnmount,
+	)
+	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", data)
+}
+
+// stringSet 把表单里的多个值整理成集合，便于保留勾选状态。
+func stringSet(values []string) map[string]bool {
+	set := make(map[string]bool, len(values))
+	for _, value := range values {
+		if value != "" {
+			set[value] = true
+		}
+	}
+	return set
+}
+
+// trimmedFormValues 去掉表单多值字段的空白并过滤空值。
+func trimmedFormValues(values []string) []string {
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			trimmed = append(trimmed, strings.TrimSpace(value))
+		}
+	}
+	return trimmed
 }
 
 func secretTargetFromCells(r *http.Request) []SecretAuthorizationCell {

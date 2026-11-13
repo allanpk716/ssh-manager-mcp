@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -95,14 +96,48 @@ func validProbe(data []byte) bool {
 //     carries a 1s deadline and its errors are ignored (an unreachable prober
 //     must never kill the loop).
 func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, enabled func() bool) (stop func()) {
-	noop := func() {}
-	if enabled == nil {
-		return noop // defensive: a nil gate can never answer
-	}
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4zero, Port: discoveryPort})
+	stop, _, err := StartDiscoveryAt(
+		ctx,
+		net.JoinHostPort("0.0.0.0", strconv.Itoa(discoveryPort)),
+		name,
+		tcpPort,
+		spki,
+		enabled,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: udp/%d unavailable (port in use): %v\n", discoveryPort, err)
-		return noop
+	}
+	return stop
+}
+
+// StartDiscoveryAt binds an explicit UDP address and returns the real bound
+// address. Tests use `127.0.0.1:0` so concurrent test processes never share the
+// production UDP port. Bind failures are returned instead of being hidden;
+// StartDiscovery keeps the production behavior of logging and continuing.
+func StartDiscoveryAt(
+	ctx context.Context,
+	address string,
+	name string,
+	tcpPort int,
+	spki string,
+	enabled func() bool,
+) (stop func(), bound *net.UDPAddr, err error) {
+	noop := func() {}
+	if enabled == nil {
+		return noop, nil, nil // defensive: a nil gate can never answer
+	}
+	udpAddress, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		return noop, nil, err
+	}
+	conn, err := net.ListenUDP("udp", udpAddress)
+	if err != nil {
+		return noop, nil, err
+	}
+	localAddress, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		conn.Close()
+		return noop, nil, fmt.Errorf("discovery returned an unexpected local address %T", conn.LocalAddr())
 	}
 
 	offerJSON, merr := json.Marshal(discOffer{
@@ -113,7 +148,7 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 	})
 	if merr != nil {
 		conn.Close() // unreachable for a fixed struct; defended anyway
-		return noop
+		return noop, localAddress, nil
 	}
 	// 对称报文:offer 与 probe 同样带魔数首行(接收方先验魔数再解 JSON)。
 	offer := append([]byte(discoveryMagic), offerJSON...)
@@ -149,7 +184,7 @@ func StartDiscovery(ctx context.Context, name string, tcpPort int, spki string, 
 			_, _ = conn.WriteToUDP(offer, src) // 只单播回源;写失败(探测方已走)无需理会
 		}
 	}()
-	return stopFn
+	return stopFn, localAddress, nil
 }
 
 func currentHostname() string {

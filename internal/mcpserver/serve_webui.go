@@ -21,6 +21,7 @@ import (
 	"ssh-manager-mcp/internal/webuiops"
 	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
+	"ssh-manager-mcp/internal/webuishares"
 	"ssh-manager-mcp/internal/webuisoftwareinventory"
 	"ssh-manager-mcp/internal/webuitopology"
 )
@@ -105,6 +106,12 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 	if err != nil {
 		return nil, err
 	}
+	injectedListener := serveOpts.webUIListener
+	if injectedListener != nil {
+		if tcpAddress, ok := injectedListener.Addr().(*net.TCPAddr); ok {
+			port = tcpAddress.Port
+		}
+	}
 	loopbackPlan := webui.ListenPlan{Addresses: []string{"127.0.0.1"}, NeedsManualListen: true}
 	plan, planErr := webUIListenPlan(st, manualListen)
 	logStartup := func(format string, arguments ...any) {
@@ -114,12 +121,19 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		logStartup("推导 Web UI 监听地址失败，先只监听 127.0.0.1：%v", planErr)
 		plan = loopbackPlan
 	}
+	if injectedListener != nil {
+		plan.Addresses = appendListenerAddressOnce(plan.Addresses, listenerPlanAddress(injectedListener))
+	}
 	opsManager := ops.NewWithSettingInputs(st, webUISettingInputs(serveOpts))
 	updates := ops.NewUpdateService(ops.UpdateDependencies{Audit: opsManager.WriteUpdateAudit})
+	openServeWebUIStore := func() (*store.Store, func(), error) {
+		return st, func() {}, nil
+	}
 	restarts := ops.NewRestartService(ops.RestartDependencies{
 		NewService: serveOpts.ServiceRestarterFactory,
 		Audit:      opsManager.WriteRestartAudit,
 	})
+	remoteTasks := webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx)
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers:                serveWebUIServerSource{store: st},
@@ -127,6 +141,14 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		ServerConnectionTester: webuiservers.ConnectionTesterFromManagerWithContext(servermanage.New(st), ctx),
 		Secrets:                webuisecrets.FromManager(secretmanage.New(st)),
 		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
+		Shares:                 webuishares.FromStore(openServeWebUIStore),
+		SharesWriter:           webuishares.WriterFromStore(openServeWebUIStore),
+		SharesRemoteTasks:      remoteTasks,
+		ShareLatestChecks:      remoteTasks,
+		ShareUnmountRunner:     webuishares.UnmountTasksFromStoreWithContext(openServeWebUIStore, ctx),
+		ShareRevokeRunner:      webuishares.RevokeTasksFromStoreWithContext(openServeWebUIStore, ctx),
+		ShareReselectRunner:    webuishares.ReselectTasksFromStoreWithContext(openServeWebUIStore, ctx),
+		ShareResidueRunner:     webuishares.ResidueTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
 			return st, func() {}, nil
 		}),
@@ -165,6 +187,7 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 			firstPlan = false
 			return currentPlan, err
 		},
+		InitialListener: injectedListener,
 		Serve: func(listener net.Listener) error {
 			server := &http.Server{Handler: handler}
 			return server.ServeTLS(listener, tlsCert, tlsKey)
@@ -182,6 +205,15 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		}
 	}()
 	return manager, nil
+}
+
+func appendListenerAddressOnce(addresses []string, address string) []string {
+	for _, existing := range addresses {
+		if existing == address {
+			return addresses
+		}
+	}
+	return append(addresses, address)
 }
 
 func webUISettingInputs(opts ServeOpts) ops.SettingInputs {

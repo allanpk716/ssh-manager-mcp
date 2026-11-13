@@ -1,0 +1,25 @@
+{{define "content"}}
+<section class="share-delete">
+<h1>删除 {{.ShareDeletePreview.Name}}</h1>
+<div class="operation-refusal"><p>删除前请核对以下信息；确认一次后立即执行，登记删除不可恢复。</p></div>
+<dl class="detail-list">
+<dt>共享名</dt><dd>{{.ShareDeletePreview.Name}}</dd>
+<dt>提供方设备</dt><dd>{{.ShareDeletePreview.DeviceName}}</dd>
+<dt>固定盘符</dt><dd>{{.ShareDeletePreview.Drive}}:</dd>
+<dt>可挂载服务器</dt>
+<dd>
+{{if .ShareDeletePreview.MountableServers}}
+<ul>
+{{range .ShareDeletePreview.MountableServers}}<li>{{.Name}}（挂载点 {{.MountPoint}}）</li>{{end}}
+</ul>
+{{else}}（无）{{end}}
+</dd>
+</dl>
+<p class="form-help">本操作只删除登记，不会去服务器上卸载。需要在服务器上清理时，请使用「检查残留」与单台卸载。</p>
+<form method="post" action="/ui/shares/{{.ShareDeletePreview.ID}}/delete" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">确认删除</button>
+<a class="button-link" href="/ui/shares/{{.ShareDeletePreview.ID}}">取消</a>
+</form>
+</section>
+{{end}}

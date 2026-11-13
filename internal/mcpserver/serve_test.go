@@ -158,10 +158,14 @@ func TestRunServe_ShutdownOnCancel(t *testing.T) {
 
 	st := newTestStore(t)
 	defer st.Close()
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- RunServe(ctx, st, "127.0.0.1:0", "", "", ServeOpts{}) }()
+	go func() {
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 
 	cancel() // RunServe must exit cleanly regardless of timing
 	select {
@@ -204,6 +208,8 @@ func TestRunServe_AutoTLSCreatesCert(t *testing.T) {
 
 	st := newTestStore(t)
 	defer st.Close()
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -211,7 +217,7 @@ func TestRunServe_AutoTLSCreatesCert(t *testing.T) {
 	// Run in goroutine; cancel after a moment to let bind + cert-gen run.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- RunServe(ctx, st, "127.0.0.1:0", "", "", ServeOpts{}) // empty cert/key → auto-TLS path
+		errCh <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener)) // empty cert/key → auto-TLS path
 	}()
 
 	// Give it a moment to bind + generate, then cancel.

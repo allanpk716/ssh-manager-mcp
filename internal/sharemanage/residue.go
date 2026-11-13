@@ -36,6 +36,8 @@ const (
 // 名时只报告该共享的发现。
 type ResidueRequest struct {
 	Share string
+	// Source 标记这次残留检查来自哪类入口；零值按命令行来源处理。
+	Source Source
 }
 
 // ResidueFinding 是一台服务器上一个共享的残留结论，不包含共享地址、账号
@@ -115,7 +117,7 @@ func (m *Manager) Residue(ctx context.Context, request ResidueRequest) (*Residue
 		return results[i].ServerName < results[j].ServerName
 	})
 	report := &ResidueReport{Servers: results}
-	if err := m.writeResidueAudit(strings.TrimSpace(request.Share), results); err != nil {
+	if err := m.writeResidueAudit(strings.TrimSpace(request.Share), results, request.Source); err != nil {
 		return nil, err
 	}
 	return report, nil
@@ -211,7 +213,13 @@ func residueErrorNotice(err error) string {
 	}
 }
 
-func (m *Manager) writeResidueAudit(filterName string, results []ResidueServerResult) error {
+func (m *Manager) writeResidueAudit(
+	filterName string, results []ResidueServerResult, requestSource Source,
+) error {
+	source := requestSource
+	if source.kind == "" {
+		source = CLISource()
+	}
 	summary := map[string]any{}
 	if filterName != "" {
 		summary["share"] = filterName
@@ -234,5 +242,8 @@ func (m *Manager) writeResidueAudit(filterName string, results []ResidueServerRe
 		servers = append(servers, item)
 	}
 	summary["servers"] = servers
-	return m.store.WriteOwnerAudit("share-residue-check", summary)
+	row := store.OwnerAuditRow("share-residue-check", summary)
+	row.Source = source.kind
+	row.SourceIP = source.addr
+	return m.store.WriteAudit(row)
 }

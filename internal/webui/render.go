@@ -69,6 +69,30 @@ type pageData struct {
 	SecretAuthorizationView           string
 	SecretAuthorizationServerID       string
 	SecretAuthorizationNotice         string
+	SecretAuthorizationShareUnmounts  []SecretAuthorizationShareUnmount
+	Shares                            []ShareRow
+	ShareFilterDevice                 string
+	ShareFilterServer                 string
+	ShareDeviceOptions                []string
+	ShareServerOptions                []ServerRow
+	ShareDetail                       *ShareRow
+	ShareAuthorization                *ShareAuthorizationView
+	ShareDetailError                  string
+	ShareDetailNotice                 string
+	ShareRemoteTask                   *ShareRemoteTaskView
+	ShareRemoteOperationsAvailable    bool
+	ShareForm                         shareFormView
+	ShareEdit                         *shareEditView
+	ShareDeletePreview                *ShareRow
+	ShareUnmountEntries               []ShareUnmountEntry
+	ShareUnmount                      *ShareUnmountView
+	ShareUnmountBatch                 *ShareUnmountBatchView
+	ShareRevokeEntries                []ShareRevokeEntry
+	ShareRevoke                       *ShareRevokeView
+	ShareReselectEntries              []ShareReselectEntry
+	ShareReselect                     *ShareReselectView
+	ShareResidue                      *ShareResidueView
+	ShareDesktopGuide                 *ShareDesktopGuideView
 	SoftwareInventoryDevices          []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice           *SoftwareInventoryDevice
 	SoftwareInventorySearchRows       []SoftwareInventorySearchRow
@@ -199,6 +223,48 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(labels, "、")
 	},
+	"shareSystemLabel": func(system string) string {
+		switch system {
+		case "linux":
+			return "Linux"
+		case "darwin":
+			return "macOS"
+		case "windows":
+			return "Windows"
+		default:
+			return "系统未知"
+		}
+	},
+	"shareCheckStatusLabel": func(status string) string {
+		switch status {
+		case ShareCheckStatusMounted:
+			return "已挂载"
+		case ShareCheckStatusUnmounted:
+			return "未挂载"
+		case ShareCheckStatusSkipped:
+			return "不检测"
+		default:
+			return "不可达"
+		}
+	},
+	"shareMountActionLabel": func(action string) string {
+		switch action {
+		case "no-change":
+			return "无需改动"
+		case "first-mount-success":
+			return "首次挂载成功"
+		case "update-success":
+			return "更新挂载成功"
+		case "remount-success":
+			return "重新挂载成功"
+		default:
+			return action
+		}
+	},
+	"isWindowsShell": func(shell string) bool {
+		return shell == string(models.ShellPowerShell) ||
+			shell == string(models.ShellWindowsCmd)
+	},
 	"joinTags": func(items []string) string { return strings.Join(items, ",") },
 	"sharedStorageNames": func(items []ServerDetailSharedStorage) string {
 		names := make([]string, 0, len(items))
@@ -207,8 +273,9 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(names, "、")
 	},
-	"formatUnixTime": formatUnixTime,
-	"formatTime":     func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
+	"formatUnixTime":         formatUnixTime,
+	"sharesSMBPrerequisites": func() string { return sharesSMBPrerequisites },
+	"formatTime":             func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
 	"formatOptionalTime": func(value *time.Time) string {
 		if value == nil {
 			return "-"
@@ -218,6 +285,16 @@ var pageFuncs = template.FuncMap{
 	"declarationFormPath": declarationFormPath,
 	"addOne":              func(v int) int { return v + 1 },
 	"credentialLabel":     CredentialTypeLabel,
+	// shareUnmountResultLabel 把单台卸载任务结论分类换成页面文案。
+	"shareUnmountResultLabel": shareUnmountResultLabel,
+	// shareRevokeResultLabel 把撤销授权任务结论分类换成页面文案。
+	"shareRevokeResultLabel": shareRevokeResultLabel,
+	// shareReselectResultLabel 把重选地址任务结论分类换成页面文案。
+	"shareReselectResultLabel": shareReselectResultLabel,
+	// 残留检查的固定分类与发现痕迹文案固定在 Go 端，模板只负责展示。
+	"shareResidueStatusLabel":   shareResidueStatusLabel,
+	"shareResidueReasonLabel":   shareResidueReasonLabel,
+	"shareResidueFindingLabels": shareResidueFindingLabels,
 	// secretCellName 与 secretTargetValue 把授权格字段名、确认目标的编码
 	// 格式固定在 Go 端一处，模板只负责展示。
 	"secretCellName":     secretCellName,
@@ -252,16 +329,27 @@ func loadPageTemplates() (map[string]parsedPage, error) {
 		return nil, fmt.Errorf("读取内嵌页面模板失败：%w", err)
 	}
 	pages := make(map[string]parsedPage)
+	var sharedPaths []string
 	for _, entry := range entries {
 		if entry.IsDir() || entry.Name() == "layout.tmpl" {
 			continue
 		}
+		if strings.HasPrefix(entry.Name(), "_") {
+			sharedPaths = append(sharedPaths, "templates/"+entry.Name())
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || entry.Name() == "layout.tmpl" || strings.HasPrefix(entry.Name(), "_") {
+			continue
+		}
 		pagePath := "templates/" + entry.Name()
-		fragment, err := template.New(filepath.Base(pagePath)).Funcs(pageFuncs).ParseFS(templateFS, pagePath)
+		fragmentPaths := append([]string{pagePath}, sharedPaths...)
+		fragment, err := template.New(filepath.Base(pagePath)).Funcs(pageFuncs).ParseFS(templateFS, fragmentPaths...)
 		if err != nil {
 			return nil, fmt.Errorf("解析页面片段模板 %s 失败：%w", entry.Name(), err)
 		}
-		full, err := template.New("layout").Funcs(pageFuncs).ParseFS(templateFS, "templates/layout.tmpl", pagePath)
+		fullPaths := append([]string{"templates/layout.tmpl", pagePath}, sharedPaths...)
+		full, err := template.New("layout").Funcs(pageFuncs).ParseFS(templateFS, fullPaths...)
 		if err != nil {
 			return nil, fmt.Errorf("解析整页模板 %s 失败：%w", entry.Name(), err)
 		}

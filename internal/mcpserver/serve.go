@@ -672,6 +672,13 @@ type ServeOpts struct {
 	// ServiceRestarterFactory 由命令行注入，复用现有系统服务抽象构造
 	// serve 服务的重启句柄；测试可以换成桩，不触碰本机服务管理器。
 	ServiceRestarterFactory func() (ops.ServiceRestarter, error)
+	// mainListener 与 webUIListener 是包内测试注入点：监听器由测试先在
+	// 系统分配端口上打开，RunServe 直接使用，避免“先关端口再重绑”的竞态。
+	// 空值保持正式运行的地址绑定路径不变。
+	mainListener  net.Listener
+	webUIListener net.Listener
+	// discoveryAddress 是包内测试注入点；空值使用正式发现的固定端口。
+	discoveryAddress string
 }
 
 // RunServe runs the serve HTTP server until ctx is cancelled (SIGINT/SIGTERM,
@@ -693,6 +700,10 @@ type ServeOpts struct {
 // flags + env seams), and the UDP discovery responder is started on ctx (an
 // enhancement surface — it never fails the serve).
 func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string, opts ServeOpts) error {
+	listener := opts.mainListener
+	if listener != nil {
+		addr = listener.Addr().String()
+	}
 	runner, err := NewServeRunner(st)
 	if err != nil {
 		return err
@@ -757,10 +768,13 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		}
 	}()
 
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
+	if listener == nil {
+		listener, err = net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
 	}
+	ln := listener
 	// Emit the "listening" line only AFTER a successful bind so a bind failure
 	// (the early return above) never prints a misleading "listening" line.
 	// TLS is always on post-auto-TLS; "auto" denotes the self-signed case.
@@ -778,11 +792,6 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	// well, since stop and the ctx hookup are the same idempotent Once).
 	// StartDiscovery binds the socket regardless of the switch state (T7) —
 	// off is answered per packet, so an off→on flip needs no restart.
-	discLabel := "off"
-	if runner.DiscoveryEnabled() {
-		discLabel = "on"
-	}
-	fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: udp/%d (%s)\n", discoveryPort, discLabel)
 	discName := ""
 	if v, ok, gerr := st.GetSetting(settingDiscoveryName); gerr == nil && ok {
 		discName = v // 缺省(未设/读失败)由 StartDiscovery 兜底到 hostname
@@ -791,7 +800,30 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 	if ta, ok := ln.Addr().(*net.TCPAddr); ok {
 		tcpPort = ta.Port // offer 带 TCP 真实端口(测试/非常规 --addr 端口都对)
 	}
-	stopDiscovery := StartDiscovery(ctx, discName, tcpPort, runner.pairSPKI, runner.DiscoveryEnabled)
+	discLabel := "off"
+	if runner.DiscoveryEnabled() {
+		discLabel = "on"
+	}
+	var stopDiscovery func()
+	if opts.discoveryAddress == "" {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: udp/%d (%s)\n", discoveryPort, discLabel)
+		stopDiscovery = StartDiscovery(ctx, discName, tcpPort, runner.pairSPKI, runner.DiscoveryEnabled)
+	} else {
+		var discoveryLocalAddress *net.UDPAddr
+		var discoveryErr error
+		stopDiscovery, discoveryLocalAddress, discoveryErr = StartDiscoveryAt(
+			ctx,
+			opts.discoveryAddress,
+			discName,
+			tcpPort,
+			runner.pairSPKI,
+			runner.DiscoveryEnabled,
+		)
+		if discoveryErr != nil {
+			return fmt.Errorf("serve discovery: %w", discoveryErr)
+		}
+		fmt.Fprintf(os.Stderr, "sshmgr serve: discovery: %s (%s)\n", discoveryLocalAddress, discLabel)
+	}
 	defer stopDiscovery()
 
 	// 软件清单采集调度（规格 #177「采集调度」）：权威端启动即执行一轮，

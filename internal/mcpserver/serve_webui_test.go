@@ -11,7 +11,6 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -22,17 +21,22 @@ import (
 	"ssh-manager-mcp/internal/webui"
 )
 
-func reserveLocalPort(t *testing.T) int {
+func openLocalTCPListener(t *testing.T) net.Listener {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener
+}
+
+func serveOptionsForTest(mainListener, webUIListener net.Listener) ServeOpts {
+	return ServeOpts{
+		mainListener:     mainListener,
+		webUIListener:    webUIListener,
+		discoveryAddress: "127.0.0.1:0",
 	}
-	return port
 }
 
 func prepareServeWebUITest(t *testing.T, role roles.Role) *store.Store {
@@ -55,9 +59,8 @@ func prepareServeWebUITest(t *testing.T, role roles.Role) *store.Store {
 
 func TestRunServeSeparatesWebUIListenerFromMainListener(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleServer)
-	if err := st.SetSetting(settingWebUIPort, "17879"); err != nil {
-		t.Fatal(err)
-	}
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 
 	runner, err := NewServeRunner(st)
 	if err != nil {
@@ -76,7 +79,9 @@ func TestRunServeSeparatesWebUIListenerFromMainListener(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- RunServe(ctx, st, "127.0.0.1:0", "", "", ServeOpts{}) }()
+	go func() {
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 
 	client := &http.Client{
 		Transport: &http.Transport{
@@ -87,7 +92,7 @@ func TestRunServeSeparatesWebUIListenerFromMainListener(t *testing.T) {
 	var body string
 	var succeeded bool
 	for attempt := 0; attempt < 50; attempt++ {
-		resp, err := client.Get("https://127.0.0.1:17879/ui/login")
+		resp, err := client.Get("https://" + webUIListener.Addr().String() + "/ui/login")
 		if err == nil {
 			raw, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -118,10 +123,8 @@ func TestRunServeSeparatesWebUIListenerFromMainListener(t *testing.T) {
 
 func TestRunServeFallsBackToLoopbackWhenListenDerivationFails(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleServer)
-	webPort := reserveLocalPort(t)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
-		t.Fatal(err)
-	}
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 	if err := st.SetSetting(settingWebUIListen, "not-an-ip"); err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +132,9 @@ func TestRunServeFallsBackToLoopbackWhenListenDerivationFails(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- RunServe(ctx, st, "127.0.0.1:0", "", "", ServeOpts{}) }()
+	go func() {
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 
 	client := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
@@ -142,7 +147,7 @@ func TestRunServeFallsBackToLoopbackWhenListenDerivationFails(t *testing.T) {
 			t.Fatalf("监听推导失败不应停止 serve：%v", err)
 		default:
 		}
-		resp, err := client.Get(fmt.Sprintf("https://127.0.0.1:%d/ui/login", webPort))
+		resp, err := client.Get("https://" + webUIListener.Addr().String() + "/ui/login")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
@@ -164,17 +169,16 @@ func TestRunServeFallsBackToLoopbackWhenListenDerivationFails(t *testing.T) {
 
 func TestRunServeStartsWebUIOnlyForServerRole(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleStandalone)
-	webPort := reserveLocalPort(t)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
-		t.Fatal(err)
-	}
-	mainPort := reserveLocalPort(t)
-	mainAddress := fmt.Sprintf("127.0.0.1:%d", mainPort)
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
+	mainAddress := mainListener.Addr().String()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- RunServe(ctx, st, mainAddress, "", "", ServeOpts{}) }()
+	go func() {
+		done <- RunServe(ctx, st, mainAddress, "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -193,13 +197,6 @@ func TestRunServeStartsWebUIOnlyForServerRole(t *testing.T) {
 	if time.Now().After(deadline) {
 		t.Fatal("等待主监听启动超时")
 	}
-	if connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", webPort), 100*time.Millisecond); err == nil {
-		connection.Close()
-		cancel()
-		<-done
-		t.Fatal("单机角色不应打开权威端 Web UI 监听")
-	}
-
 	cancel()
 	select {
 	case err := <-done:
@@ -209,15 +206,16 @@ func TestRunServeStartsWebUIOnlyForServerRole(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("RunServe 关闭超时")
 	}
+	if replacement, err := net.Listen("tcp", webUIListener.Addr().String()); err == nil {
+		replacement.Close()
+		t.Fatal("单机角色不应打开权威端 Web UI 监听")
+	}
 }
 
 func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 	st := prepareServeWebUITest(t, roles.RoleServer)
-	mainPort := reserveLocalPort(t)
-	webPort := reserveLocalPort(t)
-	if err := st.SetSetting(settingWebUIPort, strconv.Itoa(webPort)); err != nil {
-		t.Fatal(err)
-	}
+	mainListener := openLocalTCPListener(t)
+	webUIListener := openLocalTCPListener(t)
 	profileID, err := st.AddProfile("ops")
 	if err != nil {
 		t.Fatal(err)
@@ -232,13 +230,15 @@ func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- RunServe(ctx, st, "127.0.0.1:"+strconv.Itoa(mainPort), "", "", ServeOpts{}) }()
+	go func() {
+		done <- RunServe(ctx, st, mainListener.Addr().String(), "", "", serveOptionsForTest(mainListener, webUIListener))
+	}()
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	base := "https://127.0.0.1:" + strconv.Itoa(webPort)
+	base := "https://" + webUIListener.Addr().String()
 	client := &http.Client{
 		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // 测试只验证接线，不校对自签证书。
 		Jar:       jar,
@@ -299,9 +299,9 @@ func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 	if issueResp.StatusCode != http.StatusOK {
 		t.Fatalf("签发设备码状态码 = %d，应为 200，页面：\n%s", issueResp.StatusCode, issueBody)
 	}
-	wantURL := "cache pull --url https://127.0.0.1:" + strconv.Itoa(mainPort)
+	wantURL := "cache pull --url https://" + mainListener.Addr().String()
 	if !strings.Contains(string(issueBody), wantURL) {
-		t.Fatalf("拉取命令应带权威端主监听端口 %d：\n%s", mainPort, issueBody)
+		t.Fatalf("拉取命令应带权威端主监听地址 %s：\n%s", mainListener.Addr().String(), issueBody)
 	}
 	if !strings.Contains(string(issueBody), "sha256:") {
 		t.Fatalf("一次性页面应带证书公钥指纹：\n%s", issueBody)

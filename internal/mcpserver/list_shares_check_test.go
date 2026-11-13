@@ -184,17 +184,25 @@ func newListSharesCheckFixture(t *testing.T) listSharesCheckFixture {
 	}
 	fixture.serverIDs["windows-web"] = windowsID
 
-	// 模拟 SSH 不可达：指向一个已经关闭的本机端口。
-	closedListener, err := net.Listen("tcp", "127.0.0.1:0")
+	// 模拟 SSH 不可达：测试持有端口并立即关闭接入的连接，端口不会被其他
+	// 进程复用，也不会出现正常的 SSH 服务。
+	unavailableListener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	closedPort := closedListener.Addr().(*net.TCPAddr).Port
-	if err := closedListener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() { _ = unavailableListener.Close() })
+	go func() {
+		for {
+			connection, err := unavailableListener.Accept()
+			if err != nil {
+				return
+			}
+			_ = connection.Close()
+		}
+	}()
+	unavailablePort := unavailableListener.Addr().(*net.TCPAddr).Port
 	unreachableID, err := source.AddServer(&models.Server{
-		Name: "unreachable", Host: "127.0.0.1", Port: closedPort, User: "deploy",
+		Name: "unreachable", Host: "127.0.0.1", Port: unavailablePort, User: "deploy",
 		AuthMethod: models.AuthPassword,
 	})
 	if err != nil {
