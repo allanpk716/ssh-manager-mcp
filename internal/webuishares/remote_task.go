@@ -2,8 +2,6 @@ package webuishares
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
@@ -13,15 +11,11 @@ import (
 	"ssh-manager-mcp/internal/webui"
 )
 
-const shareRemoteTaskRetention = 64
-
 type shareRemoteTaskStore struct {
-	ctx          context.Context
 	open         func() (*store.Store, func(), error)
-	mu           sync.Mutex
-	tasks        map[string]*webui.ShareRemoteTaskStatus
+	tasks        *shareTaskTable[webui.ShareRemoteTaskStatus]
+	checkMu      sync.Mutex
 	latestChecks map[string][]webui.ShareCheckResult
-	order        []string
 }
 
 // RemoteTasksFromStore 返回绑定存储打开函数的共享存储远端任务视图。任
@@ -37,13 +31,25 @@ func RemoteTasksFromStore(
 func RemoteTasksFromStoreWithContext(
 	open func() (*store.Store, func(), error), ctx context.Context,
 ) webui.ShareRemoteTasks {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return &shareRemoteTaskStore{
-		ctx: ctx, open: open, tasks: map[string]*webui.ShareRemoteTaskStatus{},
+		open: open,
+		tasks: newShareTaskTable(
+			ctx, cloneShareRemoteTaskStatus,
+			func(task *webui.ShareRemoteTaskStatus) bool { return shareTaskFinished(task.State) },
+		),
 		latestChecks: map[string][]webui.ShareCheckResult{},
 	}
+}
+
+func cloneShareRemoteTaskStatus(task *webui.ShareRemoteTaskStatus) *webui.ShareRemoteTaskStatus {
+	status := *task
+	status.CheckResult = append([]webui.ShareCheckResult(nil), task.CheckResult...)
+	if task.MountResult != nil {
+		result := *task.MountResult
+		result.Notices = append([]string(nil), task.MountResult.Notices...)
+		status.MountResult = &result
+	}
+	return &status
 }
 
 func (s *shareRemoteTaskStore) StartShareRemoteTask(
@@ -60,46 +66,32 @@ func (s *shareRemoteTaskStore) StartShareRemoteTask(
 	if request.Operation == webui.ShareRemoteOperationMount && request.ServerID == "" {
 		return "", fmt.Errorf("服务器标识不能为空")
 	}
-	id, err := newShareRemoteTaskID()
+	id, err := newShareTaskID()
 	if err != nil {
 		return "", err
 	}
 	task := &webui.ShareRemoteTaskStatus{
 		ID: id, Operation: request.Operation, ShareID: request.ShareID,
-		ServerID: request.ServerID, State: webui.ShareRemoteTaskRunning,
+		ServerID: request.ServerID, State: webui.ShareTaskRunning,
 	}
-	s.mu.Lock()
-	s.tasks[id] = task
-	s.order = append(s.order, id)
-	s.mu.Unlock()
-	go s.run(task, request)
+	s.tasks.register(id, task)
+	s.tasks.launch(task, func(task *webui.ShareRemoteTaskStatus, ctx context.Context) {
+		s.run(task, request, ctx)
+	})
 	return id, nil
 }
 
 func (s *shareRemoteTaskStore) ShareRemoteTaskStatus(
 	taskID string,
 ) (*webui.ShareRemoteTaskStatus, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	task, ok := s.tasks[taskID]
-	if !ok {
-		return nil, false
-	}
-	status := *task
-	status.CheckResult = append([]webui.ShareCheckResult(nil), task.CheckResult...)
-	if task.MountResult != nil {
-		result := *task.MountResult
-		result.Notices = append([]string(nil), task.MountResult.Notices...)
-		status.MountResult = &result
-	}
-	return &status, true
+	return s.tasks.status(taskID)
 }
 
 // LatestShareCheck 返回一处共享存储最近一次完成的现场探测结果。结果只
 // 保存在当前进程内存里，进程重启后需要重新探测。
 func (s *shareRemoteTaskStore) LatestShareCheck(shareID string) ([]webui.ShareCheckResult, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
 	results, ok := s.latestChecks[shareID]
 	if !ok {
 		return nil, false
@@ -108,40 +100,37 @@ func (s *shareRemoteTaskStore) LatestShareCheck(shareID string) ([]webui.ShareCh
 }
 
 func (s *shareRemoteTaskStore) run(
-	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest,
+	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest, ctx context.Context,
 ) {
 	switch request.Operation {
 	case webui.ShareRemoteOperationCheck:
-		s.runCheck(task, request)
+		s.runCheck(task, request, ctx)
 	case webui.ShareRemoteOperationMount:
-		s.runMount(task, request)
+		s.runMount(task, request, ctx)
 	}
 }
 
 func (s *shareRemoteTaskStore) runCheck(
-	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest,
+	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest, ctx context.Context,
 ) {
 	var report *sharemanage.CheckReport
 	err := withStore(s.open, func(st *store.Store) error {
 		var operationErr error
-		report, operationErr = sharemanage.New(st).Check(s.ctx, sharemanage.CheckRequest{
+		report, operationErr = sharemanage.New(st).Check(ctx, sharemanage.CheckRequest{
 			Share: request.ShareID,
 		})
 		return operationErr
 	})
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err != nil {
-		task.State = webui.ShareRemoteTaskError
-		task.Message = "现场探测失败，请稍后重试。"
-		s.pruneLocked()
+		s.tasks.update(task.ID, func(task *webui.ShareRemoteTaskStatus) {
+			task.State = webui.ShareTaskError
+			task.Message = "现场探测失败，请稍后重试。"
+		})
 		return
 	}
-	task.State = webui.ShareRemoteTaskDone
-	task.ShareName = report.ShareName
-	task.CheckResult = make([]webui.ShareCheckResult, 0, len(report.Servers))
+	results := make([]webui.ShareCheckResult, 0, len(report.Servers))
 	for _, result := range report.Servers {
-		task.CheckResult = append(task.CheckResult, webui.ShareCheckResult{
+		results = append(results, webui.ShareCheckResult{
 			ServerID: result.ServerID, ServerName: result.ServerName,
 			System: result.System, Status: result.Status, Reason: result.Reason,
 			Notice: result.Notice, Managed: result.Managed, Version: result.Version,
@@ -149,70 +138,44 @@ func (s *shareRemoteTaskStore) runCheck(
 			ObservedAt: result.ObservedAt.Format(time.RFC3339),
 		})
 	}
-	s.latestChecks[request.ShareID] = append([]webui.ShareCheckResult(nil), task.CheckResult...)
-	s.pruneLocked()
+	s.checkMu.Lock()
+	s.latestChecks[request.ShareID] = append([]webui.ShareCheckResult(nil), results...)
+	s.checkMu.Unlock()
+	s.tasks.update(task.ID, func(task *webui.ShareRemoteTaskStatus) {
+		task.State = webui.ShareTaskDone
+		task.ShareName = report.ShareName
+		task.CheckResult = results
+	})
 }
 
 func (s *shareRemoteTaskStore) runMount(
-	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest,
+	task *webui.ShareRemoteTaskStatus, request webui.ShareRemoteTaskRequest, ctx context.Context,
 ) {
 	var result *sharemanage.MountResult
 	err := withStore(s.open, func(st *store.Store) error {
 		var operationErr error
-		result, operationErr = sharemanage.New(st).Mount(s.ctx, sharemanage.MountRequest{
+		result, operationErr = sharemanage.New(st).Mount(ctx, sharemanage.MountRequest{
 			Share: request.ShareID, Server: request.ServerID,
 			Source: sharemanage.WebUISource(request.Source.RemoteAddress),
 		})
 		return operationErr
 	})
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err != nil {
-		task.State = webui.ShareRemoteTaskError
-		task.Message = err.Error()
-		s.pruneLocked()
+		s.tasks.update(task.ID, func(task *webui.ShareRemoteTaskStatus) {
+			task.State = webui.ShareTaskError
+			task.Message = err.Error()
+		})
 		return
 	}
-	task.State = webui.ShareRemoteTaskDone
-	task.ShareName = result.ShareName
-	task.MountResult = &webui.ShareMountResult{
-		ShareName: result.ShareName, ServerID: result.ServerID,
-		ServerName: result.ServerName, Version: result.Version,
-		MountPoint: result.MountPoint, Network: result.Network,
-		NetworkSequence: result.NetworkSequence, Action: result.Action,
-		Notices: append([]string(nil), result.Notices...),
-	}
-	s.pruneLocked()
-}
-
-func (s *shareRemoteTaskStore) pruneLocked() {
-	if len(s.tasks) <= shareRemoteTaskRetention {
-		return
-	}
-	remove := len(s.tasks) - shareRemoteTaskRetention
-	for _, id := range s.order {
-		if remove == 0 {
-			break
+	s.tasks.update(task.ID, func(task *webui.ShareRemoteTaskStatus) {
+		task.State = webui.ShareTaskDone
+		task.ShareName = result.ShareName
+		task.MountResult = &webui.ShareMountResult{
+			ShareName: result.ShareName, ServerID: result.ServerID,
+			ServerName: result.ServerName, Version: result.Version,
+			MountPoint: result.MountPoint, Network: result.Network,
+			NetworkSequence: result.NetworkSequence, Action: result.Action,
+			Notices: append([]string(nil), result.Notices...),
 		}
-		if _, ok := s.tasks[id]; !ok {
-			continue
-		}
-		delete(s.tasks, id)
-		remove--
-	}
-	kept := make([]string, 0, len(s.tasks))
-	for _, id := range s.order {
-		if _, ok := s.tasks[id]; ok {
-			kept = append(kept, id)
-		}
-	}
-	s.order = kept
-}
-
-func newShareRemoteTaskID() (string, error) {
-	var data [16]byte
-	if _, err := rand.Read(data[:]); err != nil {
-		return "", fmt.Errorf("生成共享存储远端任务标识失败：%w", err)
-	}
-	return hex.EncodeToString(data[:]), nil
+	})
 }

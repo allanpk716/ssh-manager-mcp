@@ -2,11 +2,7 @@ package webuishares
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"sync"
 
 	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/sharemount"
@@ -14,60 +10,67 @@ import (
 	"ssh-manager-mcp/internal/webui"
 )
 
-// unmountTaskRetention 是已完成卸载任务的状态保留数量；页面轮询只需要最
-// 近的任务，进程重启后任务表自然清空。
-const unmountTaskRetention = 32
-
 // unmountRunner 把共享存储详情页的单台卸载请求接到共享存储管理模块，并
 // 在进程内维护「启动任务、轮询任务状态」的任务表。远端卸载、占用进程检
 // 测与强制卸载全部复用共享存储管理模块，不另写远端脚本。
 type unmountRunner struct {
 	open  func() (*store.Store, func(), error)
-	mu    sync.Mutex
-	tasks map[string]*webui.ShareUnmountTaskStatus
+	tasks *shareTaskTable[webui.ShareUnmountTaskStatus]
 }
 
 // UnmountTasksFromStore 把按请求打开的存储接成共享存储单台卸载任务视图。
 func UnmountTasksFromStore(open func() (*store.Store, func(), error)) webui.ShareUnmountRunner {
-	return &unmountRunner{open: open, tasks: map[string]*webui.ShareUnmountTaskStatus{}}
+	return UnmountTasksFromStoreWithContext(open, context.Background())
+}
+
+// UnmountTasksFromStoreWithContext 与 UnmountTasksFromStore 相同，并让任
+// 务继承 Web UI 服务的关闭上下文。
+func UnmountTasksFromStoreWithContext(
+	open func() (*store.Store, func(), error), ctx context.Context,
+) webui.ShareUnmountRunner {
+	return &unmountRunner{
+		open: open,
+		tasks: newShareTaskTable(
+			ctx, cloneShareUnmountTaskStatus,
+			func(task *webui.ShareUnmountTaskStatus) bool { return shareTaskFinished(task.State) },
+		),
+	}
+}
+
+func cloneShareUnmountTaskStatus(task *webui.ShareUnmountTaskStatus) *webui.ShareUnmountTaskStatus {
+	status := *task
+	status.Notices = append([]string(nil), task.Notices...)
+	status.BusyProcesses = append([]webui.ShareUnmountBusyProcess(nil), task.BusyProcesses...)
+	return &status
 }
 
 // StartShareUnmount 校验输入后启动后台卸载任务并立即返回任务标识。
 func (r *unmountRunner) StartShareUnmount(
-	request webui.ShareUnmountRequest, source webui.ShareWriteSource,
+	request webui.ShareUnmountRequest,
 ) (string, error) {
 	if request.ShareID == "" || request.ShareName == "" ||
 		request.ServerID == "" || request.ServerName == "" {
 		return "", errors.New("共享存储与服务器条目不能为空")
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	id, err := randomUnmountTaskID()
+	id, err := newShareTaskID()
 	if err != nil {
 		return "", err
 	}
 	task := &webui.ShareUnmountTaskStatus{
-		ID: id, State: "running",
+		ID: id, State: webui.ShareTaskRunning,
 		ShareID: request.ShareID, ShareName: request.ShareName,
 		ServerID: request.ServerID, ServerName: request.ServerName, Force: request.Force,
 	}
-	r.tasks[id] = task
-	go r.runUnmount(task, request, source)
+	r.tasks.register(id, task)
+	r.tasks.launch(task, func(task *webui.ShareUnmountTaskStatus, ctx context.Context) {
+		r.runUnmount(task, request, ctx)
+	})
 	return id, nil
 }
 
 // ShareUnmountStatus 返回任务状态；任务不存在或已被清理时返回 false。
 func (r *unmountRunner) ShareUnmountStatus(taskID string) (*webui.ShareUnmountTaskStatus, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	task, ok := r.tasks[taskID]
-	if !ok {
-		return nil, false
-	}
-	status := *task
-	status.Notices = append([]string(nil), task.Notices...)
-	status.BusyProcesses = append([]webui.ShareUnmountBusyProcess(nil), task.BusyProcesses...)
-	return &status, true
+	return r.tasks.status(taskID)
 }
 
 // runUnmount 在后台执行一次单台卸载。共享存储管理模块负责远端行为与审
@@ -75,27 +78,27 @@ func (r *unmountRunner) ShareUnmountStatus(taskID string) (*webui.ShareUnmountTa
 func (r *unmountRunner) runUnmount(
 	task *webui.ShareUnmountTaskStatus,
 	request webui.ShareUnmountRequest,
-	source webui.ShareWriteSource,
+	ctx context.Context,
 ) {
-	finish := func(result, failureMessage string, notices []string, busy []webui.ShareUnmountBusyProcess, version int64) {
-		r.mu.Lock()
-		task.State = "done"
-		task.Result = result
-		task.FailureMessage = failureMessage
-		task.Notices = notices
-		task.BusyProcesses = busy
-		task.Version = version
-		r.pruneTasksLocked()
-		r.mu.Unlock()
+	finish := func(result, failureMessage string, notices []string,
+		busy []webui.ShareUnmountBusyProcess, version int64) {
+		r.tasks.update(task.ID, func(task *webui.ShareUnmountTaskStatus) {
+			task.State = webui.ShareTaskDone
+			task.Result = result
+			task.FailureMessage = failureMessage
+			task.Notices = notices
+			task.BusyProcesses = busy
+			task.Version = version
+		})
 	}
 	st, closeStore, err := r.open()
 	if err != nil {
 		finish("error", "打开共享存储数据失败："+err.Error(), nil, nil, 0)
 		return
 	}
-	result, unmountErr := sharemanage.New(st).Unmount(context.Background(), sharemanage.UnmountRequest{
+	result, unmountErr := sharemanage.New(st).Unmount(ctx, sharemanage.UnmountRequest{
 		Share: request.ShareName, Server: request.ServerName, Force: request.Force,
-		Source: sharemanage.WebUISource(source.RemoteAddress),
+		Source: sharemanage.WebUISource(request.Source.RemoteAddress),
 	})
 	// 先关闭后台连接，再把任务标记为完成，避免页面读取结果时与后台连接
 	// 的数据库锁竞争。
@@ -142,26 +145,4 @@ func unmountErrorResult(err error, result *sharemanage.UnmountResult) string {
 	default:
 		return "error"
 	}
-}
-
-func (r *unmountRunner) pruneTasksLocked() {
-	if len(r.tasks) <= unmountTaskRetention {
-		return
-	}
-	for id, task := range r.tasks {
-		if task.State != "running" {
-			delete(r.tasks, id)
-			if len(r.tasks) <= unmountTaskRetention {
-				return
-			}
-		}
-	}
-}
-
-func randomUnmountTaskID() (string, error) {
-	buffer := make([]byte, 16)
-	if _, err := rand.Read(buffer); err != nil {
-		return "", fmt.Errorf("生成卸载任务标识失败：%w", err)
-	}
-	return hex.EncodeToString(buffer), nil
 }

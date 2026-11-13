@@ -16,6 +16,7 @@ type ShareReselectRequest struct {
 	ServerID   string
 	ServerName string
 	Force      bool
+	Source     ShareWriteSource
 }
 
 // ShareReselectBusyProcess 是页面上一个占用挂载点的进程，只含进程号、用
@@ -31,7 +32,7 @@ type ShareReselectBusyProcess struct {
 // 给出可直接展示的说明。
 type ShareReselectTaskStatus struct {
 	ID              string
-	State           string
+	State           ShareTaskState
 	ShareID         string
 	ShareName       string
 	ServerID        string
@@ -51,7 +52,7 @@ type ShareReselectTaskStatus struct {
 // 客户端不提供，重选路由不存在。实现必须立即返回任务标识，远端操作在
 // 后台执行。
 type ShareReselectRunner interface {
-	StartShareReselect(request ShareReselectRequest, source ShareWriteSource) (string, error)
+	StartShareReselect(request ShareReselectRequest) (string, error)
 	ShareReselectStatus(taskID string) (*ShareReselectTaskStatus, bool)
 }
 
@@ -178,8 +179,9 @@ func (h *handler) handleShareReselectPost(w http.ResponseWriter, r *http.Request
 	taskID, err := h.cfg.ShareReselectRunner.StartShareReselect(ShareReselectRequest{
 		ShareID: view.Share.ID, ShareName: view.Share.Name,
 		ServerID: view.Server.ID, ServerName: view.Server.Name,
-		Force: r.PostFormValue("force") == "1",
-	}, ShareWriteSource{RemoteAddress: remoteIP(r)})
+		Force:  r.PostFormValue("force") == "1",
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
 	if err != nil {
 		h.logError(r, "启动共享存储重选地址任务失败", err)
 		h.renderError(w, r, http.StatusInternalServerError, "启动重选失败", "启动重选地址任务失败，请稍后重试。")

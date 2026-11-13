@@ -61,13 +61,6 @@ type ShareRevokeBusyProcess struct {
 	Command   string
 }
 
-// ShareRevokeTaskState 是撤销授权任务状态代号。
-const (
-	ShareRevokeTaskRunning = "running"
-	ShareRevokeTaskDone    = "done"
-	ShareRevokeTaskError   = "error"
-)
-
 // ShareRevokeResult 是撤销授权任务完成后的固定结论。
 type ShareRevokeResult struct {
 	Result                string
@@ -85,7 +78,7 @@ type ShareRevokeResult struct {
 // Web UI 进程里，进程重启后不排队补跑。
 type ShareRevokeTaskStatus struct {
 	ID             string
-	State          string
+	State          ShareTaskState
 	ShareID        string
 	ShareName      string
 	ServerID       string

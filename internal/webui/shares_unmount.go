@@ -16,6 +16,7 @@ type ShareUnmountRequest struct {
 	ServerID   string
 	ServerName string
 	Force      bool
+	Source     ShareWriteSource
 }
 
 // ShareUnmountBusyProcess 是页面上一个占用挂载点的进程，只含进程号、用户
@@ -31,7 +32,7 @@ type ShareUnmountBusyProcess struct {
 // 出可直接展示的说明。
 type ShareUnmountTaskStatus struct {
 	ID             string
-	State          string
+	State          ShareTaskState
 	ShareID        string
 	ShareName      string
 	ServerID       string
@@ -48,7 +49,7 @@ type ShareUnmountTaskStatus struct {
 // 客户端不提供，卸载路由不存在。实现必须立即返回任务标识，远端操作在后
 // 台执行。
 type ShareUnmountRunner interface {
-	StartShareUnmount(request ShareUnmountRequest, source ShareWriteSource) (string, error)
+	StartShareUnmount(request ShareUnmountRequest) (string, error)
 	ShareUnmountStatus(taskID string) (*ShareUnmountTaskStatus, bool)
 }
 
@@ -203,8 +204,9 @@ func (h *handler) handleShareUnmountPost(w http.ResponseWriter, r *http.Request,
 	taskID, err := h.cfg.ShareUnmountRunner.StartShareUnmount(ShareUnmountRequest{
 		ShareID: view.Share.ID, ShareName: view.Share.Name,
 		ServerID: view.Server.ID, ServerName: view.Server.Name,
-		Force: r.PostFormValue("force") == "1",
-	}, ShareWriteSource{RemoteAddress: remoteIP(r)})
+		Force:  r.PostFormValue("force") == "1",
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
 	if err != nil {
 		h.logError(r, "启动共享存储单台卸载任务失败", err)
 		h.renderError(w, r, http.StatusInternalServerError, "启动卸载失败", "启动卸载任务失败，请稍后重试。")

@@ -7,11 +7,15 @@ const (
 	ShareRemoteOperationMount = "mount"
 )
 
-// ShareRemoteTaskState 是远端操作任务状态代号。
+// ShareTaskState 是共享存储远端操作任务的状态代号：running 表示后台执
+// 行中，done 表示已结束并带结论，error 表示启动后的执行失败。
+type ShareTaskState string
+
+// 共享存储远端操作任务的三个状态代号。
 const (
-	ShareRemoteTaskRunning = "running"
-	ShareRemoteTaskDone    = "done"
-	ShareRemoteTaskError   = "error"
+	ShareTaskRunning ShareTaskState = "running"
+	ShareTaskDone    ShareTaskState = "done"
+	ShareTaskError   ShareTaskState = "error"
 )
 
 // ShareCheckStatus 是页面展示的现场状态代号。
@@ -65,7 +69,7 @@ type ShareRemoteTaskStatus struct {
 	ShareID     string
 	ShareName   string
 	ServerID    string
-	State       string
+	State       ShareTaskState
 	Message     string
 	CheckResult []ShareCheckResult
 	MountResult *ShareMountResult

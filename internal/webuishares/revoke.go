@@ -3,7 +3,6 @@ package webuishares
 import (
 	"context"
 	"errors"
-	"sync"
 
 	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/store"
@@ -11,11 +10,8 @@ import (
 )
 
 type revokeRunner struct {
-	ctx   context.Context
 	open  func() (*store.Store, func(), error)
-	mu    sync.Mutex
-	tasks map[string]*webui.ShareRevokeTaskStatus
-	order []string
+	tasks *shareTaskTable[webui.ShareRevokeTaskStatus]
 }
 
 // RevokeTasksFromStore 把按请求打开的存储接成共享存储单台撤销授权任务
@@ -31,12 +27,25 @@ func RevokeTasksFromStore(
 func RevokeTasksFromStoreWithContext(
 	open func() (*store.Store, func(), error), ctx context.Context,
 ) webui.ShareRevokeRunner {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return &revokeRunner{
-		ctx: ctx, open: open, tasks: map[string]*webui.ShareRevokeTaskStatus{},
+		open: open,
+		tasks: newShareTaskTable(
+			ctx, cloneShareRevokeTaskStatus,
+			func(task *webui.ShareRevokeTaskStatus) bool { return shareTaskFinished(task.State) },
+		),
 	}
+}
+
+func cloneShareRevokeTaskStatus(task *webui.ShareRevokeTaskStatus) *webui.ShareRevokeTaskStatus {
+	status := *task
+	if task.Result != nil {
+		result := *task.Result
+		result.RemainingMountServers = append([]string(nil), task.Result.RemainingMountServers...)
+		result.BusyProcesses = append([]webui.ShareRevokeBusyProcess(nil), task.Result.BusyProcesses...)
+		result.Notices = append([]string(nil), task.Result.Notices...)
+		status.Result = &result
+	}
+	return &status
 }
 
 func (r *revokeRunner) StartShareRevoke(
@@ -46,48 +55,35 @@ func (r *revokeRunner) StartShareRevoke(
 		request.ServerID == "" || request.ServerName == "" {
 		return "", errors.New("共享存储与服务器条目不能为空")
 	}
-	id, err := newShareRemoteTaskID()
+	id, err := newShareTaskID()
 	if err != nil {
 		return "", err
 	}
 	task := &webui.ShareRevokeTaskStatus{
-		ID: id, State: webui.ShareRevokeTaskRunning,
+		ID: id, State: webui.ShareTaskRunning,
 		ShareID: request.ShareID, ShareName: request.ShareName,
 		ServerID: request.ServerID, ServerName: request.ServerName,
 		ServerShell: request.ServerShell, MountPoint: request.MountPoint,
 	}
-	r.mu.Lock()
-	r.tasks[id] = task
-	r.order = append(r.order, id)
-	r.mu.Unlock()
-	go r.run(task, request)
+	r.tasks.register(id, task)
+	r.tasks.launch(task, func(task *webui.ShareRevokeTaskStatus, ctx context.Context) {
+		r.run(task, request, ctx)
+	})
 	return id, nil
 }
 
 func (r *revokeRunner) ShareRevokeStatus(taskID string) (*webui.ShareRevokeTaskStatus, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	task, ok := r.tasks[taskID]
-	if !ok {
-		return nil, false
-	}
-	status := *task
-	if task.Result != nil {
-		result := *task.Result
-		result.RemainingMountServers = append([]string(nil), task.Result.RemainingMountServers...)
-		result.BusyProcesses = append([]webui.ShareRevokeBusyProcess(nil), task.Result.BusyProcesses...)
-		result.Notices = append([]string(nil), task.Result.Notices...)
-		status.Result = &result
-	}
-	return &status, true
+	return r.tasks.status(taskID)
 }
 
-func (r *revokeRunner) run(task *webui.ShareRevokeTaskStatus, request webui.ShareRevokeRequest) {
+func (r *revokeRunner) run(
+	task *webui.ShareRevokeTaskStatus, request webui.ShareRevokeRequest, ctx context.Context,
+) {
 	var result *sharemanage.RevokeResult
 	err := withStore(r.open, func(st *store.Store) error {
 		var operationErr error
 		if request.CleanupOnly {
-			unmount, cleanupErr := sharemanage.New(st).Unmount(r.ctx, sharemanage.UnmountRequest{
+			unmount, cleanupErr := sharemanage.New(st).Unmount(ctx, sharemanage.UnmountRequest{
 				Share: request.ShareName, Server: request.ServerID, Force: request.Force,
 				Source: sharemanage.WebUISource(request.Source.RemoteAddress),
 			})
@@ -102,7 +98,7 @@ func (r *revokeRunner) run(task *webui.ShareRevokeTaskStatus, request webui.Shar
 			}
 			return cleanupErr
 		}
-		result, operationErr = sharemanage.New(st).Revoke(r.ctx, sharemanage.RevokeRequest{
+		result, operationErr = sharemanage.New(st).Revoke(ctx, sharemanage.RevokeRequest{
 			Share: request.ShareName, Server: request.ServerID,
 			Unmount: request.Unmount, Force: request.Force,
 			NewPassword: request.NewPassword,
@@ -117,11 +113,10 @@ func (r *revokeRunner) run(task *webui.ShareRevokeTaskStatus, request webui.Shar
 		r.finish(task, result, err)
 		return
 	}
-	r.mu.Lock()
-	task.State = webui.ShareRevokeTaskError
-	task.FailureMessage = "撤销授权失败，请稍后重试。"
-	r.pruneLocked()
-	r.mu.Unlock()
+	r.tasks.update(task.ID, func(task *webui.ShareRevokeTaskStatus) {
+		task.State = webui.ShareTaskError
+		task.FailureMessage = "撤销授权失败，请稍后重试。"
+	})
 }
 
 func (r *revokeRunner) finish(
@@ -139,14 +134,13 @@ func (r *revokeRunner) finish(
 			ProcessID: process.ProcessID, User: process.User, Command: process.Command,
 		})
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	task.State = webui.ShareRevokeTaskDone
-	task.Result = view
-	if err != nil {
-		task.FailureMessage = shareRevokeFailureMessage(result.Result)
-	}
-	r.pruneLocked()
+	r.tasks.update(task.ID, func(task *webui.ShareRevokeTaskStatus) {
+		task.State = webui.ShareTaskDone
+		task.Result = view
+		if err != nil {
+			task.FailureMessage = shareRevokeFailureMessage(result.Result)
+		}
+	})
 }
 
 func shareRevokeFailureMessage(result string) string {
@@ -170,28 +164,4 @@ func shareRevokeFailureMessage(result string) string {
 	default:
 		return "共享存储撤销授权的远端清理未完成。"
 	}
-}
-
-func (r *revokeRunner) pruneLocked() {
-	if len(r.tasks) <= shareRemoteTaskRetention {
-		return
-	}
-	remove := len(r.tasks) - shareRemoteTaskRetention
-	for _, id := range r.order {
-		if remove == 0 {
-			break
-		}
-		if _, ok := r.tasks[id]; !ok {
-			continue
-		}
-		delete(r.tasks, id)
-		remove--
-	}
-	kept := make([]string, 0, len(r.tasks))
-	for _, id := range r.order {
-		if _, ok := r.tasks[id]; ok {
-			kept = append(kept, id)
-		}
-	}
-	r.order = kept
 }

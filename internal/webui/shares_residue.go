@@ -11,6 +11,7 @@ type ShareResidueRequest struct {
 	ShareID   string
 	ShareName string
 	AllShares bool
+	Source    ShareWriteSource
 }
 
 // ShareResidueFinding 是页面上一个共享在一台服务器上的残留发现，不含共
@@ -51,7 +52,7 @@ type ShareResidueCounts struct {
 // done 或 error；Servers 是逐台结论，Counts 是五类汇总台数。
 type ShareResidueTaskStatus struct {
 	ID             string
-	State          string
+	State          ShareTaskState
 	ShareID        string
 	ShareName      string
 	AllShares      bool
@@ -64,7 +65,7 @@ type ShareResidueTaskStatus struct {
 // 供；客户端不提供，残留检查路由不存在。实现必须立即返回任务标识，
 // 远端操作在后台执行。
 type ShareResidueRunner interface {
-	StartShareResidue(request ShareResidueRequest, source ShareWriteSource) (string, error)
+	StartShareResidue(request ShareResidueRequest) (string, error)
 	ShareResidueStatus(taskID string) (*ShareResidueTaskStatus, bool)
 }
 
@@ -152,7 +153,8 @@ func (h *handler) handleShareResiduePost(w http.ResponseWriter, r *http.Request,
 	allShares := r.PostFormValue("scope") == "all"
 	taskID, err := h.cfg.ShareResidueRunner.StartShareResidue(ShareResidueRequest{
 		ShareID: view.Share.ID, ShareName: view.Share.Name, AllShares: allShares,
-	}, ShareWriteSource{RemoteAddress: remoteIP(r)})
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
 	if err != nil {
 		h.logError(r, "启动共享存储残留检查任务失败", err)
 		h.renderError(w, r, http.StatusInternalServerError, "启动残留检查失败",
@@ -189,8 +191,9 @@ func (h *handler) handleShareResidueCleanup(w http.ResponseWriter, r *http.Reque
 	taskID, err := h.cfg.ShareUnmountRunner.StartShareUnmount(ShareUnmountRequest{
 		ShareID: view.Share.ID, ShareName: shareName,
 		ServerID: serverID, ServerName: serverName,
-		Force: r.PostFormValue("force") == "1",
-	}, ShareWriteSource{RemoteAddress: remoteIP(r)})
+		Force:  r.PostFormValue("force") == "1",
+		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+	})
 	if err != nil {
 		h.logError(r, "启动共享存储残留清理任务失败", err)
 		h.renderError(w, r, http.StatusInternalServerError, "启动清理失败",
