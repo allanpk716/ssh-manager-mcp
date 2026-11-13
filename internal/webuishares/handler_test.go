@@ -250,3 +250,95 @@ func TestShareDetailShowsRegistrationFieldsWithoutSecretValue(t *testing.T) {
 		t.Fatalf("详情页不得显示机密项值或提供读回入口：\n%s", pageBody)
 	}
 }
+
+func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	formPage := h.do(http.MethodGet, "/ui/shares/new", nil)
+	formPageBody := body(t, formPage)
+	if formPage.StatusCode != http.StatusOK {
+		t.Fatalf("新增表单状态码 = %d，页面：\n%s", formPage.StatusCode, formPageBody)
+	}
+	for _, want := range []string{
+		"共享名", "提供方设备", "挂载账号用户名", "挂载密码机密项", "固定盘符", "目录约定", "备注",
+		"首版只支持 SMB", "禁止同一 IP 多个连接",
+		`name="name"`, `name="device"`, `name="user"`, `name="password_secret"`,
+		`name="drive"`, `name="directories"`, `name="note"`,
+	} {
+		if !strings.Contains(formPageBody, want) {
+			t.Fatalf("新增表单缺少 %q：\n%s", want, formPageBody)
+		}
+	}
+
+	added := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"scratch"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"y"}, "directories": {"临时数据=tmp"}, "note": {"网页登记"},
+	})
+	addedBody := body(t, added)
+	if added.StatusCode != http.StatusSeeOther {
+		t.Fatalf("新增共享存储应跳转，状态码=%d：\n%s", added.StatusCode, addedBody)
+	}
+	share, err := st.GetSharedStorage("scratch")
+	if err != nil || share.Drive != "Y" || share.Version != 1 ||
+		len(share.Directories) != 1 || share.Directories[0].Purpose != "临时数据" {
+		t.Fatalf("vault 最终状态不正确：%+v %v", share, err)
+	}
+	detail := h.do(http.MethodGet, added.Header.Get("Location"), nil)
+	detailBody := body(t, detail)
+	if detail.StatusCode != http.StatusOK || !strings.Contains(detailBody, "scratch") ||
+		!strings.Contains(detailBody, "共享存储版本号") || !strings.Contains(detailBody, "1") {
+		t.Fatalf("新增后应进入详情页，状态码=%d：\n%s", detail.StatusCode, detailBody)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"share-add"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("新增审计来源不正确：%+v", rows)
+	}
+
+	invalid := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"DATASETS"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"D"}, "directories": {"缺等号的目录"},
+	})
+	invalidBody := body(t, invalid)
+	if invalid.StatusCode != http.StatusBadRequest {
+		t.Fatalf("校验失败状态码 = %d，页面：\n%s", invalid.StatusCode, invalidBody)
+	}
+	if !strings.Contains(invalidBody, "缺少等号，格式为 用途=子路径") {
+		t.Fatalf("目录约定错误应原样展示存储层文案：\n%s", invalidBody)
+	}
+	for _, want := range []string{`value="DATASETS"`, `value="NAS"`, `value="mount-user"`, `value="NAS_MOUNT_PASSWORD"`, `value="D"`} {
+		if !strings.Contains(invalidBody, want) {
+			t.Fatalf("校验失败页面应保留输入 %q：\n%s", want, invalidBody)
+		}
+	}
+
+	duplicate := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"E"},
+	})
+	duplicateBody := body(t, duplicate)
+	if duplicate.StatusCode != http.StatusBadRequest || !strings.Contains(duplicateBody, "共享名已存在") {
+		t.Fatalf("共享名唯一校验应原样展示存储层文案，状态码=%d：\n%s", duplicate.StatusCode, duplicateBody)
+	}
+
+	badDrive := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"scratch2"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"C"},
+	})
+	badDriveBody := body(t, badDrive)
+	if badDrive.StatusCode != http.StatusBadRequest || !strings.Contains(badDriveBody, "盘符不合法") {
+		t.Fatalf("盘符校验应原样展示存储层文案，状态码=%d：\n%s", badDrive.StatusCode, badDriveBody)
+	}
+}

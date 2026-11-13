@@ -12,6 +12,10 @@ import (
 const (
 	sharesPath    = "/ui/shares/"
 	sharesNewPath = "/ui/shares/new"
+
+	// sharesSMBPrerequisites 与命令行 shares add 的新增前提提示保持同一
+	// 份文案口径。
+	sharesSMBPrerequisites = "前提：首版只支持 SMB；提供方设备需关闭『禁止同一 IP 多个连接』类限制。"
 )
 
 // ShareRow 是共享存储列表的一行展示数据，只含可见元数据；挂载密码的值
@@ -124,6 +128,9 @@ func (h *handler) registerShareRoutes() {
 	if h.cfg.Shares == nil {
 		return
 	}
+	if h.cfg.SharesWriter != nil {
+		h.mux.HandleFunc(sharesNewPath, h.requireSession(h.handleShareNew))
+	}
 	h.mux.HandleFunc(sharesPath, h.requireSession(h.handleShareDetailRoutes))
 }
 
@@ -226,4 +233,85 @@ func (h *handler) renderShareReadError(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 	h.renderError(w, r, http.StatusInternalServerError, "读取共享存储详情失败", "读取共享存储详情失败，请稍后重试。")
+}
+
+// shareFormView 是新增共享存储表单的展示数据；Directories 保持「用途=子
+// 路径」逐行文本，与命令行 --dir 参数一一对应。
+type shareFormView struct {
+	Name           string
+	Device         string
+	User           string
+	PasswordSecret string
+	Drive          string
+	Directories    string
+	Note           string
+	Error          string
+}
+
+func (h *handler) handleShareNew(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != sharesNewPath {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet, http.MethodHead:
+		h.renderPage(w, r, http.StatusOK, "share-form.tmpl", pageData{
+			Title: "新增共享存储", ShareForm: shareFormView{
+				Name: r.URL.Query().Get("name"), Device: r.URL.Query().Get("device"),
+				User: r.URL.Query().Get("user"), PasswordSecret: r.URL.Query().Get("password_secret"),
+				Drive: r.URL.Query().Get("drive"), Directories: r.URL.Query().Get("directories"),
+				Note: r.URL.Query().Get("note"),
+			},
+		})
+	case http.MethodPost:
+		h.handleShareNewPost(w, r)
+	default:
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增共享存储页只接受 GET 与 POST 请求。")
+	}
+}
+
+func (h *handler) handleShareNewPost(w http.ResponseWriter, r *http.Request) {
+	form := shareAddFormFromRequest(r)
+	added, err := h.cfg.SharesWriter.AddShare(ShareAddForm{
+		Name: form.Name, Device: form.Device, User: form.User,
+		PasswordSecret: form.PasswordSecret, Drive: form.Drive,
+		Directories: shareDirectoryLines(form.Directories), Note: form.Note,
+	}, ShareWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		if message, ok := shareFormMessage(err); ok {
+			form.Error = message
+			h.renderPage(w, r, http.StatusBadRequest, "share-form.tmpl", pageData{
+				Title: "新增共享存储", ShareForm: form,
+			})
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "新增共享存储失败", "新增共享存储失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, sharesPath+added.ID, http.StatusSeeOther)
+}
+
+func shareAddFormFromRequest(r *http.Request) shareFormView {
+	_ = r.ParseForm()
+	return shareFormView{
+		Name: strings.TrimSpace(r.PostFormValue("name")), Device: strings.TrimSpace(r.PostFormValue("device")),
+		User:           strings.TrimSpace(r.PostFormValue("user")),
+		PasswordSecret: strings.TrimSpace(r.PostFormValue("password_secret")),
+		Drive:          strings.TrimSpace(r.PostFormValue("drive")),
+		Directories:    r.PostFormValue("directories"),
+		Note:           r.PostFormValue("note"),
+	}
+}
+
+// shareDirectoryLines 把目录约定输入拆成逐条「用途=子路径」的行；空行忽
+// 略，其余内容原样交给存储层解析与校验。
+func shareDirectoryLines(raw string) []string {
+	parts := strings.Split(raw, "\n")
+	out := make([]string, 0, len(parts))
+	for _, line := range parts {
+		if strings.TrimSpace(line) != "" {
+			out = append(out, line)
+		}
+	}
+	return out
 }

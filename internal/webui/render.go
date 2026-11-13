@@ -73,6 +73,7 @@ type pageData struct {
 	ShareDetail                      *ShareRow
 	ShareDetailError                 string
 	ShareDetailNotice                string
+	ShareForm                        shareFormView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
 	SoftwareInventorySearchRows      []SoftwareInventorySearchRow
@@ -201,9 +202,10 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(labels, "、")
 	},
-	"joinTags":       func(items []string) string { return strings.Join(items, ",") },
-	"formatUnixTime": formatUnixTime,
-	"formatTime":     func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
+	"joinTags":               func(items []string) string { return strings.Join(items, ",") },
+	"formatUnixTime":         formatUnixTime,
+	"sharesSMBPrerequisites": func() string { return sharesSMBPrerequisites },
+	"formatTime":             func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
 	"formatOptionalTime": func(value *time.Time) string {
 		if value == nil {
 			return "-"
