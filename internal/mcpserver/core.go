@@ -333,7 +333,6 @@ func contains(haystack []string, needle string) bool {
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // download has neither sudo nor a command deadline.
 func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string, hk ...sshbroker.HostKeyStore) (out DownloadOutput, err error) {
-	path = normalizeRemotePath(path)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -361,6 +360,7 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	path = normalizeRemotePath(path, srv.ShellType.IsWindows())
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -440,17 +440,17 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // PARENT to pre-exist. Before the transfer this function MkdirAll's the parent
 // of remotePath (cli.MkdirAll — broker primitive over SFTP), matching the
 // `scp --parents` UX so an agent can target a freshly-named destination without
-// a preparatory exec_command. remotePath is normalized before use: POSIX paths
-// stay unchanged, while Windows drive paths use forward slashes. path.Dir (not
-// filepath.Dir) computes the parent from that slash form so the behavior stays
-// correct on a Windows broker host too.
+// a preparatory exec_command. On a Windows target, Windows drive paths are
+// normalized to forward slashes before use. On a Linux or macOS target the path
+// stays unchanged because a backslash is a valid file-name character there.
+// path.Dir (not filepath.Dir) computes the parent so the gate stays correct on a
+// Windows broker host too.
 //
 // Statuses: denied (out-of-profile), auth_error, no_credential (credential-
 // less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // upload has neither sudo nor a command deadline.
 func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string, hk ...sshbroker.HostKeyStore) (out UploadOutput, err error) {
-	remotePath = normalizeRemotePath(remotePath)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -478,6 +478,7 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 		err = fmt.Errorf("server %s not found", serverID)
 		return
 	}
+	remotePath = normalizeRemotePath(remotePath, srv.ShellType.IsWindows())
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -544,11 +545,11 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 }
 
 // UploadContentForProfile 把调用方直接提交的内容写入远端文件；目标服务
-// 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
-// 授权检查；③ 读取文本字节或解码 Base64；④ 读取本地服务器条目、填入
-// 机密项占位符并按填值后的字节数检查大小上限；⑤ 取凭据并连接目标服务
-// 器；⑥ 写入文件；⑦ 尽力登记机密项下发记录；⑧ 写审计。前四步都
-// 不访问目标服务器。
+// 器必须已在 profile 授权集合内。执行顺序固定：① 校验不取决于目标系统
+// 的参数；② profile 授权检查；③ 读取本地服务器条目并按目标系统校验
+// 远端路径；④ 读取文本字节或解码 Base64；⑤ 填入机密项占位符并按填值
+// 后的字节数检查大小上限；⑥ 取凭据并连接目标服务器；⑦ 写入文件；
+// ⑧ 尽力登记机密项下发记录；⑨ 写审计。前五步都不访问目标服务器。
 //
 // 大小上限由 NewServerFromSource 从环境变量 SSHMGR_UPLOAD_CONTENT_MAX
 // 解析；测试直接传入较小的上限。
@@ -565,7 +566,6 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 }
 
 func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, deliveryRecorder SecretDeliveryRecorder, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
-	remotePath = normalizeRemotePath(remotePath)
 	if encoding == "" {
 		encoding = "text"
 	}
@@ -590,12 +590,10 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		})
 	}()
 
-	// ① 参数校验只依赖调用方自己提交的输入，先于 profile 授权检查执行。
+	// ① 只依赖调用方输入、且不取决于目标系统的参数校验，先于 profile
+	// 授权检查执行。
 	if encoding != "text" && encoding != "base64" {
 		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
-	}
-	if remotePath == "" || !isAbsRemotePath(remotePath) {
-		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path: /dir/file, or a Windows drive path such as C:/dir/file (backslashes are accepted and converted)")
 	}
 	if encoding == "base64" && strings.ContainsAny(content, "\r\n") {
 		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
@@ -613,7 +611,19 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, gerr
 	}
 
-	// ③ Base64 解码。大小上限在下一步按占位符填值后的内容检查。
+	// ③ 读取本地服务器条目，按目标系统规范化远端路径并校验绝对形式。
+	srv, serr := st.GetServer(serverID)
+	if serr != nil || srv == nil {
+		status = "error"
+		err = fmt.Errorf("server %s not found", serverID)
+		return
+	}
+	remotePath = normalizeRemotePath(remotePath, srv.ShellType.IsWindows())
+	if remotePath == "" || !isAbsRemotePath(remotePath) {
+		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path: /dir/file; on a Windows server, C:/dir/file or C:\\dir\\file is also accepted and backslashes are converted to forward slashes")
+	}
+
+	// ④ Base64 解码。大小上限在下一步按占位符填值后的内容检查。
 	var contentBytes []byte
 	switch encoding {
 	case "text":
@@ -628,14 +638,8 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	byteCount = int64(len(contentBytes))
 
-	// ④ 机密项占位符在取得服务器凭据和发起连接前填值。这里读取的是本地
+	// ⑤ 机密项占位符在取得服务器凭据和发起连接前填值。这里读取的是本地
 	// vault 或客户端缓存快照，不访问网络。
-	srv, serr := st.GetServer(serverID)
-	if serr != nil || srv == nil {
-		status = "error"
-		err = fmt.Errorf("server %s not found", serverID)
-		return
-	}
 	filled := secretfill.Fill(ctx, contentBytes, secretfill.ServerRef{ID: srv.ID, Name: srv.Name}, secretfill.NewStoreSource(st, profileServerIDs))
 	filledSecretNames = filled.Names
 	projectedByteCount := int64(len(filled.ProjectedContent))
@@ -668,7 +672,7 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	contentBytes = filled.Content
 	r := bytes.NewReader(contentBytes)
 
-	// ⑤ 取凭据、校验主机密钥并连接目标服务器；目标主机明文在连接层生成
+	// ⑥ 取凭据、校验主机密钥并连接目标服务器；目标主机明文在连接层生成
 	// 错误时统一遮蔽。
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -704,7 +708,7 @@ func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	}
 	defer cli.Close()
 
-	// ⑥ 写入文件；父目录创建和关闭结果检查都在写入函数内完成。
+	// ⑦ 写入文件；父目录创建、关闭结果检查和写后大小核对都在写入函数内完成。
 	var createMode os.FileMode
 	if len(filledSecretNames) > 0 && !srv.ShellType.IsWindows() {
 		createMode = 0o600
@@ -856,12 +860,15 @@ func isAbsRemotePath(p string) bool {
 
 // normalizeRemotePath 统一文件工具收到的远端路径写法。GitHub issue 47 的背
 // 景是 Windows 盘符路径里的反斜杠曾被原样传给 SFTP，导致目标路径被误处
-// 理；因此盘符加冒号后跟斜杠或反斜杠的路径会把全部反斜杠换成正斜杠。
-// 以正斜杠开头的路径可能是 Linux 或 macOS 路径，其中反斜杠是合法文件名
-// 字符，必须原样保留。其他输入不在这里改写；是否拒绝相对路径由调用方
-// 决定。该规则不依赖服务器条目的 shell 类型。
-func normalizeRemotePath(remotePath string) string {
+// 理；因此目标服务器是 Windows 时，盘符加冒号后跟斜杠或反斜杠的路径会把
+// 全部反斜杠换成正斜杠。目标服务器不是 Windows 时保持原样：反斜杠在
+// Linux 和 macOS 上是合法文件名字符。以正斜杠开头的路径同样原样保留。
+// 其他输入不在这里改写；是否拒绝相对路径由调用方决定。
+func normalizeRemotePath(remotePath string, windowsTarget bool) string {
 	if strings.HasPrefix(remotePath, "/") {
+		return remotePath
+	}
+	if !windowsTarget {
 		return remotePath
 	}
 	if len(remotePath) >= 3 &&

@@ -100,7 +100,8 @@ func capRefusedError(file string, size, cap int64) error {
 // from local through a TeeReader that counts bytes into ctr. The copy runs to
 // completion (or to the underlying io error); ctr flags truncation if cap was
 // exceeded mid-copy but never aborts the stream — aborting would leave a
-// half-written remote file. res.Files is bumped only on a fully-copied file.
+// half-written remote file. A non-empty source is verified against the remote
+// file size before res.Files is bumped.
 // Callers enforce the per-file pre-flight BEFORE calling (Upload's single-file
 // branch + uploadDir's walk callback), so an over-cap file never reaches this
 // io.Copy on either path.
@@ -114,8 +115,16 @@ func uploadFile(sc *sftp.Client, localPath, remotePath string, ctr *countingWrit
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	if _, err := io.Copy(out, io.TeeReader(in, ctr)); err != nil {
+	source := &transferByteCountReader{reader: in}
+	written, copyErr := io.Copy(out, io.TeeReader(source, ctr))
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close: %w", closeErr)
+	}
+	if err := verifyRemoteWrite(sc, remotePath, source.count, written); err != nil {
 		return err
 	}
 	res.Files++
@@ -281,14 +290,31 @@ func (w *countingWriter) Write(p []byte) (int, error) {
 	return len(p), nil // always accept — cap is advisory within a file (see above)
 }
 
+// transferByteCountReader counts bytes consumed from reader. A successful
+// io.Copy reaches the reader's end, so count is the number of source bytes the
+// transfer promised to write even when a broken SFTP server claims to accept
+// bytes without storing them.
+type transferByteCountReader struct {
+	reader io.Reader
+	count  int64
+}
+
+func (r *transferByteCountReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	r.count += int64(n)
+	return n, err
+}
+
 // WriteFile 通过 SFTP 把 r 写入 remotePath，并按需要创建父目录。上下文取
-// 消时会关闭 SFTP 客户端，让正在等待远端响应的操作返回错误。这里固定三
+// 消时会关闭 SFTP 客户端，让正在等待远端响应的操作返回错误。这里固定四
 // 点行为：
 //   - 计算父目录只用 POSIX 的 path.Dir，不用 filepath.ToSlash；反斜杠在
 //     POSIX 文件名中是普通字符，转换会把合法名字误拆成目录；
 //   - 目标已存在时截断后覆盖，保持上传文件的既有语义；
 //   - 必须检查 Close 的返回值；SFTP 写入错误可能只在关闭句柄、刷新最终
 //     数据包时出现。
+//   - 非空写入完成后用远端文件大小核对字节数，防止异常服务器静默落成
+//     空文件。
 //
 // 任一步失败时，远端都可能留下半写文件或已创建的父目录；清理由调用方
 // 决定。
@@ -345,12 +371,38 @@ func (c *Client) WriteFileWithCreateMode(ctx context.Context, remotePath string,
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, r); err != nil {
+	source := &transferByteCountReader{reader: r}
+	written, copyErr := io.Copy(out, source)
+	if copyErr != nil {
 		_ = out.Close()
+		return copyErr
+	}
+	closeErr := out.Close() // 写入错误可能延迟到关闭句柄时出现
+	if closeErr != nil {
+		return fmt.Errorf("close: %w", closeErr)
+	}
+	if err := verifyRemoteWrite(sc, remotePath, source.count, written); err != nil {
 		return err
 	}
-	if err := out.Close(); err != nil { // 写入错误可能延迟到关闭句柄时出现
-		return fmt.Errorf("close: %w", err)
+	return nil
+}
+
+// verifyRemoteWrite rejects a successful-looking copy of non-empty content when
+// the SFTP file handle accepted too few bytes or the resulting remote file has a
+// different size. Empty writes are left to the existing zero-byte-file behavior.
+func verifyRemoteWrite(sc *sftp.Client, remotePath string, expected, accepted int64) error {
+	if expected == 0 {
+		return nil
+	}
+	if accepted != expected {
+		return fmt.Errorf("remote write %s: file handle accepted %d bytes, expected %d bytes — check the remote path syntax", remotePath, accepted, expected)
+	}
+	info, err := sc.Stat(remotePath)
+	if err != nil {
+		return fmt.Errorf("stat after remote write %s: %w", remotePath, err)
+	}
+	if info.Size() != expected {
+		return fmt.Errorf("remote write %s: server reports %d bytes, expected %d bytes — check the remote path syntax", remotePath, info.Size(), expected)
 	}
 	return nil
 }
