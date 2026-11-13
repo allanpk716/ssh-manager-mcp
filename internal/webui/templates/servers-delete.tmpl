@@ -10,10 +10,11 @@
 <dt>所属设备</dt><dd>{{if .ServerDeletePreview.HasDevice}}设备保留：{{.ServerDeletePreview.DeviceName}}{{else}}无{{end}}</dd>
 <dt>主机密钥锚</dt><dd>要删除 {{.ServerDeletePreview.AnchorCount}} 个</dd>
 <dt>失去这台服务器的 profile</dt><dd>{{if .ServerDeletePreview.ProfileNames}}{{joinTags .ServerDeletePreview.ProfileNames}}{{else}}无{{end}}</dd>
+<dt>这台服务器不再可挂载的共享存储</dt><dd>{{if .ServerDeletePreview.SharedStorageNames}}{{joinTags .ServerDeletePreview.SharedStorageNames}}{{else}}无{{end}}</dd>
 <dt>移出可写入服务器列表的机密项</dt><dd>{{if .ServerDeletePreview.SecretNames}}{{joinTags .ServerDeletePreview.SecretNames}}{{else}}无{{end}}</dd>
 <dt>会随之删除的凭据</dt><dd>{{if .ServerDeletePreview.DeletedCredentials}}{{joinTags .ServerDeletePreview.DeletedCredentials}}{{else}}无{{end}}</dd>
 <dt>因共用而保留的凭据</dt><dd>{{if .ServerDeletePreview.KeptCredentials}}{{joinTags .ServerDeletePreview.KeptCredentials}}{{else}}无{{end}}</dd>
-<dt>会随之删除的下发记录</dt><dd>{{if .ServerDeletePreview.DeliveryRecords}}<ul>{{range .ServerDeletePreview.DeliveryRecords}}<li>{{.ServerName}}：{{.Path}}（机密项 {{if .SecretNames}}{{joinTags .SecretNames}}{{else}}无{{end}}）</li>{{end}}</ul>{{else}}无{{end}}</dd>
+<dt>会随之删除的下发记录</dt><dd>{{len .ServerDeletePreview.DeliveryRecords}} 条{{if .ServerDeletePreview.DeliveryRecords}}<ul>{{range .ServerDeletePreview.DeliveryRecords}}<li>{{.ServerName}}：{{.Path}}（机密项 {{if .SecretNames}}{{joinTags .SecretNames}}{{else}}无{{end}}）</li>{{end}}</ul>{{end}}</dd>
 </dl>
 <form method="post" action="/ui/servers/{{.ServerDeletePreview.ServerID}}/delete" class="confirm-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">

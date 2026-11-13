@@ -265,6 +265,7 @@ type ServerDeletePreviewView struct {
 	DeviceName         string
 	AnchorCount        int
 	ProfileNames       []string
+	SharedStorageNames []string
 	SecretNames        []string
 	DeletedCredentials []string
 	KeptCredentials    []string

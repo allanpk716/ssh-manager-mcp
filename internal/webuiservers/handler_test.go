@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
@@ -433,6 +434,128 @@ func TestHandlerDeletePreviewChangedRendersFreshPreview(t *testing.T) {
 	}
 	if srv, _ := st.GetServerByName("first"); srv != nil {
 		t.Fatal("确认后服务器应已删除")
+	}
+}
+
+// TestHandlerDeletePreviewIncludesSharedStorageAndRecords 用完整 HTTP 请求覆
+// 盖 Web UI 删除预览：共享存储单独成组、下发记录显示数量；影响变化后旧摘
+// 要整体拒绝，新摘要确认后才删除。
+func TestHandlerDeletePreviewIncludesSharedStorageAndRecords(t *testing.T) {
+	_, st, h := newIntegrationHandler(t)
+	device, err := st.AddDevice("NAS", "存放共享数据", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"API_TOKEN", "接口令牌", []byte("api-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD", "API_TOKEN"}, []string{"web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []store.SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{web}); err != nil {
+		t.Fatal(err)
+	}
+	for i, path := range []string{"/etc/app/config.yml", "/etc/app/worker.yml"} {
+		if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
+			ServerID: web, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:API_TOKEN}}"),
+			FileSHA256: strings.Repeat(fmt.Sprint(i+4), 64), WrittenAt: time.Unix(int64(1760000900+i), 0),
+			Secrets:              []store.SecretDeliverySecret{{Name: "API_TOKEN", ValueVersion: 1}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: "agent-a",
+			AuthorizationProfileID: profileID,
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	page := h.do(http.MethodGet, "/ui/servers/"+web+"/delete", nil)
+	pageBody := integrationBody(t, page)
+	for _, want := range []string{
+		"这台服务器不再可挂载的共享存储", "datasets", "scratch",
+		"会随之删除的下发记录", "2 条", "/etc/app/config.yml", "/etc/app/worker.yml",
+	} {
+		if !strings.Contains(pageBody, want) {
+			t.Fatalf("删除预览页缺少 %q：\n%s", want, pageBody)
+		}
+	}
+	if strings.Contains(pageBody, "NAS_MOUNT_PASSWORD") ||
+		strings.Contains(pageBody, "mount-secret-value") ||
+		strings.Contains(pageBody, "api-secret-value") {
+		t.Fatalf("删除预览页不得把共享存储挂载密码机密项或机密项值放进普通机密项组：\n%s", pageBody)
+	}
+	digest := regexp.MustCompile(`name="digest" value="([^"]+)"`).FindStringSubmatch(pageBody)
+	if len(digest) != 2 {
+		t.Fatalf("删除预览页应携带摘要：\n%s", pageBody)
+	}
+
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "models", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "X",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	changed := h.do(http.MethodPost, "/ui/servers/"+web+"/delete", url.Values{
+		"csrf_token": {integrationCSRF(t, h)}, "server_id": {web}, "digest": {digest[1]},
+	})
+	changedBody := integrationBody(t, changed)
+	if changed.StatusCode != http.StatusConflict {
+		t.Fatalf("共享存储影响变化后应整体拒绝删除，状态码=%d：\n%s", changed.StatusCode, changedBody)
+	}
+	for _, want := range []string{"删除预览已变化", "models"} {
+		if !strings.Contains(changedBody, want) {
+			t.Fatalf("最新删除预览缺少 %q：\n%s", want, changedBody)
+		}
+	}
+	if srv, _ := st.GetServer(web); srv == nil {
+		t.Fatal("预览变化时不得删除服务器条目")
+	}
+	newDigest := regexp.MustCompile(`name="digest" value="([^"]+)"`).FindStringSubmatch(changedBody)
+	if len(newDigest) != 2 || newDigest[1] == digest[1] {
+		t.Fatalf("最新删除预览应携带新摘要：%q", newDigest)
+	}
+
+	confirmed := h.do(http.MethodPost, "/ui/servers/"+web+"/delete", url.Values{
+		"csrf_token": {integrationCSRF(t, h)}, "server_id": {web}, "digest": {newDigest[1]},
+	})
+	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/" {
+		t.Fatalf("新摘要确认应执行删除，状态码=%d 跳转=%s", confirmed.StatusCode, confirmed.Header.Get("Location"))
+	}
+	if records, _ := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: web}); len(records) != 0 {
+		t.Fatalf("确认删除后下发记录应消失：%+v", records)
+	}
+	shares, err := st.ListSharedStorages(store.SharedStorageFilter{Server: web})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 0 {
+		t.Fatalf("确认删除后共享存储不应再按这台服务器筛出：%+v", shares)
 	}
 }
 

@@ -37,6 +37,7 @@ func writeServerDeletePreview(w io.Writer, preview *servermanage.DeletePreview) 
 	}
 	fmt.Fprintf(w, "要删除的主机密钥锚：%d 个\n", len(preview.Anchors))
 	fmt.Fprintf(w, "会失去这台服务器的 profile：%s\n", joinOrNone(preview.ProfileNames))
+	fmt.Fprintf(w, "这台服务器不再可挂载的共享存储：%s\n", joinOrNone(preview.SharedStorageNames))
 	fmt.Fprintf(w, "会从可写入服务器列表移出的机密项：%s\n", joinOrNone(preview.SecretNames))
 	var deleted, kept []string
 	for _, impact := range preview.Credentials {
@@ -55,7 +56,10 @@ func writeServerDeletePreview(w io.Writer, preview *servermanage.DeletePreview) 
 			"%s：%s（机密项 %s）", record.ServerName, record.Path, joinOrNone(record.SecretNames),
 		))
 	}
-	fmt.Fprintf(w, "会随之删除的下发记录：%s\n", joinOrNone(deliveries))
+	fmt.Fprintf(w, "会随之删除的下发记录：%d 条\n", len(deliveries))
+	for _, delivery := range deliveries {
+		fmt.Fprintf(w, "  - %s\n", delivery)
+	}
 }
 
 func joinOrNone(items []string) string {
