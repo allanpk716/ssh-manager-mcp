@@ -57,9 +57,18 @@ type ServerDetailView struct {
 	SharedStorages []ServerDetailSharedStorage
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []ServerDetailProfile
+	// ShowDeliveryRecords 表示当前角色能否查看下发记录；单机与权威端为真，
+	// 客户端为假。
+	ShowDeliveryRecords bool
+	// DeliveryRecords 是写到这台服务器条目的最新下发记录；只读展示，不携
+	// 带任何机密项值。
+	DeliveryRecords []SecretDeliveryRecordRow
 	// SiblingSharedStorages 是同一台设备的其他服务器条目带来的共享存储
 	// 可见性提示，不并入这台条目自己的授权分组。
 	SiblingSharedStorages []ServerDetailSiblingSharedStorage
+	// SiblingDeliveryRecords 是同一台设备的其他服务器条目写出的文件，仅
+	// 作为整台机器上的可见性提示。
+	SiblingDeliveryRecords []ServerDetailSiblingDeliveryRecord
 }
 
 // ServerDetailSecret 是服务器详情页机密项组的一行，不携带值、哈希或版本
@@ -93,6 +102,14 @@ type ServerDetailProfile struct {
 // 授权来源的服务器条目。
 type ServerDetailSiblingSharedStorage struct {
 	ServerDetailSharedStorage
+	SourceServerID   string
+	SourceServerName string
+}
+
+// ServerDetailSiblingDeliveryRecord 是同设备下发文件提示区的一行，并注明
+// 授权来源的服务器条目。
+type ServerDetailSiblingDeliveryRecord struct {
+	SecretDeliveryRecordRow
 	SourceServerID   string
 	SourceServerName string
 }

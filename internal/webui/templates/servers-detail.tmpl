@@ -53,6 +53,36 @@
 </tbody>
 </table>
 </section>
+{{if and .ServerDetail.ShowDeliveryRecords .Caps.CanWrite}}
+<section aria-labelledby="server-deliveries-heading">
+<h2 id="server-deliveries-heading">下发记录</h2>
+<p>登记失败的历史写入会缺漏，不承诺完整。记录只读，模板原文不包含机密项值。</p>
+<table class="server-table">
+<thead><tr><th scope="col">路径</th><th scope="col">机密项</th><th scope="col">写入时间</th><th scope="col">发起设备</th><th scope="col">客户端实例</th><th scope="col">详情</th></tr></thead>
+<tbody>
+{{range .ServerDetail.DeliveryRecords}}
+<tr>
+<td>{{.Path}}</td>
+<td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td>
+<td>{{formatTime .WrittenAt}}</td>
+<td>{{.InitiatingDeviceName}}</td>
+<td>{{.InitiatingInstanceName}}</td>
+<td>
+<details>
+<summary>展开详情</summary>
+<dl>
+<dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd>
+<dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd>
+<dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd>
+</dl>
+</details>
+</td>
+</tr>
+{{else}}<tr><td colspan="6">暂无写到这台服务器的下发记录。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}
 <aside aria-labelledby="sibling-shares-heading">
 <h2 id="sibling-shares-heading">同设备其他服务器条目带来的共享存储</h2>
 <table class="server-table">
@@ -64,6 +94,36 @@
 </tbody>
 </table>
 </aside>
+{{if and .ServerDetail.ShowDeliveryRecords .Caps.CanWrite}}
+<aside aria-labelledby="sibling-deliveries-heading">
+<h2 id="sibling-deliveries-heading">同设备其他服务器条目带来的下发文件</h2>
+<table class="server-table">
+<thead><tr><th scope="col">来源服务器条目</th><th scope="col">路径</th><th scope="col">机密项</th><th scope="col">写入时间</th><th scope="col">发起设备</th><th scope="col">客户端实例</th><th scope="col">详情</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SiblingDeliveryRecords}}
+<tr>
+<td>{{.SourceServerName}}</td>
+<td>{{.Path}}</td>
+<td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td>
+<td>{{formatTime .WrittenAt}}</td>
+<td>{{.InitiatingDeviceName}}</td>
+<td>{{.InitiatingInstanceName}}</td>
+<td>
+<details>
+<summary>展开详情</summary>
+<dl>
+<dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd>
+<dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd>
+<dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd>
+</dl>
+</details>
+</td>
+</tr>
+{{else}}<tr><td colspan="7">同一设备没有其他服务器条目带来的下发文件。</td></tr>{{end}}
+</tbody>
+</table>
+</aside>
+{{end}}
 <div class="inline-form server-actions">
 <a class="button-link" href="/ui/">返回服务器列表</a>
 {{if .Caps.CanWrite}}

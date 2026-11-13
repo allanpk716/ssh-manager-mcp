@@ -29,9 +29,14 @@ type Detail struct {
 	SharedStorages []DetailSharedStorage
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []DetailProfile
+	// DeliveryRecords 是写到这台服务器条目的最新下发记录，只读展示。
+	DeliveryRecords []store.SecretDeliveryRecord
 	// SiblingSharedStorages 是同一台设备的其他服务器条目已授权、因此
 	// 在这台机器上也可见的共享存储；每项注明来源服务器条目。
 	SiblingSharedStorages []DetailSiblingSharedStorage
+	// SiblingDeliveryRecords 是同一台设备的其他服务器条目写出的文件，仅
+	// 作为整台机器上的可见性提示。
+	SiblingDeliveryRecords []store.SecretDeliveryRecord
 }
 
 // DetailSecret 是服务器详情页机密项组的一行，只携带名字、备注与环境变量
@@ -107,8 +112,8 @@ func (m *Manager) Detail(identifier string) (*Detail, error) {
 	return detail, nil
 }
 
-// fillReverseView 从现有机密项授权、共享存储登记与 profile 授权装配反向
-// 视图。读取路径只调用存储层的查询入口，不写任何审计行。
+// fillReverseView 从现有机密项授权、共享存储登记、profile 授权与下发记录
+// 装配反向视图。读取路径只调用存储层的查询入口，不写任何审计行。
 func (m *Manager) fillReverseView(detail *Detail) error {
 	srv := detail.Server
 	shares, err := m.st.ListSharedStorages(store.SharedStorageFilter{})
@@ -147,6 +152,32 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 			if id == srv.ID {
 				detail.Profiles = append(detail.Profiles, DetailProfile{ID: profile.ID, Name: profile.Name})
 				break
+			}
+		}
+	}
+
+	records, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: srv.ID})
+	if err != nil {
+		return err
+	}
+	detail.DeliveryRecords = records
+
+	allRecords, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		return err
+	}
+	if srv.DeviceID != "" {
+		servers, err := m.st.ListServers()
+		if err != nil {
+			return err
+		}
+		serverDevices := make(map[string]string, len(servers))
+		for _, server := range servers {
+			serverDevices[server.ID] = server.DeviceID
+		}
+		for _, record := range allRecords {
+			if record.ServerID != srv.ID && serverDevices[record.ServerID] == srv.DeviceID {
+				detail.SiblingDeliveryRecords = append(detail.SiblingDeliveryRecords, record)
 			}
 		}
 	}

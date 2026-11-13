@@ -148,6 +148,11 @@ func TestServersShowOnClientSnapshot(t *testing.T) {
 			t.Fatalf("客户端详情缺少 %q：\n%s", want, out)
 		}
 	}
+	for _, forbidden := range []string{"下发记录：", "同设备其他服务器条目带来的下发文件："} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("客户端 servers show 不得显示 %q：\n%s", forbidden, out)
+		}
+	}
 	if _, err := runCliWithInput(t, "", "servers", "show", "不在快照里"); err == nil {
 		t.Fatal("快照外的服务器应报错")
 	}
@@ -236,6 +241,110 @@ func TestServersShowReverseGroups(t *testing.T) {
 		if strings.Contains(out, secretValue) {
 			t.Fatalf("servers show 不得输出机密项值 %q：\n%s", secretValue, out)
 		}
+	}
+}
+
+// TestServersShowDeliveryRecords 校验 `servers show` 的第四组与
+// `secrets records --server` 读取同一份记录，展开只读详情且不输出机密项值。
+func TestServersShowDeliveryRecords(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("workstation", "同一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := st.AddServer(&models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("ordinary-secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("OLD_TOKEN", "已下线令牌", []byte("deleted-secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"API_TOKEN", "OLD_TOKEN"}, []string{"web", "worker"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{primary, worker}); err != nil {
+		t.Fatal(err)
+	}
+	record := func(serverID, path, secretName, digest, instance string, writtenAt int64) store.SecretDeliveryRecordInput {
+		return store.SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:" + secretName + "}}"),
+			FileSHA256: digest, WrittenAt: time.Unix(writtenAt, 0),
+			Secrets:              []store.SecretDeliverySecret{{Name: secretName, ValueVersion: 2}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: instance,
+			AuthorizationProfileID: profileID,
+		}
+	}
+	if _, err := st.RecordSecretDelivery(record(
+		primary, "/etc/app/config.yml", "API_TOKEN", strings.Repeat("5", 64), "agent-a", 1760000900,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(record(
+		primary, "/etc/app/old.yml", "OLD_TOKEN", strings.Repeat("6", 64), "agent-a", 1760000800,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	workerRecord := record(
+		worker, "/etc/worker/config.yml", "API_TOKEN", strings.Repeat("7", 64), "agent-b", 1760001000,
+	)
+	workerRecord.InitiatingDeviceName = "worker-laptop"
+	if _, err := st.RecordSecretDelivery(workerRecord, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSecret("OLD_TOKEN", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "servers", "show", "web")
+	for _, want := range []string{
+		"下发记录：", "/etc/app/config.yml", "机密项 API_TOKEN（值版本号 2）",
+		"写入时间 2025-10-09", "发起设备 office-laptop", "实例 agent-a",
+		"模板原文：token: {{sshmgr-secret:API_TOKEN}}", "文件 SHA-256 哈希：" + strings.Repeat("5", 64),
+		"/etc/app/old.yml", "OLD_TOKEN（引用的机密项已删除）",
+		"同设备其他服务器条目带来的下发文件：", "来源服务器条目 worker",
+		"/etc/worker/config.yml", "worker-laptop", "agent-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("servers show 下发记录缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, secretValue := range []string{"ordinary-secret-value", "deleted-secret-value"} {
+		if strings.Contains(out, secretValue) {
+			t.Fatalf("servers show 不得输出机密项值 %q：\n%s", secretValue, out)
+		}
+	}
+
+	recordsOut := runCli(t, "secrets", "records", "--server", "web")
+	for _, want := range []string{
+		"/etc/app/config.yml", "API_TOKEN", "2025-10-09", "office-laptop", "agent-a",
+		"/etc/app/old.yml", "OLD_TOKEN（已删除）",
+	} {
+		if !strings.Contains(recordsOut, want) {
+			t.Fatalf("secrets records --server 输出缺少 %q：\n%s", want, recordsOut)
+		}
+	}
+	if strings.Contains(recordsOut, "/etc/worker/config.yml") {
+		t.Fatalf("secrets records --server web 不应包含 worker 的记录：\n%s", recordsOut)
 	}
 }
 
