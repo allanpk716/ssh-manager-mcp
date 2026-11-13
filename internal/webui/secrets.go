@@ -52,8 +52,11 @@ type SecretAuthorizationServer struct {
 type SecretAuthorizationChange struct {
 	SecretID   string
 	SecretName string
-	Added      []SecretAuthorizationServer
-	Removed    []SecretAuthorizationServer
+	// DisplayName 覆盖差异表第一列的默认机密项名；共享存储反向编辑用它
+	// 逐行显示共享名，避免 owner 必须记忆挂载密码机密项名字。
+	DisplayName string
+	Added       []SecretAuthorizationServer
+	Removed     []SecretAuthorizationServer
 }
 
 // SecretAuthorizationPreview 是授权预览与确认摘要。
@@ -374,7 +377,8 @@ func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *htt
 	}
 	if r.Method == http.MethodPost {
 		target := secretTargetFromCells(r)
-		h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.PostFormValue("return_to")), "", nil)
+		h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.PostFormValue("return_to")), "",
+			r.PostFormValue("authorization_view"), r.PostFormValue("server_id"), nil)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -387,6 +391,7 @@ func (h *handler) handleSecretAuthorizationPreview(w http.ResponseWriter, r *htt
 		return
 	}
 	h.renderSecretPreview(w, r, target, safeSecretReturnPath(r.URL.Query().Get("return_to")), "",
+		r.URL.Query().Get("authorization_view"), r.URL.Query().Get("server_id"),
 		stringSet(r.URL.Query()["unmount"]))
 }
 
@@ -404,14 +409,17 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 		h.renderError(w, r, http.StatusBadRequest, "确认授权失败", err.Error())
 		return
 	}
+	view := r.PostFormValue("authorization_view")
+	serverID := r.PostFormValue("server_id")
 	unmountServers := trimmedFormValues(r.PostForm["unmount_server"])
+	selectedUnmount := stringSet(unmountServers)
 	if h.redirectSecretWriteToReverify(w, r, secretAuthorizationResumePath(
-		target, r.PostFormValue("return_to"), unmountServers,
+		target, r.PostFormValue("return_to"), view, serverID, unmountServers,
 	)) {
 		return
 	}
 	unmountTargets := h.shareUnmountTargetsForAuthorization(
-		r, safeSecretReturnPath(r.PostFormValue("return_to")), target, stringSet(unmountServers),
+		r, safeSecretReturnPath(r.PostFormValue("return_to")), target, selectedUnmount,
 	)
 	result, conflict, err := h.cfg.SecretsWriter.ApplyAuthorization(
 		target, r.PostFormValue("summary"), SecretWriteSource{RemoteAddress: remoteIP(r)},
@@ -421,10 +429,15 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 		return
 	}
 	if conflict != nil {
-		h.renderSecretPreviewPage(w, r, http.StatusConflict, conflict.Latest, target,
+		latest, displayErr := h.authorizationPreviewDisplay(conflict.Latest, view, serverID)
+		if displayErr != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "确认授权失败", "确认授权失败，请稍后重试。")
+			return
+		}
+		h.renderSecretPreviewPage(w, r, http.StatusConflict, latest, target,
 			safeSecretReturnPath(r.PostFormValue("return_to")),
-			"机密项授权状态已被其他入口修改，请核对最新预览后再确认。",
-			stringSet(unmountServers))
+			view, serverID,
+			"机密项授权状态已被其他入口修改，请核对最新预览后再确认。", selectedUnmount)
 		return
 	}
 	if result.Applied && len(unmountTargets) > 0 {
@@ -440,8 +453,13 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 	if result.Applied {
 		notice = "已保存授权变更。"
 	}
-	h.renderSecretPreviewPage(w, r, http.StatusOK, result.Preview, target,
-		safeSecretReturnPath(r.PostFormValue("return_to")), notice, nil)
+	preview, displayErr := h.authorizationPreviewDisplay(result.Preview, view, serverID)
+	if displayErr != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "确认授权失败", "确认授权失败，请稍后重试。")
+		return
+	}
+	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target,
+		safeSecretReturnPath(r.PostFormValue("return_to")), view, serverID, notice, nil)
 }
 
 // shareUnmountTargetsForAuthorization 计算确认授权时允许联动卸载的服务
@@ -504,17 +522,24 @@ func (h *handler) redirectSecretWriteToReverify(w http.ResponseWriter, r *http.R
 }
 
 // secretAuthorizationResumePath 构造确认授权跳转重新验证后要回到的预览地
-// 址，保留返回路径、全部目标授权格与已勾选的同时卸载服务器。
+// 址，保留返回路径、全部目标授权格、服务器详情视图参数与已勾选的同时卸
+// 载服务器。
 func secretAuthorizationResumePath(
-	target []SecretAuthorizationCell, returnTo string, unmountServers []string,
+	target []SecretAuthorizationCell, returnTo, view, serverID string, unmountServers []string,
 ) string {
 	next := url.Values{"return_to": {safeSecretReturnPath(returnTo)}}
+	if view != "" {
+		next.Set("authorization_view", view)
+	}
+	if serverID != "" {
+		next.Set("server_id", serverID)
+	}
 	for _, cell := range target {
 		next.Add("target", encodeSecretTarget(cell))
 	}
-	for _, serverID := range unmountServers {
-		if serverID != "" {
-			next.Add("unmount", serverID)
+	for _, unmountServerID := range unmountServers {
+		if unmountServerID != "" {
+			next.Add("unmount", unmountServerID)
 		}
 	}
 	return secretsPreviewPath + "?" + next.Encode()
@@ -522,23 +547,89 @@ func secretAuthorizationResumePath(
 
 func (h *handler) renderSecretPreview(
 	w http.ResponseWriter, r *http.Request, target []SecretAuthorizationCell,
-	returnTo, notice string, selectedUnmount map[string]bool,
+	returnTo, notice, view, serverID string, selectedUnmount map[string]bool,
 ) {
 	preview, err := h.cfg.SecretsWriter.PreviewAuthorization(target)
 	if err != nil {
 		h.renderError(w, r, http.StatusBadRequest, "生成授权预览失败", err.Error())
 		return
 	}
-	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target, returnTo, notice, selectedUnmount)
+	preview, err = h.authorizationPreviewDisplay(preview, view, serverID)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "生成授权预览失败", "生成授权预览失败，请稍后重试。")
+		return
+	}
+	h.renderSecretPreviewPage(w, r, http.StatusOK, preview, target, returnTo, view, serverID,
+		notice, selectedUnmount)
+}
+
+// authorizationPreviewDisplay 把共享存储反向编辑的差异从挂载密码机密项名
+// 换成共享名；普通授权矩阵保持原有展示。
+func (h *handler) authorizationPreviewDisplay(
+	preview SecretAuthorizationPreview, view, serverID string,
+) (SecretAuthorizationPreview, error) {
+	if view != "server-shares" || serverID == "" {
+		return preview, nil
+	}
+	detail, err := h.cfg.Servers.ServerDetail("", serverID)
+	if err != nil || detail == nil {
+		if err == nil {
+			err = ErrServerNotFound
+		}
+		return preview, err
+	}
+	namesBySecret := make(map[string][]string, len(detail.SharedStorageChoices))
+	for _, choice := range detail.SharedStorageChoices {
+		for _, share := range choice.SharedStorages {
+			namesBySecret[choice.PasswordSecretID] = append(namesBySecret[choice.PasswordSecretID], share.Name)
+		}
+	}
+	rows := make([]SecretAuthorizationChange, 0, len(preview.Changes))
+	for _, change := range preview.Changes {
+		names := namesBySecret[change.SecretID]
+		if len(names) == 0 {
+			rows = append(rows, change)
+			continue
+		}
+		sort.Strings(names)
+		added := serverRefFor(change.Added, serverID)
+		removed := serverRefFor(change.Removed, serverID)
+		for _, name := range names {
+			row := SecretAuthorizationChange{SecretID: change.SecretID, DisplayName: name}
+			if added != nil {
+				row.Added = []SecretAuthorizationServer{*added}
+			}
+			if removed != nil {
+				row.Removed = []SecretAuthorizationServer{*removed}
+			}
+			rows = append(rows, row)
+		}
+	}
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].DisplayName < rows[j].DisplayName
+	})
+	preview.Changes = rows
+	return preview, nil
+}
+
+func serverRefFor(refs []SecretAuthorizationServer, serverID string) *SecretAuthorizationServer {
+	for i := range refs {
+		if refs[i].ID == serverID {
+			return &refs[i]
+		}
+	}
+	return nil
 }
 
 func (h *handler) renderSecretPreviewPage(
 	w http.ResponseWriter, r *http.Request, status int, preview SecretAuthorizationPreview,
-	target []SecretAuthorizationCell, returnTo, notice string, selectedUnmount map[string]bool,
+	target []SecretAuthorizationCell, returnTo, view, serverID, notice string,
+	selectedUnmount map[string]bool,
 ) {
 	data := pageData{
 		Title: "机密项授权预览", SecretAuthorizationPreview: preview,
 		SecretAuthorizationTargets: target, SecretAuthorizationReturnTo: returnTo,
+		SecretAuthorizationView: view, SecretAuthorizationServerID: serverID,
 		SecretAuthorizationNotice: notice,
 	}
 	data.SecretAuthorizationShareUnmounts = h.shareUnmountChoicesForAuthorization(

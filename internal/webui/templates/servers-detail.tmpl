@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="server-detail">
 <h1>{{.ServerDetail.Name}}</h1>
+{{if .ServerDetailNotice}}<div class="notice notice-{{or .ServerDetailNoticeKind "error"}}"><p>{{.ServerDetailNotice}}</p></div>{{end}}
 <dl class="detail-list">
 <dt>标识符</dt><dd>{{.ServerDetail.ID}}</dd>
 <dt>连接</dt><dd>{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</dd>
@@ -20,6 +21,201 @@
 <dt>注意原因</dt><dd>{{if .ServerDetail.AttentionReasons}}{{joinReasons .ServerDetail.AttentionReasons}}{{else}}无{{end}}</dd>
 <dt>修订号</dt><dd>{{.ServerDetail.Revision}}</dd>
 </dl>
+{{if .ServerDetail.ShowHostKeyAnchor}}
+<section aria-labelledby="server-hostkey-anchor-heading">
+<h2 id="server-hostkey-anchor-heading">主机密钥锚</h2>
+{{if not .Caps.CanWrite}}<p class="readonly-notice">仅显示本地快照中的主机密钥锚，修改请到权威端。</p>{{end}}
+{{if .ServerDetail.HostKeyAnchor}}
+<dl class="detail-list">
+<dt>主机密钥指纹</dt><dd>{{.ServerDetail.HostKeyAnchor.Fingerprint}}</dd>
+<dt>来源</dt><dd>{{.ServerDetail.HostKeyAnchor.SourceLabel}}</dd>
+<dt>转发设备</dt><dd>{{or .ServerDetail.HostKeyAnchor.Device "-"}}</dd>
+<dt>学到锚的地址</dt><dd>{{or .ServerDetail.HostKeyAnchor.HandshakeAddr "-"}}</dd>
+<dt>锚定时间</dt><dd>{{formatTime .ServerDetail.HostKeyAnchor.PinnedAt}}</dd>
+</dl>
+{{else}}
+<p>尚未锚定。首次信任或锚定转发会记录这台服务器条目的主机密钥。</p>
+{{end}}
+{{if and .Caps.CanWrite .ServerDetail.HostKeyAnchor}}
+<div class="server-hostkey-actions">
+<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/hostkey-pin" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="server-hostkey-fingerprint">新主机密钥指纹（SHA256 开头的完整指纹）</label>
+<input type="text" id="server-hostkey-fingerprint" name="fingerprint" placeholder="SHA256:…" required>
+<button type="submit">覆盖主机密钥锚</button>
+</form>
+{{if .ServerDetail.HostKeyAnchor}}
+<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/hostkey-clear" class="inline-form confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label class="confirm-choice"><input type="checkbox" name="confirm" value="1" required>确认删除主机密钥锚</label>
+<button type="submit" class="danger">删除主机密钥锚</button>
+</form>
+{{end}}
+</div>
+{{end}}
+</section>
+{{end}}
+<section aria-labelledby="server-secrets-heading">
+<h2 id="server-secrets-heading">机密项</h2>
+{{if not .Caps.CanWrite}}<p class="readonly-notice">仅显示本客户端可用的部分，修改请到权威端。</p>{{end}}
+{{if .Caps.CanWrite}}
+<form method="post" action="/ui/secrets/authorization/preview" class="server-secret-authorization">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
+{{range .ServerDetail.SecretChoices}}<input type="hidden" name="secret_id" value="{{.ID}}">{{end}}
+<input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
+<table class="server-table">
+<thead><tr><th scope="col">可写入</th><th scope="col">名字</th><th scope="col">备注</th><th scope="col">环境变量名</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SecretChoices}}
+<tr><td><label><input type="checkbox" name="{{secretCellName .ID $.ServerDetail.ID}}" value="1"{{if .Checked}} checked{{end}} aria-label="允许 {{.Name}} 写入 {{$.ServerDetail.Name}}"><span>允许写入</span></label></td><td>{{.Name}}</td><td>{{or .Note "-"}}</td><td>{{or .EnvironmentName "-"}}</td></tr>
+{{else}}<tr><td colspan="4">暂无可写入的机密项。</td></tr>{{end}}
+</tbody>
+</table>
+<button type="submit">预览机密项授权变更</button>
+</form>
+{{else}}
+<table class="server-table">
+<thead><tr><th scope="col">名字</th><th scope="col">备注</th></tr></thead>
+<tbody>
+{{range .ServerDetail.Secrets}}
+<tr><td>{{.Name}}</td><td>{{or .Note "-"}}</td></tr>
+{{else}}<tr><td colspan="2">暂无可写入的机密项。</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+</section>
+<section aria-labelledby="server-shares-heading">
+<h2 id="server-shares-heading">共享存储</h2>
+{{if .Caps.CanWrite}}
+<form method="post" action="/ui/secrets/authorization/preview" class="server-share-authorization">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
+<input type="hidden" name="authorization_view" value="server-shares">
+{{range .ServerDetail.SharedStorageChoices}}<input type="hidden" name="secret_id" value="{{.PasswordSecretID}}">{{end}}
+<input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
+<table class="server-table">
+<thead><tr><th scope="col">可挂载</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载用户</th><th scope="col">这台服务器的挂载点</th></tr></thead>
+<tbody>
+{{range $choice := .ServerDetail.SharedStorageChoices}}
+{{if $choice.SharedStorages}}
+{{range $index, $share := $choice.SharedStorages}}
+<tr>
+<td>{{if eq $index 0}}<label><input type="checkbox" name="{{secretCellName $choice.PasswordSecretID $.ServerDetail.ID}}" value="1"{{if $choice.Checked}} checked{{end}} aria-label="允许挂载这组共享存储"><span>允许挂载</span></label>{{if gt (len $choice.SharedStorages) 1}}<span>同一密码机密项：{{sharedStorageNames $choice.SharedStorages}}</span>{{end}}{{else}}<span>与 {{sharedStorageNames $choice.SharedStorages}} 同一密码机密项</span>{{end}}</td>
+<td>{{$share.Name}}</td>
+<td>{{or $share.ProviderDeviceName "-"}}</td>
+<td>{{or $share.MountUser "-"}}</td>
+<td>{{$share.MountPoint}}</td>
+</tr>
+{{end}}
+{{else}}
+<tr><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+{{end}}
+{{else}}<tr><td colspan="5">暂无可挂载的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+<button type="submit">预览共享存储授权变更</button>
+</form>
+{{else}}
+<table class="server-table">
+<thead><tr><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载用户</th><th scope="col">挂载密码机密项</th><th scope="col">这台服务器的挂载点</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SharedStorages}}
+<tr><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{or .MountUser "-"}}</td><td>{{or .PasswordSecretName "-"}}</td><td>{{.MountPoint}}</td></tr>
+{{else}}<tr><td colspan="5">暂无可挂载的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+{{end}}
+</section>
+{{if .Caps.CanWrite}}
+<section aria-labelledby="server-profiles-heading">
+<h2 id="server-profiles-heading">profile 授权</h2>
+<form method="post" action="/ui/servers/profile-authorization/preview" class="server-profile-authorization">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
+<table class="server-table">
+<thead><tr><th scope="col">授予</th><th scope="col">profile</th></tr></thead>
+<tbody>
+{{range .ServerDetail.ProfileChoices}}
+<tr><td><label><input type="checkbox" name="profile" value="{{.ID}}"{{if .Checked}} checked{{end}} aria-label="授予 {{.Name}} 访问 {{$.ServerDetail.Name}}"><span>授予</span></label></td><td>{{.Name}}</td></tr>
+{{else}}<tr><td colspan="2">暂无可选 profile。</td></tr>{{end}}
+</tbody>
+</table>
+<button type="submit">预览 profile 授权变更</button>
+</form>
+</section>
+{{end}}
+{{if and .ServerDetail.ShowDeliveryRecords .Caps.CanWrite}}
+<section aria-labelledby="server-deliveries-heading">
+<h2 id="server-deliveries-heading">下发记录</h2>
+<p>登记失败的历史写入会缺漏，不承诺完整。记录只读，模板原文不包含机密项值。</p>
+<table class="server-table">
+<thead><tr><th scope="col">路径</th><th scope="col">机密项</th><th scope="col">写入时间</th><th scope="col">发起设备</th><th scope="col">客户端实例</th><th scope="col">详情</th></tr></thead>
+<tbody>
+{{range .ServerDetail.DeliveryRecords}}
+<tr>
+<td>{{.Path}}</td>
+<td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td>
+<td>{{formatTime .WrittenAt}}</td>
+<td>{{.InitiatingDeviceName}}</td>
+<td>{{.InitiatingInstanceName}}</td>
+<td>
+<details>
+<summary>展开详情</summary>
+<dl>
+<dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd>
+<dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd>
+<dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd>
+</dl>
+</details>
+</td>
+</tr>
+{{else}}<tr><td colspan="6">暂无写到这台服务器的下发记录。</td></tr>{{end}}
+</tbody>
+</table>
+</section>
+{{end}}
+<aside aria-labelledby="sibling-shares-heading">
+<h2 id="sibling-shares-heading">同设备其他服务器条目带来的共享存储</h2>
+<table class="server-table">
+<thead><tr><th scope="col">来源服务器条目</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">这台机器上的挂载点</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SiblingSharedStorages}}
+<tr><td>{{.SourceServerName}}</td><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>
+{{else}}<tr><td colspan="4">同一设备没有其他服务器条目带来的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+</aside>
+{{if and .ServerDetail.ShowDeliveryRecords .Caps.CanWrite}}
+<aside aria-labelledby="sibling-deliveries-heading">
+<h2 id="sibling-deliveries-heading">同设备其他服务器条目带来的下发文件</h2>
+<table class="server-table">
+<thead><tr><th scope="col">来源服务器条目</th><th scope="col">路径</th><th scope="col">机密项</th><th scope="col">写入时间</th><th scope="col">发起设备</th><th scope="col">客户端实例</th><th scope="col">详情</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SiblingDeliveryRecords}}
+<tr>
+<td>{{.SourceServerName}}</td>
+<td>{{.Path}}</td>
+<td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td>
+<td>{{formatTime .WrittenAt}}</td>
+<td>{{.InitiatingDeviceName}}</td>
+<td>{{.InitiatingInstanceName}}</td>
+<td>
+<details>
+<summary>展开详情</summary>
+<dl>
+<dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd>
+<dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd>
+<dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd>
+</dl>
+</details>
+</td>
+</tr>
+{{else}}<tr><td colspan="7">同一设备没有其他服务器条目带来的下发文件。</td></tr>{{end}}
+</tbody>
+</table>
+</aside>
+{{end}}
 <div class="inline-form server-actions">
 <a class="button-link" href="/ui/">返回服务器列表</a>
 {{if .Caps.CanWrite}}

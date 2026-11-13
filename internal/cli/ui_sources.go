@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"io"
+	"time"
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/buildinfo"
@@ -235,7 +236,8 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			continue
 		}
 		tags := snapshotServerTags(srv.TagsRaw)
-		return &webui.ServerDetailView{
+		reverse := clientSnapshotReverseDetail(snap, srv)
+		view := &webui.ServerDetailView{
 			ID: srv.ID, Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
 			Shell:          string(models.NormalizeShellType(srv.ShellType)),
 			CredentialType: credentialType[srv.CredentialID], HasKeyPassphrase: hasPassphrase[srv.CredentialID],
@@ -245,7 +247,38 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			DeviceName: deviceNames[srv.DeviceID], HasDevice: deviceNames[srv.DeviceID] != "",
 			AttentionReasons: servermanage.ReasonLabels(models.ServerAttentionReasons(srv.CredentialID, srv.Role, tags)),
 			Revision:         srv.Revision,
-		}, nil
+		}
+		view.ShowHostKeyAnchor = true
+		for _, anchor := range snap.EntryHostKeys {
+			if anchor.ServerID != srv.ID {
+				continue
+			}
+			view.HostKeyAnchor = &webui.ServerDetailHostKeyAnchor{
+				Fingerprint:   store.PinFingerprint(anchor.KeyBlob, anchor.PinFormat),
+				SourceLabel:   webui.HostKeyAnchorSourceLabel(anchor.PinSource),
+				Device:        anchor.PinDevice,
+				HandshakeAddr: anchor.HandshakeAddr,
+				PinnedAt:      time.Unix(anchor.CreatedAt, 0),
+			}
+			break
+		}
+		for _, secret := range reverse.Secrets {
+			view.Secrets = append(view.Secrets, webui.ServerDetailSecret{
+				ID: secret.ID, Name: secret.Name, Note: secret.Note,
+				EnvironmentName: secret.EnvironmentName,
+			})
+		}
+		for _, share := range reverse.SharedStorages {
+			view.SharedStorages = append(view.SharedStorages, webuiservers.SharedStorageView(share))
+		}
+		for _, share := range reverse.SiblingSharedStorages {
+			view.SiblingSharedStorages = append(view.SiblingSharedStorages, webui.ServerDetailSiblingSharedStorage{
+				ServerDetailSharedStorage: webuiservers.SharedStorageView(share.DetailSharedStorage),
+				SourceServerID:            share.SourceServerID,
+				SourceServerName:          share.SourceServerName,
+			})
+		}
+		return view, nil
 	}
 	return nil, nil
 }

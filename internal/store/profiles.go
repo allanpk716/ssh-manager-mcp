@@ -392,12 +392,12 @@ func (s *Store) AdjustGrantSet(profileID string, expected, desired []string) (Gr
 		return GrantSetAdjustment{}, false, err
 	}
 	rows.Close()
-	currentSorted := normalizeIDSet(current)
-	expectedSorted := normalizeIDSet(expected)
+	currentSorted := NormalizeIDSet(current)
+	expectedSorted := NormalizeIDSet(expected)
 	if !idSetsEqual(currentSorted, expectedSorted) {
 		return GrantSetAdjustment{Current: currentSorted}, true, nil
 	}
-	desiredSorted := normalizeIDSet(desired)
+	desiredSorted := NormalizeIDSet(desired)
 	currentSet := make(map[string]bool, len(currentSorted))
 	for _, sid := range currentSorted {
 		currentSet[sid] = true
@@ -446,9 +446,145 @@ func (s *Store) AdjustGrantSet(profileID string, expected, desired []string) (Gr
 	return adjustment, false, tx.Commit()
 }
 
-// normalizeIDSet 把标识符清单去重并按字典序排序，保证集合比较与结果
+// ServerProfileSetAdjustment 是按完整集合调整一台服务器授权 profile 的结果。
+type ServerProfileSetAdjustment struct {
+	Added   []string
+	Removed []string
+	Current []string
+}
+
+// ProfilesForServer 返回这台服务器条目当前授予的全部 profile 标识符，
+// 按 profile 名称排序，供反向视图与预览使用。
+func (s *Store) ProfilesForServer(serverID string) ([]string, error) {
+	rows, err := s.db.Query(`
+		SELECT profiles.id
+		FROM profiles
+		JOIN profile_servers ON profile_servers.profile_id = profiles.id
+		WHERE profile_servers.server_id = ?
+		ORDER BY profiles.name, profiles.id`, serverID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// AdjustServerProfiles 在一个事务里按完整集合调整一台服务器条目被授予
+// 的 profile：先比对调用方预览时看到的集合（expected）与当前集合，不一致
+// 就返回冲突（不写任何数据）；一致则按 desired 的差异逐项新增或删除授权
+// 行，并同步推进发生变化的 profile 更新时间。没有变化时不写任何行。
+func (s *Store) AdjustServerProfiles(
+	serverID string, expected, desired []string,
+) (ServerProfileSetAdjustment, bool, error) {
+	if s.readOnly {
+		return ServerProfileSetAdjustment{}, false, ErrReadOnly
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return ServerProfileSetAdjustment{}, false, err
+	}
+	defer tx.Rollback()
+	var one int
+	if err := tx.QueryRow(`SELECT 1 FROM servers WHERE id=?`, serverID).Scan(&one); err == sql.ErrNoRows {
+		return ServerProfileSetAdjustment{}, false, fmt.Errorf("server %s not found (adjust aborted, nothing changed)", serverID)
+	} else if err != nil {
+		return ServerProfileSetAdjustment{}, false, err
+	}
+	rows, err := tx.Query(`
+		SELECT profiles.id
+		FROM profiles
+		JOIN profile_servers ON profile_servers.profile_id = profiles.id
+		WHERE profile_servers.server_id = ?
+		ORDER BY profiles.name, profiles.id`, serverID)
+	if err != nil {
+		return ServerProfileSetAdjustment{}, false, err
+	}
+	var current []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return ServerProfileSetAdjustment{}, false, err
+		}
+		current = append(current, id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ServerProfileSetAdjustment{}, false, err
+	}
+	rows.Close()
+	currentSorted := NormalizeIDSet(current)
+	expectedSorted := NormalizeIDSet(expected)
+	if !idSetsEqual(currentSorted, expectedSorted) {
+		return ServerProfileSetAdjustment{Current: currentSorted}, true, nil
+	}
+	desiredSorted := NormalizeIDSet(desired)
+	for _, id := range desiredSorted {
+		if err := tx.QueryRow(`SELECT 1 FROM profiles WHERE id=?`, id).Scan(&one); err == sql.ErrNoRows {
+			return ServerProfileSetAdjustment{}, false, fmt.Errorf("profile %s not found (adjust aborted, nothing changed)", id)
+		} else if err != nil {
+			return ServerProfileSetAdjustment{}, false, err
+		}
+	}
+	currentSet := make(map[string]bool, len(currentSorted))
+	for _, id := range currentSorted {
+		currentSet[id] = true
+	}
+	desiredSet := make(map[string]bool, len(desiredSorted))
+	for _, id := range desiredSorted {
+		desiredSet[id] = true
+	}
+	adjustment := ServerProfileSetAdjustment{}
+	for _, id := range desiredSorted {
+		if !currentSet[id] {
+			adjustment.Added = append(adjustment.Added, id)
+		}
+	}
+	for _, id := range currentSorted {
+		if !desiredSet[id] {
+			adjustment.Removed = append(adjustment.Removed, id)
+		}
+	}
+	for _, id := range adjustment.Added {
+		if _, err := tx.Exec(
+			`INSERT OR IGNORE INTO profile_servers (profile_id, server_id) VALUES (?,?)`, id, serverID,
+		); err != nil {
+			return ServerProfileSetAdjustment{}, false, err
+		}
+	}
+	for _, id := range adjustment.Removed {
+		if _, err := tx.Exec(
+			`DELETE FROM profile_servers WHERE profile_id=? AND server_id=?`, id, serverID,
+		); err != nil {
+			return ServerProfileSetAdjustment{}, false, err
+		}
+	}
+	if len(adjustment.Added) > 0 || len(adjustment.Removed) > 0 {
+		for _, id := range adjustment.Added {
+			if _, err := tx.Exec(`UPDATE profiles SET updated_at=? WHERE id=?`, now(), id); err != nil {
+				return ServerProfileSetAdjustment{}, false, err
+			}
+		}
+		for _, id := range adjustment.Removed {
+			if _, err := tx.Exec(`UPDATE profiles SET updated_at=? WHERE id=?`, now(), id); err != nil {
+				return ServerProfileSetAdjustment{}, false, err
+			}
+		}
+	}
+	return adjustment, false, tx.Commit()
+}
+
+// NormalizeIDSet 把标识符清单去重并按字典序排序，保证集合比较与结果
 // 顺序都确定。
-func normalizeIDSet(ids []string) []string {
+func NormalizeIDSet(ids []string) []string {
 	seen := make(map[string]bool, len(ids))
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {

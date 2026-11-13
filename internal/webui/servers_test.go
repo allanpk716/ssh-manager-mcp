@@ -71,6 +71,137 @@ func (s *stubServerStore) ServerDetail(_ string, identifier string) (*ServerDeta
 	return s.details[identifier], nil
 }
 
+// TestServerDetailShowsReverseReadGroups 校验详情页三组反向授权、空状态与
+// 同设备共享存储提示；页面只显示名字和备注，不显示机密项值。
+func TestServerDetailShowsReverseReadGroups(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-fine"].Secrets = []ServerDetailSecret{{
+		Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
+	}}
+	store.details["srv-fine"].SecretChoices = []ServerDetailSecretChoice{{
+		ServerDetailSecret: ServerDetailSecret{
+			Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
+		},
+		Checked: true,
+	}}
+	store.details["srv-fine"].SharedStorages = []ServerDetailSharedStorage{{
+		Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+		PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+	}}
+	store.details["srv-fine"].SharedStorageChoices = []ServerDetailSharedStorageChoice{{
+		PasswordSecretID:   "secret-dataset",
+		PasswordSecretName: "DATASET_PASSWORD",
+		SharedStorages: []ServerDetailSharedStorage{{
+			Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+		}, {
+			Name: "models", ProviderDeviceName: "NAS-B", MountUser: "model-mount-user",
+			PasswordSecretName: "DATASET_PASSWORD", Drive: "Y", MountPoint: "/mnt/sshmgr/models",
+		}},
+		Checked: true,
+	}}
+	store.details["srv-fine"].Profiles = []ServerDetailProfile{{Name: "运维"}}
+	store.details["srv-fine"].ProfileChoices = []ServerDetailProfileChoice{{
+		ServerDetailProfile: ServerDetailProfile{Name: "运维"},
+		Checked:             true,
+	}}
+	store.details["srv-fine"].SiblingSharedStorages = []ServerDetailSiblingSharedStorage{{
+		ServerDetailSharedStorage: ServerDetailSharedStorage{
+			Name: "worker-data", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretName: "WORKER_PASSWORD", Drive: "X", MountPoint: "X:",
+		},
+		SourceServerName: "worker",
+	}}
+	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"机密项", "API_TOKEN", "接口令牌", "环境变量名",
+		"共享存储", "datasets", "NAS", "mount-user", "/mnt/sshmgr/datasets",
+		"profile 授权", "运维",
+		"同设备其他服务器条目带来的共享存储", "worker-data", "来源服务器条目", "worker",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器详情页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "ordinary-secret-value") {
+		t.Fatalf("服务器详情页不得显示机密项值：\n%s", page)
+	}
+	if strings.Count(page, `name="cell__secret-dataset__srv-fine"`) != 1 {
+		t.Fatalf("同一密码机密项只应提交一个勾选框：\n%s", page)
+	}
+	if !strings.Contains(page, "与 datasets、models 同一密码机密项") ||
+		!strings.Contains(page, "models") || !strings.Contains(page, "NAS-B") ||
+		!strings.Contains(page, "model-mount-user") || !strings.Contains(page, "/mnt/sshmgr/models") {
+		t.Fatalf("同一个密码机密项驱动的共享存储应各占一行并说明共用勾选：\n%s", page)
+	}
+
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无可选 profile"} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("服务器详情页空状态缺少 %q：\n%s", want, empty)
+		}
+	}
+}
+
+// TestServerDetailShowsReadOnlyDeliveryRecords 校验详情页第四组展示记录列
+// 表与可展开详情，不提供任何编辑或删除入口；客户端页面整组隐藏。
+func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-fine"].ShowDeliveryRecords = true
+	store.details["srv-fine"].DeliveryRecords = []SecretDeliveryRecordRow{{
+		ServerName: "fine", Path: "/etc/app/config.yml",
+		Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("5", 64),
+		WrittenAt: time.Unix(1760000900, 0), InitiatingDeviceName: "office-laptop",
+		InitiatingInstanceName: "agent-a",
+		Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+	}}
+	store.details["srv-fine"].SiblingDeliveryRecords = []ServerDetailSiblingDeliveryRecord{{
+		SecretDeliveryRecordRow: SecretDeliveryRecordRow{
+			ServerName: "worker", Path: "/etc/worker/config.yml",
+			Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("6", 64),
+			WrittenAt: time.Unix(1760001000, 0), InitiatingDeviceName: "worker-laptop",
+			InitiatingInstanceName: "agent-b",
+			Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+		},
+		SourceServerID: "srv-worker", SourceServerName: "worker",
+	}}
+	store.details["srv-bare"].ShowDeliveryRecords = true
+	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
+
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"下发记录", "/etc/app/config.yml", "OLD_TOKEN", "引用的机密项已删除",
+		"写入时间", "office-laptop", "agent-a", "<details", "模板原文",
+		"token: {{sshmgr-secret:OLD_TOKEN}}", strings.Repeat("5", 64), "值版本号", "OLD_TOKEN：2",
+		"同设备其他服务器条目带来的下发文件", "来源服务器条目", "worker",
+		"/etc/worker/config.yml", "worker-laptop", "agent-b",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器详情页下发记录缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"编辑下发记录", "删除下发记录", "清理下发记录"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("下发记录组必须只读，页面不得包含 %q：\n%s", forbidden, page)
+		}
+	}
+
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	if !strings.Contains(empty, "暂无写到这台服务器的下发记录。") {
+		t.Fatalf("服务器详情页下发记录空状态不明确：\n%s", empty)
+	}
+
+	clientHandler, clientCookie := newServersTestHandler(t, RoleClient, store, &stubServerWriter{})
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
+	for _, forbidden := range []string{"下发记录", "同设备其他服务器条目带来的下发文件"} {
+		if strings.Contains(clientPage, forbidden) {
+			t.Fatalf("客户端服务器详情不得显示 %q：\n%s", forbidden, clientPage)
+		}
+	}
+}
+
 type stubServerWriter struct {
 	adds           []ServerAddForm
 	otherAdds      []OtherDeviceAddForm
@@ -88,6 +219,14 @@ type stubServerWriter struct {
 	anchorCopied   bool
 	anchorFrom     string
 	anchorConflict bool
+	pinWrites      []stubHostKeyWrite
+	clearWrites    []string
+}
+
+type stubHostKeyWrite struct {
+	id          string
+	fingerprint string
+	source      ServerWriteSource
 }
 
 func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error) {
@@ -189,6 +328,16 @@ func (w *stubServerWriter) CompleteServer(id string, form ServerCompleteForm, so
 		return nil, w.completeErr
 	}
 	return &ServerCompleteResultView{Detail: &ServerDetailView{ID: id, Name: "web", Role: form.RoleValue()}}, nil
+}
+
+func (w *stubServerWriter) ReplaceHostKeyPin(id, fingerprint string, force bool, source ServerWriteSource) error {
+	w.pinWrites = append(w.pinWrites, stubHostKeyWrite{id: id, fingerprint: fingerprint, source: source})
+	return nil
+}
+
+func (w *stubServerWriter) ClearHostKeyPin(id string, source ServerWriteSource) error {
+	w.clearWrites = append(w.clearWrites, id)
+	return nil
 }
 
 // newServersTestHandler 构造带可写来源的单机 Web UI，并完成启动令牌换会话。

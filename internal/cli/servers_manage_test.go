@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -133,27 +134,291 @@ func TestServersShowDetail(t *testing.T) {
 
 // TestServersShowOnClientSnapshot 校验客户端 `servers show` 只读本地快照。
 func TestServersShowOnClientSnapshot(t *testing.T) {
-	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+	snapshot := &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "s1", Name: "snapshot-web", User: "root", Host: "192.0.2.10", Port: 22,
-			CredentialID: "c1", Role: "快照角色", TagsRaw: `["needs-passphrase"]`, ShellType: "posix"},
-	}}, "")
+			CredentialID: "c1", Role: "快照角色", TagsRaw: `["needs-passphrase"]`, ShellType: "posix",
+			DeviceID: "device-workstation"},
+		{ID: "s2", Name: "snapshot-worker", User: "root", Host: "192.0.2.11", Port: 22,
+			ShellType: "posix", DeviceID: "device-workstation"},
+	}, Devices: []store.SnapshotDevice{{ID: "device-workstation", Name: "workstation"}},
+		Secrets: []store.SnapshotSecret{
+			{ID: "secret-web", Name: "WEB_TOKEN", Note: "网站令牌", EnvironmentName: "WEB_TOKEN_FILE", Value: []byte("web-secret-value")},
+			{ID: "secret-worker", Name: "WORKER_TOKEN", Note: "工作进程令牌", EnvironmentName: "WORKER_TOKEN_FILE", Value: []byte("worker-secret-value")},
+			{ID: "secret-share", Name: "DATASET_MOUNT_PASSWORD", Note: "数据集挂载密码", Value: []byte("share-secret-value")},
+			{ID: "secret-worker-share", Name: "WORKER_MOUNT_PASSWORD", Note: "工作目录挂载密码", Value: []byte("worker-share-secret-value")},
+		}, SecretAllows: []store.SnapshotSecretAllow{
+			{SecretID: "secret-web", ServerID: "s1"},
+			{SecretID: "secret-worker", ServerID: "s2"},
+			{SecretID: "secret-share", ServerID: "s1"},
+			{SecretID: "secret-worker-share", ServerID: "s2"},
+		}, SharedStorages: []store.SnapshotSharedStorage{
+			{ID: "share-datasets", Name: "datasets", DeviceName: "workstation", MountUser: "mount-user", PasswordSecretID: "secret-share", Drive: "E"},
+			{ID: "share-worker-data", Name: "worker-data", DeviceName: "workstation", MountUser: "worker-mount-user", PasswordSecretID: "secret-worker-share", Drive: "F"},
+		}, Profiles: []store.SnapshotProfile{{ID: "profile-1", Name: "客户端配置组"}},
+		Grants: []store.SnapshotGrant{
+			{ProfileID: "profile-1", ServerID: "s1"},
+			{ProfileID: "profile-1", ServerID: "s2"},
+		},
+		SecretDeliveryRecords: []store.SnapshotSecretDeliveryRecord{{ID: "record-1", ServerID: "s1", Path: "/etc/app/config.yml"}},
+	}
+	seedClientCacheSnapshot(t, snapshot, "")
 	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "no-vault.db"))
 
 	out := runCli(t, "servers", "show", "snapshot-web")
-	for _, want := range []string{"snapshot-web", "root@192.0.2.10:22", "快照角色", "待补私钥口令"} {
+	for _, want := range []string{
+		"snapshot-web", "root@192.0.2.10:22", "快照角色", "待补私钥口令",
+		"仅显示本客户端可用的部分，修改请到权威端。", "机密项：", "WEB_TOKEN：备注 网站令牌",
+		"共享存储：", "datasets：提供方设备 workstation；挂载用户 mount-user",
+		"挂载密码机密项 DATASET_MOUNT_PASSWORD；挂载点 /mnt/sshmgr/datasets",
+		"同设备其他服务器条目带来的共享存储：", "worker-data：来源服务器条目 snapshot-worker",
+	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("客户端详情缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, forbidden := range []string{
+		"profile 授权：", "下发记录：", "同设备其他服务器条目带来的下发文件：",
+		"环境变量名 WEB_TOKEN_FILE", "WORKER_TOKEN", "/etc/app/config.yml",
+		"web-secret-value", "share-secret-value", "worker-share-secret-value",
+	} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("客户端 servers show 不得显示 %q：\n%s", forbidden, out)
 		}
 	}
 	if _, err := runCliWithInput(t, "", "servers", "show", "不在快照里"); err == nil {
 		t.Fatal("快照外的服务器应报错")
 	}
+	_, cacheSnapshot, _, _, err := clientops.CachePathsFor("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cacheSnapshot, []byte("corrupt-client-snapshot"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runCliWithInput(t, "", "servers", "show", "snapshot-web"); err == nil {
+		t.Fatal("本地快照读取失败时应报错，不得回退请求权威端")
+	}
 }
 
-// TestServersRmPreviewAndYes 校验删除预览、非交互保护与 --yes 执行。
+// TestServersShowReverseGroups 从根命令进入，校验单机 `servers show` 输出与
+// 详情页同一份反向查询结果，且不包含机密项值。
+func TestServersShowReverseGroups(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("workstation", "同一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: device.ID,
+		ShellType: models.ShellPowerShell,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecretWithEnvironmentName(
+		"API_TOKEN", "接口令牌", []byte("ordinary-secret-value"), "API_TOKEN", store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"DATASET_PASSWORD", "挂载密码", []byte("share-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"WORKER_PASSWORD", "工作机挂载密码", []byte("worker-secret-value"), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets(
+		[]string{"API_TOKEN", "DATASET_PASSWORD"}, []string{"web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"WORKER_PASSWORD"}, []string{"worker"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "workstation", User: "mount-user",
+		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "worker-data", Device: "workstation", User: "mount-user",
+		PasswordSecret: "WORKER_PASSWORD", Drive: "Y",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("运维")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{primary}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out := runCli(t, "servers", "show", "web")
+	for _, want := range []string{
+		"机密项：", "API_TOKEN", "接口令牌", "环境变量名 API_TOKEN",
+		"共享存储：", "datasets", "提供方设备 workstation", "挂载用户 mount-user",
+		"挂载密码机密项 DATASET_PASSWORD", "挂载点 /mnt/sshmgr/datasets",
+		"profile 授权：", "运维",
+		"同设备其他服务器条目带来的共享存储：", "worker-data", "来源服务器条目 worker",
+		"这台机器上的挂载点 Y:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("servers show 反向视图缺少 %q：\n%s", want, out)
+		}
+	}
+	for _, secretValue := range []string{"ordinary-secret-value", "share-secret-value", "worker-secret-value"} {
+		if strings.Contains(out, secretValue) {
+			t.Fatalf("servers show 不得输出机密项值 %q：\n%s", secretValue, out)
+		}
+	}
+}
+
+// TestServersShowDeliveryRecords 校验 `servers show` 的第四组与
+// `secrets records --server` 读取同一份记录，展开只读详情且不输出机密项值。
+func TestServersShowDeliveryRecords(t *testing.T) {
+	dbPath, mk := newVaultEnvNoRun(t)
+	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("workstation", "同一台设备", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := st.AddServer(&models.Server{
+		Name: "worker", Host: "192.0.2.11", Port: 22, User: "deploy", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("ordinary-secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("OLD_TOKEN", "已下线令牌", []byte("deleted-secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"API_TOKEN", "OLD_TOKEN"}, []string{"web", "worker"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("agents")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{primary, worker}); err != nil {
+		t.Fatal(err)
+	}
+	record := func(serverID, path, secretName, digest, instance string, writtenAt int64) store.SecretDeliveryRecordInput {
+		return store.SecretDeliveryRecordInput{
+			ServerID: serverID, Path: path,
+			Template:   []byte("token: {{sshmgr-secret:" + secretName + "}}"),
+			FileSHA256: digest, WrittenAt: time.Unix(writtenAt, 0),
+			Secrets:              []store.SecretDeliverySecret{{Name: secretName, ValueVersion: 2}},
+			InitiatingDeviceName: "office-laptop", InitiatingInstanceName: instance,
+			AuthorizationProfileID: profileID,
+		}
+	}
+	if _, err := st.RecordSecretDelivery(record(
+		primary, "/etc/app/config.yml", "API_TOKEN", strings.Repeat("5", 64), "agent-a", 1760000900,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.RecordSecretDelivery(record(
+		primary, "/etc/app/old.yml", "OLD_TOKEN", strings.Repeat("6", 64), "agent-a", 1760000800,
+	), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	workerRecord := record(
+		worker, "/etc/worker/config.yml", "API_TOKEN", strings.Repeat("7", 64), "agent-b", 1760001000,
+	)
+	workerRecord.InitiatingDeviceName = "worker-laptop"
+	if _, err := st.RecordSecretDelivery(workerRecord, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteSecret("OLD_TOKEN", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "servers", "show", "web")
+	for _, want := range []string{
+		"下发记录：", "- 服务器条目 web；路径 /etc/app/config.yml；机密项 API_TOKEN；",
+		"写入时间 2025-10-09", "发起设备 office-laptop", "实例 agent-a",
+		"/etc/app/old.yml", "OLD_TOKEN（已删除）",
+		"同设备其他服务器条目带来的下发文件：", "来源服务器条目 worker",
+		"/etc/worker/config.yml", "worker-laptop", "agent-b",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("servers show 下发记录缺少 %q：\n%s", want, out)
+		}
+	}
+	ownDeliveries := strings.Split(out, "同设备其他服务器条目带来的下发文件：")[0]
+	for _, forbidden := range []string{
+		"模板原文：", "文件 SHA-256 哈希：", "值版本号",
+		strings.Repeat("5", 64), strings.Repeat("6", 64),
+	} {
+		if strings.Contains(ownDeliveries, forbidden) {
+			t.Fatalf("servers show 的本条目下发记录列表不得展开详情字段 %q：\n%s", forbidden, ownDeliveries)
+		}
+	}
+	for _, secretValue := range []string{"ordinary-secret-value", "deleted-secret-value"} {
+		if strings.Contains(out, secretValue) {
+			t.Fatalf("servers show 不得输出机密项值 %q：\n%s", secretValue, out)
+		}
+	}
+
+	recordsOut := runCli(t, "secrets", "records", "--server", "web")
+	for _, want := range []string{
+		"/etc/app/config.yml", "API_TOKEN", "2025-10-09", "office-laptop", "agent-a",
+		"/etc/app/old.yml", "OLD_TOKEN（已删除）",
+	} {
+		if !strings.Contains(recordsOut, want) {
+			t.Fatalf("secrets records --server 输出缺少 %q：\n%s", want, recordsOut)
+		}
+	}
+	if strings.Contains(recordsOut, "/etc/worker/config.yml") {
+		t.Fatalf("secrets records --server web 不应包含 worker 的记录：\n%s", recordsOut)
+	}
+}
+
+// runServersRmInteractive 把 `servers rm` 按交互终端驱动，便于测试确认输入。
+func runServersRmInteractive(t *testing.T, input string, args ...string) (string, error) {
+	t.Helper()
+	prevTTY := serversStdinIsTTY
+	serversStdinIsTTY = func() bool { return true }
+	t.Cleanup(func() { serversStdinIsTTY = prevTTY })
+	root := NewRootCmd()
+	out := &bytes.Buffer{}
+	root.SetOut(out)
+	root.SetErr(out)
+	root.SetIn(strings.NewReader(input))
+	root.SetArgs(append([]string{"servers", "rm"}, args...))
+	err := root.Execute()
+	return out.String(), err
+}
+
+// TestServersRmPreviewConfirmAndYes 校验删除预览、非交互保护、交互确认与
+// --yes 执行。
 func TestServersRmPreviewAndYes(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)
 	st := openInspect(t, dbPath, mk)
@@ -163,6 +428,11 @@ func TestServersRmPreviewAndYes(t *testing.T) {
 	}
 	if _, err := st.AddServerWithCredentials(&models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "root", CredentialID: cid, Role: "r",
+	}, &models.Credential{ID: cid, Type: models.CredPassword}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServerWithCredentials(&models.Server{
+		Name: "script", Host: "192.0.2.11", Port: 22, User: "root", CredentialID: cid, Role: "r",
 	}, &models.Credential{ID: cid, Type: models.CredPassword}, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -188,13 +458,37 @@ func TestServersRmPreviewAndYes(t *testing.T) {
 		t.Fatal("拒绝执行时不得删除服务器")
 	}
 
-	out := runCli(t, "servers", "rm", "--yes", "web")
-	for _, want := range []string{"team", "主机密钥锚", "登录凭据（密码）", "设备保留"} {
+	cancelled, err := runServersRmInteractive(t, "n\n", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(cancelled, "已取消删除") {
+		t.Fatalf("交互输入非 y 时应取消删除：\n%s", cancelled)
+	}
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still == nil {
+		t.Fatal("交互取消时不得删除服务器")
+	}
+
+	confirmed, err := runServersRmInteractive(t, "y\n", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"team", "主机密钥锚", "登录凭据（密码）", "设备保留", "确认删除 web"} {
+		if !strings.Contains(confirmed, want) {
+			t.Fatalf("交互删除预览缺少 %q：\n%s", want, confirmed)
+		}
+	}
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still != nil {
+		t.Fatal("输入 y 后应删除服务器")
+	}
+
+	out := runCli(t, "servers", "rm", "--yes", "script")
+	for _, want := range []string{"删除影响预览：script", "登录凭据（密码）"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("删除预览缺少 %q：\n%s", want, out)
 		}
 	}
-	if still, _ := openInspect(t, dbPath, mk).GetServerByName("web"); still != nil {
+	if still, _ := openInspect(t, dbPath, mk).GetServerByName("script"); still != nil {
 		t.Fatal("--yes 应删除服务器")
 	}
 }
@@ -372,18 +666,29 @@ func TestServersListSharedCredentialBeforeWrite(t *testing.T) {
 	}
 }
 
-// TestServersRmPreviewListsDeliveryRecords `servers rm` 的删除影响预览列出
-// 会随条目删除的下发记录；确认删除后记录消失，输出不含机密项值。
-func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
+// TestServersRmPreviewListsSharedStorageAndDeliveryRecords `servers rm` 的删
+// 除影响预览列出共享存储与下发记录；确认删除后两组影响都消失，输出不含
+// 机密项值。
+func TestServersRmPreviewListsSharedStorageAndDeliveryRecords(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)
 	st := openInspect(t, dbPath, mk)
+	device, err := st.AddDevice("NAS", "存放共享数据", "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	webID, err := st.AddServer(&models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "root", Role: "应用服务器",
+		DeviceID: device.ID,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AddSecret("API_TOKEN", "接口令牌", []byte("login-secret-value-9f21"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret(
+		"NAS_MOUNT_PASSWORD", "共享存储挂载密码", []byte("mount-secret-value"), store.CLISource(),
+	); err != nil {
 		t.Fatal(err)
 	}
 	profileID, err := st.AddProfile("agents")
@@ -393,8 +698,18 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{webID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AllowSecrets([]string{"API_TOKEN"}, []string{"web"}, store.CLISource()); err != nil {
+	if err := st.AllowSecrets(
+		[]string{"API_TOKEN", "NAS_MOUNT_PASSWORD"}, []string{"web"}, store.CLISource(),
+	); err != nil {
 		t.Fatal(err)
+	}
+	for _, input := range []store.SharedStorageInput{
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+	} {
+		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := st.RecordSecretDelivery(store.SecretDeliveryRecordInput{
 		ServerID: webID, Path: "/etc/app/config.yml",
@@ -412,11 +727,15 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 
 	out := runCli(t, "servers", "rm", "--yes", "web")
 	for _, want := range []string{
-		"会随之删除的下发记录", "web：/etc/app/config.yml", "API_TOKEN",
+		"这台服务器不再可挂载的共享存储：datasets、scratch",
+		"会随之删除的下发记录：1 条", "web：/etc/app/config.yml", "API_TOKEN",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("servers rm 预览缺少 %q：\n%s", want, out)
 		}
+	}
+	if strings.Contains(out, "NAS_MOUNT_PASSWORD") {
+		t.Fatalf("servers rm 的普通机密项组不得重复列出共享存储挂载密码：\n%s", out)
 	}
 	if strings.Contains(out, "login-secret-value-9f21") {
 		t.Fatalf("servers rm 输出不得出现机密项值：\n%s", out)
@@ -428,5 +747,12 @@ func TestServersRmPreviewListsDeliveryRecords(t *testing.T) {
 	}
 	if len(records) != 0 {
 		t.Fatalf("确认删除后下发记录应随服务器条目删除：%+v", records)
+	}
+	shares, err := after.ListSharedStorages(store.SharedStorageFilter{Server: webID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shares) != 0 {
+		t.Fatalf("确认删除后共享存储不应再按这台服务器筛出：%+v", shares)
 	}
 }

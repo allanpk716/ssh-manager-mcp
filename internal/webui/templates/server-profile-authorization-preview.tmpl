@@ -1,0 +1,35 @@
+{{define "content"}}
+<section class="secret-preview">
+<h1>profile 授权预览</h1>
+{{if .ServerProfileAuthorizationNotice}}<div class="operation-refusal">{{.ServerProfileAuthorizationNotice}}</div>{{end}}
+<p>服务器条目：{{.ServerProfileAuthorizationPreview.ServerName}}</p>
+<dl class="detail-list">
+<dt>当前授予的 profile</dt><dd>{{or (serverProfileNames .ServerProfileAuthorizationPreview.Current) "-"}}</dd>
+<dt>提交后的 profile</dt><dd>{{or (serverProfileNames .ServerProfileAuthorizationPreview.Desired) "-"}}</dd>
+</dl>
+{{if not .ServerProfileAuthorizationPreview.Added}}{{if not .ServerProfileAuthorizationPreview.Removed}}
+<p>没有变化。</p>
+{{else}}
+<p>新增 {{len .ServerProfileAuthorizationPreview.Added}} 个 profile，移除 {{len .ServerProfileAuthorizationPreview.Removed}} 个 profile。</p>
+{{end}}{{else}}
+<p>新增 {{len .ServerProfileAuthorizationPreview.Added}} 个 profile，移除 {{len .ServerProfileAuthorizationPreview.Removed}} 个 profile。</p>
+{{end}}
+<table class="server-table">
+<thead><tr><th scope="col">新增授予</th><th scope="col">移除授予</th></tr></thead>
+<tbody>
+<tr>
+<td>{{if .ServerProfileAuthorizationPreview.Added}}{{range .ServerProfileAuthorizationPreview.Added}}{{.Name}} {{end}}{{else}}无{{end}}</td>
+<td>{{if .ServerProfileAuthorizationPreview.Removed}}{{range .ServerProfileAuthorizationPreview.Removed}}{{.Name}} {{end}}{{else}}无{{end}}</td>
+</tr>
+</tbody>
+</table>
+<form method="post" action="/ui/servers/profile-authorization/confirm" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ServerProfileAuthorizationPreview.ServerID}}">
+<input type="hidden" name="summary" value="{{.ServerProfileAuthorizationPreview.Summary}}">
+{{range .ServerProfileAuthorizationPreview.Desired}}<input type="hidden" name="profile" value="{{.ID}}">{{end}}
+{{if or .ServerProfileAuthorizationPreview.Added .ServerProfileAuthorizationPreview.Removed}}<button type="submit">确认保存 profile 授权</button>{{end}}
+<a class="button-link" href="/ui/servers/{{.ServerProfileAuthorizationPreview.ServerID}}">返回继续调整</a>
+</form>
+</section>
+{{end}}

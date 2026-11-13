@@ -7,8 +7,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // ServerListEntry 是服务器页列表与过滤视图的一行；AttentionReasons 携带注
@@ -49,6 +51,134 @@ type ServerDetailView struct {
 	// 量；页面判断不得依赖界面文案。
 	AttentionReasons []string
 	Revision         int64
+	// Secrets 是这台服务器条目可写入的普通机密项，不包含共享存储的挂载
+	// 密码机密项，也不包含任何机密项值。
+	Secrets []ServerDetailSecret
+	// SecretChoices 是这台服务器条目可调整的全部普通机密项与当前授权
+	// 状态；客户端来源可以不填充，模板不向客户端显示表单。
+	SecretChoices []ServerDetailSecretChoice
+	// SharedStorages 是这台服务器条目可挂载的共享存储；同一个挂载密码机
+	// 密项驱动多个共享时逐项展示。
+	SharedStorages []ServerDetailSharedStorage
+	// SharedStorageChoices 是这台服务器条目可调整的全部共享存储；同一
+	// 个挂载密码机密项驱动的共享在同一勾选项里一起呈现。
+	SharedStorageChoices []ServerDetailSharedStorageChoice
+	// Profiles 是授予这台服务器条目的访问配置组。
+	Profiles []ServerDetailProfile
+	// ProfileChoices 是这台服务器条目可调整的全部访问配置组与当前授权
+	// 状态；客户端来源可以不填充，模板不向客户端显示表单。
+	ProfileChoices []ServerDetailProfileChoice
+	// ShowDeliveryRecords 表示当前角色能否查看下发记录；单机与权威端为真，
+	// 客户端为假。
+	ShowDeliveryRecords bool
+	// DeliveryRecords 是写到这台服务器条目的最新下发记录；只读展示，不携
+	// 带任何机密项值。
+	DeliveryRecords []SecretDeliveryRecordRow
+	// SiblingSharedStorages 是同一台设备的其他服务器条目带来的共享存储
+	// 可见性提示，不并入这台条目自己的授权分组。
+	SiblingSharedStorages []ServerDetailSiblingSharedStorage
+	// SiblingDeliveryRecords 是同一台设备的其他服务器条目写出的文件，仅
+	// 作为整台机器上的可见性提示。
+	SiblingDeliveryRecords []ServerDetailSiblingDeliveryRecord
+	// ShowHostKeyAnchor 表示当前角色能否查看主机密钥锚信息区；客户端只
+	// 读显示本地快照里的锚，不显示覆盖或删除入口。
+	ShowHostKeyAnchor bool
+	// HostKeyAnchor 是这个服务器条目自己的主机密钥锚；条目尚无锚时为
+	// 空，模板显示尚未锚定。
+	HostKeyAnchor *ServerDetailHostKeyAnchor
+}
+
+// ServerDetailHostKeyAnchor 是服务器详情页主机密钥锚信息区的展示数据：
+// 指纹按存储里的锚完整渲染，不缩写。
+type ServerDetailHostKeyAnchor struct {
+	Fingerprint string
+	SourceLabel string
+	Device      string
+	// HandshakeAddr 是学到这把锚时实际握手的地址；手工指纹锚没有这个
+	// 地址，模板显示占位符。
+	HandshakeAddr string
+	PinnedAt      time.Time
+}
+
+// HostKeyAnchorSourceLabel 把存储里的主机密钥锚来源代码换成页面文案；未
+// 知代码原样显示，避免把页面不认识的既有来源记录改成错误说法。
+func HostKeyAnchorSourceLabel(code string) string {
+	switch code {
+	case store.PinSourceTofu:
+		return "首次信任"
+	case store.PinSourceForward:
+		return "锚定转发"
+	case store.PinSourceManual:
+		return "手工锚定"
+	case "":
+		return "-"
+	default:
+		return code
+	}
+}
+
+// ServerDetailSecret 是服务器详情页机密项组的一行，不携带值、哈希或版本
+// 号。
+type ServerDetailSecret struct {
+	ID              string
+	Name            string
+	Note            string
+	EnvironmentName string
+}
+
+// ServerDetailSecretChoice 是固定服务器条目上一个普通机密项的编辑勾选项。
+type ServerDetailSecretChoice struct {
+	ServerDetailSecret
+	Checked bool
+}
+
+// ServerDetailSharedStorage 是服务器详情页共享存储组的一行。
+type ServerDetailSharedStorage struct {
+	ID                 string
+	Name               string
+	ProviderDeviceName string
+	MountUser          string
+	PasswordSecretID   string
+	PasswordSecretName string
+	Drive              string
+	MountPoint         string
+}
+
+// ServerDetailSharedStorageChoice 是固定服务器条目上一组共享存储挂载能
+// 力的编辑勾选项。
+type ServerDetailSharedStorageChoice struct {
+	PasswordSecretID   string
+	PasswordSecretName string
+	SharedStorages     []ServerDetailSharedStorage
+	Checked            bool
+}
+
+// ServerDetailProfile 是服务器详情页 profile 授权组的一行。
+type ServerDetailProfile struct {
+	ID   string
+	Name string
+}
+
+// ServerDetailProfileChoice 是固定服务器条目上一个访问配置组的编辑勾选项。
+type ServerDetailProfileChoice struct {
+	ServerDetailProfile
+	Checked bool
+}
+
+// ServerDetailSiblingSharedStorage 是同设备共享存储提示区的一行，并注明
+// 授权来源的服务器条目。
+type ServerDetailSiblingSharedStorage struct {
+	ServerDetailSharedStorage
+	SourceServerID   string
+	SourceServerName string
+}
+
+// ServerDetailSiblingDeliveryRecord 是同设备下发文件提示区的一行，并注明
+// 授权来源的服务器条目。
+type ServerDetailSiblingDeliveryRecord struct {
+	SecretDeliveryRecordRow
+	SourceServerID   string
+	SourceServerName string
 }
 
 // ServerWriteSource 描述一次服务器写操作的来源地址；适配器把它写进审计行
@@ -202,6 +332,7 @@ type ServerDeletePreviewView struct {
 	DeviceName         string
 	AnchorCount        int
 	ProfileNames       []string
+	SharedStorageNames []string
 	SecretNames        []string
 	DeletedCredentials []string
 	KeptCredentials    []string
@@ -316,6 +447,11 @@ type ServerWriter interface {
 	ImportPlan(path, profile string) (*ServerImportPlanView, error)
 	ImportRun(path string, selected []string, profile string, source ServerWriteSource) (*ServerImportRunView, error)
 	CompleteServer(id string, form ServerCompleteForm, source ServerWriteSource) (*ServerCompleteResultView, error)
+	// ReplaceHostKeyPin 用 owner 输入的主机密钥指纹覆盖这个服务器条目的
+	// 主机密钥锚；语义与 servers pin-hostkey 的 --fingerprint --force 一致。
+	ReplaceHostKeyPin(id, fingerprint string, force bool, source ServerWriteSource) error
+	// ClearHostKeyPin 删除这个服务器条目的主机密钥锚，幂等。
+	ClearHostKeyPin(id string, source ServerWriteSource) error
 }
 
 const (
@@ -404,6 +540,10 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 		h.handleServerEdit(w, r, id)
 	case "delete":
 		h.handleServerDelete(w, r, id)
+	case "hostkey-pin":
+		h.handleServerHostKeyPin(w, r, id)
+	case "hostkey-clear":
+		h.handleServerHostKeyClear(w, r, id)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
@@ -419,7 +559,104 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
-	h.renderPage(w, r, http.StatusOK, "servers-detail.tmpl", pageData{Title: detail.Name, ServerDetail: detail})
+	data := pageData{Title: detail.Name, ServerDetail: detail}
+	switch r.URL.Query().Get("hostkey") {
+	case "updated":
+		data.ServerDetailNotice, data.ServerDetailNoticeKind = "已覆盖主机密钥锚。", "success"
+	case "cleared":
+		data.ServerDetailNotice, data.ServerDetailNoticeKind = "已删除主机密钥锚。", "success"
+	}
+	h.renderPage(w, r, http.StatusOK, "servers-detail.tmpl", data)
+}
+
+// handleServerHostKeyPin 处理服务器详情页的主机密钥锚覆盖表单：权威端要
+// 求最近重新输入过管理员口令，指纹校验失败时回到详情页显示原因。
+func (h *handler) handleServerHostKeyPin(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "覆盖主机密钥锚只接受 POST 请求。")
+		return
+	}
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
+		return
+	}
+	if detail == nil {
+		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
+		return
+	}
+	if detail.HostKeyAnchor == nil {
+		h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, "条目尚无主机密钥锚，不能覆盖。")
+		return
+	}
+	detailPath := "/ui/servers/" + url.PathEscape(detail.ID)
+	if !h.requireRecentReverify(w, r, detailPath) {
+		return
+	}
+	if strings.TrimSpace(r.PostFormValue("fingerprint")) == "" {
+		h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, "请输入要使用的主机密钥指纹。")
+		return
+	}
+	err = h.cfg.ServerWriter.ReplaceHostKeyPin(detail.ID, r.PostFormValue("fingerprint"), true, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, formErr.Message)
+			return
+		}
+		if errors.Is(err, ErrServerNotFound) {
+			h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "覆盖主机密钥锚失败", "覆盖主机密钥锚失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, detailPath+"?hostkey=updated", http.StatusSeeOther)
+}
+
+// handleServerHostKeyClear 处理服务器详情页的主机密钥锚删除表单：必须勾选
+// 确认，权威端要求最近重新输入过管理员口令。
+func (h *handler) handleServerHostKeyClear(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "删除主机密钥锚只接受 POST 请求。")
+		return
+	}
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
+		return
+	}
+	if detail == nil {
+		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
+		return
+	}
+	detailPath := "/ui/servers/" + url.PathEscape(detail.ID)
+	if !h.requireRecentReverify(w, r, detailPath) {
+		return
+	}
+	if r.PostFormValue("confirm") != "1" {
+		h.renderServerDetailNotice(w, r, detail, http.StatusBadRequest, "请先勾选确认删除主机密钥锚。")
+		return
+	}
+	if err := h.cfg.ServerWriter.ClearHostKeyPin(detail.ID, ServerWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
+		if errors.Is(err, ErrServerNotFound) {
+			h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "删除主机密钥锚失败", "删除主机密钥锚失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, detailPath+"?hostkey=cleared", http.StatusSeeOther)
+}
+
+// renderServerDetailNotice 带提示重新渲染服务器详情页；提示类型为空时按错
+// 误提示样式显示。
+func (h *handler) renderServerDetailNotice(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, status int, notice string,
+) {
+	h.renderPage(w, r, status, "servers-detail.tmpl", pageData{
+		Title: detail.Name, ServerDetail: detail, ServerDetailNotice: notice,
+	})
 }
 
 // handleServerEdit 渲染编辑表单或处理编辑提交。权威端未在 5 分钟内验证过

@@ -1,7 +1,10 @@
 package servermanage
 
 import (
+	"sort"
+
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // Detail 是一台服务器的详情：完整条目（含连接信息、服务器元数据、标签与
@@ -18,6 +21,91 @@ type Detail struct {
 	// DeviceName / HasDevice 描述所属设备；设备在删除服务器条目时保留。
 	DeviceName string
 	HasDevice  bool
+	// Secrets 是可写入服务器列表包含这台服务器条目、且没有被共享存储
+	// 用作挂载密码的机密项。
+	Secrets []DetailSecret
+	// SecretChoices 是这台服务器条目可调整的全部普通机密项，含当前授
+	// 权状态；供详情页的固定服务器反向编辑表单使用。
+	SecretChoices []DetailSecretChoice
+	// SharedStorages 是密码机密项可写入这台服务器条目的共享存储；同一个
+	// 密码机密项驱动多个共享时逐项出现。
+	SharedStorages []DetailSharedStorage
+	// SharedStorageChoices 是这台服务器条目可调整的全部共享存储，按挂载
+	// 密码机密项归组；同一个密码机密项驱动的共享一起变化。
+	SharedStorageChoices []DetailSharedStorageChoice
+	// Profiles 是授予这台服务器条目的访问配置组。
+	Profiles []DetailProfile
+	// ProfileChoices 是这台服务器条目可调整的全部访问配置组，含当前授
+	// 权状态；供详情页的固定服务器反向编辑表单使用。
+	ProfileChoices []DetailProfileChoice
+	// DeliveryRecords 是写到这台服务器条目的最新下发记录，只读展示。
+	DeliveryRecords []store.SecretDeliveryRecord
+	// HostKeyAnchor 是这个服务器条目当前的主机密钥锚及来源信息；条目尚
+	// 无锚时为空。同一设备的兄弟条目各有各的锚，不合并。
+	HostKeyAnchor *store.PinMeta
+	// SiblingSharedStorages 是同一台设备的其他服务器条目已授权、因此
+	// 在这台机器上也可见的共享存储；每项注明来源服务器条目。
+	SiblingSharedStorages []DetailSiblingSharedStorage
+	// SiblingDeliveryRecords 是同一台设备的其他服务器条目写出的文件，仅
+	// 作为整台机器上的可见性提示。
+	SiblingDeliveryRecords []store.SecretDeliveryRecord
+}
+
+// DetailSecret 是服务器详情页机密项组的一行，只携带名字、备注与环境变量
+// 名，不携带值或值的版本信息。
+type DetailSecret struct {
+	ID              string
+	Name            string
+	Note            string
+	EnvironmentName string
+}
+
+// DetailSecretChoice 是普通机密项在固定服务器条目上的一个可编辑勾选项。
+type DetailSecretChoice struct {
+	DetailSecret
+	Checked bool
+}
+
+// DetailSharedStorage 是服务器详情页共享存储组的一行，字段沿用共享存储
+// 列表与详情页的识别信息，并给出这台服务器条目的挂载点。
+type DetailSharedStorage struct {
+	ID                 string
+	Name               string
+	ProviderDeviceName string
+	MountUser          string
+	PasswordSecretID   string
+	PasswordSecretName string
+	Drive              string
+	MountPoint         string
+}
+
+// DetailSharedStorageChoice 是一个挂载密码机密项在固定服务器条目上的
+// 可编辑勾选项；SharedStorages 列出这个授权同时影响的全部共享。
+type DetailSharedStorageChoice struct {
+	PasswordSecretID   string
+	PasswordSecretName string
+	SharedStorages     []DetailSharedStorage
+	Checked            bool
+}
+
+// DetailProfile 是服务器详情页 profile 授权组的一行。
+type DetailProfile struct {
+	ID   string
+	Name string
+}
+
+// DetailProfileChoice 是一个访问配置组在固定服务器条目上的可编辑勾选项。
+type DetailProfileChoice struct {
+	DetailProfile
+	Checked bool
+}
+
+// DetailSiblingSharedStorage 是同设备可见性提示区的一行：兄弟服务器条目
+// 授权后，这台机器也能看到的共享存储。
+type DetailSiblingSharedStorage struct {
+	DetailSharedStorage
+	SourceServerID   string
+	SourceServerName string
 }
 
 // Detail 按名字或标识符返回一台服务器的详情；找不到时返回 (nil, nil)。
@@ -51,5 +139,177 @@ func (m *Manager) Detail(identifier string) (*Detail, error) {
 			detail.HasDevice = true
 		}
 	}
+	anchor, err := m.st.GetEntryPinMeta(srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	detail.HostKeyAnchor = anchor
+	if err := m.fillReverseView(detail); err != nil {
+		return nil, err
+	}
 	return detail, nil
+}
+
+// fillReverseView 从现有机密项授权、共享存储登记、profile 授权与下发记录
+// 装配反向视图。读取路径只调用存储层的查询入口，不写任何审计行。
+func (m *Manager) fillReverseView(detail *Detail) error {
+	srv := detail.Server
+	shares, err := m.st.ListSharedStorages(store.SharedStorageFilter{})
+	if err != nil {
+		return err
+	}
+	shareSecretIDs := make(map[string]bool, len(shares))
+	for _, share := range shares {
+		shareSecretIDs[share.PasswordSecretID] = true
+	}
+
+	secrets, err := m.st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil {
+		return err
+	}
+	allowCells := make([]store.SecretAllowCell, 0, len(secrets))
+	for _, secret := range secrets {
+		allowCells = append(allowCells, store.SecretAllowCell{SecretID: secret.ID, ServerID: srv.ID})
+	}
+	allowStates, err := m.st.SecretAllowStates(allowCells)
+	if err != nil {
+		return err
+	}
+	allowedBySecretID := make(map[string]bool, len(allowStates))
+	for _, state := range allowStates {
+		allowedBySecretID[state.SecretID] = state.Allow
+	}
+	for _, secret := range secrets {
+		if shareSecretIDs[secret.ID] {
+			continue
+		}
+		choice := DetailSecretChoice{DetailSecret: DetailSecret{
+			ID: secret.ID, Name: secret.Name, Note: secret.Note,
+			EnvironmentName: secret.EnvironmentName,
+		}}
+		choice.Checked = allowedBySecretID[secret.ID]
+		if choice.Checked {
+			detail.Secrets = append(detail.Secrets, choice.DetailSecret)
+		}
+		detail.SecretChoices = append(detail.SecretChoices, choice)
+	}
+
+	profiles, err := m.st.ListProfiles()
+	if err != nil {
+		return err
+	}
+	for _, profile := range profiles {
+		ids, err := m.st.ServersForProfile(profile.ID)
+		if err != nil {
+			return err
+		}
+		choice := DetailProfileChoice{DetailProfile: DetailProfile{ID: profile.ID, Name: profile.Name}}
+		for _, id := range ids {
+			if id == srv.ID {
+				choice.Checked = true
+				detail.Profiles = append(detail.Profiles, choice.DetailProfile)
+				break
+			}
+		}
+		detail.ProfileChoices = append(detail.ProfileChoices, choice)
+	}
+
+	records, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: srv.ID})
+	if err != nil {
+		return err
+	}
+	detail.DeliveryRecords = records
+
+	allRecords, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		return err
+	}
+	serverDevices := make(map[string]string)
+	if srv.DeviceID != "" {
+		servers, err := m.st.ListServers()
+		if err != nil {
+			return err
+		}
+		for _, server := range servers {
+			serverDevices[server.ID] = server.DeviceID
+		}
+		for _, record := range allRecords {
+			if record.ServerID != srv.ID && serverDevices[record.ServerID] == srv.DeviceID {
+				detail.SiblingDeliveryRecords = append(detail.SiblingDeliveryRecords, record)
+			}
+		}
+	}
+
+	choicesBySecret := make(map[string]DetailSharedStorageChoice)
+	choiceOrder := make([]string, 0, len(shares))
+	for _, share := range shares {
+		mountPoint := ""
+		checked := false
+		for _, mountable := range share.MountableServers {
+			if mountable.ID != srv.ID {
+				continue
+			}
+			mountPoint = mountable.MountPoint
+			checked = true
+			detail.SharedStorages = append(detail.SharedStorages, detailSharedStorage(share, mountable.MountPoint))
+			break
+		}
+		if mountPoint == "" {
+			mountPoint = store.SharedStorageMountPoint(share.Drive, share.Name, srv.ShellType)
+		}
+		choice, exists := choicesBySecret[share.PasswordSecretID]
+		if !exists {
+			choice = DetailSharedStorageChoice{
+				PasswordSecretID:   share.PasswordSecretID,
+				PasswordSecretName: share.PasswordSecretName,
+			}
+			choicesBySecret[share.PasswordSecretID] = choice
+			choiceOrder = append(choiceOrder, share.PasswordSecretID)
+		}
+		choice.SharedStorages = append(choice.SharedStorages, detailSharedStorage(share, mountPoint))
+		choice.Checked = choice.Checked || checked
+		choicesBySecret[share.PasswordSecretID] = choice
+
+		if srv.DeviceID == "" {
+			continue
+		}
+		for _, mountable := range share.MountableServers {
+			if mountable.ID == srv.ID || serverDevices[mountable.ID] != srv.DeviceID {
+				continue
+			}
+			detail.SiblingSharedStorages = append(detail.SiblingSharedStorages, DetailSiblingSharedStorage{
+				DetailSharedStorage: detailSharedStorage(share, mountable.MountPoint),
+				SourceServerID:      mountable.ID,
+				SourceServerName:    mountable.Name,
+			})
+		}
+	}
+	sort.Slice(detail.SiblingSharedStorages, func(i, j int) bool {
+		left, right := detail.SiblingSharedStorages[i], detail.SiblingSharedStorages[j]
+		if left.SourceServerName != right.SourceServerName {
+			return left.SourceServerName < right.SourceServerName
+		}
+		return left.Name < right.Name
+	})
+	for _, secretID := range choiceOrder {
+		detail.SharedStorageChoices = append(detail.SharedStorageChoices, choicesBySecret[secretID])
+	}
+	sort.Slice(detail.SharedStorageChoices, func(i, j int) bool {
+		left := detail.SharedStorageChoices[i].SharedStorages
+		right := detail.SharedStorageChoices[j].SharedStorages
+		if len(left) == 0 || len(right) == 0 {
+			return len(left) > len(right)
+		}
+		return left[0].Name < right[0].Name
+	})
+	return nil
+}
+
+func detailSharedStorage(share *models.SharedStorage, mountPoint string) DetailSharedStorage {
+	return DetailSharedStorage{
+		ID: share.ID, Name: share.Name, ProviderDeviceName: share.DeviceName,
+		MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+		PasswordSecretName: share.PasswordSecretName,
+		Drive:              share.Drive, MountPoint: mountPoint,
+	}
 }

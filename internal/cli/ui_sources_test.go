@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
@@ -241,7 +242,9 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}}, "")
 	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
 		{ID: "n", Name: "笔记本实例服务器", User: "u", Host: "192.0.2.20", Port: 22, CredentialID: "c", Role: "r"},
-	}}, "laptop")
+	}, SecretDeliveryRecords: []store.SnapshotSecretDeliveryRecord{{
+		ID: "record", ServerID: "n", Path: "/etc/app/config.yml", PathKey: "/etc/app/config.yml",
+	}}}, "laptop")
 
 	got, err := clientUIServerSource{}.Servers("laptop")
 	if err != nil {
@@ -263,6 +266,83 @@ func TestClientUIServerSourceHonorsInstance(t *testing.T) {
 	}
 	if detail == nil || detail.ID != "n" {
 		t.Fatalf("服务器详情应读取指定实例快照，实际：%+v", detail)
+	}
+	if detail.ShowDeliveryRecords || len(detail.DeliveryRecords) != 0 || len(detail.SiblingDeliveryRecords) != 0 {
+		t.Fatalf("客户端 Web UI 不得装配下发记录：%+v", detail)
+	}
+}
+
+// TestClientUIServerSourceAssemblesCroppedReverseGroups 验证客户端服务器详
+// 情只从本地快照装配机密项、共享存储与只读主机密钥锚，并且同设备提示不
+// 推断快照外的服务器条目。
+func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
+	seedClientCacheSnapshot(t, &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+		{ID: "web", Name: "网站", ShellType: "posix", DeviceID: "device-workstation"},
+		{ID: "worker", Name: "工作进程", ShellType: "posix", DeviceID: "device-workstation"},
+	}, Devices: []store.SnapshotDevice{{ID: "device-workstation", Name: "workstation"}},
+		Secrets: []store.SnapshotSecret{
+			{ID: "secret-web", Name: "WEB_TOKEN", Note: "网站令牌", EnvironmentName: "WEB_TOKEN_FILE"},
+			{ID: "secret-worker", Name: "WORKER_TOKEN", Note: "工作进程令牌"},
+			{ID: "secret-share", Name: "DATASET_MOUNT_PASSWORD", Note: "挂载密码"},
+			{ID: "secret-worker-share", Name: "WORKER_MOUNT_PASSWORD", Note: "工作目录挂载密码"},
+			{ID: "secret-missing-share", Name: "MISSING_SIBLING_MOUNT_PASSWORD", Note: "快照外同一设备其他服务器条目的挂载密码"},
+		}, SecretAllows: []store.SnapshotSecretAllow{
+			{SecretID: "secret-web", ServerID: "web"},
+			{SecretID: "secret-worker", ServerID: "worker"},
+			{SecretID: "secret-share", ServerID: "web"},
+			{SecretID: "secret-worker-share", ServerID: "worker"},
+			{SecretID: "secret-missing-share", ServerID: "missing-worker"},
+		}, SharedStorages: []store.SnapshotSharedStorage{
+			{ID: "share-datasets", Name: "datasets", DeviceName: "workstation", MountUser: "mount-user", PasswordSecretID: "secret-share", Drive: "E"},
+			{ID: "share-worker-data", Name: "worker-data", DeviceName: "workstation", MountUser: "worker-mount-user", PasswordSecretID: "secret-worker-share", Drive: "F"},
+			{ID: "share-missing-worker-data", Name: "missing-worker-data", DeviceName: "workstation", MountUser: "missing-mount-user", PasswordSecretID: "secret-missing-share", Drive: "G"},
+		}, Profiles: []store.SnapshotProfile{{ID: "profile-1", Name: "客户端配置组"}},
+		Grants: []store.SnapshotGrant{
+			{ProfileID: "profile-1", ServerID: "web"},
+			{ProfileID: "profile-1", ServerID: "worker"},
+		}, EntryHostKeys: []store.SnapshotEntryHostKey{{
+			ServerID: "web", KeyBlob: []byte("SHA256:" + strings.Repeat("b", 43)),
+			CreatedAt: 1760000900, PinFormat: store.PinFormatFingerprint,
+			PinSource: store.PinSourceTofu, PinDevice: "office-laptop",
+			HandshakeAddr: "192.0.2.10:22",
+		}}}, "")
+
+	detail, err := clientUIServerSource{}.ServerDetail("", "网站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail == nil {
+		t.Fatal("应找到快照内服务器")
+	}
+	if len(detail.Secrets) != 1 || detail.Secrets[0].ID != "secret-web" ||
+		detail.Secrets[0].Name != "WEB_TOKEN" || detail.Secrets[0].Note != "网站令牌" {
+		t.Fatalf("客户端详情机密项裁剪不正确：%+v", detail.Secrets)
+	}
+	if len(detail.SharedStorages) != 1 || detail.SharedStorages[0].ID != "share-datasets" ||
+		detail.SharedStorages[0].Name != "datasets" || detail.SharedStorages[0].ProviderDeviceName != "workstation" ||
+		detail.SharedStorages[0].MountUser != "mount-user" ||
+		detail.SharedStorages[0].PasswordSecretName != "DATASET_MOUNT_PASSWORD" ||
+		detail.SharedStorages[0].MountPoint != "/mnt/sshmgr/datasets" {
+		t.Fatalf("客户端详情共享存储裁剪不正确：%+v", detail.SharedStorages)
+	}
+	if len(detail.SiblingSharedStorages) != 1 ||
+		detail.SiblingSharedStorages[0].Name != "worker-data" ||
+		detail.SiblingSharedStorages[0].SourceServerName != "工作进程" ||
+		detail.SiblingSharedStorages[0].MountPoint != "/mnt/sshmgr/worker-data" {
+		t.Fatalf("客户端详情同设备共享存储提示不正确：%+v", detail.SiblingSharedStorages)
+	}
+	if !detail.ShowHostKeyAnchor || detail.HostKeyAnchor == nil ||
+		detail.HostKeyAnchor.Fingerprint != "SHA256:"+strings.Repeat("b", 43) ||
+		detail.HostKeyAnchor.SourceLabel != "首次信任" ||
+		detail.HostKeyAnchor.Device != "office-laptop" ||
+		detail.HostKeyAnchor.HandshakeAddr != "192.0.2.10:22" ||
+		!detail.HostKeyAnchor.PinnedAt.Equal(time.Unix(1760000900, 0)) {
+		t.Fatalf("客户端详情主机密钥锚应只读来自本地快照：%+v", detail.HostKeyAnchor)
+	}
+	if len(detail.Profiles) != 0 || detail.ShowDeliveryRecords || len(detail.DeliveryRecords) != 0 ||
+		len(detail.SiblingDeliveryRecords) != 0 || len(detail.SecretChoices) != 0 ||
+		len(detail.SharedStorageChoices) != 0 {
+		t.Fatalf("客户端详情不得装配 profile、下发记录或编辑选项：%+v", detail)
 	}
 }
 
