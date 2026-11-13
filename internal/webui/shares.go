@@ -196,6 +196,8 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 		h.handleShareDelete(w, r, identifier)
 	case "unmount":
 		h.handleShareUnmount(w, r, identifier)
+	case "unmount-batch":
+		h.handleShareUnmountBatch(w, r, identifier)
 	case "revoke":
 		h.handleShareRevoke(w, r, identifier)
 	case "reselect":
@@ -222,7 +224,7 @@ func (h *handler) shareRouteAvailable(suffix string) bool {
 		return h.shareRemoteTasksAvailable()
 	case "edit", "delete":
 		return h.caps.CanManageShares
-	case "unmount":
+	case "unmount", "unmount-batch":
 		return h.caps.CanUnmountShares
 	case "revoke":
 		return h.caps.CanRevokeShares

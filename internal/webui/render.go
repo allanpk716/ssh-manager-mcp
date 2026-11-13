@@ -65,7 +65,7 @@ type pageData struct {
 	SecretAuthorizationTargets       []SecretAuthorizationCell
 	SecretAuthorizationReturnTo      string
 	SecretAuthorizationNotice        string
-	SecretAuthorizationShareRevokes  []SecretAuthorizationShareRevoke
+	SecretAuthorizationShareUnmounts []SecretAuthorizationShareUnmount
 	Shares                           []ShareRow
 	ShareFilterDevice                string
 	ShareFilterServer                string
@@ -82,6 +82,7 @@ type pageData struct {
 	ShareDeletePreview               *ShareRow
 	ShareUnmountEntries              []ShareUnmountEntry
 	ShareUnmount                     *ShareUnmountView
+	ShareUnmountBatch                *ShareUnmountBatchView
 	ShareRevokeEntries               []ShareRevokeEntry
 	ShareRevoke                      *ShareRevokeView
 	ShareReselectEntries             []ShareReselectEntry

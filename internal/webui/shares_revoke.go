@@ -21,14 +21,19 @@ type ShareRevokeEntry struct {
 	ConfirmPath string
 }
 
-// SecretAuthorizationShareRevoke 是可挂载范围确认页里的一条「移除授权且
-// 最近现场探测仍挂载」提示。
-type SecretAuthorizationShareRevoke struct {
-	ShareID     string
-	ShareName   string
-	ServerID    string
-	ServerName  string
-	ConfirmPath string
+// SecretAuthorizationShareUnmount 是可挂载范围确认页里一台将移除服务器的
+// 联动卸载选项。Mounted 与 Unknown 互斥：已挂载或挂载状态未知（不可达、
+// 尚未探测）时提供「同时卸载」勾选；未挂载与 Windows 服务器不提供勾选。
+// Selected 用于五分钟重新验证回跳后保留勾选。
+type SecretAuthorizationShareUnmount struct {
+	ShareID    string
+	ShareName  string
+	ServerID   string
+	ServerName string
+	Mounted    bool
+	Unknown    bool
+	Windows    bool
+	Selected   bool
 }
 
 // ShareLatestCheckSource 由远端任务视图实现，返回一处共享存储最近一次完
@@ -337,12 +342,11 @@ func (h *handler) latestShareCheckMounted(
 	return false
 }
 
-func (h *handler) shareRevokeChoicesForAuthorization(
-	r *http.Request, returnTo string, preview SecretAuthorizationPreview,
-) []SecretAuthorizationShareRevoke {
-	if !h.caps.CanRevokeShares || h.cfg.SharesRemoteTasks == nil {
-		return nil
-	}
+// shareFromAuthorizationReturnTo 解析授权编辑的返回地址；只有从共享存储
+// 详情页进入的授权预览才提供联动卸载。
+func (h *handler) shareFromAuthorizationReturnTo(
+	r *http.Request, returnTo string,
+) *ShareRow {
 	target, err := url.Parse(safeSecretReturnPath(returnTo))
 	if err != nil || target.Path == "" {
 		return nil
@@ -351,27 +355,81 @@ func (h *handler) shareRevokeChoicesForAuthorization(
 	if len(parts) != 3 || parts[0] != "ui" || parts[1] != "shares" || parts[2] == "" {
 		return nil
 	}
-	detail, readErr := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), parts[2])
-	if readErr != nil {
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), parts[2])
+	if err != nil {
 		return nil
 	}
-	choices := make([]SecretAuthorizationShareRevoke, 0)
+	return detail
+}
+
+// shareUnmountChoicesForAuthorization 按最近一次现场探测结果生成可挂载范
+// 围确认页的联动卸载选项：已挂载与状态未知的服务器提供勾选，未挂载与
+// Windows 服务器只展示状态说明。
+func (h *handler) shareUnmountChoicesForAuthorization(
+	r *http.Request, returnTo string, preview SecretAuthorizationPreview,
+	selected map[string]bool,
+) []SecretAuthorizationShareUnmount {
+	if !h.caps.CanUnmountShares {
+		return nil
+	}
+	detail := h.shareFromAuthorizationReturnTo(r, returnTo)
+	if detail == nil {
+		return nil
+	}
+	var latest []ShareCheckResult
+	if h.cfg.ShareLatestChecks != nil {
+		latest, _ = h.cfg.ShareLatestChecks.LatestShareCheck(detail.ID)
+	}
+	choices := make([]SecretAuthorizationShareUnmount, 0)
 	for _, change := range preview.Changes {
 		if change.SecretName != detail.PasswordSecret {
 			continue
 		}
 		for _, server := range change.Removed {
-			if !h.latestShareCheckMounted(detail.ID, server.ID, models.ShellType("")) {
-				continue
-			}
-			choices = append(choices, SecretAuthorizationShareRevoke{
+			shell := shareServerShellType(detail.MountableServers, server.ID)
+			windows := models.NormalizeShellType(shell).IsWindows()
+			choice := SecretAuthorizationShareUnmount{
 				ShareID: detail.ID, ShareName: detail.Name,
 				ServerID: server.ID, ServerName: server.Name,
-				ConfirmPath: shareRevokeConfirmPath(detail.ID, server.ID) + "&unmount=1",
-			})
+				Windows: windows, Selected: selected[server.ID],
+			}
+			switch shareLatestCheckStatus(latest, server.ID) {
+			case ShareCheckStatusMounted:
+				choice.Mounted = true
+			case ShareCheckStatusUnmounted, ShareCheckStatusSkipped:
+			default:
+				choice.Unknown = true
+			}
+			if windows {
+				choice.Mounted = false
+				choice.Unknown = false
+			}
+			choices = append(choices, choice)
 		}
 	}
 	return choices
+}
+
+// shareLatestCheckStatus 返回一台服务器最近一次现场探测的状态；没有探
+// 测结果时返回空串，调用方按状态未知处理。
+func shareLatestCheckStatus(results []ShareCheckResult, serverID string) string {
+	for _, result := range results {
+		if result.ServerID == serverID {
+			return result.Status
+		}
+	}
+	return ""
+}
+
+// shareServerShellType 从共享存储当前的可挂载清单里查一台服务器的系统类
+// 型；服务器不在清单时返回空串。
+func shareServerShellType(servers []ShareServerView, serverID string) string {
+	for _, server := range servers {
+		if server.ID == serverID {
+			return server.ShellType
+		}
+	}
+	return ""
 }
 
 func shareRevokeConfirmPath(shareID, serverID string) string {

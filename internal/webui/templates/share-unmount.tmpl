@@ -26,10 +26,11 @@
 <form method="post" action="/ui/shares/{{.ShareUnmount.Share.ID}}/unmount" class="confirm-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="server_id" value="{{.ShareUnmount.Server.ID}}">
+{{if .ShareUnmount.Task}}<input type="hidden" name="task" value="{{.ShareUnmount.Task.ID}}">{{end}}
 <input type="hidden" name="force" value="1">
 <button type="submit">强制卸载</button>
 </form>
-<a class="button-link" href="{{.ShareUnmount.ConfirmPath}}">稍后再试</a>
+<a class="button-link" href="{{if .ShareUnmount.PollPath}}{{.ShareUnmount.PollPath}}{{else}}{{.ShareUnmount.ConfirmPath}}{{end}}">稍后再试</a>
 </div>
 {{end}}
 {{if eq .ShareUnmount.Task.Result "ssh-error"}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；稍后可用「检查残留」兜底检查这台服务器。</p></div>{{end}}

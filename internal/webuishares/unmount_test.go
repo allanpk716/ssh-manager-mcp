@@ -16,10 +16,10 @@ import (
 	"ssh-manager-mcp/internal/webui"
 )
 
-// newUnmountFixture 组装单台卸载页的集成测试环境：真实临时加密 vault、
-// 一台带登录与 sudo 凭据的 Linux 假服务器、一台 Windows 登记服务器，以及
-// 挂上卸载任务视图的完整 Web UI。测试不连接真实服务器。
-func newUnmountFixture(t *testing.T) *unmountFixture {
+// newUnmountStoreFixture 组装共享存储远端操作的存储环境：真实临时加密
+// vault、一台带登录与 sudo 凭据的 Linux 假服务器（现场探测返回已挂载）
+// 与一台 Windows 登记服务器。测试不连接真实服务器。
+func newUnmountStoreFixture(t *testing.T) *unmountFixture {
 	t.Helper()
 	st := newIntegrationStore(t)
 	linux := &sharemounttest.LinuxServer{ShareName: "datasets"}
@@ -76,17 +76,25 @@ func newUnmountFixture(t *testing.T) *unmountFixture {
 	}
 	linux.ShareID = share.ID
 	linux.SeedManagedConfiguration("192.0.2.10", share.Version)
-	h := startIntegrationHandler(t, st, func(config *webui.Config) {
-		remoteTasks := RemoteTasksFromStore(openStoreForTest(st))
-		config.SharesRemoteTasks = remoteTasks
-		config.ShareLatestChecks = remoteTasks
-		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
-		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(st))
-	})
 	return &unmountFixture{
-		store: st, linux: linux, handler: h, stopServer: stopServer,
+		store: st, linux: linux, stopServer: stopServer,
 		shareID: share.ID, linuxID: linuxServerID, windowsID: windowsID,
 	}
+}
+
+// newUnmountFixture 在存储环境上组装挂上远端任务视图的完整单机 Web UI。
+func newUnmountFixture(t *testing.T) *unmountFixture {
+	t.Helper()
+	fixture := newUnmountStoreFixture(t)
+	h := startIntegrationHandler(t, fixture.store, func(config *webui.Config) {
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(fixture.store))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(fixture.store))
+		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(fixture.store))
+	})
+	fixture.handler = h
+	return fixture
 }
 
 type unmountFixture struct {

@@ -93,6 +93,60 @@ type ShareUnmountView struct {
 	PollPath    string
 }
 
+// ShareUnmountBatchView 是可挂载范围确认后联动卸载的任务汇总页展示数
+// 据。任务逐台复用单台卸载任务机制；任一任务仍在运行时页面定时刷新。
+type ShareUnmountBatchView struct {
+	Share       *ShareRow
+	Tasks       []*ShareUnmountTaskStatus
+	InvalidTask bool
+	AnyRunning  bool
+	PollPath    string
+}
+
+// shareUnmountBatchPath 构造联动卸载任务汇总页地址。
+func shareUnmountBatchPath(shareID string, taskIDs []string) string {
+	query := url.Values{}
+	for _, taskID := range taskIDs {
+		query.Add("task", taskID)
+	}
+	return "/ui/shares/" + shareID + "/unmount-batch?" + query.Encode()
+}
+
+// handleShareUnmountBatch 渲染可挂载范围确认后的联动卸载任务汇总页。
+func (h *handler) handleShareUnmountBatch(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "卸载任务汇总页只接受 GET 请求。")
+		return
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	view := &ShareUnmountBatchView{Share: detail}
+	for _, taskID := range r.URL.Query()["task"] {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		status, ok := h.cfg.ShareUnmountRunner.ShareUnmountStatus(taskID)
+		if !ok || status == nil || status.ShareID != detail.ID {
+			view.InvalidTask = true
+			continue
+		}
+		view.Tasks = append(view.Tasks, status)
+		if status.State == ShareTaskRunning {
+			view.AnyRunning = true
+		}
+	}
+	if view.AnyRunning {
+		view.PollPath = r.URL.RequestURI()
+	}
+	h.renderPage(w, r, http.StatusOK, "share-unmount-batch.tmpl", pageData{
+		Title: "同时卸载 · " + detail.Name, ShareUnmountBatch: view,
+	})
+}
+
 // handleShareUnmount 渲染单台卸载确认页、任务结果页，或启动卸载任务。
 func (h *handler) handleShareUnmount(w http.ResponseWriter, r *http.Request, identifier string) {
 	switch r.Method {
@@ -135,12 +189,17 @@ func (h *handler) handleShareUnmountPage(w http.ResponseWriter, r *http.Request,
 		h.renderShareReadError(w, r, err)
 		return
 	}
+	taskIdentifier := strings.TrimSpace(r.URL.Query().Get("task"))
+	if view == nil {
+		// 可挂载范围确认后的联动卸载会把服务器移出范围；仍按任务记录展示
+		// 已启动任务的结果，服务器信息来自任务表而不是表单。
+		view = h.shareUnmountTaskView(r, identifier, serverIdentifier, taskIdentifier)
+	}
 	if view == nil {
 		h.renderError(w, r, http.StatusNotFound, "服务器不在可挂载范围内",
 			"这台服务器不在这个共享的可挂载范围内；范围外机器请使用「检查残留」。")
 		return
 	}
-	taskIdentifier := strings.TrimSpace(r.URL.Query().Get("task"))
 	if taskIdentifier != "" {
 		status, ok := h.cfg.ShareUnmountRunner.ShareUnmountStatus(taskIdentifier)
 		if !ok || status == nil || status.ShareID != view.Share.ID || status.ServerID != view.Server.ID {
@@ -187,14 +246,47 @@ func shareUnmountResultLabel(result string) string {
 	}
 }
 
+// shareUnmountTaskView 按任务标识回查一台已移出可挂载范围的服务器的卸
+// 载任务视图；任务不存在或不匹配时返回 nil。
+func (h *handler) shareUnmountTaskView(
+	r *http.Request, identifier, serverIdentifier, taskIdentifier string,
+) *ShareUnmountView {
+	if taskIdentifier == "" {
+		return nil
+	}
+	status, ok := h.cfg.ShareUnmountRunner.ShareUnmountStatus(taskIdentifier)
+	if !ok || status == nil {
+		return nil
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil || detail == nil || status.ShareID != detail.ID ||
+		status.ServerID != serverIdentifier {
+		return nil
+	}
+	return &ShareUnmountView{
+		Share: detail,
+		Server: ShareServerView{
+			ID: status.ServerID, Name: status.ServerName,
+			ShellType: shareServerShellType(detail.MountableServers, status.ServerID),
+		},
+		ConfirmPath: shareUnmountConfirmPath(detail.ID, status.ServerID),
+		Task:        status, PollPath: r.URL.RequestURI(),
+	}
+}
+
 // handleShareUnmountPost 校验目标服务器后启动卸载任务并跳转到任务页。服
-// 务器不在可挂载范围内时不启动任务；Windows 服务器交给共享存储管理模块
-// 统一拒绝并写审计。
+// 务器不在可挂载范围内时，只有携带匹配的原任务标识（联动卸载被占用后的
+// 强制重试）才继续；Windows 服务器交给共享存储管理模块统一拒绝并写审计。
 func (h *handler) handleShareUnmountPost(w http.ResponseWriter, r *http.Request, identifier string) {
 	view, err := h.shareUnmountView(r, identifier, r.PostFormValue("server_id"))
 	if err != nil {
 		h.renderShareReadError(w, r, err)
 		return
+	}
+	if view == nil {
+		view = h.shareUnmountTaskView(r, identifier,
+			strings.TrimSpace(r.PostFormValue("server_id")),
+			strings.TrimSpace(r.PostFormValue("task")))
 	}
 	if view == nil {
 		h.renderError(w, r, http.StatusNotFound, "服务器不在可挂载范围内",

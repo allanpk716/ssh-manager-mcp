@@ -186,17 +186,21 @@ func TestShareScopeRemovalPreviewOffersRevokeAndUnmountAfterRecentCheck(t *testi
 		"cell__" + views[0].ID + "__" + fixture.windowsID: {"1"},
 	})
 	page := body(t, preview)
-	wantLink := fixture.revokePath(fixture.linuxID) + "&amp;unmount=1"
 	for _, want := range []string{
-		"最近现场探测显示以下将移除的服务器仍挂载",
-		"linux-web", "同时卸载并撤销授权", `href="` + wantLink + `"`,
+		"以下服务器将移出可挂载范围", "linux-web", "最近现场探测：已挂载",
+		`name="unmount_server" value="` + fixture.linuxID + `"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("可挂载范围确认页缺少同时卸载选项 %q：\n%s", want, page)
 		}
 	}
-	if strings.Contains(page, fixture.revokePath(fixture.windowsID)+"&unmount=1") {
-		t.Fatalf("Windows 服务器不应提供同时卸载选项：\n%s", page)
+	for _, forbidden := range []string{
+		"同时卸载并撤销授权", fixture.revokePath(fixture.linuxID),
+		`name="unmount_server" value="` + fixture.windowsID + `"`,
+	} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("可挂载范围确认页不应提供逐台跳转或 Windows 卸载选项 %q：\n%s", forbidden, page)
+		}
 	}
 }
 
