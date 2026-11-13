@@ -12,11 +12,13 @@ import (
 
 	"ssh-manager-mcp/internal/access"
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuisecrets"
 	"ssh-manager-mcp/internal/webuiservers"
 	"ssh-manager-mcp/internal/webuitopology"
 )
@@ -119,6 +121,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	}
 	if strings.Contains(detail, "db-1") || strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") ||
 		strings.Contains(detail, "桌面手动添加") ||
+		strings.Contains(detail, "可挂载范围勾选清单") || strings.Contains(detail, "预览可挂载范围变更") ||
 		strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
 		t.Fatalf("客户端详情不得显示写入口或机密项值：\n%s", detail)
 	}
@@ -126,6 +129,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 	csrf := csrfToken(t, h)
 	writeTargets := []string{
 		"/ui/shares/new", "/ui/shares/" + datasetsID + "/edit", "/ui/shares/" + datasetsID + "/delete",
+		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
 	}
 	for _, target := range writeTargets {
 		resp := h.do(http.MethodPost, target, url.Values{"csrf_token": {csrf}})
@@ -188,12 +192,14 @@ func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
 		Servers: func() webui.ServerSource {
 			return webuiservers.FromManager(servermanage.New(st))
 		}(),
-		ServerWriter: webuiservers.WriterFromManager(servermanage.New(st)),
-		Access:       webuiaccess.FromManager(access.New(st)),
-		Shares:       FromStore(openStoreForTest(st)),
-		SharesWriter: WriterFromStore(openStoreForTest(st)),
-		Topology:     webuitopology.FromStore(st),
-		Port:         18086,
+		ServerWriter:  webuiservers.WriterFromManager(servermanage.New(st)),
+		Access:        webuiaccess.FromManager(access.New(st)),
+		Secrets:       webuisecrets.FromManager(secretmanage.New(st)),
+		SecretsWriter: webuisecrets.WriterFromManager(secretmanage.New(st)),
+		Shares:        FromStore(openStoreForTest(st)),
+		SharesWriter:  WriterFromStore(openStoreForTest(st)),
+		Topology:      webuitopology.FromStore(st),
+		Port:          18086,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -207,6 +213,192 @@ func newIntegrationHandler(t *testing.T, st *store.Store) sessionHandler {
 		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
 	}
 	return sessionHandler{handler: handler, cookie: *cookies[0], host: "127.0.0.1:18086"}
+}
+
+func TestShareDetailMountScopeChecklistPreviewsAndConfirmsAuthorization(t *testing.T) {
+	st := newIntegrationStore(t)
+	for _, device := range []string{"web 服务器", "windows 服务器"} {
+		if _, err := st.AddDevice(device, "", ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	linuxWebID := mustServerToDevice(t, st, "linux-web", models.ShellPOSIX, "web 服务器")
+	linuxDBID := mustServerToDevice(t, st, "linux-db", models.ShellPOSIX, "web 服务器")
+	windowsWebID := mustServerToDevice(t, st, "windows-web", models.ShellPowerShell, "windows 服务器")
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	views, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(views) != 1 || views[0].Name != "NAS_MOUNT_PASSWORD" {
+		t.Fatalf("准备挂载密码机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	h := newIntegrationHandler(t, st)
+
+	detail := body(t, h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil))
+	for _, want := range []string{
+		"可挂载范围勾选清单", "linux-web", "web 服务器", "posix",
+		"linux-db", "windows-web", "powershell",
+		"同设备的其他条目可能也能读到挂载内容", "预览可挂载范围变更",
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("共享存储详情的可挂载范围勾选清单缺少 %q：\n%s", want, detail)
+		}
+	}
+	if !strings.Contains(detail, `name="cell__`+secretID+`__`+linuxWebID+`" value="1" checked`) ||
+		strings.Contains(detail, `name="cell__`+secretID+`__`+linuxDBID+`" value="1" checked`) ||
+		strings.Contains(detail, `name="cell__`+secretID+`__`+windowsWebID+`" value="1" checked`) {
+		t.Fatalf("可挂载范围勾选清单的初始状态不正确：\n%s", detail)
+	}
+
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token":                            {csrfToken(t, h)},
+		"return_to":                             {"/ui/shares/" + datasetsID},
+		"secret_id":                             {secretID},
+		"server_id":                             {linuxWebID, linuxDBID, windowsWebID},
+		"cell__" + secretID + "__" + linuxWebID: {"0"},
+		"cell__" + secretID + "__" + linuxDBID:  {"1"},
+		"cell__" + secretID + "__" + windowsWebID: {"1"},
+	})
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("可挂载范围预览状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	for _, want := range []string{
+		"机密项授权预览", "NAS_MOUNT_PASSWORD", "新增 2 个授权，移除 1 个授权。",
+		"linux-db", "windows-web", "linux-web",
+	} {
+		if !strings.Contains(previewBody, want) {
+			t.Fatalf("可挂载范围预览缺少 %q：\n%s", want, previewBody)
+		}
+	}
+	summary := pageHiddenValue(t, previewBody, "summary")
+	targets := pageHiddenValues(t, previewBody, "target")
+
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrfToken(t, h)},
+		"summary":    {summary},
+		"return_to":  {"/ui/shares/" + datasetsID},
+		"target":     targets,
+	})
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存授权变更") {
+		t.Fatalf("确认可挂载范围变更失败，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+
+	after, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(after) != 1 || strings.Join(after[0].AllowedServers, ",") != "linux-db,windows-web" {
+		t.Fatalf("确认后的可挂载范围不正确：%v %+v", err, after)
+	}
+	share, err := st.GetSharedStorage("datasets")
+	if err != nil || share.Version != 4 {
+		t.Fatalf("授权变化应让共享存储版本号按既有触发器递增：%+v %v", share, err)
+	}
+	auditRows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"secret-allow-change"},
+	})
+	if err != nil || len(auditRows) != 1 || auditRows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("可挂载范围确认应写一条机密项授权审计：%v %+v", err, auditRows)
+	}
+}
+
+func TestShareMountScopeEmptyDifferenceDoesNotWriteDataOrAudit(t *testing.T) {
+	st := newIntegrationStore(t)
+	linuxWebID := mustServer(t, st, "linux-web", models.ShellPOSIX)
+	windowsWebID := mustServer(t, st, "windows-web", models.ShellPowerShell)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	views, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备挂载密码机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	h := newIntegrationHandler(t, st)
+	target := []string{
+		secretID + " " + linuxWebID + " 1",
+		secretID + " " + windowsWebID + " 0",
+	}
+
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token":                            {csrfToken(t, h)},
+		"return_to":                             {"/ui/shares/" + datasetsID},
+		"secret_id":                             {secretID},
+		"server_id":                             {linuxWebID, windowsWebID},
+		"cell__" + secretID + "__" + linuxWebID: {"1"},
+		"cell__" + secretID + "__" + windowsWebID: {"0"},
+	})
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK || !strings.Contains(previewBody, "没有变化") {
+		t.Fatalf("空差异应显示没有变化，状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	summary := pageHiddenValue(t, previewBody, "summary")
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrfToken(t, h)}, "summary": {summary},
+		"return_to": {"/ui/shares/" + datasetsID}, "target": target,
+	})
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "没有变化，未写入数据或审计。") {
+		t.Fatalf("空差异确认不应写入，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	after, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(after) != 1 || strings.Join(after[0].AllowedServers, ",") != "linux-web" {
+		t.Fatalf("空差异后的可挂载范围不正确：%v %+v", err, after)
+	}
+	if rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"secret-allow-change"},
+	}); err != nil || len(rows) != 0 {
+		t.Fatalf("空差异不应写审计：%v %+v", err, rows)
+	}
+}
+
+func TestShareMountScopeStaleSummaryReturnsConflictWithoutWriting(t *testing.T) {
+	st := newIntegrationStore(t)
+	linuxWebID := mustServer(t, st, "linux-web", models.ShellPOSIX)
+	windowsWebID := mustServer(t, st, "windows-web", models.ShellPowerShell)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	views, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备挂载密码机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	h := newIntegrationHandler(t, st)
+	target := []string{
+		secretID + " " + linuxWebID + " 0",
+		secretID + " " + windowsWebID + " 1",
+	}
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token":                            {csrfToken(t, h)},
+		"return_to":                             {"/ui/shares/" + datasetsID},
+		"secret_id":                             {secretID},
+		"server_id":                             {linuxWebID, windowsWebID},
+		"cell__" + secretID + "__" + linuxWebID: {"0"},
+		"cell__" + secretID + "__" + windowsWebID: {"1"},
+	})
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("可挂载范围预览失败，状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	summary := pageHiddenValue(t, previewBody, "summary")
+
+	if err := st.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"windows-web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	conflict := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrfToken(t, h)}, "summary": {summary},
+		"return_to": {"/ui/shares/" + datasetsID}, "target": target,
+	})
+	conflictBody := body(t, conflict)
+	if conflict.StatusCode != http.StatusConflict ||
+		!strings.Contains(conflictBody, "授权状态已被其他入口修改") ||
+		!strings.Contains(conflictBody, "移除 1 个授权") {
+		t.Fatalf("过期摘要应返回冲突与最新预览，状态码=%d：\n%s", conflict.StatusCode, conflictBody)
+	}
+	after, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(after) != 1 || strings.Join(after[0].AllowedServers, ",") != "linux-web,windows-web" {
+		t.Fatalf("冲突确认不应改变可挂载范围：%v %+v", err, after)
+	}
+	if rows, err := st.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: []string{"secret-allow-change"},
+	}); err != nil || len(rows) != 0 {
+		t.Fatalf("冲突确认不应写 Web UI 审计：%v %+v", err, rows)
+	}
 }
 
 func csrfToken(t *testing.T, h sessionHandler) string {
@@ -240,6 +432,21 @@ func mustServer(t *testing.T, st *store.Store, name string, shell models.ShellTy
 		t.Fatal(err)
 	}
 	return id
+}
+
+func mustServerToDevice(t *testing.T, st *store.Store, name string, shell models.ShellType, device string) string {
+	t.Helper()
+	credential := &models.Credential{
+		Type: models.CredPassword, Secret: []byte("server-password"),
+	}
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: name, Host: "192.0.2.10", Port: 22, User: "owner",
+		AuthMethod: models.AuthPassword, ShellType: shell,
+	}, credential, nil, device)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return added.ServerID
 }
 
 func mustSecret(t *testing.T, st *store.Store, name string) {
@@ -704,6 +911,8 @@ func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) aut
 		Servers:                webuiservers.FromManager(servermanage.New(st)),
 		ServerWriter:           webuiservers.WriterFromManager(servermanage.New(st)),
 		Access:                 webuiaccess.FromManager(access.New(st)),
+		Secrets:                webuisecrets.FromManager(secretmanage.New(st)),
+		SecretsWriter:          webuisecrets.WriterFromManager(secretmanage.New(st)),
 		Shares:                 FromStore(openStoreForTest(st)),
 		SharesWriter:           WriterFromStore(openStoreForTest(st)),
 		Topology:               webuitopology.FromStore(st),
@@ -780,6 +989,26 @@ func authorityHiddenValue(t *testing.T, page, name string) string {
 	return match[1]
 }
 
+func pageHiddenValue(t *testing.T, page, name string) string {
+	t.Helper()
+	values := pageHiddenValues(t, page, name)
+	if len(values) == 0 {
+		t.Fatalf("页面缺少 %q 隐藏值：\n%s", name, page)
+	}
+	return values[0]
+}
+
+func pageHiddenValues(t *testing.T, page, name string) []string {
+	t.Helper()
+	pattern := regexp.MustCompile(`<input type="hidden" name="` + regexp.QuoteMeta(name) + `" value="([^"]*)"`)
+	matches := pattern.FindAllStringSubmatch(page, -1)
+	values := make([]string, 0, len(matches))
+	for _, match := range matches {
+		values = append(values, match[1])
+	}
+	return values
+}
+
 func TestAuthorityShareDeleteRequiresRecentReverify(t *testing.T) {
 	st := newIntegrationStore(t)
 	mustServer(t, st, "linux-web", models.ShellPOSIX)
@@ -841,6 +1070,75 @@ func TestAuthorityShareDeleteRequiresRecentReverify(t *testing.T) {
 	})
 	if err != nil || len(rows) != 1 || rows[0].SourceIP != "198.51.100.9" {
 		t.Fatalf("权威端删除审计不正确：%+v %v", rows, err)
+	}
+}
+
+func TestAuthorityShareMountScopeConfirmRequiresReverifyAndPreservesTarget(t *testing.T) {
+	st := newIntegrationStore(t)
+	linuxWebID := mustServer(t, st, "linux-web", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	views, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备挂载密码机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	now := time.Date(2026, 11, 13, 11, 0, 0, 0, time.Local)
+	h := newShareAuthorityHandler(t, st, &now)
+	now = now.Add(6 * time.Minute)
+	csrf := authorityPageCSRF(t, h, "/ui/shares/"+datasetsID)
+
+	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
+		"csrf_token":                            {csrf},
+		"return_to":                             {"/ui/shares/" + datasetsID},
+		"secret_id":                             {secretID},
+		"server_id":                             {linuxWebID},
+		"cell__" + secretID + "__" + linuxWebID: {"0"},
+	})
+	previewBody := body(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("权威端可挂载范围预览失败，状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	summary := authorityHiddenValue(t, previewBody, "summary")
+	target := secretID + " " + linuxWebID + " 0"
+	confirmRejected := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "summary": {summary},
+		"return_to": {"/ui/shares/" + datasetsID}, "target": {target},
+	})
+	confirmBody := body(t, confirmRejected)
+	resume := "/ui/secrets/authorization/preview?return_to=%2Fui%2Fshares%2F" + datasetsID +
+		"&target=" + url.QueryEscape(target)
+	if confirmRejected.StatusCode != http.StatusSeeOther ||
+		confirmRejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape(resume) {
+		t.Fatalf("权威端确认可挂载范围应先重新验证，状态码=%d 跳转=%q：\n%s",
+			confirmRejected.StatusCode, confirmRejected.Header.Get("Location"), confirmBody)
+	}
+
+	reverify := h.do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {authorityPageCSRF(t, h, "/ui/reverify?next="+url.QueryEscape(resume))},
+		"password":   {"correct-password"}, "next": {resume},
+	})
+	if reverify.StatusCode != http.StatusSeeOther || reverify.Header.Get("Location") != resume {
+		t.Fatalf("重新验证后应回到保留勾选集合的预览，状态码=%d 跳转=%q：\n%s",
+			reverify.StatusCode, reverify.Header.Get("Location"), body(t, reverify))
+	}
+	resumedPreview := body(t, h.do(http.MethodGet, resume, nil))
+	if authorityHiddenValue(t, resumedPreview, "summary") != summary ||
+		len(pageHiddenValues(t, resumedPreview, "target")) != 1 ||
+		pageHiddenValues(t, resumedPreview, "target")[0] != target {
+		t.Fatalf("重新验证后的预览应保留目标授权集合：\n%s", resumedPreview)
+	}
+
+	confirmed := h.do(http.MethodPost, "/ui/secrets/authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "summary": {summary},
+		"return_to": {"/ui/shares/" + datasetsID}, "target": {target},
+	})
+	confirmedBody := body(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存授权变更") {
+		t.Fatalf("重新验证后应能确认可挂载范围变更，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	after, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(after) != 1 || len(after[0].AllowedServers) != 0 {
+		t.Fatalf("权威端确认后的可挂载范围不正确：%v %+v", err, after)
 	}
 }
 

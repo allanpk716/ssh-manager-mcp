@@ -51,6 +51,23 @@ type ShareServerView struct {
 	MountPoint string
 }
 
+// ShareAuthorizationChoice 是可挂载范围勾选清单中的一台服务器条目。
+// Checked 直接来自挂载密码机密项的可写入服务器列表。
+type ShareAuthorizationChoice struct {
+	ID                           string
+	Name                         string
+	DeviceName                   string
+	ShellType                    string
+	Checked                      bool
+	SharesDeviceWithOtherEntries bool
+}
+
+// ShareAuthorizationView 是共享存储详情页的可挂载范围编辑区。
+type ShareAuthorizationView struct {
+	SecretID string
+	Servers  []ShareAuthorizationChoice
+}
+
 // ShareSource 是 Web UI 读取共享存储可见数据的唯一入口。单机与权威端由
 // 存储层适配；客户端由本机加密快照的无值视图适配。
 type ShareSource interface {
@@ -244,10 +261,69 @@ func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, iden
 		h.renderShareReadError(w, r, err)
 		return
 	}
-	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", pageData{
+	data := pageData{
 		Title: "共享存储 " + detail.Name, ShareDetail: detail,
 		ShareDetailNotice: shareSavedNotice(r, detail),
-	})
+	}
+	if h.caps.CanManageShares && h.cfg.Secrets != nil && h.cfg.SecretsWriter != nil {
+		scope, err := h.shareAuthorizationView(detail)
+		if err != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "读取可挂载范围失败", "读取可挂载范围失败，请稍后重试。")
+			return
+		}
+		data.ShareAuthorization = scope
+	}
+	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", data)
+}
+
+// shareAuthorizationView 读取全部服务器条目与挂载密码机密项的当前授权，
+// 组装成按服务器条目展示的勾选清单；差异计算仍由机密项授权模块负责。
+func (h *handler) shareAuthorizationView(share *ShareRow) (*ShareAuthorizationView, error) {
+	secrets, err := h.cfg.Secrets.ListSecrets("", "", "")
+	if err != nil {
+		return nil, err
+	}
+	secret, ok := FindSecretRow(secrets, share.PasswordSecret)
+	if !ok {
+		return nil, &SecretNotFoundError{Identifier: share.PasswordSecret}
+	}
+	servers, err := h.cfg.Servers.Servers("")
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	allowed := secretAllowedServerSet(secret)
+	scope := &ShareAuthorizationView{SecretID: secret.ID}
+	for _, server := range servers {
+		detail, err := h.cfg.Servers.ServerDetail("", server.ID)
+		if err != nil {
+			return nil, err
+		}
+		choice := ShareAuthorizationChoice{
+			ID: server.ID, Name: server.Name, DeviceName: detail.DeviceName,
+			ShellType: detail.Shell, Checked: allowed[server.Name],
+		}
+		scope.Servers = append(scope.Servers, choice)
+	}
+	markShareSameDeviceGroups(scope.Servers)
+	return scope, nil
+}
+
+// markShareSameDeviceGroups 标出同设备还有其他服务器条目的行；页面脚本
+// 再按当前勾选状态决定是否显示提示。文件权限由整个设备共享，不能按登
+// 录用户隔离。
+func markShareSameDeviceGroups(servers []ShareAuthorizationChoice) {
+	for index := range servers {
+		if servers[index].DeviceName == "" {
+			continue
+		}
+		for otherIndex := range servers {
+			if otherIndex != index && servers[otherIndex].DeviceName == servers[index].DeviceName {
+				servers[index].SharesDeviceWithOtherEntries = true
+				break
+			}
+		}
+	}
 }
 
 // shareSavedNotice 在保存跳回详情页时提示新的共享存储版本号；普通浏览返

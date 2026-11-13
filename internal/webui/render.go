@@ -71,6 +71,7 @@ type pageData struct {
 	ShareDeviceOptions               []string
 	ShareServerOptions               []ServerRow
 	ShareDetail                      *ShareRow
+	ShareAuthorization               *ShareAuthorizationView
 	ShareDetailError                 string
 	ShareDetailNotice                string
 	ShareForm                        shareFormView
