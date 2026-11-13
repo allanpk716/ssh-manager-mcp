@@ -209,3 +209,129 @@ func TestShareReselectBestAddressShowsSafeResultAndAudit(t *testing.T) {
 		t.Fatalf("重选审计摘要不得含地址或账号：%s", rows[0].Command)
 	}
 }
+
+func TestShareReselectSwitchesToPhysicalAddressWithoutLeakingIt(t *testing.T) {
+	f := newReselectWebFixture(t, "100.64.10.10")
+
+	post := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/reselect", url.Values{
+		"csrf_token": {csrfToken(t, f.handler)}, "server_id": {f.linuxID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动重选状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilReselectDone(t, f.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"已切换到更优地址", "办公物理局域网", "（物理局域网）", "共享存储版本号：1",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("切换成功结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, leak := range []string{"192.0.2.10", "100.64.10.10", "mount-user", "DATASETS_MOUNT_PASSWORD-value-不回显"} {
+		if strings.Contains(page, leak) {
+			t.Fatalf("切换成功结果页泄露 %q：\n%s", leak, page)
+		}
+	}
+	state := f.linux.State()
+	if !state.Mounted || len(state.FstabLines) != 1 ||
+		!strings.Contains(state.FstabLines[0], "//192.0.2.10/datasets") {
+		t.Fatalf("切换后的远端状态 = %+v", state)
+	}
+}
+
+func TestShareReselectBusyListsProcessesAndForceSwitches(t *testing.T) {
+	f := newReselectWebFixture(t, "100.64.10.10")
+	f.linux.BusyProcesses = []sharemounttest.BusyProcess{{
+		ProcessID: "2345", User: "worker", Command: "tar",
+	}}
+
+	post := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/reselect", url.Values{
+		"csrf_token": {csrfToken(t, f.handler)}, "server_id": {f.linuxID},
+	})
+	busyPage := waitUntilReselectDone(t, f.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"挂载被占用，保留旧地址与旧配置", "占用挂载点的进程",
+		"2345", "worker", "tar", "强制切换地址", "稍后再试",
+	} {
+		if !strings.Contains(busyPage, want) {
+			t.Fatalf("占用结果页缺少 %q：\n%s", want, busyPage)
+		}
+	}
+	state := f.linux.State()
+	if !state.Mounted || !strings.Contains(state.FstabLines[0], "//100.64.10.10/datasets") {
+		t.Fatalf("不带强制时不应改动旧状态：%+v", state)
+	}
+
+	f.linux.ForceSucceeds = true
+	force := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/reselect", url.Values{
+		"csrf_token": {csrfToken(t, f.handler)},
+		"server_id":  {f.linuxID}, "force": {"1"},
+	})
+	forcePage := waitUntilReselectDone(t, f.handler, force.Header.Get("Location"))
+	if !strings.Contains(forcePage, "已切换到更优地址") || !strings.Contains(forcePage, "强制执行") {
+		t.Fatalf("强制切换结果页：\n%s", forcePage)
+	}
+	state = f.linux.State()
+	if !state.Mounted || !strings.Contains(state.FstabLines[0], "//192.0.2.10/datasets") {
+		t.Fatalf("强制切换后的远端状态 = %+v", state)
+	}
+	rows, err := f.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-reselect"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("应有占用与强制两条审计行：%+v", rows)
+	}
+	busySeen, forcedSeen := false, false
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.Status != "ok" {
+			t.Fatalf("占用与强制的审计来源或状态不正确：%+v", row)
+		}
+		if strings.Contains(row.Command, `"result":"busy"`) && strings.Contains(row.Command, `"force":false`) {
+			busySeen = true
+		}
+		if strings.Contains(row.Command, `"result":"success"`) && strings.Contains(row.Command, `"force":true`) {
+			forcedSeen = true
+		}
+	}
+	if !busySeen || !forcedSeen {
+		t.Fatalf("占用与强制的审计摘要不正确：%s / %s", rows[0].Command, rows[1].Command)
+	}
+}
+
+func TestShareReselectWindowsServerIsRejectedAndAudited(t *testing.T) {
+	f := newReselectWebFixture(t, "192.0.2.10")
+
+	post := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/reselect", url.Values{
+		"csrf_token": {csrfToken(t, f.handler)}, "server_id": {f.windowsID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("Windows 重选请求状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilReselectDone(t, f.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"Windows 服务器不能重选共享存储地址", "每条命令执行前本来就会重新选址",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("Windows 拒绝页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "确认重选") || strings.Contains(page, "强制切换地址") {
+		t.Fatalf("Windows 拒绝页不得提供确认或强制按钮：\n%s", page)
+	}
+	rows, err := f.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-reselect"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Status != "error" ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("Windows 拒绝的重选审计 = %+v", rows)
+	}
+	if !strings.Contains(rows[0].Command, `"result":"windows-unsupported"`) {
+		t.Fatalf("Windows 拒绝的审计摘要 = %s", rows[0].Command)
+	}
+}
