@@ -16,8 +16,9 @@ package hotswap
 //     可回,泵按 F4 收场。
 //   - retireLater(后续代 goroutine,票 05):继任已直接继承本进程的标准
 //     输入输出句柄(泵侧管道),退位不化泵——Park(停读,字节留给继任)
-//     → 静默 → 冻结 → EndSdkRead(会话按序收场)→ 排干;进程经正常返回
-//     路径退出,最外层泵对端点换人无感知。继任就绪起不可回退。
+//     → 静默 → 冻结确认 → EndSdkRead(会话按序收场)→ 排干;冻结未确认时
+//     旧代继续服务,不关闭软件开发工具包读侧。进程经正常返回路径退出,最
+//     外层泵对端点换人无感知。继任就绪起不可回退。
 
 import (
 	"context"
@@ -34,8 +35,9 @@ import (
 
 // feederFreezeTimeout 是退位编排等 feeder 冻结(hold/park 在消息边界
 // 生效)的预算。正常路径在毫秒级(管道静默时一个轮询周期内生效);超时
-// 只发生在宿主停在半行等病态输入或平台不支持窥视的场合,编排按兜底
-// 继续。
+// 只发生在宿主停在半行等病态输入或平台不支持窥视的场合。首代退位按现状
+// 继续交割;后续代退位不能在未确认停读时关闭软件开发工具包读侧,会按此
+// 间隔继续等待并记录日志。
 const feederFreezeTimeout = 5 * time.Second
 
 // quiesceSettle 是关 SDK 读侧(不可回点)前静默判据的安定窗:配平必须在
@@ -76,8 +78,8 @@ type ArmResult struct {
 
 // ReloadConfig 配置一个桥进程的 reload 编排。
 type ReloadConfig struct {
-	// IO 是字节面接管(必填)。
-	IO *BridgeIO
+	// IO 是字节面接管(必填)。测试可替换为实现同一内部接口的替身。
+	IO reloadIO
 	// Srv 用于换手前快照前任握手参数(必填)。
 	Srv *mcp.Server
 	// Exe/Args 是继任可执行与命令行(生产:os.Executable()+os.Args[1:])。
@@ -118,6 +120,19 @@ type ReloadConfig struct {
 	//   在飞工具调用:exec_command 上限 300s + 余量)
 	SessionEndTimeout  time.Duration // 交割后等 SDK 会话收场,默认 30s
 	CopierDrainTimeout time.Duration // 等 copier 排干 SDK 应答,默认 30s
+}
+
+// reloadIO 是退位编排需要的字节面接管行为。生产使用 *BridgeIO;测试替身
+// 用来验证编排顺序而不拉起进程链。
+type reloadIO interface {
+	Hold() bool
+	ReleaseHold()
+	Retire(hostInW, hostOutR *os.File)
+	Park() bool
+	WaitFrozen(d time.Duration) bool
+	EndSdkRead()
+	WaitCopierPhase1(d time.Duration) bool
+	Quiescent() bool
 }
 
 // ReloadService 是一个桥进程的换手编排器。
@@ -333,12 +348,13 @@ func (s *ReloadService) retire(h *SuccessorHandle) {
 // 「停读 → 静默 → 冻结 → 关 SDK 读侧 → 会话收场 → 排干」,随后进程经
 // serveBridge→Run* 的正常返回路径退出;最外层泵对端点换人无感知。
 //
-// 与首代不同,继任就绪(共享句柄已交给它)起即不可回退:静默/冻结超时
-// 只记日志并继续退位(在飞应答随本进程消亡,宿主侧重连可恢复,不劣于
-// 桥崩溃现状;规格 D8 的回退只覆盖「就绪判定失败」,那在 Arm 内已就地
-// 处理)。已知边界:继任与旧桥在「拉起→停读」的过渡窗内是同一管道的
-// 双读者,各自消费的帧由各自完整应答,无丢失;停读之后,留在管道里的
-// 字节全归继任——两代之间的帧序以停读边界为界,整帧交付。
+// 与首代不同,继任就绪(共享句柄已交给它)起即不可回退。冻结超时不是放行
+// 条件:旧代继续等待停读生效,期间已读到的帧照常交给软件开发工具包并应答;
+// 只在冻结确认后复验静默、关读侧并收场。宿主侧关闭时输入转发循环退役,
+// 冻结等待立即得到确认,编排按原有关读侧后的收场路径结束。已知边界:继任
+// 与旧桥在「拉起→停读」的过渡窗内是同一管道的双读者,各自消费的帧由各自
+// 完整应答,无丢失;停读之后,留在管道里的字节全归继任——两代之间的帧序
+// 以停读边界为界,整帧交付。
 func (s *ReloadService) retireLater(h *SuccessorHandle) {
 	defer s.markDone()
 	defer h.cleanupReady()
@@ -355,10 +371,11 @@ func (s *ReloadService) retireLater(h *SuccessorHandle) {
 	}
 
 	// 3. 等 feeder 冻结(停读生效):此后转发循环不再投递,关 SDK 读侧
-	//    与写路径无竞争。超时(平台不支持窥视且管道静默,或宿主停在半
-	//    行)按兜底继续。
-	if !s.cfg.IO.WaitFrozen(feederFreezeTimeout) {
-		s.logf("retire (later generation): feeder freeze wait timed out; closing the SDK read side anyway")
+	//    与写路径无竞争。超时只说明停读尚未确认,不能关闭读侧;旧代继续
+	//    服务,按同一预算继续等待。宿主侧关闭会让 feeder 退役,冻结等待
+	//    随即得到确认。
+	for !s.cfg.IO.WaitFrozen(feederFreezeTimeout) {
+		s.logf("retire (later generation): feeder freeze wait timed out after %v; the old generation keeps serving while waiting for reads to stop", feederFreezeTimeout)
 	}
 	// 4. 复验静默(消息层+字节层,跨安定窗双检):冻结前后最后送达 SDK 的
 	//    帧已应答且字节已消费(关读侧的前置,否则 jsonrpc2 在读侧 EOF 后

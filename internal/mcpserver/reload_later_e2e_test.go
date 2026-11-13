@@ -204,6 +204,7 @@ func TestGenerationSuccessorDeathEndsPump(t *testing.T) {
 
 	// 服务中途杀死二代继任:泵退出,宿主侧表现为掉线。
 	pid := readStateProbePid(t, stateDir, "v2-kill")
+	h.skipExitProbeWait = true
 	proc, err := os.FindProcess(pid)
 	if err != nil {
 		t.Fatal(err)

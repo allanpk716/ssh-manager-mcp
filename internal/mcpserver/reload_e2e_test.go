@@ -208,6 +208,12 @@ type wireMsg struct {
 type fakeHost struct {
 	cmd    *exec.Cmd
 	stdinW *os.File
+	// exitProbeVersions 是本条换手链已知各代的版本名;首代由 cmd.Wait 收
+	// 割,其余代次收尾时等待 exit-<版本> 探针出现。
+	exitProbeVersions []string
+	// skipExitProbeWait 用于测试主动强杀某代的场景:被强杀的进程收不到
+	// 运行 Go defer 的机会,不能把缺失 exit 探针当成换手链泄漏。
+	skipExitProbeWait bool
 
 	mu       sync.Mutex
 	seen     []wireMsg
@@ -272,7 +278,8 @@ func spawnBridgeRoleWithArgs(t *testing.T, role string, extraEnv map[string]stri
 	stdoutW.Close()
 
 	h := &fakeHost{cmd: cmd, stdinW: stdinW, wakeup: make(chan struct{}, 1),
-		stdoutEOF: make(chan struct{}),
+		stdoutEOF:         make(chan struct{}),
+		exitProbeVersions: bridgeExitProbeVersions(extraEnv),
 		stderrFn: func() string {
 			b, _ := os.ReadFile(stderrPath)
 			return string(b)
@@ -285,9 +292,71 @@ func spawnBridgeRoleWithArgs(t *testing.T, role string, extraEnv map[string]stri
 			cmd.Process.Kill()
 		}
 		cmd.Wait()
+		if !h.skipExitProbeWait {
+			successorVersions := h.exitProbeVersions
+			if len(successorVersions) > 0 {
+				successorVersions = successorVersions[1:]
+			}
+			waitForBridgeExitProbes(t, extraEnv["SSHMGR_TEST_STATE_DIR"], successorVersions, 20*time.Second)
+		}
 	})
 	go h.readLoop(stdoutR)
 	return h
+}
+
+// bridgeExitProbeVersions 从测试环境里解析本条换手链会自报的版本名。除
+// 首代外,SSHMGR_TEST_SUCCESSOR_ENV 可以逐代嵌套传递继任环境,因此递归
+// 展开其中每一代的 SSHMGR_TEST_VERSION。
+func bridgeExitProbeVersions(extraEnv map[string]string) []string {
+	var versions []string
+	seen := make(map[string]bool)
+	var collect func(raw string)
+	collect = func(raw string) {
+		for _, item := range strings.Split(raw, ";") {
+			item = strings.TrimSpace(item)
+			if version, ok := strings.CutPrefix(item, "SSHMGR_TEST_VERSION="); ok && !seen[version] {
+				seen[version] = true
+				versions = append(versions, version)
+			}
+			if nested, ok := strings.CutPrefix(item, "SSHMGR_TEST_SUCCESSOR_ENV="); ok {
+				collect(nested)
+			}
+		}
+	}
+	collect(extraEnv["SSHMGR_TEST_VERSION"])
+	collect(extraEnv["SSHMGR_TEST_SUCCESSOR_ENV"])
+	return versions
+}
+
+// waitForBridgeExitProbes 在临时目录清理前等待本条换手链的全部已知代次
+// 写出退出探针,避免最年轻一代在目录清理后才写 exit 文件。清理函数里不能
+// 使用 t.Fatalf 提前终止,因此超时只记错误并保留目录名供排查。
+func waitForBridgeExitProbes(t *testing.T, stateDir string, versions []string, timeout time.Duration) {
+	if stateDir == "" || len(versions) == 0 {
+		return
+	}
+	pending := make(map[string]struct{})
+	for _, version := range versions {
+		pending[version] = struct{}{}
+	}
+	deadline := time.Now().Add(timeout)
+	for len(pending) > 0 {
+		for version := range pending {
+			if _, err := os.Stat(stateProbePath(stateDir, "exit", version)); err == nil {
+				delete(pending, version)
+			}
+		}
+		if len(pending) == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			for version := range pending {
+				t.Errorf("bridge generation exit probe %q did not appear in %q within %v", version, stateDir, timeout)
+			}
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func (h *fakeHost) readLoop(r *os.File) {

@@ -332,22 +332,41 @@ func TestReloadServiceQuiesceTimeoutRollback(t *testing.T) {
 	if arm.State != hotswap.ArmArmed {
 		t.Fatalf("Arm = %+v", arm)
 	}
-	// 等 Hold 生效(空闲+边界,毫秒级)后写第二笔:应被扣住不进 SDK。
-	// 探测读可取消(jsonrpc2 连接单读者,探测 goroutine 不得滞留)。
-	time.Sleep(150 * time.Millisecond)
+	// 等 Hold 确实在消息边界生效后再写第二笔:固定睡眠在机器负载高时可能
+	// 在 Hold 前写入,无法验证「扣住」这个行为。
+	if !bio.WaitFrozen(250 * time.Millisecond) {
+		t.Fatal("feeder did not freeze before the held request was written")
+	}
 	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":78,"method":"tools/list"}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
+
+	// 探测窗口以 Arm 返回时刻为保守基准,必须在静默超时前结束,避免把
+	// 「超时回退放出请求」误判成「扣住期间泄漏」。
 	probeCtx, cancelProbe := context.WithCancel(ctx)
 	held := make(chan error, 1)
-	go func() { _, err := sdkConn.Read(probeCtx); held <- err }()
+	go func() {
+		_, err := sdkConn.Read(probeCtx)
+		held <- err
+	}()
+	probeWindow := time.NewTimer(40 * time.Millisecond)
+	defer probeWindow.Stop()
 	select {
 	case err := <-held:
-		t.Fatalf("held request leaked into the SDK side during quiesce wait: %v", err)
-	case <-time.After(250 * time.Millisecond):
+		if err == nil {
+			t.Fatal("held request leaked into the SDK side during quiesce wait")
+		}
+	case <-probeWindow.C:
 	}
 	cancelProbe()
-	<-held
+	select {
+	case err := <-held:
+		if err == nil {
+			t.Fatal("held request leaked into the SDK side during quiesce wait")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("held-request probe did not return after cancellation")
+	}
 
 	// 编排终态:静默超时 → ReleaseHold + Rollback(继任被杀),旧桥继续。
 	withDeadline(t, "WaitTerminal after quiesce timeout", 10*time.Second, func() error {
