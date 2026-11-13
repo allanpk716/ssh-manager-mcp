@@ -124,15 +124,30 @@ func (h *handler) registerShareRoutes() {
 	if h.cfg.Shares == nil {
 		return
 	}
-	h.mux.HandleFunc(sharesPath, h.requireSession(h.handleShareReadRoutes))
+	h.mux.HandleFunc(sharesPath, h.requireSession(h.handleShareDetailRoutes))
 }
 
-func (h *handler) handleShareReadRoutes(w http.ResponseWriter, r *http.Request) {
+func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == sharesPath {
 		h.handleSharesRoot(w, r)
 		return
 	}
-	h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	identifier := strings.TrimPrefix(r.URL.Path, sharesPath)
+	suffix := ""
+	if index := strings.LastIndex(identifier, "/"); index >= 0 {
+		suffix = identifier[index+1:]
+		identifier = identifier[:index]
+	}
+	if identifier == "" || strings.Contains(identifier, "/") {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
+	switch suffix {
+	case "":
+		h.handleShareDetail(w, r, identifier)
+	default:
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	}
 }
 
 func (h *handler) handleSharesRoot(w http.ResponseWriter, r *http.Request) {
@@ -187,4 +202,28 @@ func (h *handler) shareDeviceOptions(r *http.Request) ([]string, error) {
 	}
 	sort.Strings(options)
 	return options, nil
+}
+
+func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, identifier string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "共享存储详情只接受 GET 请求。")
+		return
+	}
+	detail, err := h.cfg.Shares.ShareDetail(h.requestClientInstance(r), identifier)
+	if err != nil {
+		h.renderShareReadError(w, r, err)
+		return
+	}
+	h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", pageData{
+		Title: "共享存储 " + detail.Name, ShareDetail: detail,
+	})
+}
+
+func (h *handler) renderShareReadError(w http.ResponseWriter, r *http.Request, err error) {
+	var missing *ShareNotFoundError
+	if errors.As(err, &missing) {
+		h.renderError(w, r, http.StatusNotFound, "共享存储不存在", err.Error())
+		return
+	}
+	h.renderError(w, r, http.StatusInternalServerError, "读取共享存储详情失败", "读取共享存储详情失败，请稍后重试。")
 }

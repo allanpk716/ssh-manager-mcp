@@ -201,3 +201,52 @@ func TestSharesPageListsRowsAndFilters(t *testing.T) {
 		t.Fatalf("服务器条目筛选结果不正确，状态码=%d：\n%s", byServer.StatusCode, byServerBody)
 	}
 }
+
+func TestShareDetailShowsRegistrationFieldsWithoutSecretValue(t *testing.T) {
+	st := newIntegrationStore(t)
+	linuxID := mustServer(t, st, "linux-web", models.ShellPOSIX)
+	winID := mustServer(t, st, "windows-web", models.ShellPowerShell)
+	if _, err := st.AddDevice("NAS", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	mustSecret(t, st, "NAS_MOUNT_PASSWORD")
+	if err := st.AllowSecrets([]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-web", "windows-web"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	share, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Directories: []models.SharedStorageDirectory{
+			{Purpose: "临时数据", Path: "tmp"},
+			{Purpose: "长期数据", Path: "datasets"},
+		},
+		Note: "模型数据集",
+	}, store.CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = linuxID
+	_ = winID
+	h := newIntegrationHandler(t, st)
+
+	page := h.do(http.MethodGet, "/ui/shares/"+share.ID, nil)
+	pageBody := body(t, page)
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("共享存储详情状态码 = %d，页面：\n%s", page.StatusCode, pageBody)
+	}
+	for _, want := range []string{
+		"datasets", "提供方设备", "NAS", "挂载账号用户名", "mount-user",
+		"挂载密码机密项", "NAS_MOUNT_PASSWORD", "固定盘符", "Z:", "目录约定",
+		"临时数据=tmp", "长期数据=datasets", "共享存储版本号", "1",
+		"变更说明", "可挂载服务器", "linux-web", "/mnt/sshmgr/datasets",
+		"windows-web", "Z:",
+	} {
+		if !strings.Contains(pageBody, want) {
+			t.Fatalf("详情页缺少 %q：\n%s", want, pageBody)
+		}
+	}
+	if strings.Contains(pageBody, "NAS_MOUNT_PASSWORD-value-不回显") ||
+		strings.Contains(pageBody, "换值") || strings.Contains(pageBody, "读取值") {
+		t.Fatalf("详情页不得显示机密项值或提供读回入口：\n%s", pageBody)
+	}
+}
