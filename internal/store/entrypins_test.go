@@ -152,7 +152,7 @@ func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {
 	}
 	if len(rows) != 1 || rows[0].ServerID != id || rows[0].Status != "ok" ||
 		!strings.Contains(rows[0].Command, "handshake=100.64.10.5:22") ||
-		!strings.Contains(rows[0].Command, "fp="+fp) {
+		!strings.Contains(rows[0].Command, "fingerprint="+fp) {
 		t.Fatalf("首次锚定审计不完整：%+v", rows)
 	}
 }
@@ -221,7 +221,7 @@ func TestInsertForwardedEntryPin_OnlyInsert(t *testing.T) {
 	other, _ := pinHostKey(t)
 
 	inserted, err := s.InsertForwardedEntryPin(srv, "203.0.113.10:22", key, "laptop", AuditRow{
-		TS: time.Now(), ServerID: id, Action: "pin-forward", Command: "fp=" + fp, Status: "ok",
+		TS: time.Now(), ServerID: id, Action: "pin-forward", Command: "fingerprint=" + fp, Status: "ok",
 	})
 	if err != nil || !inserted {
 		t.Fatalf("首次转发应插入新锚：inserted=%v err=%v", inserted, err)
@@ -278,7 +278,7 @@ func TestManualAndClearEntryPin(t *testing.T) {
 		t.Fatal("拒绝路径不应改动锚")
 	}
 	if _, err = s.UpsertManualEntryPin(srv, "", next, PinFormatBlob, true, func(old *PinMeta) AuditRow {
-		return AuditRow{TS: time.Now(), ServerID: id, Action: "pin-manual", Command: "was=" + fp + " fp=" + nextFP}
+		return AuditRow{TS: time.Now(), ServerID: id, Action: "pin-manual", Command: "was=" + fp + " fingerprint=" + nextFP}
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestManualAndClearEntryPin(t *testing.T) {
 	}
 
 	cleared, err := s.ClearEntryPin(id, func(old PinMeta) AuditRow {
-		return AuditRow{TS: time.Now(), ServerID: id, Action: "pin-clear", Command: "fp=" + PinFingerprint(old.Blob, old.Format)}
+		return AuditRow{TS: time.Now(), ServerID: id, Action: "pin-clear", Command: "fingerprint=" + PinFingerprint(old.Blob, old.Format)}
 	})
 	if err != nil || cleared == nil || !cleared.Matches(next) {
 		t.Fatalf("按条目清除失败：%v %v", cleared, err)

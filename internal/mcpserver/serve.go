@@ -628,7 +628,7 @@ func (r *ServeRunner) handlePinHostkey(w http.ResponseWriter, req *http.Request)
 		TS:       time.Now(),
 		ServerID: srv.ID,
 		Action:   "pin-forward",
-		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s device=%s via=forward",
+		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fingerprint=%s device=%s via=forward",
 			srv.Name, srv.ID, in.HandshakeAddr, fp, ct.Name),
 		Status: "ok",
 	}

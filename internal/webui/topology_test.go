@@ -435,6 +435,7 @@ type stubTopologyWriter struct {
 	moveCalls         [][4]string
 	removePhysical    []string
 	networkAddCalls   [][2]string
+	sources           []TopologyWriteSource
 	nextNotFoundError bool
 	nextPlainError    error
 
@@ -449,33 +450,51 @@ type stubTopologyWriter struct {
 	resetCalls  int
 }
 
-func (w *stubTopologyWriter) AddNetworkMembership(device, network, address string) (string, error) {
+func (w *stubTopologyWriter) AddNetworkMembership(
+	device, network, address string, source TopologyWriteSource,
+) (string, error) {
 	w.addCalls = append(w.addCalls, [3]string{device, network, address})
+	w.sources = append(w.sources, source)
 	return "已把设备加入网络", w.nextError()
 }
 
-func (w *stubTopologyWriter) EditNetworkMembership(device, network, address string) (string, error) {
+func (w *stubTopologyWriter) EditNetworkMembership(
+	device, network, address string, source TopologyWriteSource,
+) (string, error) {
 	w.editCalls = append(w.editCalls, [3]string{device, network, address})
+	w.sources = append(w.sources, source)
 	return "已修改网络成员地址", w.nextError()
 }
 
-func (w *stubTopologyWriter) RemoveNetworkMembership(device, network string) (string, error) {
+func (w *stubTopologyWriter) RemoveNetworkMembership(
+	device, network string, source TopologyWriteSource,
+) (string, error) {
 	w.removeCalls = append(w.removeCalls, [2]string{device, network})
+	w.sources = append(w.sources, source)
 	return "已把设备移出网络", w.nextError()
 }
 
-func (w *stubTopologyWriter) MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error) {
+func (w *stubTopologyWriter) MoveNetworkMembership(
+	device, fromNetwork, toNetwork, address string, source TopologyWriteSource,
+) (string, error) {
 	w.moveCalls = append(w.moveCalls, [4]string{device, fromNetwork, toNetwork, address})
+	w.sources = append(w.sources, source)
 	return "已移动网络成员", w.nextError()
 }
 
-func (w *stubTopologyWriter) RemovePhysicalNetworkMemberships(device string) (string, error) {
+func (w *stubTopologyWriter) RemovePhysicalNetworkMemberships(
+	device string, source TopologyWriteSource,
+) (string, error) {
 	w.removePhysical = append(w.removePhysical, device)
+	w.sources = append(w.sources, source)
 	return "已删除全部物理局域网成员", w.nextError()
 }
 
-func (w *stubTopologyWriter) AddPhysicalNetwork(name, site string) (string, error) {
+func (w *stubTopologyWriter) AddPhysicalNetwork(
+	name, site string, source TopologyWriteSource,
+) (string, error) {
 	w.networkAddCalls = append(w.networkAddCalls, [2]string{name, site})
+	w.sources = append(w.sources, source)
 	return "已登记网络", w.nextError()
 }
 
@@ -608,6 +627,14 @@ func TestTopologyWriteEndpointsDelegateToWriter(t *testing.T) {
 			t.Fatalf("%s 响应提示 = %q，应为 %q", tc.path, got.Message, tc.message)
 		}
 		tc.validate()
+	}
+	if len(writer.sources) != len(cases) {
+		t.Fatalf("六个写接口都应传请求来源，实际传了 %d 次", len(writer.sources))
+	}
+	for _, source := range writer.sources {
+		if source.RemoteAddress != "192.0.2.1" {
+			t.Fatalf("写接口请求来源地址错误：%+v", source)
+		}
 	}
 }
 

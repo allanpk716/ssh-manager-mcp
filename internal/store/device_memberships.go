@@ -143,6 +143,14 @@ func (s *Store) AllVirtualNetworkAddresses() ([]string, error) {
 // EditNetworkMembership 修改设备在指定网络里的地址。数据行与审计行在同一
 // 个事务里提交。
 func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (*models.NetworkMembership, error) {
+	return s.EditNetworkMembershipWithSource(deviceName, networkName, address, WriteSource{})
+}
+
+// EditNetworkMembershipWithSource 与 EditNetworkMembership 相同，并把同一
+// 事务里的审计行标为指定来源。
+func (s *Store) EditNetworkMembershipWithSource(
+	deviceName, networkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -171,7 +179,7 @@ func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-edit", membershipAuditSummary(membership)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-edit", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
 	return membership, tx.Commit()
@@ -183,6 +191,14 @@ func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (
 // 不改变任何数据。命令行等价面是先执行 devices member rm 再执行
 // devices member add。
 func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address string) (*models.NetworkMembership, error) {
+	return s.MoveNetworkMembershipWithSource(deviceName, fromNetworkName, toNetworkName, address, WriteSource{})
+}
+
+// MoveNetworkMembershipWithSource 与 MoveNetworkMembership 相同，并把同一
+// 事务里的两条审计行都标为指定来源。
+func (s *Store) MoveNetworkMembershipWithSource(
+	deviceName, fromNetworkName, toNetworkName, address string, source WriteSource,
+) (*models.NetworkMembership, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -232,7 +248,7 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-rm", membershipAuditSummary(membership)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-rm", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
 	var registrationOrder int64
@@ -251,7 +267,7 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(moved)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(moved), source); err != nil {
 		return nil, err
 	}
 	return moved, tx.Commit()
@@ -260,6 +276,14 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 // RemoveNetworkMembership 删除设备在指定网络里的成员。数据行与审计行在
 // 同一个事务里提交。
 func (s *Store) RemoveNetworkMembership(deviceName, networkName string) (*models.NetworkMembership, error) {
+	return s.RemoveNetworkMembershipWithSource(deviceName, networkName, WriteSource{})
+}
+
+// RemoveNetworkMembershipWithSource 与 RemoveNetworkMembership 相同，并把
+// 同一事务里的审计行标为指定来源。
+func (s *Store) RemoveNetworkMembershipWithSource(
+	deviceName, networkName string, source WriteSource,
+) (*models.NetworkMembership, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -278,7 +302,7 @@ func (s *Store) RemoveNetworkMembership(deviceName, networkName string) (*models
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.member-rm", membershipAuditSummary(membership)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-rm", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
 	return membership, tx.Commit()
@@ -288,6 +312,15 @@ func (s *Store) RemoveNetworkMembership(deviceName, networkName string) (*models
 // 域网成员保留。全部数据行与审计行（沿用 member-rm 动作）在同一个事务
 // 里提交；返回被删除的成员，供调用方给出与命令行一致的提示。
 func (s *Store) RemovePhysicalNetworkMemberships(deviceName string) ([]*models.NetworkMembership, error) {
+	return s.RemovePhysicalNetworkMembershipsWithSource(deviceName, WriteSource{})
+}
+
+// RemovePhysicalNetworkMembershipsWithSource 与
+// RemovePhysicalNetworkMemberships 相同，并把同一事务里的全部审计行标为
+// 指定来源。
+func (s *Store) RemovePhysicalNetworkMembershipsWithSource(
+	deviceName string, source WriteSource,
+) ([]*models.NetworkMembership, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -334,7 +367,7 @@ func (s *Store) RemovePhysicalNetworkMemberships(deviceName string) ([]*models.N
 		); err != nil {
 			return nil, err
 		}
-		if err := writeTopologyAuditTx(tx, auditAt, "device.member-rm", membershipAuditSummary(membership)); err != nil {
+		if err := writeTopologyAuditSourceTx(tx, auditAt, "device.member-rm", membershipAuditSummary(membership), source); err != nil {
 			return nil, err
 		}
 	}

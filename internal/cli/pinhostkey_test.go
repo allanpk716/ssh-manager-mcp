@@ -139,7 +139,7 @@ func TestPinHostkey_Display(t *testing.T) {
 	forwardedPin(t, mk, "gamma", keyB, "dev-pad")
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha")
-	if !strings.Contains(out, "entry=alpha host=192.0.2.50:22 fp="+fpA) {
+	if !strings.Contains(out, "entry=alpha host=192.0.2.50:22 fingerprint="+fpA) {
 		t.Fatalf("display missing entry/host/fp:\n%s", out)
 	}
 	if !strings.Contains(out, "(format=blob, source=tofu, device=-, handshake=192.0.2.50:22, created=") {
@@ -180,9 +180,9 @@ func TestPinHostkey_List(t *testing.T) {
 	var alphaLine, betaLine bool
 	for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
 		switch {
-		case strings.HasPrefix(l, "entry=alpha host=192.0.2.50:22 fp="+fpA):
+		case strings.HasPrefix(l, "entry=alpha host=192.0.2.50:22 fingerprint="+fpA):
 			alphaLine = strings.Contains(l, "handshake=192.0.2.50:22")
-		case strings.HasPrefix(l, "entry=beta host=192.0.2.50:22 fp="):
+		case strings.HasPrefix(l, "entry=beta host=192.0.2.50:22 fingerprint="):
 			betaLine = !strings.Contains(l, fpA)
 		}
 	}
@@ -213,7 +213,7 @@ func TestPinHostkey_FingerprintStrict(t *testing.T) {
 	}
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--fingerprint", fp)
-	want := "pinned alpha host=192.0.2.50:22 fp=" + fp + " (format=fingerprint, source=manual, handshake=-, forced=false)"
+	want := "pinned alpha host=192.0.2.50:22 fingerprint=" + fp + " (format=fingerprint, source=manual, handshake=-, forced=false)"
 	if !strings.Contains(out, want) {
 		t.Fatalf("success line mismatch:\nwant: %s\ngot:\n%s", want, out)
 	}
@@ -225,7 +225,7 @@ func TestPinHostkey_FingerprintStrict(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want exactly 1 pin-manual row, got %d", len(rows))
 	}
-	wantCmd := "entry=alpha host=192.0.2.50:22 fp=" + fp + " via=fingerprint forced=false"
+	wantCmd := "entry=alpha host=192.0.2.50:22 fingerprint=" + fp + " via=fingerprint forced=false"
 	if rows[0].Command != wantCmd || rows[0].ServerID != ids["alpha"] || rows[0].ProjectID != "" || rows[0].Status != "ok" {
 		t.Fatalf("pin-manual audit row mismatch:\nwant cmd %q\n got cmd %q\nrow: %+v", wantCmd, rows[0].Command, rows[0])
 	}
@@ -247,7 +247,7 @@ func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 	tofuPin(t, mk, "beta", keyA)
 
 	errText := runCliErr(t, "servers", "pin-hostkey", "alpha", "--fingerprint", fpB)
-	want := "refusing to replace the existing pin for alpha: fp=" + fpA + " (source=tofu) — pass --force to replace it"
+	want := "refusing to replace the existing pin for alpha: fingerprint=" + fpA + " (source=tofu) — pass --force to replace it"
 	if !strings.Contains(errText, want) {
 		t.Fatalf("refusal mismatch:\nwant: %s\ngot:\n%s", want, errText)
 	}
@@ -259,14 +259,14 @@ func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 	}
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--fingerprint", fpB, "--force")
-	if !strings.Contains(out, "replacing existing pin fp="+fpA+" (source=tofu)") {
+	if !strings.Contains(out, "replacing existing pin fingerprint="+fpA+" (source=tofu)") {
 		t.Fatalf("force output must show the old pin first:\n%s", out)
 	}
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpB+" (format=fingerprint, source=manual, handshake=-, forced=true)") {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fingerprint="+fpB+" (format=fingerprint, source=manual, handshake=-, forced=true)") {
 		t.Fatalf("force success line wrong:\n%s", out)
 	}
 	rows := pinAuditRows(t, mk, "pin-manual")
-	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fp="+fpB+" via=fingerprint forced=true was="+fpA {
+	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fingerprint="+fpB+" via=fingerprint forced=true was="+fpA {
 		t.Fatalf("force audit must carry in-tx old→new: %+v", rows)
 	}
 	// 同设备同端口的其他服务器条目的锚不受覆盖影响。
@@ -276,7 +276,7 @@ func TestPinHostkey_ExistingRefusalAndForce(t *testing.T) {
 
 	runCli(t, "servers", "pin-hostkey", "alpha", "--fingerprint", fpC, "--force")
 	rows = pinAuditRows(t, mk, "pin-manual")
-	if len(rows) != 2 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fp="+fpC+" via=fingerprint forced=true was="+fpB {
+	if len(rows) != 2 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fingerprint="+fpC+" via=fingerprint forced=true was="+fpB {
 		t.Fatalf("second force was= must be the first force's new fp: %+v", rows)
 	}
 }
@@ -292,7 +292,7 @@ func TestPinHostkey_ForceFreeSlot(t *testing.T) {
 		t.Fatalf("free slot must not claim a replacement:\n%s", out)
 	}
 	rows := pinAuditRows(t, mk, "pin-manual")
-	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fp="+fp+" via=fingerprint forced=true" {
+	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fingerprint="+fp+" via=fingerprint forced=true" {
 		t.Fatalf("free-slot force audit must omit was=: %+v", rows)
 	}
 }
@@ -313,7 +313,7 @@ func TestPinHostkey_Clear(t *testing.T) {
 	tofuPin(t, mk, "gamma", keyG)
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--clear")
-	want := "unpinned alpha host=192.0.2.50:22 (was fp=" + fpA + ", source=tofu, handshake=192.0.2.50:22)"
+	want := "unpinned alpha host=192.0.2.50:22 (was fingerprint=" + fpA + ", source=tofu, handshake=192.0.2.50:22)"
 	if !strings.Contains(out, want) {
 		t.Fatalf("clear output mismatch:\nwant: %s\ngot:\n%s", want, out)
 	}
@@ -327,7 +327,7 @@ func TestPinHostkey_Clear(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want exactly 1 pin-clear row, got %d", len(rows))
 	}
-	wantCmd := "entry=alpha host=192.0.2.50:22 fp=" + fpA + " source=tofu handshake=192.0.2.50:22"
+	wantCmd := "entry=alpha host=192.0.2.50:22 fingerprint=" + fpA + " source=tofu handshake=192.0.2.50:22"
 	if rows[0].Command != wantCmd || rows[0].ServerID != ids["alpha"] || rows[0].ProjectID != "" || rows[0].Status != "ok" {
 		t.Fatalf("pin-clear audit row mismatch: want cmd %q, got %q (%+v)", wantCmd, rows[0].Command, rows[0])
 	}
@@ -373,20 +373,20 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	lineBare := "192.0.2.60 " + keyG.Type() + " " + base64.StdEncoding.EncodeToString(keyG.Marshal())
 
 	out := runCli(t, "servers", "pin-hostkey", "alpha", "--from-keyscan", keyscanFile(t, lineA))
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpA+" (format=blob, source=manual, handshake=192.0.2.50:22, forced=false)") {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fingerprint="+fpA+" (format=blob, source=manual, handshake=192.0.2.50:22, forced=false)") {
 		t.Fatalf("keyscan success line wrong:\n%s", out)
 	}
 	if pin := entryPinAt(t, mk, "alpha"); pin == nil || pin.Format != store.PinFormatBlob {
 		t.Fatalf("keyscan anchor must be a blob: %+v", pin)
 	}
 	rows := pinAuditRows(t, mk, "pin-manual")
-	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fp="+fpA+" via=keyscan forced=false" {
+	if len(rows) != 1 || rows[0].Command != "entry=alpha host=192.0.2.50:22 fingerprint="+fpA+" via=keyscan forced=false" {
 		t.Fatalf("keyscan audit wrong: %+v", rows)
 	}
 
 	runCliErr(t, "servers", "pin-hostkey", "gamma", "--from-keyscan", keyscanFile(t, lineBare))
 	out = runCli(t, "servers", "pin-hostkey", "gamma", "--from-keyscan", keyscanFile(t, lineG, lineBare))
-	if !strings.Contains(out, "pinned gamma host=192.0.2.60:2222 fp="+fpG) {
+	if !strings.Contains(out, "pinned gamma host=192.0.2.60:2222 fingerprint="+fpG) {
 		t.Fatalf("bracketed keyscan success wrong:\n%s", out)
 	}
 
@@ -422,7 +422,7 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	_, mkDup := withCliStoreEnv(t)
 	seedPinServers(t, mkDup, models.Server{Name: "alpha", Host: "192.0.2.50", Port: 22, User: "u"})
 	out = runCli(t, "servers", "pin-hostkey", "alpha", "--from-keyscan", keyscanFile(t, lineA, lineA))
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpA) {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fingerprint="+fpA) {
 		t.Fatalf("duplicate same-key lines must dedupe to one pin:\n%s", out)
 	}
 
@@ -436,7 +436,7 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	_, mkStdin := withCliStoreEnv(t)
 	seedPinServers(t, mkStdin, models.Server{Name: "alpha", Host: "192.0.2.50", Port: 22, User: "u"})
 	out = runCli(t, "servers", "pin-hostkey", "alpha", "--from-keyscan", "-")
-	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fp="+fpA) {
+	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fingerprint="+fpA) {
 		t.Fatalf("stdin keyscan must work:\n%s", out)
 	}
 }
@@ -495,7 +495,7 @@ func TestPinHostkeyListMatchesWebUIAnchorWrites(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := runCli(t, "servers", "pin-hostkey", "--list")
-	for _, want := range []string{"entry=alpha", "fp=" + fp, "source=manual", "handshake=-"} {
+	for _, want := range []string{"entry=alpha", "fingerprint=" + fp, "source=manual", "handshake=-"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("--list 应与 Web UI 覆盖结果一致，缺少 %q：\n%s", want, out)
 		}

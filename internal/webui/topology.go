@@ -194,12 +194,12 @@ var ErrTopologyLayoutInvalid = errors.New("布局请求内容无效")
 // 提供，写路由也不注册。网络成员方法返回可直接显示的中文提示，错误提示
 // 与命令行等价面一致。
 type TopologyWriter interface {
-	AddNetworkMembership(device, network, address string) (string, error)
-	EditNetworkMembership(device, network, address string) (string, error)
-	RemoveNetworkMembership(device, network string) (string, error)
-	MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error)
-	RemovePhysicalNetworkMemberships(device string) (string, error)
-	AddPhysicalNetwork(name, site string) (string, error)
+	AddNetworkMembership(device, network, address string, source TopologyWriteSource) (string, error)
+	EditNetworkMembership(device, network, address string, source TopologyWriteSource) (string, error)
+	RemoveNetworkMembership(device, network string, source TopologyWriteSource) (string, error)
+	MoveNetworkMembership(device, fromNetwork, toNetwork, address string, source TopologyWriteSource) (string, error)
+	RemovePhysicalNetworkMemberships(device string, source TopologyWriteSource) (string, error)
+	AddPhysicalNetwork(name, site string, source TopologyWriteSource) (string, error)
 	// SaveTopologyLayout 保存一个视图的完整布局并写一条来源为 Web UI 的审计。
 	SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error
 	// ResetTopologyLayout 清空一个视图保存的全部坐标并写一条来源为 Web UI
@@ -364,7 +364,7 @@ type topologyWriteOperation struct {
 	methodNotAllowed string
 	missingFields    string
 	hasFields        func(request *topologyWriteRequest) bool
-	run              func(request *topologyWriteRequest) (string, error)
+	run              func(request *topologyWriteRequest, source TopologyWriteSource) (string, error)
 }
 
 // handleTopologyWriteOperation 是六个成员与网络写接口的公共骨架。
@@ -384,7 +384,8 @@ func (h *handler) handleTopologyWriteOperation(
 		h.writeTopologyJSONError(w, http.StatusBadRequest, operation.missingFields)
 		return
 	}
-	h.writeTopologyResult(w, r, func() (string, error) { return operation.run(request) })
+	source := TopologyWriteSource{RemoteAddress: remoteIP(r)}
+	h.writeTopologyResult(w, r, func() (string, error) { return operation.run(request, source) })
 }
 
 // handleTopologyMembershipAdd 把设备加入网络并登记地址。
@@ -395,8 +396,8 @@ func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Req
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
 		},
-		run: func(request *topologyWriteRequest) (string, error) {
-			return h.cfg.TopologyWriter.AddNetworkMembership(request.Device, request.Network, request.Address)
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
+			return h.cfg.TopologyWriter.AddNetworkMembership(request.Device, request.Network, request.Address, source)
 		},
 	})
 }
@@ -409,8 +410,8 @@ func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Re
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
 		},
-		run: func(request *topologyWriteRequest) (string, error) {
-			return h.cfg.TopologyWriter.EditNetworkMembership(request.Device, request.Network, request.Address)
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
+			return h.cfg.TopologyWriter.EditNetworkMembership(request.Device, request.Network, request.Address, source)
 		},
 	})
 }
@@ -423,8 +424,8 @@ func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != ""
 		},
-		run: func(request *topologyWriteRequest) (string, error) {
-			return h.cfg.TopologyWriter.RemoveNetworkMembership(request.Device, request.Network)
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
+			return h.cfg.TopologyWriter.RemoveNetworkMembership(request.Device, request.Network, source)
 		},
 	})
 }
@@ -438,9 +439,9 @@ func (h *handler) handleTopologyMembershipMove(w http.ResponseWriter, r *http.Re
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.FromNetwork != "" && request.ToNetwork != "" && request.Address != ""
 		},
-		run: func(request *topologyWriteRequest) (string, error) {
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
 			return h.cfg.TopologyWriter.MoveNetworkMembership(
-				request.Device, request.FromNetwork, request.ToNetwork, request.Address)
+				request.Device, request.FromNetwork, request.ToNetwork, request.Address, source)
 		},
 	})
 }
@@ -452,8 +453,8 @@ func (h *handler) handleTopologyMembershipRemovePhysical(w http.ResponseWriter, 
 		methodNotAllowed: "物理局域网成员删除接口只接受 POST 请求。",
 		missingFields:    "设备不能为空。",
 		hasFields:        func(request *topologyWriteRequest) bool { return request.Device != "" },
-		run: func(request *topologyWriteRequest) (string, error) {
-			return h.cfg.TopologyWriter.RemovePhysicalNetworkMemberships(request.Device)
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
+			return h.cfg.TopologyWriter.RemovePhysicalNetworkMemberships(request.Device, source)
 		},
 	})
 }
@@ -467,8 +468,8 @@ func (h *handler) handleTopologyNetworkAdd(w http.ResponseWriter, r *http.Reques
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Name != "" && request.Site != ""
 		},
-		run: func(request *topologyWriteRequest) (string, error) {
-			return h.cfg.TopologyWriter.AddPhysicalNetwork(request.Name, request.Site)
+		run: func(request *topologyWriteRequest, source TopologyWriteSource) (string, error) {
+			return h.cfg.TopologyWriter.AddPhysicalNetwork(request.Name, request.Site, source)
 		},
 	})
 }

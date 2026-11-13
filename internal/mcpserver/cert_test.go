@@ -195,7 +195,7 @@ func TestLoadOrCreateServeCert_DeletedCertRefusesRegen(t *testing.T) {
 	// Second call: cert gone but marker present → MUST refuse to silently regen.
 	_, _, fp2, err := LoadOrCreateServeCert()
 	if err == nil {
-		t.Fatalf("expected refusal when cert deleted but marker present; got new cert fp=%s (fp1=%s) — silent regen invalidates all client pins", fp2, fp1)
+		t.Fatalf("expected refusal when cert deleted but marker present; got new certificate fingerprint=%s (first fingerprint=%s) — silent regeneration invalidates all client pins", fp2, fp1)
 	}
 	// Error must explain how to recover (delete both marker+cert, re-enroll).
 	if !strings.Contains(err.Error(), markerPath) {

@@ -182,7 +182,7 @@ func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "no pin for %s (unanchored — first trust or pin forwarding will create it)\n", srv.Name)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fingerprint=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
 		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(m.Blob, m.Format),
 		m.Format, m.Source, dash(m.Device), dash(m.HandshakeAddr), pinTime(m.CreatedAt))
 	return nil
@@ -213,7 +213,7 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 		if srv != nil {
 			name, hostPort = srv.Name, store.EntryFallbackAddr(srv)
 		}
-		fmt.Fprintf(out, "entry=%s host=%s fp=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+		fmt.Fprintf(out, "entry=%s host=%s fingerprint=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
 			name, hostPort, store.PinFingerprint(p.Blob, p.Format), p.Format, p.Source,
 			dash(p.Device), dash(p.HandshakeAddr), pinTime(p.CreatedAt))
 	}
@@ -225,7 +225,7 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handshakeAddr string, blob []byte, format, fp, via, note string, force bool) error {
 	hostPort := store.EntryFallbackAddr(srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
-		command := fmt.Sprintf("entry=%s host=%s fp=%s via=%s forced=%t", srv.Name, hostPort, fp, via, force)
+		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=%s forced=%t", srv.Name, hostPort, fp, via, force)
 		if force && old != nil {
 			command += " was=" + store.PinFingerprint(old.Blob, old.Format)
 		}
@@ -240,7 +240,7 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handsh
 	old, err := s.UpsertManualEntryPin(srv, handshakeAddr, blob, format, force, auditFor)
 	if err != nil {
 		if errors.Is(err, store.ErrPinExists) {
-			return fmt.Errorf("refusing to replace the existing pin for %s: fp=%s (source=%s) — pass --force to replace it",
+			return fmt.Errorf("refusing to replace the existing pin for %s: fingerprint=%s (source=%s) — pass --force to replace it",
 				srv.Name, store.PinFingerprint(old.Blob, old.Format), old.Source)
 		}
 		return err
@@ -250,9 +250,9 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handsh
 		fmt.Fprint(out, note)
 	}
 	if old != nil {
-		fmt.Fprintf(out, "replacing existing pin fp=%s (source=%s)\n", store.PinFingerprint(old.Blob, old.Format), old.Source)
+		fmt.Fprintf(out, "replacing existing pin fingerprint=%s (source=%s)\n", store.PinFingerprint(old.Blob, old.Format), old.Source)
 	}
-	fmt.Fprintf(out, "pinned %s host=%s fp=%s (format=%s, source=manual, handshake=%s, forced=%t)\n",
+	fmt.Fprintf(out, "pinned %s host=%s fingerprint=%s (format=%s, source=manual, handshake=%s, forced=%t)\n",
 		srv.Name, hostPort, fp, format, dash(handshakeAddr), force)
 	return nil
 }
@@ -265,7 +265,7 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 			TS:       time.Now(),
 			ServerID: srv.ID,
 			Action:   "pin-clear",
-			Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s handshake=%s",
+			Command: fmt.Sprintf("entry=%s host=%s fingerprint=%s source=%s handshake=%s",
 				srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr)),
 			Status: "ok",
 		}
@@ -278,7 +278,7 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "no pin for %s (nothing cleared)\n", srv.Name)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "unpinned %s host=%s (was fp=%s, source=%s, handshake=%s)\n",
+	fmt.Fprintf(cmd.OutOrStdout(), "unpinned %s host=%s (was fingerprint=%s, source=%s, handshake=%s)\n",
 		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr))
 	return nil
 }

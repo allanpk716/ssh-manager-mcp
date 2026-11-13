@@ -153,6 +153,12 @@ func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error)
 // AddNetwork 登记一个网络。类型与站点归属在同一个事务里校验，网络行与
 // 审计行一起提交。
 func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
+	return s.AddNetworkWithSource(input, WriteSource{})
+}
+
+// AddNetworkWithSource 与 AddNetwork 相同，并把同一事务里的审计行标为指
+// 定来源。
+func (s *Store) AddNetworkWithSource(input models.Network, source WriteSource) (*models.Network, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -202,7 +208,7 @@ func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "network.add", networkAuditSummary(network)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "network.add", networkAuditSummary(network), source); err != nil {
 		return nil, err
 	}
 	return network, tx.Commit()
@@ -211,6 +217,12 @@ func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
 // EditNetwork 按网络名字做部分更新；类型不可修改。网络行与审计行在同一
 // 个事务里提交。
 func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Network, error) {
+	return s.EditNetworkWithSource(name, changes, WriteSource{})
+}
+
+// EditNetworkWithSource 与 EditNetwork 相同，并把同一事务里的审计行标为
+// 指定来源。
+func (s *Store) EditNetworkWithSource(name string, changes NetworkChanges, source WriteSource) (*models.Network, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -272,7 +284,7 @@ func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Networ
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "network.edit", topologyEditSummary(name, editChanges)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "network.edit", topologyEditSummary(name, editChanges), source); err != nil {
 		return nil, err
 	}
 	return network, tx.Commit()
@@ -281,6 +293,12 @@ func (s *Store) EditNetwork(name string, changes NetworkChanges) (*models.Networ
 // DeleteNetwork 删除网络并级联删除它的网络成员。返回因此不再有任何网络
 // 成员的服务器条目名字，供命令行逐条提示候选地址只剩兜底 Host。
 func (s *Store) DeleteNetwork(name string) ([]string, error) {
+	return s.DeleteNetworkWithSource(name, WriteSource{})
+}
+
+// DeleteNetworkWithSource 与 DeleteNetwork 相同，并把同一事务里的审计行
+// 标为指定来源。
+func (s *Store) DeleteNetworkWithSource(name string, source WriteSource) ([]string, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -309,7 +327,7 @@ func (s *Store) DeleteNetwork(name string) ([]string, error) {
 	if _, err := tx.Exec(`DELETE FROM networks WHERE id=?`, network.ID); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "network.rm", map[string]any{"name": network.Name}); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "network.rm", map[string]any{"name": network.Name}, source); err != nil {
 		return nil, err
 	}
 	return serverNames, tx.Commit()

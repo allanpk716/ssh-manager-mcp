@@ -30,7 +30,7 @@ func (m *Manager) ReplaceHostKeyPin(identifier, fingerprint string, force bool, 
 	}
 	hostPort := store.EntryFallbackAddr(srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
-		command := fmt.Sprintf("entry=%s host=%s fp=%s via=fingerprint forced=%t", srv.Name, hostPort, display, force)
+		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=fingerprint forced=%t", srv.Name, hostPort, display, force)
 		if old != nil {
 			command += " was=" + store.PinFingerprint(old.Blob, old.Format)
 		}
@@ -66,7 +66,7 @@ func (m *Manager) ClearHostKeyPin(identifier string, src Source) (bool, error) {
 		}
 		row := store.AuditRow{
 			TS: time.Now(), ServerID: srv.ID, Action: "pin-clear",
-			Command: fmt.Sprintf("entry=%s host=%s fp=%s source=%s handshake=%s",
+			Command: fmt.Sprintf("entry=%s host=%s fingerprint=%s source=%s handshake=%s",
 				srv.Name, store.EntryFallbackAddr(srv),
 				store.PinFingerprint(old.Blob, old.Format), old.Source, handshakeAddr),
 			Status: "ok",

@@ -34,7 +34,7 @@ func TestResolvePin(t *testing.T) {
 				t.Fatalf("plain=%v want %v", plain, c.wantPlain)
 			}
 			if !plain && gotFP != c.wantFP {
-				t.Fatalf("fp=%q want %q", gotFP, c.wantFP)
+				t.Fatalf("fingerprint=%q want %q", gotFP, c.wantFP)
 			}
 		})
 	}

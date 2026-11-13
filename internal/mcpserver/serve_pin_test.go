@@ -470,7 +470,7 @@ func TestPinHostkey_MultiAddressHandshakeValidation(t *testing.T) {
 					t.Fatalf("accepted forward did not record the real handshake address: %+v", pinsAfter)
 				}
 				if len(auditAfter) != 1 || !strings.Contains(auditAfter[0].Command, "handshake="+testCase.handshakeAddr) ||
-					!strings.Contains(auditAfter[0].Command, "fp="+fp) {
+					!strings.Contains(auditAfter[0].Command, "fingerprint="+fp) {
 					t.Fatalf("accepted forward audit is wrong: %+v", auditAfter)
 				}
 				return
