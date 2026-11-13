@@ -78,9 +78,24 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	store.details["srv-fine"].Secrets = []ServerDetailSecret{{
 		Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
 	}}
+	store.details["srv-fine"].SecretChoices = []ServerDetailSecretChoice{{
+		ServerDetailSecret: ServerDetailSecret{
+			Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
+		},
+		Checked: true,
+	}}
 	store.details["srv-fine"].SharedStorages = []ServerDetailSharedStorage{{
 		Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
 		PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+	}}
+	store.details["srv-fine"].SharedStorageChoices = []ServerDetailSharedStorageChoice{{
+		PasswordSecretID:   "secret-dataset",
+		PasswordSecretName: "DATASET_PASSWORD",
+		SharedStorages: []ServerDetailSharedStorage{{
+			Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+		}},
+		Checked: true,
 	}}
 	store.details["srv-fine"].Profiles = []ServerDetailProfile{{Name: "运维"}}
 	store.details["srv-fine"].SiblingSharedStorages = []ServerDetailSiblingSharedStorage{{

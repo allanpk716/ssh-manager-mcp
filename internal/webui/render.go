@@ -64,6 +64,8 @@ type pageData struct {
 	SecretAuthorizationPreview       SecretAuthorizationPreview
 	SecretAuthorizationTargets       []SecretAuthorizationCell
 	SecretAuthorizationReturnTo      string
+	SecretAuthorizationView          string
+	SecretAuthorizationServerID      string
 	SecretAuthorizationNotice        string
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
