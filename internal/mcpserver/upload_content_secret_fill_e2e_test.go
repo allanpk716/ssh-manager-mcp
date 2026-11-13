@@ -1094,16 +1094,6 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 	})
 	t.Cleanup(cleanup)
 	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
-	if runtime.GOOS == "windows" {
-		srv, serr := st.GetServer(serverID)
-		if serr != nil || srv == nil {
-			t.Fatalf("re-read seeded server: %v %v", srv, serr)
-		}
-		srv.ShellType = models.ShellPowerShell
-		if serr = st.UpdateServer(srv); serr != nil {
-			t.Fatal(serr)
-		}
-	}
 	profileID, err := st.AddProfile("agent-profile")
 	if err != nil {
 		t.Fatal(err)
