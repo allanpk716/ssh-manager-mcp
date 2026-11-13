@@ -35,8 +35,15 @@
 {{else}}<p>（无）</p>{{end}}
 {{/*
 可挂载范围勾选清单（#256）、现场探测（#257）、挂载与卸载（#258）、撤销（#259）、
-重选地址与残留检查（#260）、桌面手动添加引导（#261）在后续票挂载到本页。
+重选地址与残留检查（#260）在后续票挂载到本页。
 */}}
+{{if .Caps.CanUseShareDesktopGuide}}
+<section class="share-desktop-guide-entry">
+<h2>桌面手动添加</h2>
+<p>给 owner 自己的 Windows 或 macOS 电脑推算地址并查看手动映射步骤；页面不会显示共享密码。</p>
+<a class="button-link" href="/ui/shares/{{.ShareDetail.ID}}/desktop">打开桌面手动添加引导</a>
+</section>
+{{end}}
 </section>
 <div class="inline-form share-actions">
 {{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/{{.ShareDetail.ID}}/edit">编辑</a>

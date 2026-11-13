@@ -97,6 +97,98 @@ func TestResolveMatchesProviderAddressAndReportsAmbiguity(t *testing.T) {
 	}
 }
 
+// TestPlanDesktopAddressesPrefersCommonPhysicalNetwork 钉住桌面手动添加
+// 引用的推荐地址规则：复用共同网络判定，物理局域网地址排在虚拟局域网
+// 地址之前。
+func TestPlanDesktopAddressesPrefersCommonPhysicalNetwork(t *testing.T) {
+	provider := []*models.NetworkMembership{
+		{
+			DeviceID: "provider", NetworkID: "virtual", NetworkName: "虚拟网",
+			NetworkType: models.NetworkVirtual, Address: "100.64.0.10", RegistrationOrder: 1,
+		},
+		{
+			DeviceID: "provider", NetworkID: "home", NetworkName: "家A局域网",
+			NetworkType: models.NetworkPhysical, Address: "192.168.1.10", RegistrationOrder: 2,
+		},
+	}
+	desktop := []*models.NetworkMembership{
+		{
+			DeviceID: "desktop", NetworkID: "virtual", NetworkName: "虚拟网",
+			NetworkType: models.NetworkVirtual, Address: "100.64.0.20", RegistrationOrder: 3,
+		},
+		{
+			DeviceID: "desktop", NetworkID: "home", NetworkName: "家A局域网",
+			NetworkType: models.NetworkPhysical, Address: "192.168.1.20", RegistrationOrder: 4,
+		},
+	}
+
+	got := PlanDesktopAddresses(provider, desktop, true)
+	if !got.DesktopInTopology {
+		t.Fatalf("已选择拓扑设备时不得按不在拓扑处理：%+v", got)
+	}
+	if got.RecommendedAddress == nil || got.RecommendedAddress.Address != "192.168.1.10" ||
+		got.RecommendedAddress.NetworkName != "家A局域网" || !got.RecommendedAddress.PhysicalNetwork {
+		t.Fatalf("推荐地址应选择共同物理局域网地址：%+v", got.RecommendedAddress)
+	}
+	if got.Reason != "" || len(got.ProviderAddresses) != 0 {
+		t.Fatalf("有推荐地址时不应给失败说明或全量地址清单：%+v", got)
+	}
+}
+
+// TestPlanDesktopAddressesExplainsNoCommonNetwork 保证没有共同网络时引导不
+// 给推荐地址，而是说明拓扑原因。
+func TestPlanDesktopAddressesExplainsNoCommonNetwork(t *testing.T) {
+	provider := []*models.NetworkMembership{{
+		DeviceID: "provider", NetworkID: "provider-network", NetworkName: "机房局域网",
+		NetworkType: models.NetworkPhysical, Address: "10.0.0.10", RegistrationOrder: 1,
+	}}
+	desktop := []*models.NetworkMembership{{
+		DeviceID: "desktop", NetworkID: "desktop-network", NetworkName: "家A局域网",
+		NetworkType: models.NetworkPhysical, Address: "192.168.1.20", RegistrationOrder: 2,
+	}}
+
+	got := PlanDesktopAddresses(provider, desktop, true)
+	if got.RecommendedAddress != nil || len(got.ProviderAddresses) != 0 {
+		t.Fatalf("没有共同网络时不得推荐地址：%+v", got)
+	}
+	if got.Reason != "这台电脑与共享存储提供方设备没有共同网络，因此不给出推荐地址。" {
+		t.Fatalf("没有共同网络的原因说明 = %q", got.Reason)
+	}
+}
+
+// TestPlanDesktopAddressesListsProviderMembersWhenDesktopNotInTopology 覆盖
+// owner 声明电脑不在拓扑里的情况：不推算共同网络，列出提供方设备全部网
+// 络成员地址并注明所属网络。
+func TestPlanDesktopAddressesListsProviderMembersWhenDesktopNotInTopology(t *testing.T) {
+	provider := []*models.NetworkMembership{
+		{
+			DeviceID: "provider", NetworkID: "virtual", NetworkName: "虚拟网",
+			NetworkType: models.NetworkVirtual, Address: "100.64.0.10", RegistrationOrder: 1,
+		},
+		{
+			DeviceID: "provider", NetworkID: "home", NetworkName: "家A局域网",
+			NetworkType: models.NetworkPhysical, Address: "192.168.1.10", RegistrationOrder: 2,
+		},
+	}
+
+	got := PlanDesktopAddresses(provider, nil, false)
+	if got.DesktopInTopology || got.RecommendedAddress != nil || got.Reason != "" {
+		t.Fatalf("电脑不在拓扑里时不得推算推荐地址：%+v", got)
+	}
+	want := []DesktopAddress{
+		{Address: "100.64.0.10", NetworkName: "虚拟网"},
+		{Address: "192.168.1.10", NetworkName: "家A局域网", PhysicalNetwork: true},
+	}
+	if len(got.ProviderAddresses) != len(want) {
+		t.Fatalf("提供方地址 = %+v，期待 %+v", got.ProviderAddresses, want)
+	}
+	for index, wantAddress := range want {
+		if got.ProviderAddresses[index] != wantAddress {
+			t.Fatalf("第 %d 个提供方地址 = %+v，期待 %+v", index, got.ProviderAddresses[index], wantAddress)
+		}
+	}
+}
+
 // TestResolvedPathOnServerCoversMountAgreements 覆盖 Linux、macOS 与
 // Windows 的挂载点约定翻译。
 func TestResolvedPathOnServerCoversMountAgreements(t *testing.T) {

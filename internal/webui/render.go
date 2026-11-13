@@ -76,6 +76,7 @@ type pageData struct {
 	ShareForm                        shareFormView
 	ShareEdit                        *shareEditView
 	ShareDeletePreview               *ShareRow
+	ShareDesktopGuide                *ShareDesktopGuideView
 	SoftwareInventoryDevices         []SoftwareInventoryDeviceSummary
 	SoftwareInventoryDevice          *SoftwareInventoryDevice
 	SoftwareInventorySearchRows      []SoftwareInventorySearchRow

@@ -272,6 +272,9 @@ type capabilities struct {
 	ShowSharesArea bool
 	// CanManageShares 控制共享存储写操作；客户端只保留只读列表入口。
 	CanManageShares bool
+	// CanUseShareDesktopGuide 控制共享存储详情页的桌面手动添加引导；只有
+	// 单机与权威端且提供拓扑来源时可用。
+	CanUseShareDesktopGuide bool
 	// HasPairingAndDeviceCodes 表示本机角色是否显示配对与设备码入口。
 	HasPairingAndDeviceCodes bool
 	// ShowOpsArea 控制是否显示「运维」区域入口。
@@ -302,6 +305,7 @@ func capabilitiesForConfig(cfg Config) capabilities {
 	caps.ShowSecretsArea = cfg.Secrets != nil
 	caps.ShowSharesArea = cfg.Shares != nil
 	caps.CanManageShares = cfg.Shares != nil && cfg.SharesWriter != nil && cfg.Role != RoleClient
+	caps.CanUseShareDesktopGuide = cfg.Shares != nil && cfg.Topology != nil && cfg.Role != RoleClient
 	caps.ShowSoftwareInventoryArea = cfg.Role != RoleClient && cfg.SoftwareInventory != nil
 	caps.ShowTopologyArea = cfg.Topology != nil
 	caps.CanEditTopology = cfg.Topology != nil && cfg.TopologyWriter != nil

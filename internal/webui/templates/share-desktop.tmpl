@@ -1,0 +1,101 @@
+{{define "content"}}
+{{with .ShareDesktopGuide}}
+<section class="share-desktop-guide">
+<h1>桌面手动添加 {{.Detail.Name}}</h1>
+{{if .Error}}<div class="operation-refusal">{{.Error}}</div>{{end}}
+<form class="filter-form" method="get" action="/ui/shares/{{.Detail.ID}}/desktop">
+<label for="share-desktop-device">这台电脑是拓扑里哪台设备</label>
+<select id="share-desktop-device" name="device">
+<option value="">请选择这台电脑</option>
+<option value="none"{{if .DesktopNotInTopology}} selected{{end}}>这台电脑不在拓扑里</option>
+{{range .DeviceOptions}}<option value="{{.ID}}"{{if eq $.ShareDesktopGuide.SelectedDeviceID .ID}} selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<button type="submit">显示引导</button>
+</form>
+
+{{if .Plan.RecommendedAddress}}
+<section class="share-desktop-address">
+<h2>推荐地址</h2>
+<dl class="detail-list">
+<dt>地址</dt><dd>{{.Plan.RecommendedAddress.Address}}</dd>
+<dt>所属网络</dt><dd>{{.Plan.RecommendedAddress.NetworkName}}{{if .Plan.RecommendedAddress.PhysicalNetwork}}（物理局域网）{{else}}（虚拟局域网）{{end}}</dd>
+</dl>
+<p class="form-help">地址按这台电脑与共享存储提供方设备的共同网络推算；有共同物理局域网时优先使用物理局域网地址。</p>
+</section>
+
+<section class="share-desktop-windows">
+<h2>Windows 手动映射步骤</h2>
+<dl class="detail-list">
+<dt>固定盘符</dt><dd>{{.Detail.Drive}}:</dd>
+<dt>访问路径</dt><dd><code>\\{{.Plan.RecommendedAddress.Address}}\{{.Detail.Name}}</code></dd>
+{{if .WindowsDirectoryPaths}}<dt>目录约定访问路径</dt><dd>
+<ul>
+{{range .WindowsDirectoryPaths}}<li>{{.Purpose}}：<code>{{.Path}}</code></li>{{end}}
+</ul>
+</dd>{{end}}
+<dt>专用挂载账号用户名</dt><dd>{{.Detail.MountUser}}</dd>
+</dl>
+<ol>
+<li>打开资源管理器，右键点击「此电脑」，选择「映射网络驱动器」。</li>
+<li>盘符选择 {{.Detail.Drive}}:，文件夹填入 <code>\\{{.Plan.RecommendedAddress.Address}}\{{.Detail.Name}}</code>，勾选「登录时重新连接」。</li>
+<li>按系统提示输入专用挂载账号用户名与共享密码。</li>
+</ol>
+<p>等价命令：<code>net use {{.Detail.Drive}}: \\{{.Plan.RecommendedAddress.Address}}\{{.Detail.Name}} /user:{{.Detail.MountUser}} * /persistent:yes</code></p>
+<p class="form-help">命令里的 <code>*</code> 表示运行时输入密码；sshmgr 不显示、复制或下载共享密码。</p>
+</section>
+
+<section class="share-desktop-macos">
+<h2>macOS 手动连接步骤</h2>
+<dl class="detail-list">
+<dt>访达连接地址</dt><dd><code>smb://{{.Plan.RecommendedAddress.Address}}/{{.Detail.Name}}</code></dd>
+<dt>挂载路径</dt><dd><code>/Volumes/{{.Detail.Name}}</code></dd>
+<dt>专用挂载账号用户名</dt><dd>{{.Detail.MountUser}}</dd>
+</dl>
+<ol>
+<li>打开访达，按 <code>Command+K</code> 或选择菜单「前往」→「连接服务器」。</li>
+<li>输入 <code>smb://{{.Plan.RecommendedAddress.Address}}/{{.Detail.Name}}</code>，点击「连接」。</li>
+<li>选择注册用户，输入专用挂载账号用户名与共享密码。</li>
+</ol>
+</section>
+{{else if .Plan.ProviderAddresses}}
+<section class="share-desktop-addresses">
+<h2>提供方设备的全部网络成员地址</h2>
+<p class="form-help">这台电脑不在拓扑里，无法按共同网络推荐地址。以下地址都来自共享存储提供方设备，请按所属网络自行判断。</p>
+<table class="server-table">
+<thead><tr><th>地址</th><th>所属网络</th><th>网络类型</th><th>Windows 访问路径</th><th>macOS 连接地址</th></tr></thead>
+<tbody>
+{{range .Plan.ProviderAddresses}}
+<tr>
+<td>{{.Address}}</td>
+<td>{{.NetworkName}}</td>
+<td>{{if .PhysicalNetwork}}物理局域网{{else}}虚拟局域网{{end}}</td>
+<td><code>\\{{.Address}}\{{$.ShareDesktopGuide.Detail.Name}}</code></td>
+<td><code>smb://{{.Address}}/{{$.ShareDesktopGuide.Detail.Name}}</code></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+<p>Windows 等价命令把访问路径代入：<code>net use {{.Detail.Drive}}: \\&lt;地址&gt;\{{.Detail.Name}} /user:{{.Detail.MountUser}} * /persistent:yes</code></p>
+<p>macOS 挂载成功后的路径是 <code>/Volumes/{{.Detail.Name}}</code>。</p>
+</section>
+{{else}}
+<section class="share-desktop-address">
+<h2>地址推算结果</h2>
+<p class="operation-refusal">{{.Plan.Reason}}</p>
+</section>
+{{end}}
+
+<section class="share-desktop-notices">
+<h2>注意事项</h2>
+<ul>
+<li>笔记本更换网络后，映射可能失效；换回同一网络或重新按引导映射。</li>
+<li>请输入你自己保存在密码管理器里的共享密码。本页面不显示、复制或下载共享密码，也不生成含密码的脚本。</li>
+</ul>
+</section>
+
+<div class="inline-form">
+<a class="button-link" href="/ui/shares/{{.Detail.ID}}">返回共享存储详情</a>
+</div>
+</section>
+{{end}}
+{{end}}
