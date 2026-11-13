@@ -1067,9 +1067,12 @@ func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
 }
 
 func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
-	// 测试 SSH 服务器直接使用测试主机文件系统。Windows 上把远端标成
-	// Windows shell，路径按盘符绝对路径传递；自定义测试处理器还要把
-	// SFTP 服务器归一出的 “/盘符:/...” 还原成 Windows 盘符路径。
+	// 独占创建与创建权限只在 POSIX 目标上使用；Windows 目标不设创建权限，
+	// 不存在这种竞争。测试 SSH 服务器直接使用测试主机文件系统，Windows
+	// 测试主机上的远端只能按 Windows 目标模拟，因此没有等价场景。
+	if runtime.GOOS == "windows" {
+		t.Skip("创建权限竞争只发生在 POSIX 目标上，Windows 测试主机无法模拟 POSIX 目标")
+	}
 	const secretValue = "12345678"
 	st := newStore(t)
 	if err := st.AddSecret("RACE_SECRET", "", []byte(secretValue), store.CLISource()); err != nil {
