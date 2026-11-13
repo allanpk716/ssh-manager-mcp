@@ -12,7 +12,7 @@
 {{else}}
 <div class="operation-result">
 <p><strong>{{shareUnmountResultLabel .ShareUnmount.Task.Result}}</strong>{{if .ShareUnmount.Task.Force}}（强制执行）{{end}}{{if .ShareUnmount.Task.FailureMessage}}：{{.ShareUnmount.Task.FailureMessage}}{{end}}</p>
-{{if eq .ShareUnmount.Task.Result "success"}}<div class="notice notice-success"><p>远端持久挂载配置已删除，挂载点已卸载；共享存储版本号：{{.ShareUnmount.Task.Version}}{{end}}</p></div>
+{{if eq .ShareUnmount.Task.Result "success"}}<div class="notice notice-success"><p>远端持久挂载配置已删除，挂载点已卸载；共享存储版本号：{{.ShareUnmount.Task.Version}}。</p></div>{{end}}
 {{if .ShareUnmount.Task.Notices}}<div class="notice notice-warning"><ul>{{range .ShareUnmount.Task.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
 {{if .ShareUnmount.Task.BusyProcesses}}
 <div class="share-unmount-busy">
@@ -35,20 +35,8 @@
 {{if eq .ShareUnmount.Task.Result "ssh-error"}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；稍后可用「检查残留」兜底检查这台服务器。</p></div>{{end}}
 </div>
 {{end}}
-{{else if .ShareUnmount.TaskInvalid}}
-<div class="notice notice-warning"><p>卸载任务结果已失效（进程重启或任务被清理）；如需继续，请重新确认并发起。</p></div>
-{{if .ShareUnmount.Windows}}
-<div class="operation-refusal"><p>Windows 服务器不能执行共享存储卸载：sshmgr 不在其上留下任何持久改动。</p></div>
 {{else}}
-<div class="operation-refusal"><p>将删除服务器上的远端持久挂载配置，再卸载挂载点。被占用时会列出占用进程，由你决定强制卸载或稍后再试。</p></div>
-<form method="post" action="/ui/shares/{{.ShareUnmount.Share.ID}}/unmount" class="confirm-form">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<input type="hidden" name="server_id" value="{{.ShareUnmount.Server.ID}}">
-<button type="submit" class="danger">确认卸载</button>
-<a class="button-link" href="/ui/shares/{{.ShareUnmount.Share.ID}}">取消</a>
-</form>
-{{end}}
-{{else}}
+{{if .ShareUnmount.TaskInvalid}}<div class="notice notice-warning"><p>卸载任务结果已失效（进程重启或任务被清理）；如需继续，请重新确认并发起。</p></div>{{end}}
 {{if .ShareUnmount.Windows}}
 <div class="operation-refusal"><p>Windows 服务器不能执行共享存储卸载：sshmgr 不在其上留下任何持久改动。</p></div>
 {{else}}

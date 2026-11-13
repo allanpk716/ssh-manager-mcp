@@ -230,3 +230,74 @@ func TestShareUnmountTaskSucceedsAndAuditsWebUISource(t *testing.T) {
 		t.Fatalf("卸载审计摘要 = %s", row.Command)
 	}
 }
+
+func TestShareUnmountBusyListsProcessesAndForceSucceeds(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{
+		{ProcessID: "1234", User: "worker", Command: "python"},
+	}
+	csrf := csrfToken(t, fixture.handler)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/unmount", url.Values{
+		"csrf_token": {csrf}, "server_id": {fixture.linuxID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动占用场景卸载状态码 = %d：\n%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilUnmountDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"配置已删除，挂载点被占用并保留", "占用挂载点的进程",
+		"1234", "worker", "python", "强制卸载", "稍后再试",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("占用结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	if !fixture.linux.State().Mounted {
+		t.Fatalf("不强制时应保留挂载：%+v", fixture.linux.State())
+	}
+	if strings.Contains(page, "卸载完成") {
+		t.Fatalf("占用时不得显示卸载完成：\n%s", page)
+	}
+
+	fixture.linux.ForceSucceeds = true
+	force := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/unmount", url.Values{
+		"csrf_token": {csrf}, "server_id": {fixture.linuxID}, "force": {"1"},
+	})
+	if force.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动强制卸载状态码 = %d：\n%s", force.StatusCode, body(t, force))
+	}
+	forcePage := waitUntilUnmountDone(t, fixture.handler, force.Header.Get("Location"))
+	if !strings.Contains(forcePage, "卸载完成") || !strings.Contains(forcePage, "强制执行") {
+		t.Fatalf("强制卸载结果页：\n%s", forcePage)
+	}
+	if fixture.linux.State().Mounted {
+		t.Fatalf("强制卸载后挂载应被移除：%+v", fixture.linux.State())
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-unmount"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("应有占用与强制两条审计行：%+v", rows)
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.Status != "ok" {
+			t.Fatalf("占用与强制的审计来源或状态不正确：%+v", row)
+		}
+	}
+	busySeen, forcedSeen := false, false
+	for _, row := range rows {
+		if strings.Contains(row.Command, `"result":"busy"`) && strings.Contains(row.Command, `"force":false`) {
+			busySeen = true
+		}
+		if strings.Contains(row.Command, `"result":"success"`) && strings.Contains(row.Command, `"force":true`) {
+			forcedSeen = true
+		}
+	}
+	if !busySeen || !forcedSeen {
+		t.Fatalf("占用与强制的审计摘要不正确：%s / %s", rows[0].Command, rows[1].Command)
+	}
+}
