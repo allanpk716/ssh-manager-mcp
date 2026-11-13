@@ -27,6 +27,16 @@ type stubAccessStore struct {
 	grantConflict  *AccessGrantConflict
 	grantErr       error
 
+	serverProfilePreviewResult ServerProfileAuthorizationPreview
+	serverProfilePreviewErr    error
+	serverProfileServerID      string
+	serverProfileDesired       []string
+	serverProfileSummary       string
+	serverProfileSrc           AccessWriteSource
+	serverProfileApplyResult   ServerProfileAuthorizationApplyResult
+	serverProfileApplyConflict *ServerProfileAuthorizationConflict
+	serverProfileApplyErr      error
+
 	deviceCodes      []AccessDeviceCodeSummary
 	addDeviceName    string
 	addDeviceProfile string
@@ -96,6 +106,18 @@ func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []
 	s.grantDesired = append([]string(nil), desired...)
 	s.grantSrc = source
 	return s.grantResult, s.grantConflict, s.grantErr
+}
+
+func (s *stubAccessStore) PreviewServerProfileAuthorization(serverID string, desired []string) (ServerProfileAuthorizationPreview, error) {
+	return s.serverProfilePreviewResult, s.serverProfilePreviewErr
+}
+
+func (s *stubAccessStore) ApplyServerProfileAuthorization(serverID string, desired []string, summary string, source AccessWriteSource) (ServerProfileAuthorizationApplyResult, *ServerProfileAuthorizationConflict, error) {
+	s.serverProfileServerID = serverID
+	s.serverProfileDesired = append([]string(nil), desired...)
+	s.serverProfileSummary = summary
+	s.serverProfileSrc = source
+	return s.serverProfileApplyResult, s.serverProfileApplyConflict, s.serverProfileApplyErr
 }
 
 func (s *stubAccessStore) ListPairingRequests() ([]AccessPairingSummary, error) {
@@ -679,6 +701,8 @@ func TestAccessWriteRoutesRequireOriginAndCSRFToken(t *testing.T) {
 		{"/ui/access/profiles", url.Values{"name": {"team-a"}}},
 		{"/ui/access/profiles/delete", url.Values{"profile_id": {"profile-1"}}},
 		{"/ui/access/profiles/profile-1/grants", url.Values{"expected": {"server-web"}, "server": {"server-db"}}},
+		{"/ui/servers/profile-authorization/preview", url.Values{"server_id": {"server-web"}}},
+		{"/ui/servers/profile-authorization/confirm", url.Values{"server_id": {"server-web"}, "summary": {"summary"}}},
 		{"/ui/access/device-codes", url.Values{"name": {"laptop"}, "profile": {"profile-1"}}},
 		{"/ui/access/device-codes/device-1/revoke", url.Values{}},
 	}

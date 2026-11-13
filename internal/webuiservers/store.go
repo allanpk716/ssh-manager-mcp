@@ -178,6 +178,12 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 	for _, profile := range detail.Profiles {
 		view.Profiles = append(view.Profiles, webui.ServerDetailProfile{ID: profile.ID, Name: profile.Name})
 	}
+	for _, choice := range detail.ProfileChoices {
+		view.ProfileChoices = append(view.ProfileChoices, webui.ServerDetailProfileChoice{
+			ServerDetailProfile: webui.ServerDetailProfile{ID: choice.ID, Name: choice.Name},
+			Checked:             choice.Checked,
+		})
+	}
 	view.ShowDeliveryRecords = true
 	for _, record := range detail.DeliveryRecords {
 		view.DeliveryRecords = append(view.DeliveryRecords, deliveryRecordRow(record))

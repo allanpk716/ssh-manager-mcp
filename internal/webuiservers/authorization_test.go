@@ -439,6 +439,325 @@ func TestServerDetailAuthorizationNoChangeAndConflict(t *testing.T) {
 	}
 }
 
+// TestServerDetailEditsProfileAuthorization 用真实 vault 走公开 HTTP 入口：
+// 详情页一次提交多个访问配置组的差异，预览确认后沿用 profile 授权审计。
+func TestServerDetailEditsProfileAuthorization(t *testing.T) {
+	key, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "store.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	server, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.20", Port: 22, User: "deploy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileIDs := make(map[string]string, 3)
+	for _, name := range []string{"team-a", "team-b", "team-c"} {
+		id, err := st.AddProfile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		profileIDs[name] = id
+	}
+	if err := st.GrantServers(profileIDs["team-a"], []string{server}); err != nil {
+		t.Fatal(err)
+	}
+	handler, cookie := newAuthorizationTestHandler(t, st)
+	csrf := authorizationCSRF(t, handler, cookie)
+
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server, nil)
+	detailBody := authorizationBody(t, detail)
+	if detail.StatusCode != http.StatusOK ||
+		!strings.Contains(detailBody, "/ui/servers/profile-authorization/preview") ||
+		!strings.Contains(detailBody, "team-a") ||
+		!strings.Contains(detailBody, "team-b") ||
+		!strings.Contains(detailBody, "team-c") ||
+		!strings.Contains(detailBody, `value="`+profileIDs["team-a"]+`" checked`) ||
+		strings.Contains(detailBody, `value="`+profileIDs["team-b"]+`" checked`) {
+		t.Fatalf("详情页应列出全部 profile 并预选当前授权，状态码=%d：\n%s", detail.StatusCode, detailBody)
+	}
+
+	previewForm := url.Values{
+		"csrf_token": {csrf}, "server_id": {server},
+		"profile": {profileIDs["team-b"], profileIDs["team-c"]},
+	}
+	preview := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/preview", previewForm)
+	previewBody := authorizationBody(t, preview)
+	if preview.StatusCode != http.StatusOK ||
+		!strings.Contains(previewBody, "新增") || !strings.Contains(previewBody, "team-b") ||
+		!strings.Contains(previewBody, "team-c") || !strings.Contains(previewBody, "移除") ||
+		!strings.Contains(previewBody, "team-a") ||
+		!strings.Contains(previewBody, "确认保存 profile 授权") {
+		t.Fatalf("profile 授权预览应显示新增与移除清单，状态码=%d：\n%s", preview.StatusCode, previewBody)
+	}
+	summary := authorizationHiddenValues(previewBody, "summary")
+	if len(summary) != 1 {
+		t.Fatalf("预览应携带一个确认摘要：%v\n%s", summary, previewBody)
+	}
+
+	confirmForm := url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "summary": summary,
+		"profile": {profileIDs["team-b"], profileIDs["team-c"]},
+	}
+	confirmed := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/confirm", confirmForm)
+	confirmedBody := authorizationBody(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存 profile 授权") {
+		t.Fatalf("确认 profile 授权失败，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	for name, wantGranted := range map[string]bool{
+		"team-a": false, "team-b": true, "team-c": true,
+	} {
+		ids, err := st.ServersForProfile(profileIDs[name])
+		if err != nil {
+			t.Fatal(err)
+		}
+		granted := len(ids) == 1 && ids[0] == server
+		if granted != wantGranted {
+			t.Fatalf("%s 授权结果不正确：%v", name, ids)
+		}
+	}
+
+	rows, err := st.QueryAudit(store.AuditFilter{
+		Source:  store.AuditSourceWebUI,
+		Actions: []string{"profile.grant", "profile.revoke"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("应逐个 profile 写授权与撤销审计，实际 %d 行：%+v", len(rows), rows)
+	}
+	commands := make([]string, 0, len(rows))
+	for _, row := range rows {
+		commands = append(commands, row.Command)
+		if row.SourceIP != "192.0.2.1" {
+			t.Fatalf("审计来源地址不正确：%+v", row)
+		}
+	}
+	joined := strings.Join(commands, "\n")
+	for _, want := range []string{
+		`"profile":"team-b"`, `"profile":"team-c"`, `"profile":"team-a"`,
+		`"servers":"1台:web"`,
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("审计摘要缺少 %s：%s", want, joined)
+		}
+	}
+}
+
+// TestServerDetailProfileAuthorizationNoChangeAndConflict 验证无变化不写
+// 数据或审计；其他入口改过同一台服务器的 profile 集合时，过期确认整体
+// 拒绝并按最新集合重新确认。
+func TestServerDetailProfileAuthorizationNoChangeAndConflict(t *testing.T) {
+	key, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "store.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	server, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.21", Port: 22, User: "deploy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileA, err := st.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileB, err := st.AddProfile("team-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileA, []string{server}); err != nil {
+		t.Fatal(err)
+	}
+	handler, cookie := newAuthorizationTestHandler(t, st)
+	csrf := authorizationCSRF(t, handler, cookie)
+
+	noChange := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/preview", url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "profile": {profileA},
+	})
+	noChangeBody := authorizationBody(t, noChange)
+	if noChange.StatusCode != http.StatusOK || !strings.Contains(noChangeBody, "没有变化") ||
+		strings.Contains(noChangeBody, "确认保存 profile 授权") {
+		t.Fatalf("无变化预览不应提供确认按钮，状态码=%d：\n%s", noChange.StatusCode, noChangeBody)
+	}
+
+	preview := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/preview", url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "profile": {profileB},
+	})
+	previewBody := authorizationBody(t, preview)
+	summary := authorizationHiddenValues(previewBody, "summary")
+	if preview.StatusCode != http.StatusOK || len(summary) != 1 ||
+		!strings.Contains(previewBody, "team-a") || !strings.Contains(previewBody, "team-b") {
+		t.Fatalf("准备冲突预览失败，状态码=%d：%v\n%s", preview.StatusCode, summary, previewBody)
+	}
+	if _, err := access.New(st).GrantServers(profileB, []string{"web"}, access.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	confirmForm := url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "summary": summary,
+		"profile": {profileB},
+	}
+	conflict := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/confirm", confirmForm)
+	conflictBody := authorizationBody(t, conflict)
+	if conflict.StatusCode != http.StatusConflict ||
+		!strings.Contains(conflictBody, "profile 授权已被其他入口修改") ||
+		!strings.Contains(conflictBody, "当前授予的 profile") ||
+		!strings.Contains(conflictBody, "team-a") || !strings.Contains(conflictBody, "team-b") {
+		t.Fatalf("过期摘要应整体拒绝并显示最新集合，状态码=%d：\n%s", conflict.StatusCode, conflictBody)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		Source: store.AuditSourceWebUI, Actions: []string{"profile.grant", "profile.revoke"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("无变化与冲突提交都不应写 Web UI 审计：%+v", rows)
+	}
+
+	latestSummary := authorizationHiddenValues(conflictBody, "summary")
+	if len(latestSummary) != 1 {
+		t.Fatalf("冲突页应携带最新确认摘要：%v\n%s", latestSummary, conflictBody)
+	}
+	confirmForm.Set("summary", latestSummary[0])
+	confirmed := authorizationRequest(handler, cookie, http.MethodPost, "/ui/servers/profile-authorization/confirm", confirmForm)
+	confirmedBody := authorizationBody(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存 profile 授权") {
+		t.Fatalf("按最新摘要重新确认失败，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	for profileID, wantGranted := range map[string]bool{profileA: false, profileB: true} {
+		ids, err := st.ServersForProfile(profileID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		granted := len(ids) == 1 && ids[0] == server
+		if granted != wantGranted {
+			t.Fatalf("重新确认后授权不正确：%v", ids)
+		}
+	}
+}
+
+// TestAuthorityServerProfileEditDoesNotRequireRecentPasswordVerification 验证
+// 权威端调整 profile 授权不需要重新输入管理员口令。
+func TestAuthorityServerProfileEditDoesNotRequireRecentPasswordVerification(t *testing.T) {
+	key, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(filepath.Join(t.TempDir(), "store.db"), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	server, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.22", Port: 22, User: "deploy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("team")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	authStore := vault.NewWebUIAuthStore(st)
+	if _, err := authStore.SetAdminPasswordWithAudit([]byte("correct-password"), webui.AuditEvent{
+		Action: "admin.password_change", Status: "ok",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler, _, err := webui.NewAuthority(webui.Config{
+		Role: webui.RoleServer, Port: 18086,
+		Servers:                FromManager(servermanage.New(st)),
+		Access:                 webuiaccess.FromManager(access.New(st)),
+		Auth:                   authStore,
+		AllowedHosts:           []string{"127.0.0.1"},
+		CertificateFingerprint: "sha256:0123456789abcdef",
+		Now:                    func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	do := func(method, target string, form url.Values, cookie *http.Cookie) *http.Response {
+		requestBody := strings.NewReader("")
+		if form != nil {
+			requestBody = strings.NewReader(form.Encode())
+		}
+		request := httptest.NewRequest(method, target, requestBody)
+		request.Host = "127.0.0.1:18086"
+		request.RemoteAddr = "198.51.100.10:45678"
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+		if form != nil {
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			request.Header.Set("Origin", "https://127.0.0.1:18086")
+		}
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		return recorder.Result()
+	}
+
+	loginPage := do(http.MethodGet, "/ui/login", nil, nil)
+	loginBody := authorizationBody(t, loginPage)
+	loginCSRF := authorizationHiddenOne(loginBody, "csrf_token")
+	var preloginCookie *http.Cookie
+	for _, cookie := range loginPage.Cookies() {
+		preloginCookie = cookie
+	}
+	loggedIn := do(http.MethodPost, "/ui/login", url.Values{
+		"csrf_token": {loginCSRF}, "password": {"correct-password"},
+	}, preloginCookie)
+	_ = loggedIn.Body.Close()
+	var session *http.Cookie
+	for _, cookie := range loggedIn.Cookies() {
+		if cookie.Name == "__Host-sshmgr_ui" {
+			session = cookie
+		}
+	}
+	if loggedIn.StatusCode != http.StatusSeeOther || session == nil {
+		t.Fatalf("权威端登录失败，状态码=%d cookie=%v", loggedIn.StatusCode, loggedIn.Cookies())
+	}
+
+	detail := do(http.MethodGet, "/ui/servers/"+server, nil, session)
+	detailBody := authorizationBody(t, detail)
+	csrf := authorizationCSRFValue(detailBody)
+	now = now.Add(6 * time.Minute)
+	preview := do(http.MethodPost, "/ui/servers/profile-authorization/preview", url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "profile": {profileID},
+	}, session)
+	previewBody := authorizationBody(t, preview)
+	summary := authorizationHiddenValues(previewBody, "summary")
+	if preview.StatusCode != http.StatusOK || len(summary) != 1 {
+		t.Fatalf("权威端生成 profile 授权预览失败，状态码=%d：%v\n%s", preview.StatusCode, summary, previewBody)
+	}
+	confirmed := do(http.MethodPost, "/ui/servers/profile-authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "summary": summary,
+		"profile": {profileID},
+	}, session)
+	confirmedBody := authorizationBody(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存 profile 授权") {
+		t.Fatalf("超过重新验证窗口后仍应直接确认 profile 授权，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	ids, err := st.ServersForProfile(profileID)
+	if err != nil || len(ids) != 1 || ids[0] != server {
+		t.Fatalf("权威端确认后授权不正确：%v（错误 %v）", ids, err)
+	}
+}
+
 // TestAuthorityServerShareEditRequiresRecentPasswordVerification 验证权威端
 // 确认共享存储授权前必须重新输入管理员口令，回跳保留待确认集合且不包含值。
 func TestAuthorityServerShareEditRequiresRecentPasswordVerification(t *testing.T) {

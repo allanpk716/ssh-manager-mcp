@@ -35,6 +35,9 @@ type Detail struct {
 	SharedStorageChoices []DetailSharedStorageChoice
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []DetailProfile
+	// ProfileChoices 是这台服务器条目可调整的全部访问配置组，含当前授
+	// 权状态；供详情页的固定服务器反向编辑表单使用。
+	ProfileChoices []DetailProfileChoice
 	// DeliveryRecords 是写到这台服务器条目的最新下发记录，只读展示。
 	DeliveryRecords []store.SecretDeliveryRecord
 	// SiblingSharedStorages 是同一台设备的其他服务器条目已授权、因此
@@ -86,6 +89,12 @@ type DetailSharedStorageChoice struct {
 type DetailProfile struct {
 	ID   string
 	Name string
+}
+
+// DetailProfileChoice 是一个访问配置组在固定服务器条目上的可编辑勾选项。
+type DetailProfileChoice struct {
+	DetailProfile
+	Checked bool
 }
 
 // DetailSiblingSharedStorage 是同设备可见性提示区的一行：兄弟服务器条目
@@ -177,12 +186,15 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		if err != nil {
 			return err
 		}
+		choice := DetailProfileChoice{DetailProfile: DetailProfile{ID: profile.ID, Name: profile.Name}}
 		for _, id := range ids {
 			if id == srv.ID {
-				detail.Profiles = append(detail.Profiles, DetailProfile{ID: profile.ID, Name: profile.Name})
+				choice.Checked = true
+				detail.Profiles = append(detail.Profiles, choice.DetailProfile)
 				break
 			}
 		}
+		detail.ProfileChoices = append(detail.ProfileChoices, choice)
 	}
 
 	records, err := m.st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: srv.ID})

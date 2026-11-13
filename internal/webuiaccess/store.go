@@ -77,6 +77,27 @@ func (s openerStore) SetServerGrants(profileID string, expected, desired []strin
 	return change, conflict, err
 }
 
+func (s openerStore) PreviewServerProfileAuthorization(serverID string, desired []string) (webui.ServerProfileAuthorizationPreview, error) {
+	var preview webui.ServerProfileAuthorizationPreview
+	err := s.withManager(func(manager *access.Manager) error {
+		result, previewErr := managerStore{manager: manager}.PreviewServerProfileAuthorization(serverID, desired)
+		preview = result
+		return previewErr
+	})
+	return preview, err
+}
+
+func (s openerStore) ApplyServerProfileAuthorization(serverID string, desired []string, summary string, source webui.AccessWriteSource) (webui.ServerProfileAuthorizationApplyResult, *webui.ServerProfileAuthorizationConflict, error) {
+	var result webui.ServerProfileAuthorizationApplyResult
+	var conflict *webui.ServerProfileAuthorizationConflict
+	err := s.withManager(func(manager *access.Manager) error {
+		applied, blocked, applyErr := managerStore{manager: manager}.ApplyServerProfileAuthorization(serverID, desired, summary, source)
+		result, conflict = applied, blocked
+		return applyErr
+	})
+	return result, conflict, err
+}
+
 func (s openerStore) ListProjects(includeRevoked bool) ([]webui.AccessProjectSummary, error) {
 	var projects []webui.AccessProjectSummary
 	err := s.withManager(func(manager *access.Manager) error {
@@ -241,6 +262,31 @@ func (s managerStore) SetServerGrants(profileID string, expected, desired []stri
 	return webui.AccessGrantChange{Added: serverRefs(result.Added), Removed: serverRefs(result.Removed)}, nil, nil
 }
 
+func (s managerStore) PreviewServerProfileAuthorization(serverID string, desired []string) (webui.ServerProfileAuthorizationPreview, error) {
+	result, err := s.manager.PreviewServerProfileAuthorization(serverID, desired)
+	if err != nil {
+		return webui.ServerProfileAuthorizationPreview{}, err
+	}
+	return serverProfilePreview(result), nil
+}
+
+func (s managerStore) ApplyServerProfileAuthorization(serverID string, desired []string, summary string, source webui.AccessWriteSource) (webui.ServerProfileAuthorizationApplyResult, *webui.ServerProfileAuthorizationConflict, error) {
+	result, conflict, err := s.manager.ApplyServerProfileAuthorization(
+		serverID, desired, summary, access.WebUISource(source.RemoteAddress),
+	)
+	if err != nil {
+		return webui.ServerProfileAuthorizationApplyResult{}, nil, err
+	}
+	if conflict != nil {
+		return webui.ServerProfileAuthorizationApplyResult{}, &webui.ServerProfileAuthorizationConflict{
+			Latest: serverProfilePreview(conflict.Latest),
+		}, nil
+	}
+	return webui.ServerProfileAuthorizationApplyResult{
+		Preview: serverProfilePreview(result.Preview), Applied: result.Applied,
+	}, nil, nil
+}
+
 func (s managerStore) ListProjects(includeRevoked bool) ([]webui.AccessProjectSummary, error) {
 	projects, err := s.manager.ListProjects(includeRevoked)
 	if err != nil {
@@ -367,6 +413,26 @@ func serverRefs(refs []access.ServerRef) []webui.AccessServerRef {
 	out := make([]webui.AccessServerRef, 0, len(refs))
 	for _, ref := range refs {
 		out = append(out, webui.AccessServerRef{ID: ref.ID, Name: ref.Name})
+	}
+	return out
+}
+
+func serverProfilePreview(result access.ServerProfileAuthorizationPreview) webui.ServerProfileAuthorizationPreview {
+	return webui.ServerProfileAuthorizationPreview{
+		ServerID:   result.Server.ID,
+		ServerName: result.Server.Name,
+		Current:    profileRefs(result.Current),
+		Desired:    profileRefs(result.Desired),
+		Added:      profileRefs(result.Added),
+		Removed:    profileRefs(result.Removed),
+		Summary:    result.Summary,
+	}
+}
+
+func profileRefs(refs []access.ProfileRef) []webui.AccessProfileRef {
+	out := make([]webui.AccessProfileRef, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, webui.AccessProfileRef{ID: ref.ID, Name: ref.Name})
 	}
 	return out
 }
