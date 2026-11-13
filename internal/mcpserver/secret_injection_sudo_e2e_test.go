@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +15,7 @@ import (
 )
 
 func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "sudo-injected-secret-%-backslash-\\-value\n"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
@@ -39,16 +39,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 			remoteCommand, remoteStdin = command, append([]byte(nil), stdinBytes...)
 			commandMu.Unlock()
 
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			output := &bytes.Buffer{}
-			errors := &bytes.Buffer{}
-			localShell.Stdout = output
-			localShell.Stderr = errors
-			if err := localShell.Run(); err != nil {
-				return output.String(), errors.String() + err.Error(), 1
-			}
-			return output.String(), errors.String(), 0
+			return runRecordedPOSIXCommand(command, stdinBytes)
 		},
 	}, "sudopw")
 	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -106,6 +97,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 }
 
 func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const sudoPassword = "sudopw-that-must-not-become-a-value"
 	const secretValue = "sudo-nopasswd-secret-value"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
@@ -123,16 +115,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 			if err != nil {
 				return "", "read standard input: " + err.Error(), 1
 			}
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			output := &bytes.Buffer{}
-			errors := &bytes.Buffer{}
-			localShell.Stdout = output
-			localShell.Stderr = errors
-			if err := localShell.Run(); err != nil {
-				return output.String(), errors.String() + err.Error(), 1
-			}
-			return output.String(), errors.String(), 0
+			return runRecordedPOSIXCommand(command, stdinBytes)
 		},
 	}, sudoPassword)
 	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -163,6 +146,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 }
 
 func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
+	requirePOSIXRemoteSimulation(t)
 	const secretValue = "sudo-background-injected-secret-value"
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
@@ -187,18 +171,7 @@ func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
 			remoteCommand, remoteStdin = command, append([]byte(nil), stdinBytes...)
 			commandMu.Unlock()
 
-			localShell := exec.Command("/bin/sh", "-c", command)
-			localShell.Stdin = bytes.NewReader(stdinBytes)
-			localShell.Stdout = stdout
-			localShell.Stderr = stderr
-			if err := localShell.Run(); err != nil {
-				if exitErr, ok := err.(*exec.ExitError); ok {
-					return exitErr.ExitCode()
-				}
-				_, _ = stderr.Write([]byte(err.Error()))
-				return 1
-			}
-			return 0
+			return runRecordedPOSIXCommandStream(command, stdinBytes, stdout, stderr)
 		},
 	}, "sudopw")
 	if err := st.AllowSecrets([]string{"ELEVATED_API_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {

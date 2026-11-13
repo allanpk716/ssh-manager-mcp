@@ -422,8 +422,15 @@ func TestE2EUploadContentFullFlow(t *testing.T) {
 		t.Fatalf("no-secret new-file mode = %v, want existing default %v", initialInfo.Mode().Perm(), controlInfo.Mode().Perm())
 	}
 	// 无机密项引用时不套用机密项写入的 0600 规则；覆盖保留既有权限。
+	// Windows 的权限位展示不区分 0640 与 0666，因此以修改后的实际值为准。
 	if err := os.Chmod(filepath.FromSlash(target), 0o640); err != nil {
 		t.Fatal(err)
+	}
+	wantRetainedMode := os.FileMode(0o640)
+	if retainedInfo, statErr := os.Stat(filepath.FromSlash(target)); statErr != nil {
+		t.Fatal(statErr)
+	} else {
+		wantRetainedMode = retainedInfo.Mode().Perm()
 	}
 	res, err = cliSess.CallTool(ctx, &mcp.CallToolParams{
 		Name: "upload_content",
@@ -439,8 +446,8 @@ func TestE2EUploadContentFullFlow(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.FromSlash(target)); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o640 {
-		t.Fatalf("no-secret overwrite mode = %v, want retained 0640", info.Mode().Perm())
+	} else if info.Mode().Perm() != wantRetainedMode {
+		t.Fatalf("no-secret overwrite mode = %v, want retained %v", info.Mode().Perm(), wantRetainedMode)
 	}
 }
 

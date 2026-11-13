@@ -300,8 +300,10 @@ func TestSnapshotPollE2E_BackgroundPollPullsOnlyOnChange(t *testing.T) {
 }
 
 // TestSnapshotPollE2E_TwoBridgesSharedCache — 两个桥先在同一实例目录上启动,
-// 权威端改配置后一个桥完成全量拉取,另一个桥只查修订号、不再下载,直接从
-// 共享缓存热加载;两个会话各自看到一次变更提示。
+// 权威端改配置后桥 A 完成全量拉取;等共享缓存到达新修订号后再启动桥 B 的
+// 轮询,它只查修订号、不再下载,直接从共享缓存热加载;两个会话各自看到一
+// 次变更提示。轮询实现允许两个桥同时发现旧缓存并各自原子拉取,因此这里不
+// 把桥 B 的第一轮放在桥 A 下载期间。
 func TestSnapshotPollE2E_TwoBridgesSharedCache(t *testing.T) {
 	fx := newCacheFwdFixture(t)
 	setUpPollableCache(t, fx)
@@ -320,9 +322,7 @@ func TestSnapshotPollE2E_TwoBridgesSharedCache(t *testing.T) {
 		}
 	}
 	startTestPoller(t, 20*time.Millisecond, refresherA)
-	startTestPoller(t, 2*time.Second, refresherB)
-	waitForCount(t, "两个桥的启动修订号查询", 2, fx.versionCount)
-	time.Sleep(100 * time.Millisecond)
+	beforeVersions := fx.versionCount()
 	beforeRevision := refresherA.CurrentRevision()
 
 	// 权威端写入配置,桥 A 的轮询先完成全量拉取。
@@ -339,6 +339,8 @@ func TestSnapshotPollE2E_TwoBridgesSharedCache(t *testing.T) {
 	}
 	waitForCount(t, "桥 A 的全量快照请求", 2, fx.snapshotCount)
 	waitForTrue(t, "桥 A 热加载后的修订号", func() bool { return refresherA.CurrentRevision() == wantRevision })
+	waitForCount(t, "桥 A 的启动修订号查询", beforeVersions+1, fx.versionCount)
+	startTestPoller(t, 20*time.Millisecond, refresherB)
 	waitForTrue(t, "桥 B 从共享缓存热加载后的修订号", func() bool { return refresherB.CurrentRevision() == wantRevision })
 	if got := refresherB.CurrentRevision(); got != wantRevision {
 		t.Fatalf("桥 B 热加载后的修订号 = %d,应为 %d(不得再下载)", got, wantRevision)

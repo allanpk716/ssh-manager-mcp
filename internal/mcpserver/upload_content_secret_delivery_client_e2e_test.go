@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -31,7 +32,7 @@ func TestUploadContentClientRecordsDeliveryThroughAuthority(t *testing.T) {
 		Name: "upload_content",
 		Arguments: map[string]any{
 			"server_id": environment.serverID, "content": template,
-			"remote_path": environment.target,
+			"remote_path": environment.remoteTarget,
 		},
 	})
 	if err != nil || result.IsError {
@@ -63,7 +64,7 @@ func TestUploadContentClientRecordsDeliveryThroughAuthority(t *testing.T) {
 	}
 	digest := sha256.Sum256([]byte(written))
 	record := records[0]
-	if record.ServerID != environment.serverID || record.Path != filepath.ToSlash(environment.target) ||
+	if record.ServerID != environment.serverID || record.Path != environment.remoteTarget ||
 		string(record.Template) != template ||
 		record.FileSHA256 != hex.EncodeToString(digest[:]) ||
 		len(record.Secrets) != 1 || record.Secrets[0].Name != "CLIENT_TOKEN" ||
@@ -91,7 +92,7 @@ func TestUploadContentClientRecordsDeliveryThroughAuthority(t *testing.T) {
 		Name: "upload_content",
 		Arguments: map[string]any{
 			"server_id": environment.serverID, "content": "plain text\n",
-			"remote_path": environment.target,
+			"remote_path": environment.remoteTarget,
 		},
 	})
 	if err != nil || plainResult.IsError {
@@ -127,7 +128,7 @@ func TestUploadContentClientDeliveryReplacesSameAuthorityPath(t *testing.T) {
 			Name: "upload_content",
 			Arguments: map[string]any{
 				"server_id": environment.serverID, "content": template,
-				"remote_path": environment.target,
+				"remote_path": environment.remoteTarget,
 			},
 		})
 		if err != nil || result.IsError {
@@ -180,6 +181,7 @@ type deliveryClientE2E struct {
 	profileID    string
 	serverID     string
 	target       string
+	remoteTarget string
 	auditPath    string
 	session      *mcp.ClientSession
 }
@@ -244,11 +246,12 @@ func newDeliveryClientE2E(t *testing.T, secretName, secretValue string) *deliver
 	t.Cleanup(cleanupBroker)
 	t.Cleanup(tunnels.CloseAll)
 	t.Cleanup(tasks.CloseAll)
+	localTarget := filepath.Join(t.TempDir(), "client-config.yaml")
+	remoteTarget := filepath.ToSlash(localTarget)
 	return &deliveryClientE2E{
 		authority: authority, authorityWeb: authorityWeb, serverID: serverID,
-		profileID: profileID,
-		target:    filepath.Join(t.TempDir(), "client-config.yaml"), auditPath: auditPath,
-		session: connectDeliveryE2EClient(t, broker),
+		profileID: profileID, target: localTarget, remoteTarget: remoteTarget,
+		auditPath: auditPath, session: connectDeliveryE2EClient(t, broker),
 	}
 }
 
@@ -282,6 +285,9 @@ func seedDeliveryE2EServer(t *testing.T, vaultStore *store.Store, address string
 	server := &models.Server{
 		Name: "real", Host: host, Port: port, User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}
+	if runtime.GOOS == "windows" {
+		server.ShellType = models.ShellPowerShell
 	}
 	serverID, err := vaultStore.AddServer(server)
 	if err != nil {

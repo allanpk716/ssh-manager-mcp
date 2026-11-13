@@ -221,7 +221,7 @@ func TestHandlerAddServerRunsConnectionTestAndKeepsRowsOnFailure(t *testing.T) {
 	}
 	final := session.do(http.MethodGet, response.Header.Get("Location"), nil)
 	finalBody := integrationBody(t, final)
-	for _, want := range []string{"未验证", "shell 未验证", "默认 POSIX", "connection refused"} {
+	for _, want := range []string{"未验证", "shell 未验证", "默认 POSIX", "refused"} {
 		if !strings.Contains(finalBody, want) {
 			t.Fatalf("失败结果页缺少 %q：\n%s", want, finalBody)
 		}

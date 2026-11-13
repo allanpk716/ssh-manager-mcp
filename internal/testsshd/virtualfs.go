@@ -5,6 +5,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -24,6 +25,13 @@ func newVirtualFilesystemHandler(root string) sftp.Handlers {
 
 func (handler *virtualFilesystemHandler) hostPath(remotePath string) string {
 	cleanRemote := path.Clean(strings.TrimPrefix(path.Clean("/"+remotePath), "/"))
+	if runtime.GOOS == "windows" {
+		// Windows 远端路径自带盘符前缀。虚拟文件系统仍须把它限制在测试
+		// 临时目录内，因此把盘符当作命名空间前缀去掉。
+		if volume := filepath.VolumeName(cleanRemote); volume != "" {
+			cleanRemote = strings.TrimPrefix(cleanRemote[len(volume):], "/")
+		}
+	}
 	if cleanRemote == "" || cleanRemote == "." {
 		return handler.root
 	}

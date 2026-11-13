@@ -63,8 +63,10 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   await page.getByLabel("服务器条目", { exact: true }).selectOption("web-1");
   await page.getByLabel("允许用 sudo 采集").check();
 
-  // 端到端测试把重新验证窗口缩短到 100 毫秒；等它过期后再提交。
-  await page.waitForTimeout(1_000);
+  // 端到端测试把重新验证窗口缩短到 1 秒；等它过期后再提交。窗口不能只有
+  // 100 毫秒：验证回跳后还要检查保留的表单状态，慢速持续集成机器会在第二
+  // 次提交前再次过期，导致页面又回到重新验证页。
+  await page.waitForTimeout(1_200);
   await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
   await expect(page.getByRole("heading", { name: "重新验证" })).toBeVisible();
   await page.getByLabel("管理员口令").fill("browser-test-password");
@@ -75,5 +77,6 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   await expect(page.getByLabel("服务器条目", { exact: true })).toHaveValue("web-1");
   await expect(page.getByLabel("允许用 sudo 采集")).toBeChecked();
   await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
-  await expect(page.getByText("sudo 采集开关已打开。")).toBeVisible();
+  const serverRow = page.locator("tr", { hasText: "web-1" });
+  await expect(serverRow).toContainText("已打开");
 });

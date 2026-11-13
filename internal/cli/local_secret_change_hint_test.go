@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -55,7 +56,11 @@ func TestLocalSecretChangeHintE2E_CommandLineSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binary := filepath.Join(t.TempDir(), "sshmgr")
+	binaryName := "sshmgr"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	binary := filepath.Join(t.TempDir(), binaryName)
 	build := exec.Command("go", "build", "-o", binary, "ssh-manager-mcp/cmd/sshmgr")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("构建命令行程序失败:%v\n%s", err, output)

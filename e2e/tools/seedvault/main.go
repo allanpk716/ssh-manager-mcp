@@ -180,9 +180,6 @@ func seed(dir string) error {
 			return err
 		}
 	}
-	if err := seedTopology(st); err != nil {
-		return err
-	}
 	role := roles.RoleStandalone
 	if os.Getenv("SSHMGR_E2E_ROLE") == "server" {
 		role = roles.RoleServer
@@ -204,7 +201,12 @@ func seed(dir string) error {
 			}
 		}
 	}
-	return roles.Save(roles.State{Role: role, SetupComplete: true})
+	// seedTopology 里的探测结果位置按部署角色解析。必须先写角色状态，再
+	// 写探测结果；否则新机器上会因角色未初始化而静默跳过。
+	if err := roles.Save(roles.State{Role: role, SetupComplete: true}); err != nil {
+		return err
+	}
+	return seedTopology(st)
 }
 
 // writeBrowserTestCertificate 给权威端浏览器测试生成一张 P-256 椭圆曲线

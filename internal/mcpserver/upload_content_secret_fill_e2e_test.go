@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -220,7 +221,7 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.FromSlash(target)); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o600 {
+	} else if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("new file containing secret values has mode %v, want 0600", info.Mode().Perm())
 	}
 	assertUploadContentResultHasNoSecretValue(t, result, databasePassword, interfaceToken)
@@ -229,6 +230,11 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	if err := os.Chmod(filepath.FromSlash(target), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	retainedInfo, err := os.Stat(filepath.FromSlash(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retainedMode := retainedInfo.Mode().Perm()
 	placeholder := []byte("{{sshmgr-secret:DATABASE_PASSWORD}}")
 	binaryTemplate := bytes.Join([][]byte{
 		{0xEF, 0xBB, 0xBF}, []byte("windows\r\n"), {0x00},
@@ -270,8 +276,8 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	}
 	if info, err := os.Stat(filepath.FromSlash(target)); err != nil {
 		t.Fatal(err)
-	} else if info.Mode().Perm() != 0o644 {
-		t.Fatalf("overwritten file mode = %v, want retained 0644", info.Mode().Perm())
+	} else if info.Mode().Perm() != retainedMode {
+		t.Fatalf("overwritten file mode = %v, want retained %v", info.Mode().Perm(), retainedMode)
 	}
 	assertUploadContentResultHasNoSecretValue(t, base64Result, databasePassword, interfaceToken)
 
@@ -1061,6 +1067,12 @@ func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
 }
 
 func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
+	// 独占创建与创建权限只在 POSIX 目标上使用；Windows 目标不设创建权限，
+	// 不存在这种竞争。测试 SSH 服务器直接使用测试主机文件系统，Windows
+	// 测试主机上的远端只能按 Windows 目标模拟，因此没有等价场景。
+	if runtime.GOOS == "windows" {
+		t.Skip("创建权限竞争只发生在 POSIX 目标上，Windows 测试主机无法模拟 POSIX 目标")
+	}
 	const secretValue = "12345678"
 	st := newStore(t)
 	if err := st.AddSecret("RACE_SECRET", "", []byte(secretValue), store.CLISource()); err != nil {
@@ -1082,6 +1094,16 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 	})
 	t.Cleanup(cleanup)
 	serverID := seedRealServer(t, st, "real", addr, hostKey, "")
+	if runtime.GOOS == "windows" {
+		srv, serr := st.GetServer(serverID)
+		if serr != nil || srv == nil {
+			t.Fatalf("re-read seeded server: %v %v", srv, serr)
+		}
+		srv.ShellType = models.ShellPowerShell
+		if serr = st.UpdateServer(srv); serr != nil {
+			t.Fatal(serr)
+		}
+	}
 	profileID, err := st.AddProfile("agent-profile")
 	if err != nil {
 		t.Fatal(err)
@@ -1119,8 +1141,9 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o640 {
-		t.Fatalf("target mode after simulated create race = %v, want retained 0640", info.Mode().Perm())
+	if info.Mode().Perm() != handlers.createdMode {
+		t.Fatalf("target mode after simulated create race = %v, want retained %v",
+			info.Mode().Perm(), handlers.createdMode)
 	}
 	assertUploadContentResultHasNoSecretValue(t, result, secretValue)
 }
@@ -1129,6 +1152,9 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 // 创建出目标文件；随后的覆盖写入必须保留这个已存在文件的权限。
 type createModeRaceHandlers struct {
 	injected bool
+	// createdMode 记录模拟竞争者刚创建文件后，测试主机实际展示的权限位。
+	// Windows 不按 Unix 权限位展示文件安全模型，不能直接断言 0640。
+	createdMode os.FileMode
 }
 
 func (h *createModeRaceHandlers) Fileread(*sftp.Request) (io.ReaderAt, error) {
@@ -1137,13 +1163,18 @@ func (h *createModeRaceHandlers) Fileread(*sftp.Request) (io.ReaderAt, error) {
 
 func (h *createModeRaceHandlers) Filewrite(request *sftp.Request) (io.WriterAt, error) {
 	if request.Pflags().Excl && !h.injected {
-		file, err := os.OpenFile(filepath.FromSlash(request.Filepath), os.O_CREATE|os.O_WRONLY, 0o640)
+		file, err := os.OpenFile(h.hostPath(request.Filepath), os.O_CREATE|os.O_WRONLY, 0o640)
 		if err != nil {
 			return nil, err
 		}
 		if err := file.Close(); err != nil {
 			return nil, err
 		}
+		createdInfo, err := os.Stat(h.hostPath(request.Filepath))
+		if err != nil {
+			return nil, err
+		}
+		h.createdMode = createdInfo.Mode().Perm()
 		h.injected = true
 		return nil, os.ErrExist
 	}
@@ -1161,16 +1192,16 @@ func (h *createModeRaceHandlers) Filewrite(request *sftp.Request) (io.WriterAt, 
 	if openFlags.Excl {
 		flags |= os.O_EXCL
 	}
-	return os.OpenFile(filepath.FromSlash(request.Filepath), flags, 0o666)
+	return os.OpenFile(h.hostPath(request.Filepath), flags, 0o666)
 }
 
 func (h *createModeRaceHandlers) Filecmd(request *sftp.Request) error {
 	switch request.Method {
 	case "Mkdir":
-		return os.MkdirAll(filepath.FromSlash(request.Filepath), 0o755)
+		return os.MkdirAll(h.hostPath(request.Filepath), 0o755)
 	case "Setstat":
 		if request.AttrFlags().Permissions {
-			return os.Chmod(filepath.FromSlash(request.Filepath), request.Attributes().FileMode())
+			return os.Chmod(h.hostPath(request.Filepath), request.Attributes().FileMode())
 		}
 		return nil
 	default:
@@ -1179,7 +1210,7 @@ func (h *createModeRaceHandlers) Filecmd(request *sftp.Request) error {
 }
 
 func (h *createModeRaceHandlers) Filelist(request *sftp.Request) (sftp.ListerAt, error) {
-	path := filepath.FromSlash(request.Filepath)
+	path := h.hostPath(request.Filepath)
 	var info os.FileInfo
 	var err error
 	if request.Method == "Lstat" {
@@ -1191,6 +1222,21 @@ func (h *createModeRaceHandlers) Filelist(request *sftp.Request) (sftp.ListerAt,
 		return nil, err
 	}
 	return &fileInfoLister{info: info}, nil
+}
+
+// hostPath 把 SFTP 请求服务器按 POSIX 规则归一出的路径换回测试主机路径。
+// Windows 上 “C:/x” 会被归一成 “/C:/x”；递归到盘符时还会得到 “C:.”。
+// 直接 FromSlash 会把它们变成 “\C:\x” 与 “\C:.” 这类无效主机路径。
+func (h *createModeRaceHandlers) hostPath(remotePath string) string {
+	if runtime.GOOS == "windows" &&
+		len(remotePath) >= 3 &&
+		remotePath[0] == '/' &&
+		((remotePath[1] >= 'A' && remotePath[1] <= 'Z') ||
+			(remotePath[1] >= 'a' && remotePath[1] <= 'z')) &&
+		remotePath[2] == ':' {
+		remotePath = remotePath[1:]
+	}
+	return filepath.FromSlash(remotePath)
 }
 
 type fileInfoLister struct {

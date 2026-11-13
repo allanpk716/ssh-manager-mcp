@@ -49,7 +49,7 @@ func TestUploadContentClientDeliveryFailureKeepsFileAndReportsReason(t *testing.
 				Arguments: map[string]any{
 					"server_id":   environment.serverID,
 					"content":     "token={{sshmgr-secret:FAILURE_TOKEN}}\n",
-					"remote_path": environment.target,
+					"remote_path": environment.remoteTarget,
 				},
 			})
 			if err != nil || result.IsError {
