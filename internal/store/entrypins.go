@@ -60,7 +60,7 @@ func migrateEntryPinsTx(tx *sql.Tx) error {
 			return err
 		}
 		if len(matched) == 0 {
-			dropped = append(dropped, fmt.Sprintf("%s fp=%s", hostPort, PinFingerprint(blob, format)))
+			dropped = append(dropped, fmt.Sprintf("%s fingerprint=%s", hostPort, PinFingerprint(blob, format)))
 			continue
 		}
 		for _, id := range matched {
@@ -223,7 +223,7 @@ func (s *Store) SaveEntryPinAtHandshakeWithSource(
 	defer tx.Rollback()
 	audit := AuditRow{
 		TS: time.Now(), ServerID: srv.ID, Action: "pin-tofu",
-		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fp=%s source=%s",
+		Command: fmt.Sprintf("entry=%s(%s) handshake=%s fingerprint=%s source=%s",
 			srv.Name, srv.ID, handshakeAddr, PinFingerprint(marshaledKey, PinFormatBlob), PinSourceTofu),
 		Status: "ok",
 	}
@@ -423,7 +423,7 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 		TS:       time.Now(),
 		ServerID: srv.ID,
 		Action:   "pin-delete",
-		Command: fmt.Sprintf("server=%s host=%s:%d fp=%s source=%s via=server-delete",
+		Command: fmt.Sprintf("server=%s host=%s:%d fingerprint=%s source=%s via=server-delete",
 			srv.Name, srv.Host, srv.Port, PinFingerprint(old.Blob, old.Format), old.Source),
 		Status: "ok",
 	})

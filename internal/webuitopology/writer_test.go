@@ -61,8 +61,9 @@ func newWriterTestStore(t *testing.T) *store.Store {
 func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 	st := newWriterTestStore(t)
 	writer := WriterFromStore(st)
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
 
-	message, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20")
+	message, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20", source)
 	if err != nil {
 		t.Fatalf("新增网络成员失败：%v", err)
 	}
@@ -70,7 +71,7 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 		t.Fatalf("新增网络成员提示与命令行不一致：%q", message)
 	}
 
-	message, err = writer.EditNetworkMembership("工作站", "家A局域网", "192.168.1.21")
+	message, err = writer.EditNetworkMembership("工作站", "家A局域网", "192.168.1.21", source)
 	if err != nil {
 		t.Fatalf("修改网络成员地址失败：%v", err)
 	}
@@ -78,11 +79,11 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 		t.Fatalf("修改网络成员地址提示与命令行不一致：%q", message)
 	}
 
-	message, err = writer.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20")
+	message, err = writer.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20", source)
 	if err != nil {
 		t.Fatal(err)
 	}
-	message, err = writer.MoveNetworkMembership("工作站", "家A局域网", "机房局域网", "10.0.0.20")
+	message, err = writer.MoveNetworkMembership("工作站", "家A局域网", "机房局域网", "10.0.0.20", source)
 	if err != nil {
 		t.Fatalf("移动网络成员失败：%v", err)
 	}
@@ -90,7 +91,7 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 		t.Fatalf("移动网络成员提示应说明设备、目标网络与新地址：%q", message)
 	}
 
-	message, err = writer.RemoveNetworkMembership("工作站", "虚拟网")
+	message, err = writer.RemoveNetworkMembership("工作站", "虚拟网", source)
 	if err != nil {
 		t.Fatalf("退出网络成员失败：%v", err)
 	}
@@ -98,7 +99,7 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 		t.Fatalf("退出网络成员提示与命令行不一致：%q", message)
 	}
 
-	message, err = writer.AddPhysicalNetwork("新办公楼局域网", "机房")
+	message, err = writer.AddPhysicalNetwork("新办公楼局域网", "机房", source)
 	if err != nil {
 		t.Fatalf("新建物理局域网失败：%v", err)
 	}
@@ -119,10 +120,10 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 		t.Fatalf("新建物理局域网应按站点归属登记：%+v", networks)
 	}
 
-	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.22"); err != nil {
+	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.22", source); err != nil {
 		t.Fatal(err)
 	}
-	message, err = writer.RemovePhysicalNetworkMemberships("工作站")
+	message, err = writer.RemovePhysicalNetworkMemberships("工作站", source)
 	if err != nil {
 		t.Fatalf("删除全部物理局域网成员失败：%v", err)
 	}
@@ -152,11 +153,161 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 	}
 }
 
+func TestTopologyWriterMarksNetworkWritesAsWebUI(t *testing.T) {
+	st := newWriterTestStore(t)
+	writer := WriterFromStore(st)
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
+
+	// 先给两台设备各加一个虚拟局域网成员，后面的退出网络成员操作才有对
+	// 象；这一步的来源不参与逐项比较。
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.20"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.AddNetworkMembership("NAS", "虚拟网", "100.64.0.30", source); err != nil {
+		t.Fatal(err)
+	}
+
+	runPair := func(action string, wantRows int, commandLine func() error, webUI func() error) {
+		t.Helper()
+		before := latestAuditID(t, st)
+		if err := commandLine(); err != nil {
+			t.Fatalf("%s 的命令行路径失败：%v", action, err)
+		}
+		assertAuditSource(t, st, before, action, "", "", wantRows)
+
+		before = latestAuditID(t, st)
+		if err := webUI(); err != nil {
+			t.Fatalf("%s 的 Web UI 路径失败：%v", action, err)
+		}
+		assertAuditSource(t, st, before, action, store.AuditSourceWebUI, "192.0.2.9", wantRows)
+	}
+
+	runPair("device.member-add", 1,
+		func() error {
+			_, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20")
+			return err
+		},
+		func() error {
+			_, err := writer.AddNetworkMembership("NAS", "家A局域网", "192.168.1.30", source)
+			return err
+		})
+	runPair("device.member-edit", 1,
+		func() error {
+			_, err := st.EditNetworkMembership("工作站", "家A局域网", "192.168.1.21")
+			return err
+		},
+		func() error {
+			_, err := writer.EditNetworkMembership("NAS", "家A局域网", "192.168.1.31", source)
+			return err
+		})
+	runPair("device.member-move", 2,
+		func() error {
+			_, err := st.MoveNetworkMembership("工作站", "家A局域网", "机房局域网", "10.0.0.20")
+			return err
+		},
+		func() error {
+			_, err := writer.MoveNetworkMembership("NAS", "家A局域网", "机房局域网", "10.0.0.30", source)
+			return err
+		})
+	runPair("device.member-remove", 1,
+		func() error {
+			_, err := st.RemoveNetworkMembership("工作站", "虚拟网")
+			return err
+		},
+		func() error {
+			_, err := writer.RemoveNetworkMembership("NAS", "虚拟网", source)
+			return err
+		})
+	runPair("network.add", 1,
+		func() error {
+			_, err := st.AddNetwork(models.Network{Name: "命令行局域网", Type: models.NetworkPhysical, SiteName: "家A"})
+			return err
+		},
+		func() error {
+			_, err := writer.AddPhysicalNetwork("Web UI 局域网", "家A", source)
+			return err
+		})
+
+	// 重新加入一个物理局域网成员，让「删除全部物理局域网成员」也有可审计
+	// 的数据行。
+	runPair("device.member-remove-physical", 2,
+		func() error {
+			if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.22"); err != nil {
+				return err
+			}
+			_, err := st.RemovePhysicalNetworkMemberships("工作站")
+			return err
+		},
+		func() error {
+			if _, err := writer.AddNetworkMembership("NAS", "家A局域网", "192.168.1.32", source); err != nil {
+				return err
+			}
+			_, err := writer.RemovePhysicalNetworkMemberships("NAS", source)
+			return err
+		})
+}
+
+func latestAuditID(t *testing.T, st *store.Store) int64 {
+	t.Helper()
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatalf("读取最新审计行失败：%v", err)
+	}
+	if len(rows) == 0 {
+		return 0
+	}
+	return rows[0].ID
+}
+
+func assertAuditSource(
+	t *testing.T, st *store.Store, beforeID int64, caseName, source, sourceIP string, wantRows int,
+) {
+	t.Helper()
+	filter := store.AuditFilter{}
+	switch caseName {
+	case "device.member-add":
+		filter.Actions = []string{"device.member-add"}
+	case "device.member-edit":
+		filter.Actions = []string{"device.member-edit"}
+	case "device.member-move":
+		filter.Actions = []string{"device.member-rm", "device.member-add"}
+	case "device.member-remove", "device.member-remove-physical":
+		filter.Actions = []string{"device.member-rm"}
+	case "network.add":
+		filter.Actions = []string{"network.add"}
+	default:
+		t.Fatalf("未知审计测试场景：%s", caseName)
+	}
+	if source != "" {
+		filter.Source = source
+		filter.SourceIP = sourceIP
+	}
+	queryRows, err := st.QueryAudit(filter)
+	if err != nil {
+		t.Fatalf("查询 %s 的审计行失败：%v", caseName, err)
+	}
+	rows := make([]store.AuditRow, 0, len(queryRows))
+	for _, row := range queryRows {
+		if row.ID > beforeID {
+			rows = append(rows, row)
+		}
+	}
+	if len(rows) != wantRows {
+		t.Fatalf("%s 应写 %d 条审计行，实际 %d 条：%+v", caseName, wantRows, len(rows), rows)
+	}
+	for _, row := range rows {
+		if row.Source != source || row.SourceIP != sourceIP {
+			t.Fatalf("%s 的审计来源错误：want source=%q address=%q，got %+v",
+				caseName, source, sourceIP, row)
+		}
+	}
+}
+
 func TestTopologyWriterClassifiesNameNotFoundAndValidationErrors(t *testing.T) {
 	st := newWriterTestStore(t)
 	writer := WriterFromStore(st)
 
-	_, err := writer.AddNetworkMembership("不存在的设备", "家A局域网", "192.168.1.20")
+	_, err := writer.AddNetworkMembership("不存在的设备", "家A局域网", "192.168.1.20", webui.TopologyWriteSource{})
 	var notFound *webui.TopologyNameNotFoundError
 	if !errors.As(err, &notFound) {
 		t.Fatalf("设备不存在应映射为名称不存在错误：%v", err)
@@ -165,15 +316,15 @@ func TestTopologyWriterClassifiesNameNotFoundAndValidationErrors(t *testing.T) {
 		t.Fatalf("名称不存在错误应保留存储层的可读提示：%q", notFound.Message)
 	}
 
-	_, err = writer.AddNetworkMembership("工作站", "不存在的网络", "192.168.1.20")
+	_, err = writer.AddNetworkMembership("工作站", "不存在的网络", "192.168.1.20", webui.TopologyWriteSource{})
 	if !errors.As(err, &notFound) {
 		t.Fatalf("网络不存在应映射为名称不存在错误：%v", err)
 	}
 
-	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20", webui.TopologyWriteSource{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.AddNetworkMembership("NAS", "家A局域网", "192.168.1.20"); err == nil {
+	if _, err := writer.AddNetworkMembership("NAS", "家A局域网", "192.168.1.20", webui.TopologyWriteSource{}); err == nil {
 		t.Fatal("地址冲突应返回错误")
 	} else if !strings.Contains(err.Error(), "已被设备 工作站 占用") {
 		t.Fatalf("地址冲突提示应指出占用设备：%v", err)
@@ -181,19 +332,19 @@ func TestTopologyWriterClassifiesNameNotFoundAndValidationErrors(t *testing.T) {
 		t.Fatalf("地址冲突不应按名称不存在分类：%v", err)
 	}
 
-	_, err = writer.RemoveNetworkMembership("工作站", "不存在的网络")
+	_, err = writer.RemoveNetworkMembership("工作站", "不存在的网络", webui.TopologyWriteSource{})
 	if !errors.As(err, &notFound) {
 		t.Fatalf("退出不存在的网络应映射为名称不存在错误：%v", err)
 	}
-	_, err = writer.RemovePhysicalNetworkMemberships("不存在的设备")
+	_, err = writer.RemovePhysicalNetworkMemberships("不存在的设备", webui.TopologyWriteSource{})
 	if !errors.As(err, &notFound) {
 		t.Fatalf("删除全部物理成员时设备不存在应映射为名称不存在错误：%v", err)
 	}
-	_, err = writer.AddPhysicalNetwork("家A局域网", "家A")
+	_, err = writer.AddPhysicalNetwork("家A局域网", "家A", webui.TopologyWriteSource{})
 	if err == nil || errors.As(err, &notFound) {
 		t.Fatalf("网络名重复应按校验错误返回：%v", err)
 	}
-	_, err = writer.AddPhysicalNetwork("全新局域网", "不存在的站点")
+	_, err = writer.AddPhysicalNetwork("全新局域网", "不存在的站点", webui.TopologyWriteSource{})
 	if !errors.As(err, &notFound) {
 		t.Fatalf("站点不存在应映射为名称不存在错误：%v", err)
 	}
@@ -206,10 +357,10 @@ func TestTopologyWriterFromOpenerOpensStorePerRequest(t *testing.T) {
 		opened += 1
 		return st, func() {}, nil
 	})
-	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
+	if _, err := writer.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20", webui.TopologyWriteSource{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := writer.RemoveNetworkMembership("工作站", "家A局域网"); err != nil {
+	if _, err := writer.RemoveNetworkMembership("工作站", "家A局域网", webui.TopologyWriteSource{}); err != nil {
 		t.Fatal(err)
 	}
 	if opened != 2 {

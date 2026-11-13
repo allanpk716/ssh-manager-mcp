@@ -187,7 +187,7 @@ func TestServerDetailOverwritesAndClearsHostKeyAnchor(t *testing.T) {
 	}
 	rows := hostKeyAuditRows(t, st, "pin-manual")
 	if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
-		!strings.Contains(rows[0].Command, "fp="+newAnchor.fingerprint) ||
+		!strings.Contains(rows[0].Command, "fingerprint="+newAnchor.fingerprint) ||
 		!strings.Contains(rows[0].Command, "forced=true") ||
 		!strings.Contains(rows[0].Command, "was="+oldAnchor.fingerprint) {
 		t.Fatalf("覆盖审计应沿用 pin-hostkey 习惯并标记 Web UI 来源：%+v", rows)
@@ -210,7 +210,7 @@ func TestServerDetailOverwritesAndClearsHostKeyAnchor(t *testing.T) {
 	}
 	clearRows := hostKeyAuditRows(t, st, "pin-clear")
 	if len(clearRows) != 1 || clearRows[0].Source != store.AuditSourceWebUI ||
-		!strings.Contains(clearRows[0].Command, "fp="+newAnchor.fingerprint) ||
+		!strings.Contains(clearRows[0].Command, "fingerprint="+newAnchor.fingerprint) ||
 		!strings.HasSuffix(clearRows[0].Command, "handshake=-") {
 		t.Fatalf("删除审计应携带被删指纹并沿用命令行的空地址占位：%+v", clearRows)
 	}

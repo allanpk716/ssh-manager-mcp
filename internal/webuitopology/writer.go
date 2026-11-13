@@ -20,9 +20,12 @@ func WriterFromOpener(open func() (*store.Store, func(), error)) webui.TopologyW
 	return openerWriter{open: open}
 }
 
-func (w openerWriter) AddNetworkMembership(device, network, address string) (string, error) {
+func (w openerWriter) AddNetworkMembership(
+	device, network, address string, source webui.TopologyWriteSource,
+) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.AddNetworkMembership(device, network, address)
+		membership, err := st.AddNetworkMembershipWithSource(
+			device, network, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
@@ -31,9 +34,12 @@ func (w openerWriter) AddNetworkMembership(device, network, address string) (str
 	})
 }
 
-func (w openerWriter) EditNetworkMembership(device, network, address string) (string, error) {
+func (w openerWriter) EditNetworkMembership(
+	device, network, address string, source webui.TopologyWriteSource,
+) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.EditNetworkMembership(device, network, address)
+		membership, err := st.EditNetworkMembershipWithSource(
+			device, network, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
@@ -42,9 +48,12 @@ func (w openerWriter) EditNetworkMembership(device, network, address string) (st
 	})
 }
 
-func (w openerWriter) RemoveNetworkMembership(device, network string) (string, error) {
+func (w openerWriter) RemoveNetworkMembership(
+	device, network string, source webui.TopologyWriteSource,
+) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.RemoveNetworkMembership(device, network)
+		membership, err := st.RemoveNetworkMembershipWithSource(
+			device, network, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
@@ -52,9 +61,12 @@ func (w openerWriter) RemoveNetworkMembership(device, network string) (string, e
 	})
 }
 
-func (w openerWriter) MoveNetworkMembership(device, fromNetwork, toNetwork, address string) (string, error) {
+func (w openerWriter) MoveNetworkMembership(
+	device, fromNetwork, toNetwork, address string, source webui.TopologyWriteSource,
+) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.MoveNetworkMembership(device, fromNetwork, toNetwork, address)
+		membership, err := st.MoveNetworkMembershipWithSource(
+			device, fromNetwork, toNetwork, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
@@ -63,9 +75,12 @@ func (w openerWriter) MoveNetworkMembership(device, fromNetwork, toNetwork, addr
 	})
 }
 
-func (w openerWriter) RemovePhysicalNetworkMemberships(device string) (string, error) {
+func (w openerWriter) RemovePhysicalNetworkMemberships(
+	device string, source webui.TopologyWriteSource,
+) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		removed, err := st.RemovePhysicalNetworkMemberships(device)
+		removed, err := st.RemovePhysicalNetworkMembershipsWithSource(
+			device, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
@@ -74,11 +89,11 @@ func (w openerWriter) RemovePhysicalNetworkMemberships(device string) (string, e
 	})
 }
 
-func (w openerWriter) AddPhysicalNetwork(name, site string) (string, error) {
+func (w openerWriter) AddPhysicalNetwork(name, site string, source webui.TopologyWriteSource) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		network, err := st.AddNetwork(models.Network{
+		network, err := st.AddNetworkWithSource(models.Network{
 			Name: name, Type: models.NetworkPhysical, SiteName: site,
-		})
+		}, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}

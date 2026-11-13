@@ -392,7 +392,7 @@ func (fx *cacheFwdFixture) assertServeAuditPinForward(t *testing.T) {
 	}
 	for _, r := range rows {
 		if r.Action == "pin-forward" {
-			for _, want := range []string{"entry=target(", "handshake=" + fx.host() + ":" + strconv.Itoa(fx.port()), "fp=" + fx.fingerprint(), "device=laptop", "via=forward"} {
+			for _, want := range []string{"entry=target(", "handshake=" + fx.host() + ":" + strconv.Itoa(fx.port()), "fingerprint=" + fx.fingerprint(), "device=laptop", "via=forward"} {
 				if !strings.Contains(r.Command, want) {
 					t.Fatalf("pin-forward audit row missing %q: %q", want, r.Command)
 				}
