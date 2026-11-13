@@ -927,7 +927,9 @@ type authorityHandler struct {
 	cookie  *http.Cookie
 }
 
-func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) authorityHandler {
+func newShareAuthorityHandler(
+	t *testing.T, st *store.Store, now *time.Time, configure ...func(*webui.Config),
+) authorityHandler {
 	t.Helper()
 	auth := vault.NewWebUIAuthStore(st)
 	if _, err := auth.SetAdminPasswordWithAudit([]byte("correct-password"), webui.AuditEvent{
@@ -935,7 +937,7 @@ func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) aut
 	}); err != nil {
 		t.Fatal(err)
 	}
-	handler, _, err := webui.NewAuthority(webui.Config{
+	config := webui.Config{
 		Role: webui.RoleServer, Port: 18087,
 		Servers:                webuiservers.FromManager(servermanage.New(st)),
 		ServerWriter:           webuiservers.WriterFromManager(servermanage.New(st)),
@@ -949,7 +951,13 @@ func newShareAuthorityHandler(t *testing.T, st *store.Store, now *time.Time) aut
 		AllowedHosts:           []string{"127.0.0.1"},
 		CertificateFingerprint: "sha256:0123456789abcdef",
 		Now:                    func() time.Time { return *now },
-	})
+	}
+	for _, setup := range configure {
+		if setup != nil {
+			setup(&config)
+		}
+	}
+	handler, _, err := webui.NewAuthority(config)
 	if err != nil {
 		t.Fatal(err)
 	}

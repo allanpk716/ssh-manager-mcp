@@ -1,6 +1,8 @@
 package webui
 
 import (
+	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -104,14 +106,17 @@ func shareRevokeEntries(share *ShareRow) []ShareRevokeEntry {
 
 // ShareRevokeView 是单台撤销授权确认页的展示数据。
 type ShareRevokeView struct {
-	Share           *ShareRow
-	Server          ShareServerView
-	Windows         bool
-	ConfirmPath     string
-	RecentlyMounted bool
-	Task            *ShareRevokeTaskStatus
-	TaskInvalid     bool
-	PollPath        string
+	Share            *ShareRow
+	Server           ShareServerView
+	Windows          bool
+	ConfirmPath      string
+	RecentlyMounted  bool
+	RequestedUnmount bool
+	ChangePassword   bool
+	Error            string
+	Task             *ShareRevokeTaskStatus
+	TaskInvalid      bool
+	PollPath         string
 }
 
 // handleShareRevoke 渲染单台撤销授权确认页；提交入口由任务视图实现后接入。
@@ -145,6 +150,8 @@ func (h *handler) handleShareRevokePage(w http.ResponseWriter, r *http.Request, 
 	if view == nil {
 		view = &ShareRevokeView{Share: detail}
 	}
+	view.RequestedUnmount = r.URL.Query().Get("unmount") == "1"
+	view.ChangePassword = r.URL.Query().Get("change_password") == "1"
 	taskIdentifier := strings.TrimSpace(r.URL.Query().Get("task"))
 	if taskIdentifier != "" {
 		status, ok := h.cfg.ShareRevokeRunner.ShareRevokeStatus(taskIdentifier)
@@ -193,13 +200,35 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 			"这台服务器不在这个共享的可挂载范围内；范围外机器请使用「检查残留」。")
 		return
 	}
+	changePassword := r.PostFormValue("change_password") == "1"
+	if changePassword && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		next := shareRevokeConfirmPath(view.Share.ID, view.Server.ID) +
+			"&unmount=1&change_password=1"
+		http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
+		return
+	}
+	var newPassword []byte
+	if changePassword {
+		password, passwordErr := shareRevokePasswordFromRequest(r)
+		if passwordErr != nil {
+			view.RequestedUnmount = r.PostFormValue("unmount") == "1"
+			view.ChangePassword = true
+			view.Error = passwordErr.Error()
+			h.renderPage(w, r, http.StatusBadRequest, "share-revoke.tmpl", pageData{
+				Title: "撤销 " + view.Share.Name + " · " + view.Server.Name, ShareRevoke: view,
+			})
+			return
+		}
+		newPassword = password
+	}
 	taskID, err := h.cfg.ShareRevokeRunner.StartShareRevoke(ShareRevokeRequest{
 		ShareID: view.Share.ID, ShareName: view.Share.Name,
 		ServerID: view.Server.ID, ServerName: view.Server.Name,
 		ServerShell: view.Server.ShellType, MountPoint: view.Server.MountPoint,
-		Unmount: r.PostFormValue("unmount") == "1",
-		Force:   r.PostFormValue("force") == "1",
-		Source:  ShareWriteSource{RemoteAddress: remoteIP(r)},
+		Unmount:     r.PostFormValue("unmount") == "1",
+		Force:       r.PostFormValue("force") == "1",
+		NewPassword: newPassword,
+		Source:      ShareWriteSource{RemoteAddress: remoteIP(r)},
 	})
 	if err != nil {
 		h.logError(r, "启动共享存储撤销授权任务失败", err)
@@ -259,6 +288,44 @@ func (h *handler) shareRevokeView(
 
 func shareRevokeConfirmPath(shareID, serverID string) string {
 	return "/ui/shares/" + shareID + "/revoke?server=" + serverID
+}
+
+func isShareRevokePasswordUpload(r *http.Request) bool {
+	return r != nil && r.Method == http.MethodPost &&
+		strings.HasPrefix(r.URL.Path, sharesPath) && strings.HasSuffix(r.URL.Path, "/revoke")
+}
+
+func shareRevokePasswordFromRequest(r *http.Request) ([]byte, error) {
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if r.MultipartForm == nil {
+			if err := r.ParseMultipartForm(secretUploadMaxRequestBody); err != nil {
+				return nil, errors.New("读取表单失败，请重试")
+			}
+		}
+		file, header, err := r.FormFile("new_password_file")
+		if err == nil {
+			defer file.Close()
+			if r.PostFormValue("new_password") != "" {
+				return nil, errors.New("隐藏输入框与上传文件不能同时提供")
+			}
+			if header.Size > secretValueLimit {
+				return nil, errSecretUploadTooLarge
+			}
+			value, readErr := io.ReadAll(io.LimitReader(file, secretValueLimit+1))
+			if readErr != nil {
+				return nil, errors.New("读取上传文件失败，请重试")
+			}
+			if len(value) > secretValueLimit {
+				return nil, errSecretUploadTooLarge
+			}
+			return value, nil
+		}
+	}
+	password := []byte(r.PostFormValue("new_password"))
+	if len(password) == 0 {
+		return nil, errors.New("请输入新的共享密码，或上传按字节原样保存的文件")
+	}
+	return password, nil
 }
 
 // shareRevokeResultLabel 把共享存储管理模块的固定结论分类换成页面文案；

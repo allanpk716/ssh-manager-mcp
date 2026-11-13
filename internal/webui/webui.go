@@ -507,7 +507,7 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// 样不向跨源目标透露引用地址。
 	w.Header().Set("Referrer-Policy", "same-origin")
 	w.Header().Set("Cache-Control", "no-store")
-	if isSecretValueUpload(r) {
+	if isSecretValueUpload(r) || isShareRevokePasswordUpload(r) {
 		r.Body = http.MaxBytesReader(w, r.Body, secretUploadMaxRequestBody)
 	}
 	if isAddFormPost(r) {

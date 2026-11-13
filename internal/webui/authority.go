@@ -495,7 +495,7 @@ func (h *handler) authorityWriteAllowed(w http.ResponseWriter, r *http.Request) 
 	}
 	token := r.Header.Get("X-CSRF-Token")
 	if token == "" {
-		_ = r.ParseForm()
+		_ = parseFormForCSRF(r)
 		token = r.PostFormValue("csrf_token")
 	}
 	if subtle.ConstantTimeCompare([]byte(token), []byte(sess.csrf)) != 1 {

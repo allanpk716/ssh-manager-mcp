@@ -1,6 +1,7 @@
 {{define "content"}}
 <section class="share-revoke">
 <h1>撤销授权 {{.ShareRevoke.Share.Name}} · {{.ShareRevoke.Server.Name}}</h1>
+{{if .ShareRevoke.Error}}<div class="notice notice-error"><p>{{.ShareRevoke.Error}}</p></div>{{end}}
 {{if .ShareRevoke.Task}}
 {{if eq .ShareRevoke.Task.State "running"}}<h2>撤销授权进行中</h2>{{else if eq .ShareRevoke.Task.State "error"}}<h2>撤销授权失败</h2>{{else}}<h2>撤销授权结果</h2>{{end}}
 <section{{if eq .ShareRevoke.Task.State "running"}} id="share-revoke-task" hx-get="{{.ShareRevoke.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
@@ -38,6 +39,9 @@
 <div class="inline-form"><a class="button-link" href="{{.ShareRevoke.PollPath}}">稍后再试</a></div>
 {{end}}
 {{if .ShareRevoke.Task.Result.Notices}}<div class="notice notice-warning"><ul>{{range .ShareRevoke.Task.Result.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if .ShareRevoke.Task.Result.PasswordChanged}}
+<div class="operation-result"><p>已更换共享密码。仍可挂载的 Linux 与 macOS 服务器：{{if .ShareRevoke.Task.Result.RemainingMountServers}}{{range .ShareRevoke.Task.Result.RemainingMountServers}}{{.}} {{end}}{{else}}无{{end}}。这些服务器需要 agent 按新版本号重新挂载；桌面手动连接也需要更新密码。</p></div>
+{{end}}
 {{end}}
 </section>
 {{else if .ShareRevoke.TaskInvalid}}
@@ -55,10 +59,10 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="server_id" value="{{.ShareRevoke.Server.ID}}">
 {{if not .ShareRevoke.Windows}}
-<label class="confirm-choice"><input type="checkbox" name="unmount" value="1"{{if .ShareRevoke.RecentlyMounted}} checked{{end}}>同时卸载现有挂载；被占用时会列出进程，可选择强制或稍后再试</label>
+<label class="confirm-choice"><input type="checkbox" name="unmount" value="1"{{if or .ShareRevoke.RecentlyMounted .ShareRevoke.RequestedUnmount}} checked{{end}}>同时卸载现有挂载；被占用时会列出进程，可选择强制或稍后再试</label>
 {{end}}
-<label class="confirm-choice"><input type="checkbox" name="change_password" value="1" data-share-reveal-checkbox>同时更换共享密码</label>
-<div class="share-password-input" data-share-reveal-target hidden>
+<label class="confirm-choice"><input type="checkbox" name="change_password" value="1"{{if .ShareRevoke.ChangePassword}} checked{{end}} data-share-reveal-checkbox>同时更换共享密码</label>
+<div class="share-password-input" data-share-reveal-target{{if not .ShareRevoke.ChangePassword}} hidden{{end}}>
 <label>新的共享密码<input type="password" name="new_password" autocomplete="new-password"></label>
 <label>或从文件按字节原样读取<input type="file" name="new_password_file"></label>
 <p class="form-help">隐藏输入框与上传文件不能同时提供；页面不会显示旧密码或新密码。更换后，仍可挂载的 Linux 与 macOS 服务器需按新版本号重新挂载，桌面手动连接也需要更新密码。</p>
