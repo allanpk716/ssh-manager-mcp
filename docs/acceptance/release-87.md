@@ -114,9 +114,9 @@
 | R05 | 网络拓扑验收覆盖站点、网络、设备、多服务器条目、多地址选址、密钥不一致跳过、探测与按需查询。 | #271 | 单机271-1、单机271-2、单机271-3 | 权威端271-1 | 客户端271-1、客户端271-2 | 混跑271-1、混跑271-2 |
 | R06 | 主机信任验收覆盖存量锚迁移、首次锚定、锚定转发、旧格式兜底锚与旧格式转发拒绝。 | #271 | 单机271-2、单机271-4 | 权威端271-2 | 客户端271-3 | 混跑271-1 |
 | R07 | 共享存储验收覆盖登记、Linux 持久挂载、macOS 间接映射、Windows 会话内注入、撤销、残留检查与共享地址中继本地拷贝。 | #272 | §1.3 | §2.3 | §3.3 | §4.3 |
-| R08 | Web UI 验收覆盖单机回环、权威端独立监听、客户端只读、管理员鉴权、敏感操作重验、主要页面与手机查看路径。 | #273 | §1.4 | §2.4 | §3.4 | §4.4 无条目 |
-| R09 | Web UI 验收包含一次性回环令牌、Host 与 Origin 请求头校验、防跨站请求伪造、内容安全策略与审计。 | #273 | §1.4 | §2.4 | §3.4 | §4.4 无条目 |
-| R10a | 图形界面能力逐项对照命令行等价面，布局坐标例外需明确标注——基础页面与既有功能。 | #273 | §1.4 | §2.4 | §3.4 | §4.4 无条目 |
+| R08 | Web UI 验收覆盖单机回环、权威端独立监听、客户端只读、管理员鉴权、敏感操作重验、主要页面与手机查看路径。 | #273 | 单机273-1、单机273-2 | 权威端273-1–权威端273-4、人工273-1 | 客户端273-1、客户端273-2 | §4.4 无条目（#273 确认） |
+| R09 | Web UI 验收包含一次性回环令牌、Host 与 Origin 请求头校验、防跨站请求伪造、内容安全策略与审计。 | #273 | 单机273-1、单机273-2 | 权威端273-2、权威端273-3、权威端273-4 | 客户端273-1、客户端273-2 | §4.4 无条目（#273 确认） |
+| R10a | 图形界面能力逐项对照命令行等价面，布局坐标例外需明确标注——基础页面与既有功能。 | #273 | 单机273-2 | 权威端273-4 | 客户端273-2 | §4.4 无条目（#273 确认） |
 | R10b | 图形界面能力逐项对照命令行等价面，布局坐标例外需明确标注——新功能页面。 | #274 | §1.5 | §2.5 | §3.5 | §4.5 无条目 |
 | R11 | 初始化与迁移验收覆盖单机向导、权威端向导、客户端配对、旧 `sshmgr tui` 提示与文档入口。 | #275 | §1.6 | §2.6 | §3.6 | §4.6 |
 | R12 | Windows 反斜杠路径上传缺陷 #47 的复设用例通过，且路径进入下发记录时已规范化。 | #270 | 无条目（由 §3.1 C3-PATH-01 覆盖） | 无条目（由 §3.1 C3-PATH-01 覆盖） | §3.1 C3-PATH-01 | 无条目（缺陷属新版路径，不做旧客户端复设） |
@@ -188,7 +188,62 @@
 
 ### Web UI 基础页面浏览器与手机观感（#273 填写）
 
-<!-- 待 #273 补写：Web UI 基础页面的浏览器与手机观感条目 -->
+#### 人工273-1 基础页面手机观感
+
+标注：适用组合=权威端；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- owner 使用自己的手机访问公司 A 的权威端 Web UI。手机只作为浏览器，
+  不入真机设备矩阵，也不在本册记录真实网络标识。
+- 已完成人工273-2的证书公钥指纹人工比对；手机浏览器允许继续打开权威端
+  Web UI。
+- 本条只看基础查看页面的观感。网络拓扑画布、新增服务器与设备、共享存储
+  授权页、服务器详情反向视图归 #274，不在本条验收。
+执行步骤：
+1. 在手机浏览器依次打开：`/ui/`、`/ui/access/profiles`、
+   `/ui/access/projects`、`/ui/access/device-codes`、
+   `/ui/access/pairing/list`、`/ui/ops/backup`、`/ui/ops/audit`、
+   `/ui/secrets/`。
+2. owner 逐页目验：页面能打开、标题与导航可读、列表或表单不出现必须横向
+   滚动才能读完整行的情况、返回导航可用；查看与过滤操作可以用触控完成。
+3. 配对批准页只检查列表、短认证码、Profile（服务器授权分组）选择与返回
+   导航的观感，不提交批准或拒绝；人工配对判断归 #275。
+4. owner 记录每页「过」或列出影响使用的观感问题；不得用浏览器开发工具的
+   截图代替手机目验。
+期望结果：
+- 上述基础查看页面在手机上可用；文字、表格、过滤条件与主要按钮没有遮挡
+  或超出视口后无法到达的问题。
+- 发现观感问题时登记欠账，不得因页面在桌面浏览器正常而放宽判据。
+证据留存方式：
+- 每页留存手机截图或页面文本，另附路径清单与 owner 的逐页结论；截图先
+  确认不含机密值、真实网络标识与账号名。
+是否允许自动化替代：
+- 不允许。本条是 owner 对手机观感的人工保留面；自动化手机视口测试只能
+  作为实现前的补充证据。
+
+#### 人工273-2 权威端证书公钥指纹人工比对
+
+标注：适用组合=权威端；操作面=owner 命令行；证据来源=真机端到端
+前置数据：
+- 公司 A 的权威端 `serve` 服务已生成证书，Web UI 登录页可访问。
+- owner 在权威端主机命令行可执行 `sshmgr serve admin status`；浏览器登录页
+  显示证书公钥的 SHA-256 指纹。
+- 指纹事实来源是权威端主机上的证书文件；agent 可以留存两处显示，但不得
+  代替 owner 判断两处指纹相同。
+执行步骤：
+1. owner 在公司 A 的权威端执行 `sshmgr serve admin status`，读取
+   「证书公钥 SHA-256 指纹」整行。
+2. owner 在浏览器打开权威端 Web UI 登录页，读取「证书公钥指纹」整行。
+3. owner 把两处 `sha256:` 后的 64 位十六进制指纹逐字比对。
+期望结果：
+- 两处指纹完全相同；owner 记录「人工比对一致」。
+- 任一字符不一致时停止后续权威端 Web UI 验收，登记失败证据，并先检查
+  是否访问到错误服务或证书已被替换。
+证据留存方式：
+- 留存命令原文与完整输出、登录页页面文本或截图、owner 人工比对结论；
+  输出中不得出现真实地址、账号名或口令。
+是否允许自动化替代：
+- 不允许。自动化只能证明两个显示值都被取出，不能替代 owner 对安全判断项
+  的人工逐字比对。
 
 ### Web UI 新功能页面浏览器与手机观感（#274 填写）
 
@@ -504,7 +559,107 @@
 
 ### 1.4 Web UI 基础、安全与等价面（#273 填写）
 
-<!-- 待 #273 补写：单机组合的 Web UI 基础、安全与等价面条目 -->
+#### 单机273-1 回环监听、一次性启动令牌与退出即停
+
+标注：适用组合=单机；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 家 A 的单机演练机使用一次性演练 vault，不触碰生产 vault；本机角色为
+  单机，且已有可供页面显示的服务器条目。
+- 依据：#38 结论第 3 条；#39 结论第 1 条；#49 结论第 14 条；ADR 0010、
+  0012、0013；CONTEXT.md 的「Web UI（管理界面）」。
+执行步骤：
+1. owner 在家 A 的单机演练机执行 `sshmgr ui`，保存终端输出；输出中的一
+   次性启动令牌必须先替换为 `<一次性启动令牌>` 再入运行记录。
+2. 确认输出网址以 `http://127.0.0.1:<随机端口>/ui/start?token=` 开头；
+   浏览器打开后落在不带令牌的 `/ui/`。
+3. 在浏览器开发者工具中保存 `/ui/` 的响应头与会话 cookie 属性；令牌值与
+   cookie 值不得进入证据。
+4. 使用同一个启动网址第二次访问；保存错误页页面文本。
+5. 在候选发行版源码根目录执行：
+   `go test ./internal/webui -run '^(TestHostValidationRejectsNonLoopbackHosts|TestWriteRouteRequiresMatchingOriginAndCSRFToken|TestCSRFTokenBoundToSession|TestAllWriteMethodsRequireOriginAndCSRFToken|TestSecurityHeadersOnEveryResponse)$'`
+6. 对 `sshmgr ui` 发送终止信号或关闭其终端；等待命令退出后刷新浏览器页。
+期望结果：
+- Web UI 只监听 `127.0.0.1` 的随机端口；启动令牌首次使用即换取进程内会话，
+  第二次使用返回 403，并提示重新运行 `sshmgr ui` 获取新的启动链接。
+- 会话 cookie 名包含本次端口，属性为 `HttpOnly`、`SameSite=Strict`、
+  `Path=/ui/`，且不带 `Secure`。
+- 页面响应包含内容安全策略 `default-src 'none'; script-src 'self';
+  style-src 'self'; connect-src 'self'; img-src 'self'; font-src 'self';
+  base-uri 'none'; form-action 'self'; frame-ancestors 'none'`，并带
+  `X-Content-Type-Options: nosniff`、`Referrer-Policy: same-origin` 与
+  `Cache-Control: no-store`。
+- 自动化测试证明非回环 Host、错误 Origin、缺失或错误防跨站请求伪造令牌
+  的写请求被拒绝，且令牌与会话绑定。
+- `sshmgr ui` 退出后浏览器无法再连接；没有常驻进程继续提供页面。
+证据留存方式：
+- 留存脱敏后的启动输出、`/ui/` 页面文本、响应头与会话 cookie 属性、令牌
+  二次使用错误页、自动化测试完整输出、命令退出与浏览器刷新后的失败截图。
+是否允许自动化替代：
+- 不允许用自动化替代真实回环监听、令牌一次性、退出即停与浏览器响应头；
+  第 5 步测试只作为 Host、Origin 与防跨站请求伪造拒绝分支的补充证据。
+
+#### 单机273-2 单机基础页面、命令行等价面与写操作审计
+
+标注：适用组合=单机；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 完成 S1-01，家 A 的单机演练机已有服务器条目、机密项与审计记录；备份
+  配置可读。本条不执行破坏性服务器、机密项或备份操作。
+- 设备码与配对是权威端专属能力，单机 Web UI 不注册对应页面；本条按单机
+  适用页面逐一对照。
+- 依据：#38 结论第 2、6 条；#39 结论第 8 条；#55 结论第 4 条；ADR 0003、
+  0010；CONTEXT.md 的「Web UI（管理界面）」。
+执行步骤：
+1. owner 启动单机 Web UI 后逐页打开基础页面：
+   `/ui/`、`/ui/access/profiles`、`/ui/access/projects`、`/ui/secrets/`、
+   `/ui/ops/backup`、`/ui/ops/settings`、`/ui/ops/update`、`/ui/ops/audit`。
+2. 对照命令行等价面并保存输出：
+   - 服务器列表、需要注意过滤、详情：`sshmgr servers ls [--attention]`、
+     `sshmgr servers show <条目>`；
+   - 服务器编辑、删除、导入、补全：`sshmgr servers edit <条目>`、
+     `sshmgr servers rm <条目>`、`sshmgr servers import`、
+     `sshmgr servers complete`；
+   - 服务器主机密钥锚查看、覆盖与删除：`sshmgr servers pin-hostkey <条目>`、
+     `sshmgr servers pin-hostkey <条目> --fingerprint <指纹> --force`、
+     `sshmgr servers pin-hostkey <条目> --clear`；
+   - Profile（服务器授权分组）：`sshmgr profiles ls`、
+     `sshmgr profiles add <名>`、`sshmgr profiles grant <Profile> <条目...>`、
+     `sshmgr profiles revoke <Profile> <条目...>`、
+     `sshmgr profiles remove <名>`；
+   - 项目令牌：`sshmgr projects ls`、`sshmgr projects show <项目>`、
+     `sshmgr projects add <项目> --profile <Profile>`、
+     `sshmgr projects rotate <项目>`、`sshmgr projects disable <项目>`、
+     `sshmgr projects enable <项目>`、`sshmgr projects revoke <项目>`、
+     `sshmgr projects remove <项目>`；
+   - 机密项：`sshmgr secrets list`、`sshmgr secrets add <名> --stdin`、
+     `sshmgr secrets set <名> --stdin`、`sshmgr secrets edit <名>`、
+     `sshmgr secrets allow --secrets <名...> --servers <条目...>`、
+     `sshmgr secrets disallow --secrets <名...> --servers <条目...>`、
+     `sshmgr secrets records <名>`、`sshmgr secrets rm <名>`；
+   - 备份：`sshmgr backup status`、`sshmgr backup create`、
+     `sshmgr backup verify --latest`、`sshmgr backup config show`、
+     `sshmgr backup config set`；
+   - 设置与升级：`sshmgr settings ls`、`sshmgr settings get <设置项>`、
+     `sshmgr settings set <设置项> <值>`、`sshmgr settings unset <设置项>`、
+     `sshmgr update`；
+   - 审计：`sshmgr audit --source web_ui --action <动作名> --limit 100`。
+3. 在浏览器创建一个一次性 Profile（服务器授权分组），确认列表出现；再在
+   浏览器删除该一次性 Profile，确认清理完成。
+4. 打开 `/ui/ops/audit?source=web_ui`，核对第 3 步的写操作行；再执行
+   `sshmgr audit --source web_ui --action profile.add --action profile.rm
+   --limit 100` 对照。
+期望结果：
+- 浏览器页面与命令行输出对同一 vault 数据给出相同条目名、条目数、状态与
+  过滤结果；页面显示的每项既有能力都能在上面的命令行等价面中找到。
+- 机密项页面只显示名字、备注、环境变量名、可写入服务器与时间，不显示值。
+- 一次性 Profile 的新增与删除都产生来源为 `web_ui` 的 `profile.add` 与
+  `profile.rm` 审计；审计摘要不含机密值或凭据。
+- 清理后 Profile 列表无该一次性条目；失败清理不得记为完成。
+证据留存方式：
+- 留存每个页面路径与页面文本或截图、所有对照命令原文与完整输出、浏览器
+  写操作页面、审计页面与命令输出、一次性 Profile 清理证据。
+是否允许自动化替代：
+- 不允许。页面呈现、命令行等价面对照和真实单机 vault 审计必须真机执行；
+  进程内测试只能作为实现前的补充证据。
 
 ### 1.5 Web UI 新功能页面（#274 填写）
 
@@ -724,7 +879,204 @@
 
 ### 2.4 Web UI 基础、安全与等价面（#273 填写）
 
-<!-- 待 #273 补写：权威端组合的 Web UI 基础、安全与等价面条目 -->
+#### 权威端273-1 独立监听与虚拟局域网地址交集推导
+
+标注：适用组合=权威端；操作面=owner 命令行；证据来源=真机端到端
+前置数据：
+- 公司 A 的权威端已初始化，`serve` 与 Web UI 独立监听运行；拓扑中已有
+  虚拟局域网成员地址，且该地址存在于权威端本机网卡上。
+- 权威端主监听端口与 Web UI 独立端口按实际设置记录；证据中的真实地址先
+  替换为「权威端虚拟局域网地址」「权威端物理局域网地址」等代称。
+- 依据：#39 结论第 2 条；#49 结论第 11–13 条；#55 结论第 3、6 条；ADR
+  0013。
+执行步骤：
+1. owner 在公司 A 的权威端执行 `sshmgr serve admin status`，保存 Web UI
+   端口、全部 Web UI 地址与证书指纹输出。
+2. owner 从虚拟局域网里的浏览器打开状态输出中的 Web UI 地址，确认登录页
+   可用；主监听端口上的 `/ui` 与 `/ui/login` 应返回 404。
+3. owner 从物理局域网地址访问同一 Web UI 端口，确认连接被拒绝；该真实地址
+   只私下使用，证据写代称。
+4. owner 把状态输出的非回环地址与拓扑虚拟局域网成员地址、本机网卡地址的
+   交集私下核对；不应出现未同时存在于两侧的物理局域网地址。
+5. 在候选发行版源码根目录执行：
+   `go test ./internal/webui -run '^(TestDeriveListenAddresses|TestDeriveListenAddressesRejectsInvalidManualAddress)$'`
+6. 在候选发行版源码根目录执行：
+   `go test ./internal/mcpserver -run '^(TestRunServeSeparatesWebUIListenerFromMainListener|TestRunServeFallsBackToLoopbackWhenListenDerivationFails|TestWebUIListenerManagerClosesOldAndOpensNewListeners|TestWebUIListenerManagerRetriesFailedAddressAfterThirtySeconds)$'`
+期望结果：
+- Web UI 与主监听使用不同端口；主监听不再提供 `/ui`，Web UI 独立监听提供
+  登录页。
+- 默认监听地址是拓扑里全部设备的虚拟局域网成员地址与本机网卡地址的交集，
+  并始终包含 `127.0.0.1`；物理局域网地址不会被自动加入。
+- 交集为空时只监听 `127.0.0.1`，并提示用 `serve.ui_listen` 手动指定；
+  `serve.ui_listen` 可覆盖地址集合，非法 IP 地址被拒绝。
+- 绑定失败的地址按测试证明的节奏重试，不再需要的旧地址会被关闭。
+证据留存方式：
+- 留存状态命令原文与脱敏完整输出、虚拟局域网浏览器登录页文本、主监听 404
+  响应、物理地址拒绝证据、owner 的交集核对结论、两条自动化测试完整输出。
+是否允许自动化替代：
+- 不允许用自动化替代真实权威端双端口与虚拟局域网路径；地址交集、交集为空
+  与重试契约允许第 5、6 步测试代证。
+
+#### 权威端273-2 管理员口令登录、锁定、会话与重验证
+
+标注：适用组合=权威端；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 公司 A 的权威端 Web UI 可从 `127.0.0.1` 访问；owner 知道当前管理员口令。
+  全部失败登录演练只用 `127.0.0.1` 这个来源地址，避免把其他设备锁住。
+- 依据：#39 结论第 3–9 条；ADR 0010、0013；CONTEXT.md 的「管理员口令」与
+  「会话代」。
+执行步骤：
+1. owner 在权威端本机浏览器用正确管理员口令登录，保存登录响应与会话
+   cookie 属性，再注销。
+2. owner 用错误口令登录一次，保存错误页与耗时；紧接着用正确口令登录，记
+   录成功登录耗时，观察全局延迟。随后注销。
+3. owner 连续五次用错误口令登录；第五次应显示该来源 IP 已锁定。保存第五次
+   错误页后，在权威端执行 `sshmgr serve admin unlock 127.0.0.1` 解除锁定。
+4. owner 重新登录，先打开 `/ui/password`，确认 5 分钟内直接显示修改口令页；
+   不提交修改。
+5. 保持该浏览器会话 5 分零 1 秒无操作，再打开 `/ui/password`；应跳转到
+   `/ui/reverify?next=/ui/password`。输入正确口令后应回到修改口令页。
+6. 再次保持会话 5 分零 1 秒无操作，继续用一次性靶子核对其他敏感写入口：
+   新增机密项、机密项换值、修改机密项备注或环境变量名、删除机密项、立即
+   备份、删除一次性服务器条目、导出或恢复备份、撤销一次性实例。逐项发起
+   提交；未重验时都应先跳到重新验证页，且不写入任何靶子数据。若页面缺少
+   其中某个入口，按「页面缺失」登记失败，不得改用其他能力代替。随后用正
+   确口令完成一次重新验证。
+7. 在候选发行版源码根目录执行：
+   `go test ./internal/webui -run '^(TestAuthorityLoginExchangesPasswordForSecureSession|TestAuthoritySessionSlidesAndGenerationInvalidates|TestAuthorityLoginFailuresLockIPAndDelayAllRequests|TestAuthorityLoginGlobalDelayIsCappedAtTenSeconds|TestAuthorityPasswordChangeRequiresRecentReverification)$'`
+8. owner 检查登录页：没有找回口令入口。重置已忘记口令的唯一入口写明为在
+   权威端主机执行 `sshmgr serve admin set`；该命令会使全部 Web 会话作废并
+   写审计。
+期望结果：
+- 正确口令登录只签发名为 `__Host-sshmgr_ui` 的会话 cookie，属性为 `Secure`、
+  `HttpOnly`、`SameSite=Strict`、`Path=/`；登录成功、失败、锁定与注销分别
+  产生 `admin.login`、`admin.login_fail`、`admin.lockout`、`admin.logout`
+  审计。
+- 第一次错误登录后，后续所有登录请求至少多等 1 秒；全局延迟最多 10 秒。
+- 同一来源地址 15 分钟内第五次失败后锁定 15 分钟；锁定期间不校验口令，
+  `sshmgr serve admin unlock 127.0.0.1` 能解除。
+- 会话按最后一次活动时间滑动，12 小时无活动失效；会话代变化后旧会话立即
+  失效。这两个时间边界由第 7 步测试代证。
+- 超过 5 分钟未重验时，修改管理员口令页先要求重新输入口令；重验成功后回
+  到原页面。新增、修改或删除机密项，导出或恢复备份，删除服务器，撤销实
+  例等敏感写入口同样要求 5 分钟内重新验证；未重验时不得写入数据。口令忘
+  记时没有浏览器找回入口，只能权威端命令行重置。
+证据留存方式：
+- 留存浏览器页面文本、截图、响应头与 cookie 属性（不含 cookie 值）、每次
+  登录耗时、锁定与解锁命令输出、审计查询输出、自动化测试完整输出；口令
+  不得进入任何证据。
+是否允许自动化替代：
+- 不允许用自动化替代真实浏览器登录、错误口令、按来源地址锁定、解锁与
+  5 分钟重验；12 小时滑动会话与全局延迟 10 秒封顶允许第 7 步测试代证。
+
+#### 权威端273-3 Host、Origin、防跨站请求伪造与审计来源
+
+标注：适用组合=权威端；操作面=agent 工具面；证据来源=真机端到端
+前置数据：
+- 权威端273-2已完成一次有效登录，浏览器会话可用于本条；agent 在权威端本机
+  发送测试请求，不改动 vault 数据。
+- 依据：#39 结论第 1、8 条；#49 结论第 6 条；ADR 0012；#55 结论第 6 条。
+执行步骤：
+1. 保存 `/ui/login` 与登录后的 `/ui/` 响应头，核对内容安全策略、
+   `X-Content-Type-Options`、`Referrer-Policy` 与 `Cache-Control`。
+2. 用本地 HTTP 客户端带错误 `Host` 请求 Web UI 登录页，保存状态码与页面
+   文本。
+3. 复用有效会话 cookie，但分别发送 `Origin: https://example.invalid` 的写
+   请求、来源正确但缺失防跨站请求伪造令牌的写请求；两组请求都以
+   `/ui/access/profiles` 为目标。保存两次状态码与页面文本。令牌和 cookie
+   值不得进入证据。
+4. 在候选发行版源码根目录执行：
+   `go test ./internal/webui -run '^(TestAuthorityHostOriginAndCSRFGuards|TestAuthorityLoginExchangesPasswordForSecureSession)$'`
+5. 引用权威端273-4的一次性 Profile 写操作审计，或在同一会话中用页面提交一
+   次一次性 Profile 新增；随后执行
+   `sshmgr audit --source web_ui --action admin.login --action profile.add
+   --limit 100`。
+期望结果：
+- 所有页面响应都带第 1 步列出的安全响应头；HTML 不缓存。
+- 错误 `Host` 被拒绝；错误或缺失 `Origin` 的写请求返回 403，缺失防跨站请
+  求伪造令牌也返回 403，不落入业务处理器。
+- 登录表单的防跨站请求伪造令牌与 cookie 绑定；登录后的写请求令牌与会话
+  绑定。
+- 登录与经 Web UI 发起的写操作都有来源为 `web_ui` 的审计行；来源地址与审
+  计摘要不包含口令、cookie、令牌或机密值。
+证据留存方式：
+- 留存响应头、三组拒绝请求的命令原文与完整输出（敏感值先替换为占位符）、
+  审计查询输出、自动化测试完整输出。
+是否允许自动化替代：
+- 不允许自动化替代真实权威端监听上的请求与审计；第 4 步测试只作为分支
+  覆盖补充。
+
+#### 权威端273-4 权威端基础页面、命令行等价面与唯一例外
+
+标注：适用组合=权威端；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 公司 A 的权威端已有服务器条目、Profile（服务器授权分组）、项目令牌、
+  设备码、备份状态、审计记录与机密项；配对队列可以为空，但页面必须可打
+  开。本条不提交配对批准。
+- owner 已完成权威端273-2的登录与重验证，距上次验证不足 5 分钟。
+- 设备码与配对是权威端专属页面；本条把两页与单机共有的服务器、Profile
+  （服务器授权分组）、项目令牌、备份、审计、机密项页面一起逐项对照。
+- 依据：#38 结论第 2、6 条；#39 结论第 8 条；#49 结论第 6 条；#55 结论第
+  4 条；ADR 0003、0010、0012。
+执行步骤：
+1. owner 逐页打开：
+   `/ui/`、`/ui/access/profiles`、`/ui/access/projects`、
+   `/ui/access/device-codes`、`/ui/access/pairing/list`、`/ui/secrets/`、
+   `/ui/ops/backup`、`/ui/ops/settings`、`/ui/ops/update`、`/ui/ops/audit`。
+2. 对照命令行等价面并保存输出：
+   - 服务器列表、过滤、详情、编辑、删除、导入、补全：`sshmgr servers ls
+     [--attention]`、`sshmgr servers show <条目>`、`sshmgr servers edit
+     <条目>`、`sshmgr servers rm <条目>`、`sshmgr servers import`、
+     `sshmgr servers complete`；
+   - 服务器主机密钥锚查看、覆盖与删除：`sshmgr servers pin-hostkey <条目>`、
+     `sshmgr servers pin-hostkey <条目> --fingerprint <指纹> --force`、
+     `sshmgr servers pin-hostkey <条目> --clear`；
+   - Profile（服务器授权分组）：`sshmgr profiles ls`、`sshmgr profiles add
+     <名>`、`sshmgr profiles grant <Profile> <条目...>`、`sshmgr profiles
+     revoke <Profile> <条目...>`、`sshmgr profiles remove <名>`；
+   - 项目令牌：`sshmgr projects ls`、`sshmgr projects show <项目>`、
+     `sshmgr projects add <项目> --profile <Profile>`、`sshmgr projects
+     rotate <项目>`、`sshmgr projects disable <项目>`、`sshmgr projects
+     enable <项目>`、`sshmgr projects revoke <项目>`、`sshmgr projects
+     remove <项目>`；
+   - 设备码：`sshmgr cache-tokens ls`、`sshmgr cache-tokens add --name
+     <设备名> --profile <Profile>`、`sshmgr cache-tokens revoke <设备名>`；
+   - 配对：`sshmgr serve pair ls`、`sshmgr serve pair approve <名字或标识>
+     --profile <Profile>`、`sshmgr serve pair reject <名字或标识>`；
+   - 机密项：`sshmgr secrets list`、`sshmgr secrets add <名> --stdin`、
+     `sshmgr secrets set <名> --stdin`、`sshmgr secrets edit <名>`、
+     `sshmgr secrets allow --secrets <名...> --servers <条目...>`、
+     `sshmgr secrets disallow --secrets <名...> --servers <条目...>`、
+     `sshmgr secrets records <名>`、`sshmgr secrets rm <名>`；
+   - 备份、设置、升级、审计：`sshmgr backup status`、`sshmgr backup create`、
+     `sshmgr backup verify --latest`、`sshmgr backup config show`、
+     `sshmgr backup config set`、`sshmgr settings ls`、
+     `sshmgr settings get <设置项>`、`sshmgr settings set <设置项> <值>`、
+     `sshmgr settings unset <设置项>`、`sshmgr update`、
+     `sshmgr audit --source web_ui --limit 100`。
+3. 在浏览器创建一个一次性 Profile（服务器授权分组），确认列表出现；再删除
+   该一次性 Profile，并确认清理完成。
+4. 打开 `/ui/ops/audit?source=web_ui`，核对第 3 步写操作；再执行
+   `sshmgr audit --source web_ui --action profile.add --action profile.rm
+   --limit 100`。
+5. 在运行记录的基础页面对照表中登记：网络拓扑画布的布局坐标是图形界面
+   能力对照的唯一例外，没有命令行等价面；本条不执行画布操作，画布与探测
+   交互归 #274。
+期望结果：
+- 浏览器页面与命令行输出对同一权威 vault 数据给出相同条目名、条目数、状
+  态与过滤结果；基础页面和既有功能的每项能力都有命令行等价面。
+- 设备码列表只显示令牌前缀与安全字段，不显示完整令牌；机密项页面不显示
+  值。配对列表与 `sshmgr serve pair ls` 对同一队列给出相同待处理行。
+- 一次性 Profile 新增与删除产生 `profile.add`、`profile.rm` 来源为 `web_ui`
+  的审计，清理后无残留。
+- 除拓扑画布布局坐标外，没有发现其他图形界面专属且无命令行等价面的能力；
+  该例外被明确登记。
+证据留存方式：
+- 留存每个页面路径与页面文本或截图、全部对照命令原文与完整输出、一次性
+  Profile 写操作与清理证据、审计页面与命令输出、唯一例外登记。
+是否允许自动化替代：
+- 不允许。权威端真实页面、真实命令行入口与权威 vault 审计必须真机执行；
+  配对批准本身另由 #275的人工判断条目覆盖。
 
 ### 2.5 Web UI 新功能页面（#274 填写）
 
@@ -1062,7 +1414,92 @@
 
 ### 3.4 Web UI 基础、安全与等价面（#273 填写）
 
-<!-- 待 #273 补写：客户端组合的 Web UI 基础、安全与等价面条目 -->
+#### 客户端273-1 客户端回环监听、一次性启动令牌与只读入口
+
+标注：适用组合=客户端；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 家 A Windows 新版客户端（工作机 1）的一次性实例已按 C3-01 拉取本地快照；
+  本条只使用该一次性实例。
+- 依据：#38 结论第 3 条；#39 结论第 1 条；#49 结论第 14 条；ADR 0010、
+  0012、0013；CONTEXT.md 的「Web UI（管理界面）」。
+执行步骤：
+1. owner 在客户端执行 `sshmgr ui --instance <一次性实例>`，保存脱敏后的
+   启动输出，并确认网址以 `http://127.0.0.1:<随机端口>/ui/start?token=`
+   开头。
+2. 浏览器打开后确认页面显示「客户端 · 只读」与「这里只读，修改需到权威端
+   Web UI 去做」；保存 `/ui/` 页面文本、响应头与会话 cookie 属性。
+3. 使用同一启动网址第二次访问，保存错误页。
+4. 在候选发行版源码根目录执行：
+   `go test ./internal/webui -run '^(TestHostValidationRejectsNonLoopbackHosts|TestWriteRouteRequiresMatchingOriginAndCSRFToken|TestCSRFTokenBoundToSession|TestAllWriteMethodsRequireOriginAndCSRFToken|TestSecurityHeadersOnEveryResponse|TestClientRoleShowsReadOnlyNoticeWithoutWriteEntries)$'`
+5. 关闭 `sshmgr ui` 终端或发送终止信号，确认命令退出后浏览器无法连接。
+期望结果：
+- 客户端 Web UI 只监听本机回环地址的随机端口；启动令牌首次使用即换会话，
+  第二次使用返回 403；命令退出即停。
+- 会话 cookie 名包含端口，属性为 `HttpOnly`、`SameSite=Strict`、
+  `Path=/ui/`，且不带 `Secure`。
+- 页面响应带与单机273-1相同的内容安全策略与安全响应头；自动化测试证明
+  非回环 Host、错误 Origin、缺失或错误防跨站请求伪造令牌被拒绝。
+- 客户端首页没有编辑、删除、新增、添加等修改入口，并提示修改到权威端
+  Web UI。
+证据留存方式：
+- 留存脱敏启动输出、页面文本、响应头与 cookie 属性、二次访问错误页、
+  自动化测试完整输出、退出后浏览器失败截图。
+是否允许自动化替代：
+- 不允许用自动化替代客户端真实回环模式、令牌一次性、退出即停与只读入口；
+  第 4 步测试只作为拒绝分支与只读页面契约的补充证据。
+
+#### 客户端273-2 客户端本地快照、本机探测视图与命令行等价面
+
+标注：适用组合=客户端；操作面=浏览器；证据来源=真机端到端
+前置数据：
+- 完成客户端273-1；一次性实例的本地快照内有服务器条目、机密项与网络拓扑
+  数据，且至少有一个可用的一次性探测目标。
+- 本条不写权威 vault；配对批准与实例删除不在本条执行。
+- 设备码与配对页面不适用于客户端；本条按客户端本地快照与本机操作对照。
+- 依据：#38 结论第 3 条；#39 结论第 8 条；#49 结论第 6 条；#55 结论第 4 条；
+  ADR 0003、0010；CONTEXT.md 的「客户端」「探测结果」。
+执行步骤：
+1. 在浏览器打开 `/ui/`、`/ui/secrets/`、`/ui/ops/client`、
+   `/ui/ops/client-audit` 与 `/ui/topology/`。
+2. 对照命令行输出：
+   - 服务器：默认实例用 `sshmgr servers ls`；命名实例逐条执行
+     `sshmgr servers show <条目> --instance <一次性实例>`；
+   - 机密项：`sshmgr secrets list --instance <一次性实例>`；
+   - 连接状态与实例：`sshmgr cache status --instance <一次性实例>`、
+     `sshmgr cache instances ls`；
+   - 本机审计：`sshmgr cache audit --instance <一次性实例> --limit 100`；
+   - 网络拓扑只读数据：`sshmgr sites list --instance <一次性实例>`、
+     `sshmgr networks list --instance <一次性实例>`、`sshmgr devices list
+     --instance <一次性实例>`。
+3. 在客户端执行 `sshmgr devices probe --from self --instance <一次性实例>
+   <一次性目标>`，再刷新 `/ui/topology/`，确认页面仍为只读、探测起点只能
+   是本机，并能看到本机起点的探测结果摘要；真实地址先替换为网络名加序号。
+4. 在浏览器分别访问 `/ui/access/`、`/ui/access/profiles/delete`、
+   `/ui/secrets/new`、`/ui/servers/<一次性条目>/edit`、
+   `/ui/servers/<一次性条目>/delete` 与 `/ui/ops/backup`；第一个路径应显示
+   权威端管理提示，其余路径应返回 404。
+5. 在客户端页面对同一一次性实例执行一次「立即同步」；对照
+   `sshmgr cache pull --instance <一次性实例>`。实例切换的命令行等价面登记
+   为后续命令显式加 `--instance <实例>`，或启动 Web UI 时使用
+   `sshmgr ui --instance <实例>`。
+期望结果：
+- 客户端页面只显示本地快照内的服务器、机密项名字、备注、环境变量名与
+  可写入服务器等安全字段、网络拓扑、连接状态与本机审计；显示内容与第 2
+  步命令行输出一致，不显示机密项值。
+- 页面不出现新增、编辑、删除、授权、备份配置等修改入口；访问写路由得到
+  404，而不是客户端代写权威 vault。
+- `/ui/access/` 提示「profile、配对、设备码和项目令牌在权威端管理。」；
+   页头同时保留只读到权威端修改的指引。
+- 本机探测视图可用且起点只能是本机；探测结果保存在客户端本地，权威端审计
+   不新增 `probe-connectivity` 行。
+- 立即同步失败时旧快照仍可查看；成功后页面与 `cache status` 的时间、修订
+  号一致。
+证据留存方式：
+- 留存每个页面路径与页面文本或截图、全部命令原文与完整输出、脱敏探测结
+  果、写路由 404 响应、权威端审计无探测记录的查询输出、同步前后状态。
+是否允许自动化替代：
+- 不允许。真实客户端快照、回环页面、本机探测与权威端无回传必须真机实证；
+  进程内测试只能作为页面路由契约的补充证据。
 
 ### 3.5 Web UI 新功能页面（#274 填写）
 
@@ -1215,7 +1652,8 @@
 
 ### 4.4 Web UI 基础、安全与等价面（#273 填写）
 
-本组合无条目（#273 确认）
+本组合无条目（#273 确认：基础 Web UI 按单机、权威端、客户端三种新版本角
+色验收；旧版本界面的兼容提示与版本混跑行为归 #275 及第 4 部分其他条目。）
 
 ### 4.5 Web UI 新功能页面（#274 填写）
 
