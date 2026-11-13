@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -458,6 +459,134 @@ func TestDownloadForProfileTruncatesLargeFile(t *testing.T) {
 // host FS, which accepts both separators on Windows; a POSIX path is the native
 // case for a real Linux remote).
 func toSlash(p string) string { return filepath.ToSlash(p) }
+
+// TestNormalizeRemotePath 锁定远端路径规范化规则：Linux 和 macOS 的反斜杠
+// 是文件名字符，不能改写；只有盘符绝对路径才统一 Windows 分隔符。
+func TestNormalizeRemotePath(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"POSIX path keeps backslash", `/a\b`, `/a\b`},
+		{"uppercase Windows drive uses backslash", `C:\a\b`, `C:/a/b`},
+		{"lowercase Windows drive mixes separators", `c:/a\b`, `c:/a/b`},
+		{"relative path unchanged", `a\b`, `a\b`},
+		{"backslash-rooted path unchanged", `\a`, `\a`},
+		{"drive-relative path unchanged", `C:a`, `C:a`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeRemotePath(tc.in); got != tc.want {
+				t.Fatalf("normalizeRemotePath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// windowsPathToolFixture 在非 Windows 测试主机上用 testsshd 的虚拟文件系统
+// 把 C:/... 映射到临时目录；在 Windows 测试主机上直接使用本机临时目录和
+// 原生 SFTP 文件系统。两种方式都能从真实 MCP 文件工具边界验证盘符路径。
+type windowsPathToolFixture struct {
+	store          *store.Store
+	profileID      string
+	serverID       string
+	backslashPath  string
+	normalizedPath string
+	hostPath       string
+}
+
+func newWindowsPathToolFixture(t *testing.T, relativeSlashPath string) windowsPathToolFixture {
+	t.Helper()
+	root := t.TempDir()
+	opts := testsshd.Options{Password: "pw"}
+	var normalizedPath, hostPath string
+	if runtime.GOOS == "windows" {
+		hostPath = filepath.Join(root, filepath.FromSlash(relativeSlashPath))
+		normalizedPath = toSlash(hostPath)
+	} else {
+		opts.VirtualFilesystemRoot = root
+		normalizedPath = "C:/" + relativeSlashPath
+		hostPath = filepath.Join(root, filepath.FromSlash(normalizedPath))
+	}
+
+	addr, hostKey, cleanup := testsshd.Start(t, opts)
+	t.Cleanup(cleanup)
+	fixture := windowsPathToolFixture{
+		backslashPath:  strings.ReplaceAll(normalizedPath, "/", `\`),
+		normalizedPath: normalizedPath,
+		hostPath:       hostPath,
+		store:          newStore(t),
+	}
+	fixture.serverID = seedRealServer(t, fixture.store, "windows-path", addr, hostKey, "")
+	fixture.profileID, _ = fixture.store.AddProfile("p")
+	_ = fixture.store.GrantServers(fixture.profileID, []string{fixture.serverID})
+	return fixture
+}
+
+// TestFileToolsNormalizeWindowsDriveRemotePaths 覆盖三个文件工具：输入反
+// 斜杠盘符路径时，写入和下载使用规范化后的正斜杠路径，审计也记录同一路径。
+func TestFileToolsNormalizeWindowsDriveRemotePaths(t *testing.T) {
+	fixture := newWindowsPathToolFixture(t, "Users/u/AppData/Local/Temp/x.ps1")
+	ctx := context.Background()
+
+	const inlineContent = "windows-content"
+	if _, err := UploadContentForProfile(
+		ctx, fixture.store, "proj-test", fixture.profileID, fixture.serverID,
+		inlineContent, fixture.backslashPath, "", 1<<20,
+	); err != nil {
+		t.Fatalf("upload content: %v", err)
+	}
+	if got, err := os.ReadFile(fixture.hostPath); err != nil || string(got) != inlineContent {
+		t.Fatalf("upload content host file = %q, err=%v; want %q", got, err, inlineContent)
+	}
+
+	const uploadContent = "uploaded-file\n"
+	localFile := filepath.Join(t.TempDir(), "source.txt")
+	if err := os.WriteFile(localFile, []byte(uploadContent), 0o644); err != nil {
+		t.Fatalf("write local source: %v", err)
+	}
+	if _, err := UploadForProfile(
+		ctx, fixture.store, "proj-test", fixture.profileID, fixture.serverID,
+		localFile, fixture.backslashPath,
+	); err != nil {
+		t.Fatalf("upload file: %v", err)
+	}
+	if got, err := os.ReadFile(fixture.hostPath); err != nil || string(got) != uploadContent {
+		t.Fatalf("upload file host file = %q, err=%v; want %q", got, err, uploadContent)
+	}
+
+	downloaded, err := DownloadForProfile(
+		ctx, fixture.store, "proj-test", fixture.profileID, fixture.serverID,
+		fixture.backslashPath,
+	)
+	if err != nil {
+		t.Fatalf("download: %v", err)
+	}
+	if downloaded.Content != uploadContent {
+		t.Fatalf("download content = %q, want %q", downloaded.Content, uploadContent)
+	}
+
+	rows, err := fixture.store.AuditRows(10)
+	if err != nil {
+		t.Fatalf("read audit: %v", err)
+	}
+	wantAuditCommands := map[string]bool{
+		fmt.Sprintf("inline %d bytes -> %s", len(inlineContent), fixture.normalizedPath): false,
+		localFile + " -> " + fixture.normalizedPath:                                      false,
+		fixture.normalizedPath: false,
+	}
+	for _, row := range rows {
+		if _, exists := wantAuditCommands[row.Command]; exists {
+			wantAuditCommands[row.Command] = true
+		}
+	}
+	for command, seen := range wantAuditCommands {
+		if !seen {
+			t.Fatalf("missing normalized audit command %q; rows=%+v", command, rows)
+		}
+	}
+}
 
 // TestUploadForProfileUploadsInProfileServer verifies the in-profile happy path:
 // an upload round-trips through the broker (upload via UploadForProfile, verify
@@ -1469,7 +1598,8 @@ func TestUploadContentForProfileParamValidation(t *testing.T) {
 	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", "", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
 		t.Fatalf("empty path: err=%v", err)
 	}
-	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", "tmp/rel.txt", "", 8); err == nil || !strings.Contains(err.Error(), "absolute path") {
+	if _, err := UploadContentForProfile(ctx, st, "proj-test", pid, srvID, "x", "tmp/rel.txt", "", 8); err == nil ||
+		!strings.Contains(err.Error(), "absolute path") || !strings.Contains(err.Error(), "C:/") {
 		t.Fatalf("relative path: err=%v", err)
 	}
 	// multiline base64 → single-line rejection.
@@ -1579,13 +1709,19 @@ func TestUploadContentForProfileNoLeakConnectError(t *testing.T) {
 // host:port shape and the audit must hold one error-status row.
 func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	st, pid, srvID, root := ucSeed(t)
+	if err := st.AddSecret("MIDFAIL_TOKEN", "", []byte("mid-failure-secret"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AllowSecrets([]string{"MIDFAIL_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 
 	blocker := root + "/blocker"
 	if err := os.WriteFile(filepath.FromSlash(blocker), []byte("i am a regular file"), 0o600); err != nil {
 		t.Fatalf("plant blocker file: %v", err)
 	}
 
-	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "data", blocker+"/sub/f.txt", "", 1<<20)
+	_, err := UploadContentForProfile(context.Background(), st, "proj-test", pid, srvID, "token={{sshmgr-secret:MIDFAIL_TOKEN}}", blocker+"/sub/f.txt", "", 1<<20)
 	if err == nil {
 		t.Fatal("regular file in parent chain: want SFTP mkdir failure")
 	}
@@ -1605,6 +1741,13 @@ func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("no error-status row; rows=%+v", rows)
+	}
+	records, err := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("写入失败不应登记下发记录，实际：%+v", records)
 	}
 }
 

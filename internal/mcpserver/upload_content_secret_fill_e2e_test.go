@@ -275,16 +275,22 @@ func TestUploadContentSecretFillFullFlow(t *testing.T) {
 	}
 	assertUploadContentResultHasNoSecretValue(t, base64Result, databasePassword, interfaceToken)
 
-	rows, err := st.AuditRows(3)
+	rows, err := st.AuditRows(10)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 3 {
-		t.Fatalf("audit rows = %+v", rows)
+	uploadRows := make([]store.AuditRow, 0, 3)
+	for _, row := range rows {
+		if row.Action == "upload-content" {
+			uploadRows = append(uploadRows, row)
+		}
 	}
-	textRow := rows[1]
-	base64Row := rows[0]
-	deniedRow := rows[2]
+	if len(uploadRows) != 3 {
+		t.Fatalf("upload-content audit rows = %+v", uploadRows)
+	}
+	textRow := uploadRows[1]
+	base64Row := uploadRows[0]
+	deniedRow := uploadRows[2]
 	if base64Row.Action != "upload-content" || base64Row.Status != "ok" ||
 		!strings.Contains(base64Row.Command, fmt.Sprintf("inline %d bytes -> %s", len(binaryWant), target)) ||
 		!strings.Contains(base64Row.Command, "secrets=DATABASE_PASSWORD") {
@@ -684,6 +690,13 @@ func TestUploadFileAndRelayFileKeepSecretPlaceholdersLiteral(t *testing.T) {
 			t.Fatal("audit leaks secret value")
 		}
 	}
+	records, err := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("upload_file 与 relay_file 不应登记下发记录，实际：%+v", records)
+	}
 }
 
 func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *testing.T) {
@@ -809,6 +822,13 @@ func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *t
 
 	if connections.Load() != 0 {
 		t.Fatalf("rejected uploads connected to target %d times", connections.Load())
+	}
+	records, err := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("连接前整体拒绝不应登记下发记录，实际：%+v", records)
 	}
 	for _, path := range []string{target, hiddenTarget} {
 		if _, statErr := os.Stat(filepath.FromSlash(path)); !os.IsNotExist(statErr) {

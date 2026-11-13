@@ -1,14 +1,16 @@
 package store
 
-// SecretValueForUpload 是上传内容填值专用的机密项当前值。Value 只允许在
-// 进程内使用，不能进入工具结果、日志或审计。
+// SecretValueForUpload 是上传内容填值专用的机密项当前值与当前值版本号。
+// Value 只允许在进程内使用，不能进入工具结果、日志或审计。
 type SecretValueForUpload struct {
 	Value             []byte
+	ValueVersion      int64
 	WritableServerIDs []string
 }
 
-// SecretValuesForUpload 按名字精确解密被引用的机密项。单个值解密失败只
-// 返回名字，其他值继续返回；数据库读取失败才返回错误。
+// SecretValuesForUpload 按名字精确解密被引用的机密项，并带回这次取得的
+// 当前值版本号。单个值解密失败只返回名字，其他值继续返回；数据库读取
+// 失败才返回错误。
 func (s *Store) SecretValuesForUpload(names []string) (map[string]SecretValueForUpload, []string, error) {
 	if len(names) == 0 {
 		return map[string]SecretValueForUpload{}, nil, nil
@@ -17,7 +19,7 @@ func (s *Store) SecretValuesForUpload(names []string) (map[string]SecretValueFor
 	for _, name := range names {
 		requested[name] = true
 	}
-	rows, err := s.db.Query(`SELECT id,name,value_blob FROM secrets ORDER BY id`)
+	rows, err := s.db.Query(`SELECT id,name,value_blob,value_version FROM secrets ORDER BY id`)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -27,7 +29,8 @@ func (s *Store) SecretValuesForUpload(names []string) (map[string]SecretValueFor
 	for rows.Next() {
 		var id, name string
 		var encrypted []byte
-		if err := rows.Scan(&id, &name, &encrypted); err != nil {
+		var valueVersion int64
+		if err := rows.Scan(&id, &name, &encrypted, &valueVersion); err != nil {
 			rows.Close()
 			return nil, nil, err
 		}
@@ -40,7 +43,7 @@ func (s *Store) SecretValuesForUpload(names []string) (map[string]SecretValueFor
 			failed = append(failed, name)
 			continue
 		}
-		values[name] = SecretValueForUpload{Value: value}
+		values[name] = SecretValueForUpload{Value: value, ValueVersion: valueVersion}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()

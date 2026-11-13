@@ -3,7 +3,9 @@ package mcpserver
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -17,6 +19,7 @@ import (
 	"ssh-manager-mcp/internal/dialplan"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/policy"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretfill"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -330,6 +333,7 @@ func contains(haystack []string, needle string) bool {
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // download has neither sudo nor a command deadline.
 func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, path string, hk ...sshbroker.HostKeyStore) (out DownloadOutput, err error) {
+	path = normalizeRemotePath(path)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -436,15 +440,17 @@ func DownloadForProfile(ctx context.Context, st *store.Store, projectID, profile
 // PARENT to pre-exist. Before the transfer this function MkdirAll's the parent
 // of remotePath (cli.MkdirAll — broker primitive over SFTP), matching the
 // `scp --parents` UX so an agent can target a freshly-named destination without
-// a preparatory exec_command. remotePath is a POSIX path; path.Dir (not
-// filepath.Dir) computes the parent so the gate stays correct on a Windows broker
-// host too (the remote's path convention is always POSIX).
+// a preparatory exec_command. remotePath is normalized before use: POSIX paths
+// stay unchanged, while Windows drive paths use forward slashes. path.Dir (not
+// filepath.Dir) computes the parent from that slash form so the behavior stays
+// correct on a Windows broker host too.
 //
 // Statuses: denied (out-of-profile), auth_error, no_credential (credential-
 // less server, Plan 20 C0 — Plan 21 A1 unified with exec), hostkey_mismatch,
 // connect_error, ok, error. There is no no_sudo / timeout branch — SFTP
 // upload has neither sudo nor a command deadline.
 func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, localPath, remotePath string, hk ...sshbroker.HostKeyStore) (out UploadOutput, err error) {
+	remotePath = normalizeRemotePath(remotePath)
 	var status string
 	start := time.Now()
 	defer func() {
@@ -541,7 +547,8 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // 器必须已在 profile 授权集合内。执行顺序固定：① 参数校验；② profile
 // 授权检查；③ 读取文本字节或解码 Base64；④ 读取本地服务器条目、填入
 // 机密项占位符并按填值后的字节数检查大小上限；⑤ 取凭据并连接目标服务
-// 器；⑥ 写入文件；⑦ 写审计。前四步都不访问目标服务器。
+// 器；⑥ 写入文件；⑦ 尽力登记机密项下发记录；⑧ 写审计。前四步都
+// 不访问目标服务器。
 //
 // 大小上限由 NewServerFromSource 从环境变量 SSHMGR_UPLOAD_CONTENT_MAX
 // 解析；测试直接传入较小的上限。
@@ -554,12 +561,18 @@ func UploadForProfile(ctx context.Context, st *store.Store, projectID, profileID
 // 取或 Base64 解码后的拒绝为填值前模板字节数，避免间接暴露机密值长度；
 // 更早失败为 0。
 func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
+	return uploadContentForProfile(ctx, st, projectID, profileID, serverID, content, remotePath, encoding, cap, nil, hk...)
+}
+
+func uploadContentForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID, content, remotePath, encoding string, cap int64, deliveryRecorder SecretDeliveryRecorder, hk ...sshbroker.HostKeyStore) (out UploadContentOutput, err error) {
+	remotePath = normalizeRemotePath(remotePath)
 	if encoding == "" {
 		encoding = "text"
 	}
 	byteCount := int64(0) // 只供审计使用；成功后改为实际写入字节数
 	var status string
 	var filledSecretNames []string
+	var deliveryRecordStatus, deliveryReason string
 	start := time.Now()
 	defer func() {
 		if status == "" {
@@ -568,6 +581,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		auditCommand := fmt.Sprintf("inline %d bytes -> %s", byteCount, remotePath)
 		if len(filledSecretNames) > 0 {
 			auditCommand += "; secrets=" + strings.Join(filledSecretNames, ",")
+			auditCommand += "; delivery-record=" + deliveryRecordStatus
 		}
 		_ = st.WriteAudit(store.AuditRow{
 			TS: start, ProjectID: projectID, ServerID: serverID, Action: "upload-content",
@@ -581,7 +595,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		return UploadContentOutput{}, fmt.Errorf("encoding must be \"text\" or \"base64\", got %q", encoding)
 	}
 	if remotePath == "" || !isAbsRemotePath(remotePath) {
-		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path starting with /")
+		return UploadContentOutput{}, fmt.Errorf("remote_path must be an absolute path: /dir/file, or a Windows drive path such as C:/dir/file (backslashes are accepted and converted)")
 	}
 	if encoding == "base64" && strings.ContainsAny(content, "\r\n") {
 		return UploadContentOutput{}, fmt.Errorf("base64 content must be single-line standard base64 with padding — join lines and resend")
@@ -650,6 +664,7 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 		}
 		return
 	}
+	templateContent := append([]byte(nil), contentBytes...)
 	contentBytes = filled.Content
 	r := bytes.NewReader(contentBytes)
 
@@ -708,12 +723,103 @@ func UploadContentForProfile(ctx context.Context, st *store.Store, projectID, pr
 	if filledSecretNames == nil {
 		filledSecretNames = []string{}
 	}
+	if len(filledSecretNames) > 0 {
+		deliveryRecordStatus = secretDeliveryStatusNotRecorded
+		registration := registerSecretDelivery(ctx, st, deliveryRecorder, cli, secretDeliveryRegistrationRequest{
+			ServerID: serverID, ProfileID: profileID, RemotePath: remotePath,
+			Filled: filled, Template: templateContent, TemplateLimitBytes: cap,
+		})
+		deliveryRecordStatus = registration.Status
+		deliveryReason = registration.Reason
+	}
 	out = UploadContentOutput{
 		Bytes:                 byteCount,
 		FilledSecretNames:     filledSecretNames,
+		DeliveryRecordStatus:  deliveryRecordStatus,
+		DeliveryRecordReason:  deliveryReason,
 		ConnectionNotesOutput: ConnectionNotesOutput{ConnectionNotes: connectionNotes},
 	}
 	return
+}
+
+type secretDeliveryRegistrationRequest struct {
+	ServerID           string
+	ProfileID          string
+	RemotePath         string
+	Filled             secretfill.Result
+	Template           []byte
+	TemplateLimitBytes int64
+}
+
+type secretDeliveryRegistration struct {
+	Status string
+	Reason string
+}
+
+// registerSecretDelivery 在文件写入成功后尽力登记下发记录，并把登记状态
+// 与未登记原因整理成 upload_content 的输出字段。
+func registerSecretDelivery(
+	ctx context.Context,
+	st *store.Store,
+	deliveryRecorder SecretDeliveryRecorder,
+	cli *sshbroker.Client,
+	request secretDeliveryRegistrationRequest,
+) secretDeliveryRegistration {
+	result := secretDeliveryRegistration{Status: secretDeliveryStatusNotRecorded}
+	finalPath, err := cli.RealRemotePath(ctx, request.RemotePath)
+	if err != nil {
+		result.Reason = "解析服务器上的最终路径失败，未登记下发记录：" + err.Error()
+		return result
+	}
+	digest := sha256.Sum256(request.Filled.Content)
+	deliverySecrets := make([]store.SecretDeliverySecret, 0, len(request.Filled.Names))
+	for _, name := range request.Filled.Names {
+		version, exists := request.Filled.ValueVersions[name]
+		if !exists || version <= 0 {
+			result.Reason = "机密项值版本号不可用，未登记下发记录"
+			return result
+		}
+		deliverySecrets = append(deliverySecrets, store.SecretDeliverySecret{
+			Name: name, ValueVersion: version,
+		})
+	}
+	recordInput := store.SecretDeliveryRecordInput{
+		ServerID: request.ServerID, Path: finalPath, Template: request.Template,
+		FileSHA256: hex.EncodeToString(digest[:]), Secrets: deliverySecrets,
+		WrittenAt: time.Now(), AuthorizationProfileID: request.ProfileID,
+		TemplateLimitBytes: request.TemplateLimitBytes,
+	}
+	if deliveryRecorder == nil {
+		hostname, err := os.Hostname()
+		if err != nil || hostname == "" {
+			hostname = "本机"
+		}
+		recordInput.InitiatingDeviceName = hostname
+		// 本机直接登记只发生在单机部署与权威端本机工具面；按本机角色区分两者。
+		recordInput.InitiatingInstanceName = "单机部署"
+		if state, err := roles.Load(); err == nil && state != nil && state.Role == roles.RoleServer {
+			recordInput.InitiatingInstanceName = "权威端本机"
+		}
+		if _, err := st.RecordSecretDelivery(recordInput, store.AgentSource()); err != nil {
+			result.Reason = "下发记录登记失败：" + err.Error()
+			return result
+		}
+		result.Status = secretDeliveryStatusRecorded
+		return result
+	}
+	outcome, err := deliveryRecorder.RecordSecretDeliveryForBroker(ctx, recordInput)
+	switch {
+	case err != nil:
+		result.Reason = outcome.Reason
+		if result.Reason == "" {
+			result.Reason = err.Error()
+		}
+	case outcome.Recorded:
+		result.Status = secretDeliveryStatusRecorded
+	default:
+		result.Reason = outcome.Reason
+	}
+	return result
 }
 
 // secretFillResultUsesPlaceholder 判断内容是否包含合法机密项占位符，或以
@@ -746,6 +852,26 @@ func isAbsRemotePath(p string) bool {
 	return len(p) >= 3 &&
 		((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z')) &&
 		p[1] == ':' && p[2] == '/'
+}
+
+// normalizeRemotePath 统一文件工具收到的远端路径写法。GitHub issue 47 的背
+// 景是 Windows 盘符路径里的反斜杠曾被原样传给 SFTP，导致目标路径被误处
+// 理；因此盘符加冒号后跟斜杠或反斜杠的路径会把全部反斜杠换成正斜杠。
+// 以正斜杠开头的路径可能是 Linux 或 macOS 路径，其中反斜杠是合法文件名
+// 字符，必须原样保留。其他输入不在这里改写；是否拒绝相对路径由调用方
+// 决定。该规则不依赖服务器条目的 shell 类型。
+func normalizeRemotePath(remotePath string) string {
+	if strings.HasPrefix(remotePath, "/") {
+		return remotePath
+	}
+	if len(remotePath) >= 3 &&
+		((remotePath[0] >= 'A' && remotePath[0] <= 'Z') ||
+			(remotePath[0] >= 'a' && remotePath[0] <= 'z')) &&
+		remotePath[1] == ':' &&
+		(remotePath[2] == '/' || remotePath[2] == '\\') {
+		return strings.ReplaceAll(remotePath, `\`, `/`)
+	}
+	return remotePath
 }
 
 // ForwardForProfile opens a `ssh -L` tunnel through serverID iff serverID is in
