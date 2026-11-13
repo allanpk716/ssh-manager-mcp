@@ -99,8 +99,14 @@ func TestBridgeIOCountsCallsAndResponses(t *testing.T) {
 	if err := conn.Write(ctx, resp); err != nil {
 		t.Fatal(err)
 	}
-	if !b.Quiescent() {
-		t.Fatal("call answered: must be quiescent")
+	// 写入与计数是相邻但非原子的两步,立即断言会短暂看到消费账领先;按
+	// 产品路径的方式有界等待配平。
+	quiesceDeadline := time.Now().Add(2 * time.Second)
+	for !b.Quiescent() {
+		if time.Now().After(quiesceDeadline) {
+			t.Fatal("call answered: must become quiescent")
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 	line := readLineWithTimeout(t, "copied response", outR, 2*time.Second)
 	var wire struct {
@@ -333,17 +339,30 @@ func TestBridgeIOHoldRetireLargeHeld(t *testing.T) {
 // ReleaseHold 后回到 SDK。
 func TestBridgeIOHoldWaitsForMessageBoundary(t *testing.T) {
 	b, inW, _ := newTestIO(t)
+	// 输入管道写端必须保活到测试结束;否则垃圾回收可能关闭它,让 feeder
+	// 提前看到宿主侧文件结束。
+	t.Cleanup(func() { inW.Close() })
+
+	half := `{"jsonrpc":"2.0","id":50,"method":"big"`
+	if _, err := inW.WriteString(half); err != nil { // 半行:帧未完
+		t.Fatal(err)
+	}
+	// MCP 软件开发工具包侧还没连接,半行一旦由 feeder 写出,字节进账必然
+	// 大于消费账;这比固定睡眠确定地证明 feeder 已离开初始帧边界。
+	halfForwardedDeadline := time.Now().Add(2 * time.Second)
+	for b.Quiescent() {
+		if time.Now().After(halfForwardedDeadline) {
+			t.Fatal("half frame was not forwarded to the SDK-side pipe")
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
 	conn, err := b.Transport().Connect(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
 
-	half := `{"jsonrpc":"2.0","id":50,"method":"big"`
-	if _, err := inW.WriteString(half); err != nil { // 半行:帧未完
-		t.Fatal(err)
-	}
-	time.Sleep(150 * time.Millisecond) // 让 feeder 转发半行(此时不在边界)
 	if !b.Hold() {
 		t.Fatal("Hold must succeed mid-frame")
 	}
@@ -351,12 +370,13 @@ func TestBridgeIOHoldWaitsForMessageBoundary(t *testing.T) {
 	if _, err := inW.WriteString(`,"params":{"x":1}}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond)
+	if !b.WaitFrozen(2 * time.Second) {
+		t.Fatal("feeder did not freeze at the completed frame boundary")
+	}
 	// 下一帧:应被扣住,不进 SDK。
 	if _, err := inW.WriteString(`{"jsonrpc":"2.0","id":51,"method":"next"}` + "\n"); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(150 * time.Millisecond)
 
 	// SDK 侧:读到的是完整的 id=50 帧;id=51 不得到达。探测读可取消
 	//(jsonrpc2 连接是单读者,探测 goroutine 不得滞留到下一步)。
