@@ -360,7 +360,8 @@ func runServersRmInteractive(t *testing.T, input string, args ...string) (string
 	root.SetErr(out)
 	root.SetIn(strings.NewReader(input))
 	root.SetArgs(append([]string{"servers", "rm"}, args...))
-	return out.String(), root.Execute()
+	err := root.Execute()
+	return out.String(), err
 }
 
 // TestServersRmPreviewConfirmAndYes 校验删除预览、非交互保护、交互确认与
