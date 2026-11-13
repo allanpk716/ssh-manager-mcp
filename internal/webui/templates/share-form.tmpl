@@ -1,0 +1,20 @@
+{{define "content"}}
+<section class="share-form">
+<h1>新增共享存储</h1>
+{{if .ShareForm.Error}}<div class="operation-refusal">{{.ShareForm.Error}}</div>{{end}}
+<p class="form-help">{{sharesSMBPrerequisites}}</p>
+<form method="post" action="/ui/shares/new">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="form-field"><label for="share-name">共享名</label><input type="text" id="share-name" name="name" value="{{.ShareForm.Name}}" required></div>
+<div class="form-field"><label for="share-device">提供方设备</label><input type="text" id="share-device" name="device" value="{{.ShareForm.Device}}" required></div>
+<div class="form-field"><label for="share-user">专用挂载账号用户名</label><input type="text" id="share-user" name="user" value="{{.ShareForm.User}}" required></div>
+<div class="form-field"><label for="share-password-secret">挂载密码机密项</label><input type="text" id="share-password-secret" name="password_secret" value="{{.ShareForm.PasswordSecret}}" required></div>
+<div class="form-field"><label for="share-drive">固定盘符（D 到 Z）</label><input type="text" id="share-drive" name="drive" value="{{.ShareForm.Drive}}" required></div>
+<div class="form-field"><label for="share-directories">目录约定（每行一条，格式为 用途=子路径，可留空）</label><textarea id="share-directories" name="directories" rows="4">{{.ShareForm.Directories}}</textarea></div>
+<div class="form-field"><label for="share-note">备注</label><input type="text" id="share-note" name="note" value="{{.ShareForm.Note}}"></div>
+<p class="form-help">挂载密码只保存在机密项里；本页面不读取、不显示、也不提供复制机密项值的入口。</p>
+<button type="submit">新增</button>
+<a class="button-link" href="/ui/shares/">取消</a>
+</form>
+</section>
+{{end}}

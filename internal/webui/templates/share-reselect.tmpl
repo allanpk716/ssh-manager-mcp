@@ -1,0 +1,61 @@
+{{define "content"}}
+<section class="share-reselect-page"{{if and .ShareReselect.Task (eq .ShareReselect.Task.State "running")}} id="share-reselect-task" hx-get="{{.ShareReselect.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>{{if .ShareReselect.Task}}{{if eq .ShareReselect.Task.State "running"}}重选进行中{{else}}重选结果{{end}}{{else}}重选地址 {{.ShareReselect.Share.Name}} · {{.ShareReselect.Server.Name}}{{end}}</h1>
+<dl class="detail-list">
+<dt>共享存储</dt><dd>{{.ShareReselect.Share.Name}}</dd>
+<dt>服务器条目</dt><dd>{{.ShareReselect.Server.Name}}</dd>
+<dt>挂载点</dt><dd>{{.ShareReselect.Server.MountPoint}}</dd>
+</dl>
+{{if .ShareReselect.Task}}
+{{if eq .ShareReselect.Task.State "running"}}
+<div class="notice notice-info"><p>正在重新探测候选地址并优先切回物理局域网，请稍候；页面会自动刷新。</p></div>
+{{else}}
+<div class="operation-result">
+<p><strong>{{shareReselectResultLabel .ShareReselect.Task.Result}}</strong>{{if .ShareReselect.Task.Force}}（强制执行）{{end}}{{if .ShareReselect.Task.FailureMessage}}：{{.ShareReselect.Task.FailureMessage}}{{end}}</p>
+{{if eq .ShareReselect.Task.Result "success"}}
+<div class="notice notice-success"><p>已切换到更优可达地址；网络：{{.ShareReselect.Task.NetworkName}}{{if .ShareReselect.Task.Physical}}（物理局域网）{{end}}；共享存储版本号：{{.ShareReselect.Task.Version}}。</p></div>
+{{end}}
+{{if eq .ShareReselect.Task.Result "best-address-unchanged"}}
+<div class="notice notice-success"><p>当前地址已是最优可达地址；网络：{{.ShareReselect.Task.NetworkName}}{{if .ShareReselect.Task.Physical}}（物理局域网）{{end}}；共享存储版本号：{{.ShareReselect.Task.Version}}。</p></div>
+{{end}}
+{{if .ShareReselect.Task.Notices}}<div class="notice notice-warning"><ul>{{range .ShareReselect.Task.Notices}}<li>{{.}}</li>{{end}}</ul></div>{{end}}
+{{if .ShareReselect.Task.BusyProcesses}}
+<div class="share-reselect-busy">
+<p>占用挂载点的进程：</p>
+<table class="server-table">
+<thead><tr><th>进程号</th><th>用户</th><th>命令名</th></tr></thead>
+<tbody>
+{{range .ShareReselect.Task.BusyProcesses}}<tr><td>{{.ProcessID}}</td><td>{{.User}}</td><td>{{.Command}}</td></tr>{{end}}
+</tbody>
+</table>
+<form method="post" action="/ui/shares/{{.ShareReselect.Share.ID}}/reselect" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ShareReselect.Server.ID}}">
+<input type="hidden" name="force" value="1">
+<button type="submit">强制切换地址</button>
+</form>
+<a class="button-link" href="{{.ShareReselect.ConfirmPath}}">稍后再试</a>
+</div>
+{{end}}
+{{if eq .ShareReselect.Task.Result "ssh-error"}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；服务器恢复可达后可重新发起。</p></div>{{end}}
+</div>
+{{end}}
+{{else}}
+{{if .ShareReselect.TaskInvalid}}{{template "shareTaskLostNotice" "重选"}}{{end}}
+{{if .ShareReselect.Windows}}
+<div class="operation-refusal"><p>Windows 服务器不能重选共享存储地址：每条命令执行前本来就会重新选址。</p></div>
+{{else}}
+<div class="operation-refusal"><p>将优先选择物理局域网中仍可达的更优地址。当前地址已是最优可达地址时不做改动；切换时被占用的挂载会保留，由你决定强制切换或稍后再试。</p></div>
+<form method="post" action="/ui/shares/{{.ShareReselect.Share.ID}}/reselect" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ShareReselect.Server.ID}}">
+<button type="submit">确认重选</button>
+<a class="button-link" href="/ui/shares/{{.ShareReselect.Share.ID}}">取消</a>
+</form>
+{{end}}
+{{end}}
+<div class="inline-form">
+<a class="button-link" href="/ui/shares/{{.ShareReselect.Share.ID}}">返回共享存储详情</a>
+</div>
+</section>
+{{end}}

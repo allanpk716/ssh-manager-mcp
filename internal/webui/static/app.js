@@ -4,6 +4,36 @@
   "use strict";
   var meta = document.querySelector('meta[name="csrf-token"]');
   var token = meta === null ? "" : meta.getAttribute("content");
+
+  function updateShareScopeWarnings(form) {
+    var rows = Array.prototype.slice.call(form.querySelectorAll("[data-share-scope-device]"));
+    rows.forEach(function (row) {
+      var warning = row.querySelector("[data-share-scope-warning]");
+      var checkbox = row.querySelector('input[type="checkbox"]');
+      if (warning === null || checkbox === null) {
+        return;
+      }
+      var device = row.getAttribute("data-share-scope-device");
+      var hasUncheckedOtherEntry = device !== "" && rows.some(function (other) {
+        var otherCheckbox = other.querySelector('input[type="checkbox"]');
+        return other !== row && other.getAttribute("data-share-scope-device") === device &&
+          otherCheckbox !== null && !otherCheckbox.checked;
+      });
+      warning.hidden = !checkbox.checked || !hasUncheckedOtherEntry;
+    });
+  }
+
+  function updateAllShareScopeWarnings() {
+    document.querySelectorAll("[data-share-scope-form]").forEach(updateShareScopeWarnings);
+  }
+
+  function updateRevealTarget(checkbox) {
+    var target = document.querySelector("[data-share-reveal-target]");
+    if (target !== null) {
+      target.hidden = !checkbox.checked;
+    }
+  }
+
   document.body.addEventListener("htmx:configRequest", function (event) {
     event.detail.headers["X-CSRF-Token"] = token;
   });
@@ -32,4 +62,14 @@
     }
     window.prompt("请手动复制：", text);
   });
+  document.body.addEventListener("change", function (event) {
+    var form = event.target.closest("[data-share-scope-form]");
+    if (form !== null) {
+      updateShareScopeWarnings(form);
+    }
+    if (event.target.hasAttribute && event.target.hasAttribute("data-share-reveal-checkbox")) {
+      updateRevealTarget(event.target);
+    }
+  });
+  updateAllShareScopeWarnings();
 })();

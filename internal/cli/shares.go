@@ -34,8 +34,8 @@ func requireSharesVault() (*store.Store, error) {
 func newSharesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "shares", Short: "Manage registered shared storage"}
 	cmd.AddCommand(sharesAddCmd(), sharesEditCmd(), sharesRmCmd(), sharesListCmd(),
-		sharesShowCmd(), sharesUnmountCmd(), sharesRevokeCmd(), sharesReselectCmd(),
-		sharesResidueCmd())
+		sharesShowCmd(), sharesMountCmd(), sharesUnmountCmd(), sharesRevokeCmd(),
+		sharesReselectCmd(), sharesResidueCmd())
 	return cmd
 }
 
@@ -199,12 +199,35 @@ func sharesEditCmd() *cobra.Command {
 }
 
 func sharesShowCmd() *cobra.Command {
+	var check bool
 	var instance string
 	c := &cobra.Command{
 		Use:   "show NAME [--instance <name>]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Show one registered shared storage",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if check {
+				if strings.TrimSpace(instance) != "" {
+					return errors.New("现场探测只能连接本机 vault 里的服务器，仅支持在单机或权威端本机运行，不支持 --instance；请去掉 --instance 后重试")
+				}
+				s, err := requireSharesVault()
+				if err != nil {
+					return err
+				}
+				defer s.Close()
+				share, err := s.GetSharedStorage(args[0])
+				if err != nil {
+					return err
+				}
+				report, err := sharemanage.New(s).Check(cmd.Context(), sharemanage.CheckRequest{
+					Share: share.Name,
+				})
+				if err != nil {
+					return err
+				}
+				printSharedStorageCheck(cmd.OutOrStdout(), report)
+				return nil
+			}
 			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
 				return err
@@ -221,6 +244,7 @@ func sharesShowCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&check, "check", false, "并发现场探测已勾选服务器的挂载状态")
 	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
@@ -335,15 +359,7 @@ func sharesUnmountCmd() *cobra.Command {
 }
 
 func parseSharedStorageDirectories(values []string) ([]models.SharedStorageDirectory, error) {
-	out := make([]models.SharedStorageDirectory, 0, len(values))
-	for _, value := range values {
-		purpose, path, found := strings.Cut(value, "=")
-		if !found {
-			return nil, fmt.Errorf("目录约定 %q 缺少等号，格式为 用途=子路径", value)
-		}
-		out = append(out, models.SharedStorageDirectory{Purpose: purpose, Path: path})
-	}
-	return out, nil
+	return store.ParseSharedStorageDirectoryLines(values)
 }
 
 func printSharedStorageSummary(out io.Writer, share *models.SharedStorage) {

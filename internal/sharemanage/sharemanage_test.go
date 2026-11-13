@@ -42,7 +42,7 @@ func TestUnmountRemovesLinuxConfigurationBeforeUnmount(t *testing.T) {
 	if configIndex < 0 || unmountIndex < 0 || configIndex > unmountIndex {
 		t.Fatalf("状态变化历史应先删配置再卸载：%v", state.History)
 	}
-	if !containsText(result.Notices, "服务器仍在可挂载范围内，agent 之后仍可能重新挂载；彻底撤下请使用 shares revoke") {
+	if !containsText(result.Notices, "服务器仍在可挂载范围内，agent 之后仍可能重新挂载；彻底撤下需先取消勾选") {
 		t.Fatalf("缺少范围内卸载提示：%+v", result)
 	}
 	if len(state.Commands) != 2 {

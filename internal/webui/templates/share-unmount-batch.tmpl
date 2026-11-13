@@ -1,0 +1,38 @@
+{{define "content"}}
+<section class="share-unmount-batch-page"{{if .ShareUnmountBatch.AnyRunning}} id="share-unmount-batch" hx-get="{{.ShareUnmountBatch.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>同时卸载任务</h1>
+<dl class="detail-list">
+<dt>共享存储</dt><dd>{{.ShareUnmountBatch.Share.Name}}</dd>
+</dl>
+{{if .ShareUnmountBatch.InvalidTask}}{{template "shareTaskLostNotice" "卸载"}}{{end}}
+{{if .ShareUnmountBatch.Tasks}}
+{{if .ShareUnmountBatch.AnyRunning}}
+<div class="notice notice-info"><p>仍在逐台删除远端持久挂载配置并卸载挂载点，请稍候；页面会自动刷新。</p></div>
+{{end}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>状态</th><th>结论</th><th>任务</th></tr></thead>
+<tbody>
+{{range .ShareUnmountBatch.Tasks}}
+<tr>
+<td>{{.ServerName}}</td>
+<td>{{if eq .State "running"}}卸载进行中{{else}}卸载结果{{end}}</td>
+<td>
+{{if eq .State "running"}}—{{else}}<strong>{{shareUnmountResultLabel .Result}}</strong>{{if .Force}}（强制执行）{{end}}{{if .FailureMessage}}：{{.FailureMessage}}{{end}}{{end}}
+{{if .BusyProcesses}}
+<div class="share-unmount-busy">
+<p>占用挂载点的进程：</p>
+<ul>{{range .BusyProcesses}}<li>{{.ProcessID}} · {{.User}} · {{.Command}}</li>{{end}}</ul>
+</div>
+{{end}}
+</td>
+<td><a href="/ui/shares/{{$.ShareUnmountBatch.Share.ID}}/unmount?server={{.ServerID}}&amp;task={{.ID}}">查看任务</a></td>
+</tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（没有可展示的卸载任务）</p>{{end}}
+<div class="inline-form">
+<a class="button-link" href="/ui/shares/{{.ShareUnmountBatch.Share.ID}}">返回共享存储详情</a>
+</div>
+</section>
+{{end}}

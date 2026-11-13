@@ -23,6 +23,8 @@ type ReselectRequest struct {
 	Share  string
 	Server string
 	Force  bool
+	// Source 标记这次重选地址来自哪类入口；零值按命令行来源处理。
+	Source Source
 }
 
 // ReselectResult 是重选地址的安全结论，不包含共享地址、账号或密码。
@@ -59,12 +61,12 @@ func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*Resel
 	inRange := sharedStorageHasMountableServer(share, server.ID)
 	if !inRange {
 		_ = m.writeReselectAudit(server.Name, share.Name, share.Version,
-			request.Force, "outside-mountable-range", true)
+			request.Force, "outside-mountable-range", true, request.Source)
 		return nil, ErrReselectOutsideMountableRange
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		_ = m.writeReselectAudit(server.Name, share.Name, share.Version,
-			request.Force, "windows-unsupported", true)
+			request.Force, "windows-unsupported", true, request.Source)
 		return nil, ErrWindowsReselectUnsupported
 	}
 	secret, err := m.store.SecretValueForSharedStorageMount(share.PasswordSecretID)
@@ -77,7 +79,7 @@ func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*Resel
 	})
 	if remoteErr != nil {
 		_ = m.writeReselectAudit(server.Name, share.Name, share.Version,
-			request.Force, reselectAuditResult(remoteErr), true)
+			request.Force, reselectAuditResult(remoteErr), true, request.Source)
 		return nil, remoteErr
 	}
 	result := &ReselectResult{
@@ -96,7 +98,7 @@ func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*Resel
 		result.Result = "success"
 	}
 	if err := m.writeReselectAudit(server.Name, share.Name, share.Version,
-		request.Force, result.Result, false); err != nil {
+		request.Force, result.Result, false, request.Source); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -104,17 +106,23 @@ func (m *Manager) Reselect(ctx context.Context, request ReselectRequest) (*Resel
 
 func (m *Manager) writeReselectAudit(
 	serverName, shareName string, version int64, force bool, result string, failed bool,
+	requestSource Source,
 ) error {
+	source := requestSource
+	if source.kind == "" {
+		source = CLISource()
+	}
 	summary := map[string]any{
 		"share": shareName, "server": serverName, "result": result, "force": force,
 		"version": version,
 	}
+	row := store.OwnerAuditRow("share-reselect", summary)
 	if failed {
-		row := store.OwnerAuditRow("share-reselect", summary)
 		row.Status = "error"
-		return m.store.WriteAudit(row)
 	}
-	return m.store.WriteOwnerAudit("share-reselect", summary)
+	row.Source = source.kind
+	row.SourceIP = source.addr
+	return m.store.WriteAudit(row)
 }
 
 func reselectAuditResult(err error) string {

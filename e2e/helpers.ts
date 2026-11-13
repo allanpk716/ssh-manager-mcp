@@ -420,14 +420,28 @@ async function startAuthorityUI(password: string): Promise<authorityUI> {
 // standaloneUIFixture 让每个用例拿到自己的 Web UI 进程；用例结束（无论成
 // 败）都会停止进程并删除临时加密库。
 type standaloneUIFixture = { standaloneUI: standaloneUI };
+// sharesStandaloneUIFixture 给共享存储用例额外种入挂载密码与登记数据。
+type sharesStandaloneUIFixture = { sharesStandaloneUI: standaloneUI };
 type clientUIFixture = { clientUI: clientUI };
 type authorityUIFixture = { authorityUI: authorityUI };
 
-export const test = base.extend<standaloneUIFixture & clientUIFixture & authorityUIFixture>({
+export const test = base.extend<
+  standaloneUIFixture & sharesStandaloneUIFixture & clientUIFixture & authorityUIFixture
+>({
   standaloneUI: async ({}, use) => {
     const ui = await startStandaloneUI();
     await use(ui);
     await ui.close();
+  },
+  sharesStandaloneUI: async ({}, use) => {
+    process.env.SSHMGR_E2E_SHARES = "1";
+    try {
+      const ui = await startStandaloneUI();
+      await use(ui);
+      await ui.close();
+    } finally {
+      delete process.env.SSHMGR_E2E_SHARES;
+    }
   },
   clientUI: async ({}, use) => {
     const ui = await startClientUI();

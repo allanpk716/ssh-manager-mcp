@@ -118,6 +118,26 @@ func seed(dir string) error {
 	if err := st.AllowSecrets([]string{"MATRIX_TOKEN"}, []string{"db-1"}, store.CLISource()); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SHARES")) == "1" {
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: "share-db", Host: "192.0.2.13", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-share-db-password")}, nil, "工作站"); err != nil {
+			return err
+		}
+		if err := st.AddSecret("SHARE_MOUNT_PASSWORD", "共享存储挂载密码", []byte("share-mount-password-value"), store.CLISource()); err != nil {
+			return err
+		}
+		if err := st.AllowSecrets([]string{"SHARE_MOUNT_PASSWORD"}, []string{"web-1"}, store.CLISource()); err != nil {
+			return err
+		}
+		if _, err := st.AddSharedStorage(store.SharedStorageInput{
+			Name: "datasets", Device: "工作站", User: "browser-mount-user",
+			PasswordSecret: "SHARE_MOUNT_PASSWORD", Drive: "X",
+			Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
+		}, store.CLISource()); err != nil {
+			return err
+		}
+	}
 	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{
 			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
@@ -308,6 +328,7 @@ func seedTopology(st *store.Store) error {
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "家NAS共享", Device: "NAS", User: "backup", PasswordSecret: "NAS_PASSWORD", Drive: "N",
+		Directories: []models.SharedStorageDirectory{{Purpose: "照片", Path: "photos"}},
 	}, store.CLISource()); err != nil {
 		return err
 	}

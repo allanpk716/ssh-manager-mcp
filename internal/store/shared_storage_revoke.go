@@ -9,6 +9,8 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
+const sharedStorageRevokeChangeNote = "共享已从服务器撤销"
+
 // RevokeSharedStorageMount 在同一个事务里把服务器条目移出共享存储挂载
 // 密码机密项的可写入列表，并写机密项取消授权审计与共享撤销 owner 审计。
 // 返回提交事务后的共享存储登记，供调用方用新版本号清理远端。
@@ -67,6 +69,12 @@ func (s *Store) RevokeSharedStorageMount(
 	if changed != 1 {
 		return nil, fmt.Errorf("共享存储撤销没有移除服务器条目 %s", serverName)
 	}
+	if _, err := tx.Exec(
+		`UPDATE shared_storages SET change_note=? WHERE id=?`,
+		sharedStorageRevokeChangeNote, shareID,
+	); err != nil {
+		return nil, err
+	}
 	after, err := secretAllowServerNames(tx, secretID)
 	if err != nil {
 		return nil, err
@@ -82,10 +90,13 @@ func (s *Store) RevokeSharedStorageMount(
 	}, source); err != nil {
 		return nil, err
 	}
-	if err := writeAuditTx(tx, OwnerAuditRowAt(at, "share-revoke", map[string]any{
+	auditRow := OwnerAuditRowAt(at, "share-revoke", map[string]any{
 		"share": loaded.Name, "server": serverName, "version": loaded.Version,
 		"unmount": unmount, "force": force, "password_changed": false,
-	})); err != nil {
+	})
+	auditRow.Source = source.kind
+	auditRow.SourceIP = source.address
+	if err := writeAuditTx(tx, auditRow); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
