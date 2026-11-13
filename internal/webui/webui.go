@@ -215,6 +215,16 @@ func (c Config) validate() error {
 	if c.Role != RoleClient && c.ShareRevokeRunner != nil && c.ShareLatestChecks == nil {
 		return errors.New("提供共享存储撤销授权任务的 Web UI 必须提供最近现场探测来源")
 	}
+	if c.Role == RoleClient {
+		if c.SharesWriter != nil {
+			return errors.New("客户端 Web UI 不得提供共享存储写入来源")
+		}
+		if c.SharesRemoteTasks != nil || c.ShareUnmountRunner != nil ||
+			c.ShareRevokeRunner != nil || c.ShareReselectRunner != nil ||
+			c.ShareResidueRunner != nil {
+			return errors.New("客户端 Web UI 不得提供共享存储远端任务执行对象")
+		}
+	}
 	if c.Role == RoleServer {
 		if c.Auth == nil {
 			return errors.New("权威端 Web UI 必须提供鉴权存储")

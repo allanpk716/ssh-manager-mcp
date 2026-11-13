@@ -146,7 +146,7 @@ func (h *handler) registerShareRoutes() {
 	if h.cfg.Shares == nil {
 		return
 	}
-	if h.cfg.SharesWriter != nil {
+	if h.caps.CanManageShares {
 		h.mux.HandleFunc(sharesNewPath, h.requireSession(h.handleShareNew))
 	}
 	h.mux.HandleFunc(sharesPath, h.requireSession(h.handleShareDetailRoutes))
@@ -179,71 +179,63 @@ func (h *handler) handleShareDetailRoutes(w http.ResponseWriter, r *http.Request
 	if len(parts) == 2 {
 		suffix = parts[1]
 	}
+	if !h.shareRouteAvailable(suffix) {
+		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		return
+	}
 	switch suffix {
 	case "":
 		h.handleShareDetail(w, r, identifier)
 	case "check":
-		if h.shareRemoteTasksAvailable() {
-			h.handleShareCheckStart(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareCheckStart(w, r, identifier)
 	case "mount":
-		if h.shareRemoteTasksAvailable() {
-			h.handleShareMountStart(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareMountStart(w, r, identifier)
 	case "edit":
-		if h.cfg.SharesWriter != nil {
-			h.handleShareEdit(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareEdit(w, r, identifier)
 	case "delete":
-		if h.cfg.SharesWriter != nil {
-			h.handleShareDelete(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareDelete(w, r, identifier)
 	case "unmount":
-		if h.cfg.ShareUnmountRunner != nil {
-			h.handleShareUnmount(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareUnmount(w, r, identifier)
 	case "revoke":
-		if h.cfg.ShareRevokeRunner != nil {
-			h.handleShareRevoke(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareRevoke(w, r, identifier)
 	case "reselect":
-		if h.cfg.ShareReselectRunner != nil {
-			h.handleShareReselect(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareReselect(w, r, identifier)
 	case "residue":
-		if h.cfg.ShareResidueRunner != nil {
-			h.handleShareResidue(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareResidue(w, r, identifier)
 	case "residue-cleanup":
-		if h.cfg.ShareResidueRunner != nil && h.cfg.ShareUnmountRunner != nil {
-			h.handleShareResidueCleanup(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareResidueCleanup(w, r, identifier)
 	case "desktop":
-		if h.cfg.Role != RoleClient && h.cfg.Topology != nil {
-			h.handleShareDesktopGuide(w, r, identifier)
-			return
-		}
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+		h.handleShareDesktopGuide(w, r, identifier)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	}
+}
+
+// shareRouteAvailable 统一判断一个共享存储子路由是否可用：除详情页与桌
+// 面引导外，写路由和远端操作路由都要求本机角色不是客户端且对应执行对象
+// 已装配（能力开关已同时包含这两点）。
+func (h *handler) shareRouteAvailable(suffix string) bool {
+	switch suffix {
+	case "":
+		return true
+	case "check", "mount":
+		return h.shareRemoteTasksAvailable()
+	case "edit", "delete":
+		return h.caps.CanManageShares
+	case "unmount":
+		return h.caps.CanUnmountShares
+	case "revoke":
+		return h.caps.CanRevokeShares
+	case "reselect":
+		return h.caps.CanReselectShares
+	case "residue":
+		return h.caps.CanCheckShareResidue
+	case "residue-cleanup":
+		return h.caps.CanCheckShareResidue && h.caps.CanUnmountShares
+	case "desktop":
+		return h.caps.CanUseShareDesktopGuide
+	default:
+		return false
 	}
 }
 
@@ -412,7 +404,7 @@ func (h *handler) shareDeviceOptions(r *http.Request) ([]string, error) {
 
 func (h *handler) handleShareDetail(w http.ResponseWriter, r *http.Request, identifier string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		if h.cfg.SharesWriter == nil {
+		if !h.caps.CanManageShares {
 			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 			return
 		}
