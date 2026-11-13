@@ -24,9 +24,15 @@ type Detail struct {
 	// Secrets 是可写入服务器列表包含这台服务器条目、且没有被共享存储
 	// 用作挂载密码的机密项。
 	Secrets []DetailSecret
+	// SecretChoices 是这台服务器条目可调整的全部普通机密项，含当前授
+	// 权状态；供详情页的固定服务器反向编辑表单使用。
+	SecretChoices []DetailSecretChoice
 	// SharedStorages 是密码机密项可写入这台服务器条目的共享存储；同一个
 	// 密码机密项驱动多个共享时逐项出现。
 	SharedStorages []DetailSharedStorage
+	// SharedStorageChoices 是这台服务器条目可调整的全部共享存储，按挂载
+	// 密码机密项归组；同一个密码机密项驱动的共享一起变化。
+	SharedStorageChoices []DetailSharedStorageChoice
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []DetailProfile
 	// DeliveryRecords 是写到这台服务器条目的最新下发记录，只读展示。
@@ -48,6 +54,12 @@ type DetailSecret struct {
 	EnvironmentName string
 }
 
+// DetailSecretChoice 是普通机密项在固定服务器条目上的一个可编辑勾选项。
+type DetailSecretChoice struct {
+	DetailSecret
+	Checked bool
+}
+
 // DetailSharedStorage 是服务器详情页共享存储组的一行，字段沿用共享存储
 // 列表与详情页的识别信息，并给出这台服务器条目的挂载点。
 type DetailSharedStorage struct {
@@ -59,6 +71,15 @@ type DetailSharedStorage struct {
 	PasswordSecretName string
 	Drive              string
 	MountPoint         string
+}
+
+// DetailSharedStorageChoice 是一个挂载密码机密项在固定服务器条目上的
+// 可编辑勾选项；SharedStorages 列出这个授权同时影响的全部共享。
+type DetailSharedStorageChoice struct {
+	PasswordSecretID   string
+	PasswordSecretName string
+	SharedStorages     []DetailSharedStorage
+	Checked            bool
 }
 
 // DetailProfile 是服务器详情页 profile 授权组的一行。
@@ -125,7 +146,7 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		shareSecretIDs[share.PasswordSecretID] = true
 	}
 
-	secrets, err := m.st.ListSecretsInScope(store.ScopeToServers(srv.ID))
+	secrets, err := m.st.ListSecretsInScope(store.ScopeAllServers())
 	if err != nil {
 		return err
 	}
@@ -133,10 +154,18 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		if shareSecretIDs[secret.ID] {
 			continue
 		}
-		detail.Secrets = append(detail.Secrets, DetailSecret{
+		choice := DetailSecretChoice{DetailSecret: DetailSecret{
 			ID: secret.ID, Name: secret.Name, Note: secret.Note,
 			EnvironmentName: secret.EnvironmentName,
-		})
+		}}
+		for _, allowed := range secret.AllowedServers {
+			if allowed == srv.Name {
+				choice.Checked = true
+				detail.Secrets = append(detail.Secrets, choice.DetailSecret)
+				break
+			}
+		}
+		detail.SecretChoices = append(detail.SecretChoices, choice)
 	}
 
 	profiles, err := m.st.ListProfiles()
@@ -182,14 +211,34 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 		}
 	}
 
+	choicesBySecret := make(map[string]*DetailSharedStorageChoice)
 	for _, share := range shares {
+		mountPoint := ""
+		checked := false
 		for _, mountable := range share.MountableServers {
 			if mountable.ID != srv.ID {
 				continue
 			}
+			mountPoint = mountable.MountPoint
+			checked = true
 			detail.SharedStorages = append(detail.SharedStorages, detailSharedStorage(share, mountable.MountPoint))
 			break
 		}
+		if mountPoint == "" {
+			mountPoint = store.SharedStorageMountPoint(share.Drive, share.Name, srv.ShellType)
+		}
+		choice := choicesBySecret[share.PasswordSecretID]
+		if choice == nil {
+			choice = &DetailSharedStorageChoice{
+				PasswordSecretID:   share.PasswordSecretID,
+				PasswordSecretName: share.PasswordSecretName,
+			}
+			choicesBySecret[share.PasswordSecretID] = choice
+			detail.SharedStorageChoices = append(detail.SharedStorageChoices, *choice)
+		}
+		choice.SharedStorages = append(choice.SharedStorages, detailSharedStorage(share, mountPoint))
+		choice.Checked = checked
+
 		if srv.DeviceID == "" {
 			continue
 		}
@@ -210,6 +259,19 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 			return left.SourceServerName < right.SourceServerName
 		}
 		return left.Name < right.Name
+	})
+	for i := range detail.SharedStorageChoices {
+		if choice := choicesBySecret[detail.SharedStorageChoices[i].PasswordSecretID]; choice != nil {
+			detail.SharedStorageChoices[i] = *choice
+		}
+	}
+	sort.Slice(detail.SharedStorageChoices, func(i, j int) bool {
+		left := detail.SharedStorageChoices[i].SharedStorages
+		right := detail.SharedStorageChoices[j].SharedStorages
+		if len(left) == 0 || len(right) == 0 {
+			return len(left) > len(right)
+		}
+		return left[0].Name < right[0].Name
 	})
 	return nil
 }

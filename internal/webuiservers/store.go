@@ -142,6 +142,15 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 			EnvironmentName: secret.EnvironmentName,
 		})
 	}
+	for _, choice := range detail.SecretChoices {
+		view.SecretChoices = append(view.SecretChoices, webui.ServerDetailSecretChoice{
+			ServerDetailSecret: webui.ServerDetailSecret{
+				ID: choice.ID, Name: choice.Name, Note: choice.Note,
+				EnvironmentName: choice.EnvironmentName,
+			},
+			Checked: choice.Checked,
+		})
+	}
 	for _, share := range detail.SharedStorages {
 		view.SharedStorages = append(view.SharedStorages, webui.ServerDetailSharedStorage{
 			ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
@@ -149,6 +158,22 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 			PasswordSecretName: share.PasswordSecretName,
 			Drive:              share.Drive, MountPoint: share.MountPoint,
 		})
+	}
+	for _, choice := range detail.SharedStorageChoices {
+		viewChoice := webui.ServerDetailSharedStorageChoice{
+			PasswordSecretID:   choice.PasswordSecretID,
+			PasswordSecretName: choice.PasswordSecretName,
+			Checked:            choice.Checked,
+		}
+		for _, share := range choice.SharedStorages {
+			viewChoice.SharedStorages = append(viewChoice.SharedStorages, webui.ServerDetailSharedStorage{
+				ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+				MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
+				PasswordSecretName: share.PasswordSecretName,
+				Drive:              share.Drive, MountPoint: share.MountPoint,
+			})
+		}
+		view.SharedStorageChoices = append(view.SharedStorageChoices, viewChoice)
 	}
 	for _, profile := range detail.Profiles {
 		view.Profiles = append(view.Profiles, webui.ServerDetailProfile{ID: profile.ID, Name: profile.Name})

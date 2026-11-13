@@ -78,9 +78,24 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	store.details["srv-fine"].Secrets = []ServerDetailSecret{{
 		Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
 	}}
+	store.details["srv-fine"].SecretChoices = []ServerDetailSecretChoice{{
+		ServerDetailSecret: ServerDetailSecret{
+			Name: "API_TOKEN", Note: "接口令牌", EnvironmentName: "API_TOKEN",
+		},
+		Checked: true,
+	}}
 	store.details["srv-fine"].SharedStorages = []ServerDetailSharedStorage{{
 		Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
 		PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+	}}
+	store.details["srv-fine"].SharedStorageChoices = []ServerDetailSharedStorageChoice{{
+		PasswordSecretID:   "secret-dataset",
+		PasswordSecretName: "DATASET_PASSWORD",
+		SharedStorages: []ServerDetailSharedStorage{{
+			Name: "datasets", ProviderDeviceName: "NAS", MountUser: "mount-user",
+			PasswordSecretName: "DATASET_PASSWORD", Drive: "Z", MountPoint: "/mnt/sshmgr/datasets",
+		}},
+		Checked: true,
 	}}
 	store.details["srv-fine"].Profiles = []ServerDetailProfile{{Name: "运维"}}
 	store.details["srv-fine"].SiblingSharedStorages = []ServerDetailSiblingSharedStorage{{
@@ -125,7 +140,7 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 		Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("5", 64),
 		WrittenAt: time.Unix(1760000900, 0), InitiatingDeviceName: "office-laptop",
 		InitiatingInstanceName: "agent-a",
-		Secrets: []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+		Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
 	}}
 	store.details["srv-fine"].SiblingDeliveryRecords = []ServerDetailSiblingDeliveryRecord{{
 		SecretDeliveryRecordRow: SecretDeliveryRecordRow{
@@ -133,7 +148,7 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 			Template: "token: {{sshmgr-secret:OLD_TOKEN}}", FileSHA256: strings.Repeat("6", 64),
 			WrittenAt: time.Unix(1760001000, 0), InitiatingDeviceName: "worker-laptop",
 			InitiatingInstanceName: "agent-b",
-			Secrets: []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
+			Secrets:                []SecretDeliverySecretRow{{Name: "OLD_TOKEN", ValueVersion: 2, Deleted: true}},
 		},
 		SourceServerID: "srv-worker", SourceServerName: "worker",
 	}}
@@ -152,7 +167,7 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 			t.Fatalf("服务器详情页下发记录缺少 %q：\n%s", want, page)
 		}
 	}
-	for _, forbidden := range []string{"<form", "编辑下发记录", "删除下发记录", "清理下发记录"} {
+	for _, forbidden := range []string{"编辑下发记录", "删除下发记录", "清理下发记录"} {
 		if strings.Contains(page, forbidden) {
 			t.Fatalf("下发记录组必须只读，页面不得包含 %q：\n%s", forbidden, page)
 		}

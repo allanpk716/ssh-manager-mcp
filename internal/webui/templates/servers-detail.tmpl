@@ -22,6 +22,23 @@
 </dl>
 <section aria-labelledby="server-secrets-heading">
 <h2 id="server-secrets-heading">机密项</h2>
+{{if .Caps.CanWrite}}
+<form method="post" action="/ui/secrets/authorization/preview" class="server-secret-authorization">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
+{{range .ServerDetail.SecretChoices}}<input type="hidden" name="secret_id" value="{{.ID}}">{{end}}
+<input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
+<table class="server-table">
+<thead><tr><th scope="col">可写入</th><th scope="col">名字</th><th scope="col">备注</th><th scope="col">环境变量名</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SecretChoices}}
+<tr><td><label><input type="checkbox" name="{{secretCellName .ID $.ServerDetail.ID}}" value="1"{{if .Checked}} checked{{end}} aria-label="允许 {{.Name}} 写入 {{$.ServerDetail.Name}}"><span>允许写入</span></label></td><td>{{.Name}}</td><td>{{or .Note "-"}}</td><td>{{or .EnvironmentName "-"}}</td></tr>
+{{else}}<tr><td colspan="4">暂无可写入的机密项。</td></tr>{{end}}
+</tbody>
+</table>
+<button type="submit">预览机密项授权变更</button>
+</form>
+{{else}}
 <table class="server-table">
 <thead><tr><th scope="col">名字</th><th scope="col">备注</th><th scope="col">环境变量名</th></tr></thead>
 <tbody>
@@ -30,9 +47,34 @@
 {{else}}<tr><td colspan="3">暂无可写入的机密项。</td></tr>{{end}}
 </tbody>
 </table>
+{{end}}
 </section>
 <section aria-labelledby="server-shares-heading">
 <h2 id="server-shares-heading">共享存储</h2>
+{{if .Caps.CanWrite}}
+<form method="post" action="/ui/secrets/authorization/preview" class="server-share-authorization">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
+<input type="hidden" name="authorization_view" value="server-shares">
+{{range .ServerDetail.SharedStorageChoices}}<input type="hidden" name="secret_id" value="{{.PasswordSecretID}}">{{end}}
+<input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
+<table class="server-table">
+<thead><tr><th scope="col">可挂载</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载用户</th><th scope="col">这台服务器的挂载点</th></tr></thead>
+<tbody>
+{{range .ServerDetail.SharedStorageChoices}}
+<tr>
+<td>{{if len .SharedStorages}}<label><input type="checkbox" name="{{secretCellName .PasswordSecretID $.ServerDetail.ID}}" value="1"{{if .Checked}} checked{{end}} aria-label="允许挂载这组共享存储"><span>允许挂载</span></label>{{else}}-{{end}}</td>
+<td>{{range .SharedStorages}}{{.Name}} {{else}}-{{end}}</td>
+<td>{{if .SharedStorages}}{{or (index .SharedStorages 0).ProviderDeviceName "-"}}{{else}}-{{end}}</td>
+<td>{{if .SharedStorages}}{{or (index .SharedStorages 0).MountUser "-"}}{{else}}-{{end}}</td>
+<td>{{range .SharedStorages}}{{.MountPoint}} {{else}}-{{end}}</td>
+</tr>
+{{else}}<tr><td colspan="5">暂无可挂载的共享存储。</td></tr>{{end}}
+</tbody>
+</table>
+<button type="submit">预览共享存储授权变更</button>
+</form>
+{{else}}
 <table class="server-table">
 <thead><tr><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载用户</th><th scope="col">挂载密码机密项</th><th scope="col">这台服务器的挂载点</th></tr></thead>
 <tbody>
@@ -41,6 +83,7 @@
 {{else}}<tr><td colspan="5">暂无可挂载的共享存储。</td></tr>{{end}}
 </tbody>
 </table>
+{{end}}
 </section>
 <section aria-labelledby="server-profiles-heading">
 <h2 id="server-profiles-heading">profile 授权</h2>

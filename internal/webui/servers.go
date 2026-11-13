@@ -52,9 +52,15 @@ type ServerDetailView struct {
 	// Secrets 是这台服务器条目可写入的普通机密项，不包含共享存储的挂载
 	// 密码机密项，也不包含任何机密项值。
 	Secrets []ServerDetailSecret
+	// SecretChoices 是这台服务器条目可调整的全部普通机密项与当前授权
+	// 状态；客户端来源可以不填充，模板不向客户端显示表单。
+	SecretChoices []ServerDetailSecretChoice
 	// SharedStorages 是这台服务器条目可挂载的共享存储；同一个挂载密码机
 	// 密项驱动多个共享时逐项展示。
 	SharedStorages []ServerDetailSharedStorage
+	// SharedStorageChoices 是这台服务器条目可调整的全部共享存储；同一
+	// 个挂载密码机密项驱动的共享在同一勾选项里一起呈现。
+	SharedStorageChoices []ServerDetailSharedStorageChoice
 	// Profiles 是授予这台服务器条目的访问配置组。
 	Profiles []ServerDetailProfile
 	// ShowDeliveryRecords 表示当前角色能否查看下发记录；单机与权威端为真，
@@ -80,6 +86,12 @@ type ServerDetailSecret struct {
 	EnvironmentName string
 }
 
+// ServerDetailSecretChoice 是固定服务器条目上一个普通机密项的编辑勾选项。
+type ServerDetailSecretChoice struct {
+	ServerDetailSecret
+	Checked bool
+}
+
 // ServerDetailSharedStorage 是服务器详情页共享存储组的一行。
 type ServerDetailSharedStorage struct {
 	ID                 string
@@ -90,6 +102,15 @@ type ServerDetailSharedStorage struct {
 	PasswordSecretName string
 	Drive              string
 	MountPoint         string
+}
+
+// ServerDetailSharedStorageChoice 是固定服务器条目上一组共享存储挂载能
+// 力的编辑勾选项。
+type ServerDetailSharedStorageChoice struct {
+	PasswordSecretID   string
+	PasswordSecretName string
+	SharedStorages     []ServerDetailSharedStorage
+	Checked            bool
 }
 
 // ServerDetailProfile 是服务器详情页 profile 授权组的一行。
