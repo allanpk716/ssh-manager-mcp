@@ -508,3 +508,56 @@ func TestShareRevokeCleanupRetryLooksUpServerFieldsFromRegistration(t *testing.T
 		t.Fatalf("强制清理后挂载应被移除：%+v", fixture.linux.State())
 	}
 }
+
+// TestShareRevokeWithoutUnmountChangesScopeAndKeepsMount 覆盖不带同时卸载
+// 的撤销授权：范围与登记变更生效，远端现有挂载保留，不启动卸载审计。
+func TestShareRevokeWithoutUnmountChangesScopeAndKeepsMount(t *testing.T) {
+	fixture := newUnmountFixture(t)
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"server_id":  {fixture.linuxID},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动撤销授权任务状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"撤销授权完成", "远端持久配置已删除，现有挂载保留",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("不带同时卸载的撤销结果页缺少 %q：\n%s", want, page)
+		}
+	}
+
+	share, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != 2 || share.ChangeNote != "共享已从服务器撤销" ||
+		len(share.MountableServers) != 1 || share.MountableServers[0].Name != "windows-web" {
+		t.Fatalf("撤销授权后的登记不正确：%+v", share)
+	}
+	state := fixture.linux.State()
+	if !state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("不带卸载时应删除持久配置但保留现有挂载：%+v", state)
+	}
+	for _, action := range []string{"secret-disallow", "share-revoke", "share-revoke-remote"} {
+		rows, err := fixture.store.QueryAudit(store.AuditFilter{
+			OwnerOnly: true, Actions: []string{action},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) != 1 || rows[0].Source != store.AuditSourceWebUI ||
+			rows[0].SourceIP != "192.0.2.1" || rows[0].Status != "ok" {
+			t.Fatalf("不带卸载的撤销审计 %s 不正确：%+v", action, rows)
+		}
+	}
+	unmountRows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-unmount"},
+	})
+	if err != nil || len(unmountRows) != 0 {
+		t.Fatalf("不带同时卸载时不应有卸载审计：%v %+v", err, unmountRows)
+	}
+}
