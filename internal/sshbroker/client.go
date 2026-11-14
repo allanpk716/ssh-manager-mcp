@@ -46,21 +46,24 @@ var backgroundKeepAlive = keepAliveSpec{interval: 30 * time.Second, maxFail: 3}
 // Connect closes the underlying TCP connection, which aborts an in-flight
 // handshake immediately instead of letting it finish in the background.
 func Connect(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback) (*Client, error) {
-	return connectWith(ctx, host, port, user, auth, hostKeyCb, keepAliveSpec{})
+	return connectWith(ctx, host, port, user, auth, hostKeyCb, keepAliveSpec{}, nil)
 }
 
 // ConnectKeepAlive 与 Connect 全同, 但为连接挂 30s 周期、3 次无响应判死的
 // keepalive 循环 (Plan 32 T4: 后台 24h 长连接防 NAT/防火墙空闲拆连的诚实
 // 失败形态; 前台 ≤5min 路径不走此变体)。循环生命周期随 Client.Close 终止。
 func ConnectKeepAlive(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback) (*Client, error) {
-	return connectWith(ctx, host, port, user, auth, hostKeyCb, backgroundKeepAlive)
+	return connectWith(ctx, host, port, user, auth, hostKeyCb, backgroundKeepAlive, nil)
 }
 
 // connectWith 是 Connect/ConnectKeepAlive 的共用体: ka 为 zero 值时不启
 // keepalive 循环 (Connect 的零行为变化); 否则拨号成功后起循环并接线 kaStop。
 // 拨号前还解析 SSHMGR_EXEC_KILL_GRACE (killGraceFromEnv)——非法值即拒绝
 // 构造, 与 host-key 算法旋钮同一 fail-closed 先例。
-func connectWith(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+func connectWith(
+	ctx context.Context, host string, port int, user string, auth ssh.AuthMethod,
+	hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, preferredHostKeyAlgorithms []string,
+) (*Client, error) {
 	algos, err := hostKeyAlgosChecked() // fail-closed BEFORE dial (typo → no connection attempt)
 	if err != nil {
 		return nil, err
@@ -73,6 +76,9 @@ func connectWith(ctx context.Context, host string, port int, user string, auth s
 		User:            user,
 		Auth:            []ssh.AuthMethod{auth},
 		HostKeyCallback: hostKeyCb,
+	}
+	if algos == nil {
+		algos = preferredHostKeyAlgorithms
 	}
 	if algos != nil {
 		cfg.HostKeyAlgorithms = algos

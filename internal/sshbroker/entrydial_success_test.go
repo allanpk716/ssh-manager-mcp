@@ -127,7 +127,7 @@ func TestConnectServerEntrySuccessCacheOrdersMultipleAddressesByDuration(t *test
 	var attemptedMu sync.Mutex
 	var attempted []string
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attemptedMu.Lock()
 		attempted = append(attempted, host)
 		attemptedMu.Unlock()
@@ -191,7 +191,7 @@ func TestConnectServerEntryIgnoresDialSuccessCacheFailures(t *testing.T) {
 	cache := NewFileDialSuccessCache(filepath.Join(blockedDirectory, "ssh-dial-successes.json"))
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
 		return &Client{}, nil
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -233,7 +233,7 @@ func TestConnectServerEntrySuccessCacheIsExplicit(t *testing.T) {
 	}}
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
 		return &Client{}, nil
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -277,7 +277,7 @@ func TestConnectServerEntrySkipsSuccessCacheForFallbackOnlyPlan(t *testing.T) {
 	source := &countingDialSuccessSource{}
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
 		return &Client{}, nil
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -315,7 +315,7 @@ func TestConnectServerEntrySuccessCacheOrdersSameLevelByDuration(t *testing.T) {
 	var attemptedMu sync.Mutex
 	var attempted []string
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attemptedMu.Lock()
 		attempted = append(attempted, host)
 		attemptedMu.Unlock()
@@ -372,7 +372,7 @@ func TestConnectServerEntryWritesSuccessRecordAndRewritesCorruptFile(t *testing.
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		time.Sleep(2 * time.Millisecond)
 		if host != "192.0.2.10" {
 			return nil, errors.New("only the physical address is available")
@@ -476,7 +476,7 @@ func TestConnectServerEntrySuccessCacheIgnoresStaleRecords(t *testing.T) {
 			var attemptedMu sync.Mutex
 			var attempted []string
 			original := lowLevelDial
-			lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+			lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 				attemptedMu.Lock()
 				attempted = append(attempted, host)
 				attemptedMu.Unlock()
@@ -530,7 +530,7 @@ func TestConnectServerEntryMismatchDeletesSuccessRecord(t *testing.T) {
 	}
 
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		if host == "192.0.2.10" {
 			return nil, fmt.Errorf("%w: presented SHA256:wrong", ErrHostKeyMismatch)
 		}
@@ -589,7 +589,7 @@ func TestConnectServerEntrySuccessCacheKeepsSiblingEntry(t *testing.T) {
 	}
 
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		return nil, fmt.Errorf("%w: presented SHA256:wrong", ErrHostKeyMismatch)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -666,7 +666,7 @@ func TestConnectServerEntryConcurrentWritesKeepCacheUsable(t *testing.T) {
 	source := concurrentDialSource{cache: cache}
 
 	original := lowLevelDial
-	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
 		return &Client{}, nil
 	}
 	t.Cleanup(func() { lowLevelDial = original })

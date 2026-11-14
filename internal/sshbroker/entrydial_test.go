@@ -36,11 +36,11 @@ func fixedSigner(t *testing.T) ssh.Signer {
 func mapFallbackToFixture(t *testing.T, srv *models.Server, addr string) {
 	t.Helper()
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		if host != srv.Host || port != srv.Port {
 			t.Errorf("low-level dial must receive the entry fallback address %s:%d, got %s:%d", srv.Host, srv.Port, host, port)
 		}
-		return connectWith(ctx, hostOf(addr), portOf(addr), user, auth, hostKeyCb, ka)
+		return connectWith(ctx, hostOf(addr), portOf(addr), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 }
@@ -169,12 +169,12 @@ func TestConnectServerEntrySkipsMismatchedHostKeyThenConnectsNextAddress(t *test
 		"198.51.100.10": correctAddr,
 	}
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		fixtureAddr, ok := fixtureByAddress[host]
 		if !ok {
 			return nil, errors.New("unexpected candidate address")
 		}
-		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 
@@ -224,12 +224,12 @@ func TestConnectServerEntryTriesPlannedAddressesInOrder(t *testing.T) {
 	var attempted []string
 
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		attempted = append(attempted, host)
 		if host == "2001:db8::1" {
 			return nil, errors.New("connect failed")
 		}
-		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 
@@ -274,7 +274,7 @@ func TestConnectServerEntryFirstTrustWithoutVirtualLanKeepsAllCandidates(t *test
 	remoteKey := testPublicKey(t)
 	var attempted []string
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attempted = append(attempted, host)
 		if host == "192.0.2.10" {
 			return nil, errors.New("physical address unavailable")
@@ -319,7 +319,7 @@ func TestConnectServerEntryFirstTrustUsesOnlyVirtualLan(t *testing.T) {
 	var attempted []string
 
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		attempted = append(attempted, host)
 		if err := hostKeyCb(host, nil, remoteKey); err != nil {
 			return nil, err
@@ -362,7 +362,7 @@ func TestConnectServerEntryFirstTrustWithoutCommonVirtualLanFails(t *testing.T) 
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	var attempted []string
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attempted = append(attempted, host)
 		return nil, errors.New("must not dial")
 	}
@@ -400,7 +400,7 @@ func TestConnectServerEntryFirstTrustEquivalentPhysicalAndVirtualAddressFails(t 
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	attempts := 0
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attempts++
 		return nil, fmt.Errorf("must not dial %s", host)
 	}
@@ -449,7 +449,7 @@ func TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan(t *tes
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	var attempted []string
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		attempted = append(attempted, host)
 		return nil, errors.New("must not dial")
 	}
@@ -477,7 +477,7 @@ func TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan(t *tes
 func TestConnectServerEntryFailureListsCandidatesWithoutAddresses(t *testing.T) {
 	srv := entryAt("srv-a", "192.0.2.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
 		return nil, errors.New("dial 192.0.2.10:2202: connection refused")
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -511,7 +511,7 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 		"198.51.100.10": errors.New("ssh: handshake failed: EOF"),
 	}
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		return nil, errorsByAddress[host]
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -551,7 +551,7 @@ func TestConnectServerEntryFailureLabelsEveryPlannedCandidate(t *testing.T) {
 func TestConnectServerEntryFailureLabelsSinglePlannedCandidate(t *testing.T) {
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		return nil, errors.New("dial 100.64.10.5:2202: refused")
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -586,7 +586,7 @@ func TestConnectServerEntryFailureLabelsSinglePlannedCandidate(t *testing.T) {
 func TestConnectServerEntryDeletedLocalDeviceHint(t *testing.T) {
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		return nil, errors.New("dial 198.51.100.10:2202: refused")
 	}
 	t.Cleanup(func() { lowLevelDial = original })
@@ -612,7 +612,7 @@ func TestConnectServerEntryDeletedLocalDeviceHint(t *testing.T) {
 func TestConnectServerEntryFailureLabelsSkippedHostKeyMismatch(t *testing.T) {
 	srv := entryAt("srv-a", "198.51.100.10", 2202)
 	original := lowLevelDial
-	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		return nil, fmt.Errorf("%w: presented SHA256:test", ErrHostKeyMismatch)
 	}
 	t.Cleanup(func() { lowLevelDial = original })

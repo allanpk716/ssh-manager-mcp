@@ -398,7 +398,7 @@ func (s *Store) copySiblingEntryPinTx(
 	}
 	rows, err := tx.Query(`
 		SELECT pin.server_id,server.name,pin.key_blob,pin.pin_format,pin.pin_source,
-		       pin.pin_device,pin.handshake_addr,pin.created_at
+		       pin.pin_device,pin.handshake_addr,pin.key_algorithm,pin.created_at
 		FROM servers server
 		JOIN entry_host_keys pin ON pin.server_id=server.id
 		WHERE server.device_id=? AND server.port=? AND server.id<>?
@@ -415,7 +415,8 @@ func (s *Store) copySiblingEntryPinTx(
 	for rows.Next() {
 		var item siblingPin
 		if err := rows.Scan(&item.pin.ServerID, &item.name, &item.pin.Blob, &item.pin.Format,
-			&item.pin.Source, &item.pin.Device, &item.pin.HandshakeAddr, &item.pin.CreatedAt); err != nil {
+			&item.pin.Source, &item.pin.Device, &item.pin.HandshakeAddr,
+			&item.pin.KeyAlgorithm, &item.pin.CreatedAt); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -455,7 +456,8 @@ func (s *Store) copySiblingEntryPinTx(
 	audit.Source = source.kind
 	audit.SourceIP = source.address
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr,
-		sibling.pin.Blob, sibling.pin.Format, sibling.pin.Source, sibling.pin.Device, audit)
+		sibling.pin.Blob, sibling.pin.Format, sibling.pin.Source, sibling.pin.Device,
+		sibling.pin.KeyAlgorithm, audit)
 	if err != nil {
 		return nil, err
 	}

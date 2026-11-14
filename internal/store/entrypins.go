@@ -63,12 +63,16 @@ func migrateEntryPinsTx(tx *sql.Tx) error {
 			dropped = append(dropped, fmt.Sprintf("%s fingerprint=%s", hostPort, PinFingerprint(blob, format)))
 			continue
 		}
+		keyAlgorithm := ""
+		if format == PinFormatBlob {
+			keyAlgorithm = pinAlgorithmFromBlob(blob)
+		}
 		for _, id := range matched {
 			res, err := tx.Exec(
-				`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-				 VALUES (?,?,?,?,?,?,?)
+				`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr, key_algorithm)
+				 VALUES (?,?,?,?,?,?,?,?)
 				 ON CONFLICT(server_id) DO NOTHING`,
-				id, blob, createdAt, format, source, device, hostPort)
+				id, blob, createdAt, format, source, device, hostPort, keyAlgorithm)
 			if err != nil {
 				rows.Close()
 				return err
@@ -148,14 +152,18 @@ func pinKeyIdentity(blob []byte, format, invalid string) string {
 func loadEntryPinMeta(q dbtx, serverID string) (*PinMeta, error) {
 	var m PinMeta
 	err := q.QueryRow(
-		`SELECT server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, created_at
+		`SELECT server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, key_algorithm, created_at
 		 FROM entry_host_keys WHERE server_id=?`, serverID,
-	).Scan(&m.ServerID, &m.Blob, &m.Format, &m.Source, &m.Device, &m.HandshakeAddr, &m.CreatedAt)
+	).Scan(&m.ServerID, &m.Blob, &m.Format, &m.Source, &m.Device, &m.HandshakeAddr,
+		&m.KeyAlgorithm, &m.CreatedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
+	}
+	if m.Format == PinFormatBlob && m.KeyAlgorithm == "" {
+		m.KeyAlgorithm = pinAlgorithmFromBlob(m.Blob)
 	}
 	return &m, nil
 }
@@ -178,7 +186,7 @@ func (s *Store) GetEntryPinMeta(serverID string) (*PinMeta, error) {
 // ListEntryPins 列出全部按条目存放的锚（含来源信息），按条目标识符排序。
 func (s *Store) ListEntryPins() ([]PinMeta, error) {
 	rows, err := s.db.Query(
-		`SELECT server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, created_at
+		`SELECT server_id, key_blob, pin_format, pin_source, pin_device, handshake_addr, key_algorithm, created_at
 		 FROM entry_host_keys ORDER BY server_id`)
 	if err != nil {
 		return nil, err
@@ -187,8 +195,12 @@ func (s *Store) ListEntryPins() ([]PinMeta, error) {
 	var out []PinMeta
 	for rows.Next() {
 		var m PinMeta
-		if err := rows.Scan(&m.ServerID, &m.Blob, &m.Format, &m.Source, &m.Device, &m.HandshakeAddr, &m.CreatedAt); err != nil {
+		if err := rows.Scan(&m.ServerID, &m.Blob, &m.Format, &m.Source, &m.Device, &m.HandshakeAddr,
+			&m.KeyAlgorithm, &m.CreatedAt); err != nil {
 			return nil, err
+		}
+		if m.Format == PinFormatBlob && m.KeyAlgorithm == "" {
+			m.KeyAlgorithm = pinAlgorithmFromBlob(m.Blob)
 		}
 		out = append(out, m)
 	}
@@ -230,7 +242,7 @@ func (s *Store) SaveEntryPinAtHandshakeWithSource(
 	audit.Source = source.kind
 	audit.SourceIP = source.address
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, marshaledKey,
-		PinFormatBlob, PinSourceTofu, "", audit)
+		PinFormatBlob, PinSourceTofu, "", "", audit)
 	if err != nil {
 		return err
 	}
@@ -264,7 +276,7 @@ func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string
 	}
 	defer tx.Rollback()
 	inserted, err := insertEntryPinWithAuditTx(tx, srv.ID, handshakeAddr, blob,
-		PinFormatBlob, PinSourceForward, device, audit)
+		PinFormatBlob, PinSourceForward, device, "", audit)
 	if err != nil || !inserted {
 		return inserted, err
 	}
@@ -274,13 +286,17 @@ func (s *Store) InsertForwardedEntryPin(srv *models.Server, handshakeAddr string
 // insertEntryPinWithAuditTx 是“只新增不覆盖”的锚写入公共入口：插入成功才
 // 在同一事务写锚审计；条目已有锚时不写审计。设备转发与设备内锚复制共用。
 func insertEntryPinWithAuditTx(
-	tx *sql.Tx, serverID, handshakeAddr string, blob []byte, format, source, device string, audit AuditRow,
+	tx *sql.Tx, serverID, handshakeAddr string, blob []byte, format, source, device, keyAlgorithm string,
+	audit AuditRow,
 ) (bool, error) {
+	if keyAlgorithm == "" && format == PinFormatBlob {
+		keyAlgorithm = pinAlgorithmFromBlob(blob)
+	}
 	res, err := tx.Exec(
-		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-		 VALUES (?,?,?,?,?,?,?)
+		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr, key_algorithm)
+		 VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(server_id) DO NOTHING`,
-		serverID, blob, now(), format, source, device, handshakeAddr)
+		serverID, blob, now(), format, source, device, handshakeAddr, keyAlgorithm)
 	if err != nil {
 		return false, err
 	}
@@ -314,10 +330,11 @@ func (s *Store) ApplyForwardedEntryPin(srv *models.Server, handshakeAddr string,
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(
-		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-		 VALUES (?,?,?,?,?,?,?)
+		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr, key_algorithm)
+		 VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(server_id) DO NOTHING`,
-		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceForward, s.forwardDevice, handshakeAddr)
+		srv.ID, marshaledKey, now(), PinFormatBlob, PinSourceForward, s.forwardDevice,
+		handshakeAddr, pinAlgorithmFromBlob(marshaledKey))
 	if err != nil {
 		return err
 	}
@@ -345,11 +362,27 @@ func (s *Store) ApplyForwardedEntryPin(srv *models.Server, handshakeAddr string,
 // --fingerprint / --from-keyscan）。已有锚且未加 --force 时拒绝且不写审计；
 // --force 是唯一覆盖入口，覆盖与审计同一事务提交。
 func (s *Store) UpsertManualEntryPin(srv *models.Server, handshakeAddr string, blob []byte, format string, force bool, auditFor func(old *PinMeta) AuditRow) (*PinMeta, error) {
+	return s.UpsertManualEntryPinWithAlgorithm(srv, handshakeAddr, blob, format, "", force, auditFor)
+}
+
+// UpsertManualEntryPinWithAlgorithm 在手工锚上记录算法族。完整公钥锚总是
+// 从公钥字节推导算法，避免算法字段和公钥本身出现两个事实源。
+func (s *Store) UpsertManualEntryPinWithAlgorithm(
+	srv *models.Server, handshakeAddr string, blob []byte, format, keyAlgorithm string,
+	force bool, auditFor func(old *PinMeta) AuditRow,
+) (*PinMeta, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
 	if format != PinFormatBlob && format != PinFormatFingerprint {
 		return nil, fmt.Errorf("pin format must be %q or %q, got %q", PinFormatBlob, PinFormatFingerprint, format)
+	}
+	keyAlgorithm, err := ParsePinKeyAlgorithm(keyAlgorithm)
+	if err != nil {
+		return nil, err
+	}
+	if format == PinFormatBlob {
+		keyAlgorithm = pinAlgorithmFromBlob(blob)
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -364,19 +397,103 @@ func (s *Store) UpsertManualEntryPin(srv *models.Server, handshakeAddr string, b
 		return old, ErrPinExists
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr)
-		 VALUES (?,?,?,?,?,?,?)
+		`INSERT INTO entry_host_keys (server_id, key_blob, created_at, pin_format, pin_source, pin_device, handshake_addr, key_algorithm)
+		 VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(server_id) DO UPDATE SET
 		   key_blob=excluded.key_blob, created_at=excluded.created_at,
 		   pin_format=excluded.pin_format, pin_source=excluded.pin_source,
-		   pin_device=excluded.pin_device, handshake_addr=excluded.handshake_addr`,
-		srv.ID, blob, now(), format, PinSourceManual, "", handshakeAddr); err != nil {
+		   pin_device=excluded.pin_device, handshake_addr=excluded.handshake_addr,
+		   key_algorithm=excluded.key_algorithm`,
+		srv.ID, blob, now(), format, PinSourceManual, "", handshakeAddr, keyAlgorithm); err != nil {
 		return nil, err
 	}
 	if err := writeAuditTx(tx, auditFor(old)); err != nil {
 		return nil, err
 	}
 	return old, tx.Commit()
+}
+
+// LearnEntryPinAlgorithm 在一次已按锚完成指纹比对的主机密钥上补记算法。
+// 它不会放宽比对：事务里先重新读取锚并做同一条 Matches 判定，指纹不同就
+// 返回锚不一致，不写任何数据。
+func (s *Store) LearnEntryPinAlgorithm(srv *models.Server, marshaledKey []byte) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	algorithm := pinAlgorithmFromBlob(marshaledKey)
+	if algorithm == "" {
+		return fmt.Errorf("learn host key algorithm for entry %s: presented key does not parse", srv.ID)
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	existing, err := loadEntryPinMeta(tx, srv.ID)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		return fmt.Errorf("learn host key algorithm for entry %s: anchor is missing", srv.ID)
+	}
+	if !existing.Matches(marshaledKey) {
+		return fmt.Errorf("%w: presented %s != pinned %s",
+			ErrEntryPinMismatch, PinFingerprint(marshaledKey, PinFormatBlob),
+			PinFingerprint(existing.Blob, existing.Format))
+	}
+	if existing.KeyAlgorithm != "" {
+		if pinKeyAlgorithmCompatible(existing.KeyAlgorithm, algorithm) {
+			return nil
+		}
+		return fmt.Errorf("learn host key algorithm for entry %s: pinned algorithm %s differs from presented %s",
+			srv.ID, existing.KeyAlgorithm, algorithm)
+	}
+	result, err := tx.Exec(
+		`UPDATE entry_host_keys SET key_algorithm=? WHERE server_id=? AND key_algorithm=''`,
+		algorithm, srv.ID,
+	)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated == 0 {
+		current, err := loadEntryPinMeta(tx, srv.ID)
+		if err != nil {
+			return err
+		}
+		if current == nil || !current.Matches(marshaledKey) ||
+			!pinKeyAlgorithmCompatible(current.KeyAlgorithm, algorithm) {
+			return fmt.Errorf("learn host key algorithm for entry %s: anchor changed inside the transaction", srv.ID)
+		}
+		return nil
+	}
+	if err := writeAuditTx(tx, AuditRow{
+		TS: time.Now(), ServerID: srv.ID, Action: "pin-learn-algorithm",
+		Command: fmt.Sprintf("entry=%s fingerprint=%s algorithm=%s", srv.Name,
+			PinFingerprint(existing.Blob, existing.Format), algorithm),
+		Status: "ok",
+	}); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// pinKeyAlgorithmCompatible 判断两个锚算法名是否指向同一算法族。ecdsa 可
+// 以先记算法族，首次看到完整公钥后能对应到具体曲线。
+func pinKeyAlgorithmCompatible(stored, presented string) bool {
+	if stored == presented {
+		return true
+	}
+	switch stored {
+	case "ecdsa":
+		return presented == ssh.KeyAlgoECDSA256 || presented == ssh.KeyAlgoECDSA384 ||
+			presented == ssh.KeyAlgoECDSA521
+	default:
+		return false
+	}
 }
 
 // ClearEntryPin 删除服务器条目当前的主机密钥锚并写审计，一次事务完成。条目

@@ -65,3 +65,32 @@ func TestDevicesNetworkMemberConflictWarnsOnStderr(t *testing.T) {
 		t.Fatalf("修改冲突时标准错误应包含警告：\nstdout=%s\nstderr=%s", stdout, stderr)
 	}
 }
+
+// TestDevicesNetworkMemberConflictKeepsNetworkTypeLabels 覆盖两个登记方向：
+// 警告里的“物理局域网”与“虚拟局域网”必须分别指向对应类型的网络名。
+func TestDevicesNetworkMemberConflictKeepsNetworkTypeLabels(t *testing.T) {
+	withCliStoreEnv(t)
+	runCli(t, "sites", "add", "家A")
+	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
+	runCli(t, "networks", "add", "虚拟网", "--type", "virtual")
+	runCli(t, "devices", "add", "工作站")
+	runCli(t, "devices", "member", "add", "工作站", "--network", "虚拟网", "--address", "100.64.0.1")
+
+	_, stderr := runCliCapturingStderr(t,
+		"devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "100.64.0.1",
+	)
+	if !strings.Contains(stderr,
+		"同时登记在物理局域网 家A局域网 与虚拟局域网 虚拟网") {
+		t.Fatalf("先登记虚拟局域网再登记物理局域网时，警告类型说反：\n%s", stderr)
+	}
+
+	runCli(t, "devices", "add", "工作站二")
+	runCli(t, "devices", "member", "add", "工作站二", "--network", "家A局域网", "--address", "100.64.0.2")
+	_, stderr = runCliCapturingStderr(t,
+		"devices", "member", "add", "工作站二", "--network", "虚拟网", "--address", "100.64.0.2",
+	)
+	if !strings.Contains(stderr,
+		"同时登记在物理局域网 家A局域网 与虚拟局域网 虚拟网") {
+		t.Fatalf("先登记物理局域网再登记虚拟局域网时，警告类型说反：\n%s", stderr)
+	}
+}

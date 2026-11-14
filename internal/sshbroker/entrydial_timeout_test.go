@@ -118,7 +118,7 @@ func TestConnectServerEntryReleasesAddressTimeoutWhenHostKeyArrives(t *testing.T
 		release: make(chan struct{}),
 	}
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, hostKeyCallback ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, _ string, _ int, _ string, _ ssh.AuthMethod, hostKeyCallback ssh.HostKeyCallback, _ keepAliveSpec, _ []string) (*Client, error) {
 		hostKeys.dialContext = ctx
 		return nil, hostKeyCallback("192.0.2.10:2202", nil, testPublicKey(t))
 	}
@@ -162,10 +162,10 @@ func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 		reclaimed := make(chan struct{})
 		var attempted []string
 		original := lowLevelDial
-		lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+		lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 			attempted = append(attempted, host)
 			if host != "192.0.2.10" {
-				return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+				return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 			}
 			select {
 			case <-ctx.Done():
@@ -221,13 +221,13 @@ func TestConnectServerEntryAddressTimeoutAndSingleCandidate(t *testing.T) {
 		defer cleanup()
 		entered, release := make(chan struct{}), make(chan struct{})
 		original := lowLevelDial
-		lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+		lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 			if _, hasDeadline := ctx.Deadline(); hasDeadline {
 				t.Error("the only candidate must inherit the caller context without an address deadline")
 			}
 			close(entered)
 			<-release
-			return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+			return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 		}
 		t.Cleanup(func() { lowLevelDial = original })
 
@@ -269,12 +269,12 @@ func TestConnectServerEntryAddressTimeoutEndsAtHostKeyVerification(t *testing.T)
 		"srv-a": {Blob: hostKey.Marshal(), Format: store.PinFormatBlob},
 	}}
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		if host == "192.0.2.10" {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
-		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 

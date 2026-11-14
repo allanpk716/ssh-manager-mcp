@@ -231,6 +231,40 @@ func TestPinHostkey_FingerprintStrict(t *testing.T) {
 	}
 }
 
+// TestPinHostkey_FingerprintKeyType 校验 --key-type 只在指纹锚上可用；指定
+// 后算法直接入库，未指定时保持为空，等待首次连接自动确定。
+func TestPinHostkey_FingerprintKeyType(t *testing.T) {
+	_, mk := withCliStoreEnv(t)
+	_, fp := genHostKey(t)
+	seedPinServers(t, mk,
+		models.Server{Name: "typed", Host: "192.0.2.50", Port: 22, User: "u"},
+		models.Server{Name: "untyped", Host: "192.0.2.51", Port: 22, User: "u"},
+	)
+
+	errText := runCliErr(t,
+		"servers", "pin-hostkey", "typed", "--fingerprint", fp, "--key-type", "unknown",
+	)
+	if !strings.Contains(errText, "key type must be one of") {
+		t.Fatalf("未知算法应被拒绝：\n%s", errText)
+	}
+	out := runCli(t,
+		"servers", "pin-hostkey", "typed", "--fingerprint", fp, "--key-type", "ed25519",
+	)
+	if !strings.Contains(out, "key-type=ssh-ed25519") {
+		t.Fatalf("成功输出应显示指定算法：\n%s", out)
+	}
+	typed := entryPinAt(t, mk, "typed")
+	if typed == nil || typed.KeyAlgorithm != ssh.KeyAlgoED25519 {
+		t.Fatalf("指定算法应写入锚，得到：%+v", typed)
+	}
+
+	runCli(t, "servers", "pin-hostkey", "untyped", "--fingerprint", fp)
+	untyped := entryPinAt(t, mk, "untyped")
+	if untyped == nil || untyped.KeyAlgorithm != "" {
+		t.Fatalf("未指定算法时应先保持为空，得到：%+v", untyped)
+	}
+}
+
 // TestPinHostkey_ExistingRefusalAndForce：已有锚不加 --force 拒绝并显示现存
 // 指纹与来源；--force 覆盖，审计带事务内读到的旧指纹；同一设备、同一端口的其他服务器条目的锚
 // 不受影响。
@@ -376,7 +410,8 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	if !strings.Contains(out, "pinned alpha host=192.0.2.50:22 fingerprint="+fpA+" (format=blob, source=manual, handshake=192.0.2.50:22, forced=false)") {
 		t.Fatalf("keyscan success line wrong:\n%s", out)
 	}
-	if pin := entryPinAt(t, mk, "alpha"); pin == nil || pin.Format != store.PinFormatBlob {
+	if pin := entryPinAt(t, mk, "alpha"); pin == nil || pin.Format != store.PinFormatBlob ||
+		pin.KeyAlgorithm != keyA.Type() {
 		t.Fatalf("keyscan anchor must be a blob: %+v", pin)
 	}
 	rows := pinAuditRows(t, mk, "pin-manual")

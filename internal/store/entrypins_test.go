@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ssh"
+
 	"ssh-manager-mcp/internal/models"
 )
 
@@ -143,7 +145,8 @@ func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(pins) != 1 || pins[0].Source != PinSourceTofu || pins[0].HandshakeAddr != "100.64.10.5:22" {
+	if len(pins) != 1 || pins[0].Source != PinSourceTofu || pins[0].HandshakeAddr != "100.64.10.5:22" ||
+		pins[0].KeyAlgorithm != ssh.KeyAlgoED25519 {
 		t.Fatalf("首次锚定来源信息不完整：%+v", pins)
 	}
 	rows, err := s.QueryAudit(AuditFilter{Actions: []string{"pin-tofu"}})
@@ -354,7 +357,7 @@ func TestEntryLifecycle_PinFollowsEntry(t *testing.T) {
 // 落为 blob/tofu、无转发设备。
 func TestEntryPins_FreshSchemaColumns(t *testing.T) {
 	s := newTestStore(t)
-	for _, col := range []string{"pin_format", "pin_source", "pin_device", "handshake_addr"} {
+	for _, col := range []string{"pin_format", "pin_source", "pin_device", "handshake_addr", "key_algorithm"} {
 		if !hasColumn(t, s.db, "entry_host_keys", col) {
 			t.Fatalf("新建锚表缺少 %s 列", col)
 		}

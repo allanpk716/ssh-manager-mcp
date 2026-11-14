@@ -272,6 +272,7 @@ type SnapshotEntryHostKey struct {
 	PinSource     string `json:"pin_source,omitempty"`
 	PinDevice     string `json:"pin_device,omitempty"`
 	HandshakeAddr string `json:"handshake_addr,omitempty"`
+	KeyAlgorithm  string `json:"key_algorithm,omitempty"`
 }
 
 type SnapshotAudit struct {
@@ -386,6 +387,7 @@ func (s *Store) snapshotEntryPins() ([]SnapshotEntryHostKey, error) {
 			PinSource:     p.Source,
 			PinDevice:     p.Device,
 			HandshakeAddr: p.HandshakeAddr,
+			KeyAlgorithm:  p.KeyAlgorithm,
 		})
 	}
 	return out, nil
@@ -1540,8 +1542,9 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		for _, p := range snap.EntryHostKeys {
 			format, source := normalizeSnapshotPinColumns(p.PinFormat, p.PinSource)
 			if _, err := tx.Exec(
-				`INSERT INTO entry_host_keys(server_id,key_blob,created_at,pin_format,pin_source,pin_device,handshake_addr) VALUES(?,?,?,?,?,?,?)`,
-				p.ServerID, p.KeyBlob, p.CreatedAt, format, source, p.PinDevice, p.HandshakeAddr); err != nil {
+				`INSERT INTO entry_host_keys(server_id,key_blob,created_at,pin_format,pin_source,pin_device,handshake_addr,key_algorithm) VALUES(?,?,?,?,?,?,?,?)`,
+				p.ServerID, p.KeyBlob, p.CreatedAt, format, source, p.PinDevice, p.HandshakeAddr,
+				normalizedSnapshotPinAlgorithm(p.KeyAlgorithm, p.KeyBlob, format)); err != nil {
 				return fmt.Errorf("insert entry host_key %s: %w", p.ServerID, err)
 			}
 		}
@@ -1614,6 +1617,18 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		return err
 	}
 	return nil
+}
+
+// normalizedSnapshotPinAlgorithm 兼容旧快照：新快照携带算法字段；旧快照缺
+// 失时只有完整公钥锚可以推导，指纹锚保持未知并走首次连接的算法探测。
+func normalizedSnapshotPinAlgorithm(algorithm string, blob []byte, format string) string {
+	if algorithm != "" {
+		return algorithm
+	}
+	if format == PinFormatBlob {
+		return pinAlgorithmFromBlob(blob)
+	}
+	return ""
 }
 
 // nullIfEmpty returns nil (-> SQL NULL) for "", else s. Mirrors COALESCE-on-read.

@@ -364,10 +364,17 @@ type ServerDialRequest struct {
 	Observer DialAttemptObserver
 }
 
-// lowLevelDial 是统一入口的低层连接函数：按「主机、端口」拨一个地址并完成
-// 认证。默认值是现有的 connectWith（Connect 与 ConnectKeepAlive 共用的底层
-// 函数）；测试注入它，把候选地址映射到进程内 SSH 服务器。
-var lowLevelDial = connectWith
+// lowLevelDialFunc 是统一入口的低层连接函数类型：按「主机、端口」拨一个地
+// 址，并可用锚记录的算法约束本次主机密钥协商。
+type lowLevelDialFunc func(
+	ctx context.Context, host string, port int, user string, auth ssh.AuthMethod,
+	hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, hostKeyAlgorithms []string,
+) (*Client, error)
+
+// lowLevelDial 是统一入口的低层连接函数。默认值是现有的 connectWith
+// （Connect 与 ConnectKeepAlive 共用的底层函数）；测试注入它，把候选地址映
+// 射到进程内 SSH 服务器。
+var lowLevelDial lowLevelDialFunc = connectWith
 
 // AddressTimeoutEnv 覆盖每个候选地址的拨号超时；默认值是规格定下的 1.5 秒。
 const (
@@ -519,13 +526,23 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 	if err != nil {
 		return nil, nil, err
 	}
+	pin, err := req.HostKeys.GetEntryPin(req.Server)
+	if err != nil {
+		return nil, nil, err
+	}
+	pinnedHostKeyAlgorithms := hostKeyAlgorithmsForPin(pin)
+	// 只有“指纹锚且算法未知”才需要算法族探测；环境变量显式指定时保持原
+	// 有旋钮语义，一律以用户指定为准，不做额外重试。
+	retryUnknownPinAlgorithm := pin != nil &&
+		pin.Format == store.PinFormatFingerprint && pin.KeyAlgorithm == "" &&
+		hostKeyAlgos() == nil
 	keepAlive := keepAliveSpec{}
 	if req.KeepAlive {
 		keepAlive = backgroundKeepAlive
 	}
 	failures := make([]DialAttemptError, 0, len(plan.Candidates))
 	var notes []string
-	for _, candidate := range plan.Candidates {
+	attemptCandidate := func(candidate DialAddress, hostKeyAlgorithms []string) (*Client, error) {
 		dialCtx := ctx
 		stopAddressTimeout := func() {}
 		candidateHostKeyCallback := hostKeyCallback
@@ -535,7 +552,10 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			candidateHostKeyCallback = hostKeyCallbackReleasingVerification(hostKeyCallback, releaseHostKeyVerification)
 		}
 		attemptStarted := time.Now()
-		cli, err := lowLevelDial(dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth, candidateHostKeyCallback, keepAlive)
+		cli, err := lowLevelDial(
+			dialCtx, candidate.Address, req.Server.Port, req.Server.User, req.Auth,
+			candidateHostKeyCallback, keepAlive, hostKeyAlgorithms,
+		)
 		if contextErr := dialCtx.Err(); contextErr != nil {
 			if cli != nil {
 				cli.Close()
@@ -543,10 +563,14 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			err = contextErr
 			stopAddressTimeout()
 			if parentErr := ctx.Err(); parentErr != nil {
-				return nil, nil, parentErr
+				return nil, parentErr
 			}
 		} else {
 			stopAddressTimeout()
+		}
+		if err != nil && len(hostKeyAlgorithms) > 0 &&
+			strings.Contains(err.Error(), "no common algorithm for host key") {
+			err = fmt.Errorf("%w: %v", ErrHostKeyMismatch, err)
 		}
 		if observer != nil && candidate.Source != DialAddressFallback {
 			outcome := DialAttemptOutcome{
@@ -557,10 +581,37 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			}
 			observer.ObserveDialAttempt(req.Server, candidate, outcome)
 		}
+		return cli, err
+	}
+
+	for _, candidate := range plan.Candidates {
+		candidateStarted := time.Now()
+		cli, err := attemptCandidate(candidate, pinnedHostKeyAlgorithms)
+		if retryUnknownPinAlgorithm && errors.Is(err, ErrHostKeyMismatch) {
+			for _, family := range hostKeyAlgorithmFamilyAttempts() {
+				retryClient, retryErr := attemptCandidate(candidate, family)
+				if retryErr == nil {
+					cli, err = retryClient, nil
+					break
+				}
+				// 探测某个算法族时，服务器不支持该算法会造成“没有共同算
+				// 法”。这不能覆盖第一次已经确认的指纹不一致；最终结论仍
+				// 是主机密钥不同。
+				if !errors.Is(retryErr, ErrHostKeyMismatch) {
+					break
+				}
+			}
+		}
+		if parentErr := ctx.Err(); parentErr != nil {
+			if cli != nil {
+				cli.Close()
+			}
+			return nil, nil, parentErr
+		}
 		if err == nil {
 			if successCache != nil {
 				record := DialSuccessRecord{
-					Address: candidate.Address, SucceededAt: time.Now(), Duration: time.Since(attemptStarted),
+					Address: candidate.Address, SucceededAt: time.Now(), Duration: time.Since(candidateStarted),
 				}
 				if err := successCache.RecordServerDialSuccess(req.Server, record); err != nil {
 					warnDialSuccessCacheFailure("写入", err)
