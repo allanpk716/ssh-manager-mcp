@@ -32,6 +32,11 @@ const (
 // 锚定只能经虚拟局域网，但当前拨号设备与目标没有共同虚拟局域网。
 var ErrFirstTrustNoCommonVirtualLan = errors.New("首次锚定只能经虚拟局域网；当前拨号设备与目标没有共同虚拟局域网。请用带外锚定，或先从虚拟局域网内的机器连接一次。")
 
+// ErrFirstTrustVirtualLanAddressAlsoPhysical 表示服务器条目还没有主机密
+// 钥锚，而共同虚拟局域网候选地址与共同物理局域网候选地址等价，规划时被
+// 物理局域网优先的去重规则去掉，无法证明实际握手走的是虚拟局域网。
+var ErrFirstTrustVirtualLanAddressAlsoPhysical = errors.New("首次锚定被拒绝：虚拟局域网地址同时登记在物理局域网")
+
 // FallbackOnlyReason 解释为什么拓扑规划后仍只剩兜底主机。
 type FallbackOnlyReason string
 
@@ -434,6 +439,11 @@ func PlanServerDialCandidates(input ServerDialPlanInput) (ServerDialPlanResult, 
 		if firstTrustNeedsVirtualLan {
 			plan = keepVirtualLanCandidates(plan)
 			if len(plan.Candidates) == 0 {
+				if conflict := firstTrustVirtualLanAddressAlsoPhysical(
+					input.Topology.TargetMemberships, dialerMemberships,
+				); conflict != nil {
+					return ServerDialPlanResult{}, conflict
+				}
 				return ServerDialPlanResult{}, ErrFirstTrustNoCommonVirtualLan
 			}
 		}
@@ -608,6 +618,50 @@ func keepVirtualLanCandidates(plan DialAddressPlan) DialAddressPlan {
 	}
 	plan.Candidates = candidates
 	return plan
+}
+
+// firstTrustVirtualLanAddressAlsoPhysical 在“只保留虚拟局域网候选”之后没
+// 有候选时，区分“没有共同虚拟局域网”和“共同虚拟局域网地址被等价的共同
+// 物理局域网地址去重”。后者说明双方确有共同虚拟局域网，但无法证明这次
+// 连接走的是它，因此仍拒绝首次锚定，只是错误原因必须如实说明。
+func firstTrustVirtualLanAddressAlsoPhysical(
+	targetMemberships, dialerMemberships []*models.NetworkMembership,
+) error {
+	dialerNetworks := make(map[string]bool, len(dialerMemberships))
+	for _, membership := range dialerMemberships {
+		if membership != nil {
+			dialerNetworks[membership.NetworkID] = true
+		}
+	}
+
+	physicalNetworks := make(map[string]string)
+	for _, membership := range targetMemberships {
+		if membership == nil || !dialerNetworks[membership.NetworkID] ||
+			membership.NetworkType != models.NetworkPhysical {
+			continue
+		}
+		key := normalizeDialAddress(membership.Address)
+		if _, exists := physicalNetworks[key]; !exists {
+			physicalNetworks[key] = membership.NetworkName
+		}
+	}
+	for _, membership := range targetMemberships {
+		if membership == nil || !dialerNetworks[membership.NetworkID] ||
+			membership.NetworkType != models.NetworkVirtual {
+			continue
+		}
+		key := normalizeDialAddress(membership.Address)
+		physicalNetwork, exists := physicalNetworks[key]
+		if !exists {
+			continue
+		}
+		return fmt.Errorf(
+			"%w。地址 %s 同时登记在物理局域网 %s 与虚拟局域网 %s，无法证明这次连接走的是虚拟局域网，所以拒绝首次锚定。请改正网络成员登记，让虚拟局域网成员使用虚拟局域网自己的地址；或用带外锚定：sshmgr servers pin-hostkey <服务器条目名> --fingerprint SHA256:...（也可改用 --from-keyscan）。",
+			ErrFirstTrustVirtualLanAddressAlsoPhysical, membership.Address,
+			physicalNetwork, membership.NetworkName,
+		)
+	}
+	return nil
 }
 
 // orderPlanWithDialSuccess 只重排同一优先级级别（物理局域网、虚拟局域

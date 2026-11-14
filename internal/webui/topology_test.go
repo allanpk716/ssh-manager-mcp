@@ -436,6 +436,7 @@ type stubTopologyWriter struct {
 	removePhysical    []string
 	networkAddCalls   [][2]string
 	sources           []TopologyWriteSource
+	addMessage        string
 	nextNotFoundError bool
 	nextPlainError    error
 
@@ -455,6 +456,9 @@ func (w *stubTopologyWriter) AddNetworkMembership(
 ) (string, error) {
 	w.addCalls = append(w.addCalls, [3]string{device, network, address})
 	w.sources = append(w.sources, source)
+	if w.addMessage != "" {
+		return w.addMessage, w.nextError()
+	}
 	return "已把设备加入网络", w.nextError()
 }
 
@@ -736,6 +740,33 @@ func TestTopologyWriteEndpointSeparatesValidationAndInternalErrors(t *testing.T)
 				t.Fatalf("错误提示 = %q，应为 %q", payload.Error, tc.message)
 			}
 		})
+	}
+}
+
+// TestTopologyWriteEndpointReturnsSuccessMessageWithWarning 确认“成功但警
+// 告”仍是成功响应，警告文字进入保存后的提示字段，由拓扑页提示区显示。
+func TestTopologyWriteEndpointReturnsSuccessMessageWithWarning(t *testing.T) {
+	writer := &stubTopologyWriter{addMessage: "已把设备 工作站 加入网络 家A局域网：100.64.0.1\n警告：地址 100.64.0.1 同时登记在物理局域网 家A局域网 与虚拟局域网 虚拟网，无法自动首次锚定。"}
+	uiHandler, startup := newTopologyTestHandler(t, RoleStandalone, &stubTopologySource{data: topologyFixture()}, "", writer)
+	resp := exchangeStartupToken(t, uiHandler, startup.URL("127.0.0.1:18080"))
+	cookies := resp.Cookies()
+	resp.Body.Close()
+
+	response := postTopologyJSON(t, uiHandler, cookies[0], sessionCSRFTokenForTopology(t, uiHandler),
+		topologyMembershipAddPath, `{"device":"工作站","network":"家A局域网","address":"100.64.0.1"}`)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		payload, _ := io.ReadAll(response.Body)
+		t.Fatalf("成功但警告的响应状态码 = %d，响应：%s", response.StatusCode, payload)
+	}
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload.Message, "已把设备") || !strings.Contains(payload.Message, "警告：地址 100.64.0.1") {
+		t.Fatalf("响应提示应包含成功结论与警告：%q", payload.Message)
 	}
 }
 

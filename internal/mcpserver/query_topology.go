@@ -301,6 +301,10 @@ func (view *queryTopologyPairView) setActualNetwork(st *store.Store, target *que
 			target.dialFailureReason = "真正拨号会失败：这个服务器条目还没有主机密钥锚，首次连接只能经虚拟局域网，而出发点与它没有共同虚拟局域网"
 			return nil
 		}
+		if errors.Is(err, sshbroker.ErrFirstTrustVirtualLanAddressAlsoPhysical) {
+			target.dialFailureReason = "真正拨号会失败：" + err.Error()
+			return nil
+		}
 		return err
 	}
 	if len(planned.Plan.Candidates) > 0 {

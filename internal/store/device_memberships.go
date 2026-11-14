@@ -13,10 +13,21 @@ import (
 // ErrNetworkMembershipNotFound 表示设备在这个网络里还没有网络成员。
 var ErrNetworkMembershipNotFound = errors.New("设备在这个网络里没有网络成员")
 
+// NetworkMembershipWriteResult 是一次网络成员写入结果；Warning 非空表示写
+// 入成功但拓扑里有需要 owner 注意的问题。
+type NetworkMembershipWriteResult struct {
+	Membership *models.NetworkMembership
+	Warning    string
+}
+
 // AddNetworkMembership 把设备加入网络并登记地址。地址按去首尾空白后的小
 // 写形式保证同一网络内唯一；成员行与审计行同事务提交。
 func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*models.NetworkMembership, error) {
-	return s.addNetworkMembership(deviceName, networkName, address, WriteSource{})
+	write, err := s.addNetworkMembership(deviceName, networkName, address, WriteSource{})
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
 }
 
 // AddNetworkMembershipWithSource 与 AddNetworkMembership 相同，并把同一事务
@@ -24,12 +35,32 @@ func (s *Store) AddNetworkMembership(deviceName, networkName, address string) (*
 func (s *Store) AddNetworkMembershipWithSource(
 	deviceName, networkName, address string, source WriteSource,
 ) (*models.NetworkMembership, error) {
+	write, err := s.addNetworkMembership(deviceName, networkName, address, source)
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
+}
+
+// AddNetworkMembershipWithWarning 与 AddNetworkMembership 相同，但把写入成
+// 功后仍需展示的警告返回给调用方。
+func (s *Store) AddNetworkMembershipWithWarning(
+	deviceName, networkName, address string,
+) (*NetworkMembershipWriteResult, error) {
+	return s.addNetworkMembership(deviceName, networkName, address, WriteSource{})
+}
+
+// AddNetworkMembershipWithSourceAndWarning 与
+// AddNetworkMembershipWithWarning 相同，并把审计行标为指定来源。
+func (s *Store) AddNetworkMembershipWithSourceAndWarning(
+	deviceName, networkName, address string, source WriteSource,
+) (*NetworkMembershipWriteResult, error) {
 	return s.addNetworkMembership(deviceName, networkName, address, source)
 }
 
 func (s *Store) addNetworkMembership(
 	deviceName, networkName, address string, source WriteSource,
-) (*models.NetworkMembership, error) {
+) (*NetworkMembershipWriteResult, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -49,7 +80,7 @@ func (s *Store) addNetworkMembership(
 // 随外层事务一起提交或回滚。
 func (s *Store) addNetworkMembershipTx(
 	tx *sql.Tx, deviceName, networkName, address string, source WriteSource,
-) (*models.NetworkMembership, error) {
+) (*NetworkMembershipWriteResult, error) {
 	address = strings.TrimSpace(address)
 	if address == "" {
 		return nil, &TopologyValidationError{Message: "网络成员地址不能为空"}
@@ -113,7 +144,11 @@ func (s *Store) addNetworkMembershipTx(
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
-	return membership, nil
+	warning, err := physicalVirtualAddressConflictWarningTx(tx, membership)
+	if err != nil {
+		return nil, err
+	}
+	return &NetworkMembershipWriteResult{Membership: membership, Warning: warning}, nil
 }
 
 // AllVirtualNetworkAddresses 返回拓扑里所有设备在虚拟局域网中的成员地址。
@@ -143,7 +178,11 @@ func (s *Store) AllVirtualNetworkAddresses() ([]string, error) {
 // EditNetworkMembership 修改设备在指定网络里的地址。数据行与审计行在同一
 // 个事务里提交。
 func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (*models.NetworkMembership, error) {
-	return s.EditNetworkMembershipWithSource(deviceName, networkName, address, WriteSource{})
+	write, err := s.editNetworkMembership(deviceName, networkName, address, WriteSource{})
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
 }
 
 // EditNetworkMembershipWithSource 与 EditNetworkMembership 相同，并把同一
@@ -151,6 +190,32 @@ func (s *Store) EditNetworkMembership(deviceName, networkName, address string) (
 func (s *Store) EditNetworkMembershipWithSource(
 	deviceName, networkName, address string, source WriteSource,
 ) (*models.NetworkMembership, error) {
+	write, err := s.editNetworkMembership(deviceName, networkName, address, source)
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
+}
+
+// EditNetworkMembershipWithWarning 与 EditNetworkMembership 相同，但把写入
+// 成功后仍需展示的警告返回给调用方。
+func (s *Store) EditNetworkMembershipWithWarning(
+	deviceName, networkName, address string,
+) (*NetworkMembershipWriteResult, error) {
+	return s.editNetworkMembership(deviceName, networkName, address, WriteSource{})
+}
+
+// EditNetworkMembershipWithSourceAndWarning 与
+// EditNetworkMembershipWithWarning 相同，并把审计行标为指定来源。
+func (s *Store) EditNetworkMembershipWithSourceAndWarning(
+	deviceName, networkName, address string, source WriteSource,
+) (*NetworkMembershipWriteResult, error) {
+	return s.editNetworkMembership(deviceName, networkName, address, source)
+}
+
+func (s *Store) editNetworkMembership(
+	deviceName, networkName, address string, source WriteSource,
+) (*NetworkMembershipWriteResult, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -182,7 +247,11 @@ func (s *Store) EditNetworkMembershipWithSource(
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-edit", membershipAuditSummary(membership), source); err != nil {
 		return nil, err
 	}
-	return membership, tx.Commit()
+	warning, err := physicalVirtualAddressConflictWarningTx(tx, membership)
+	if err != nil {
+		return nil, err
+	}
+	return &NetworkMembershipWriteResult{Membership: membership, Warning: warning}, tx.Commit()
 }
 
 // MoveNetworkMembership 把设备在 fromNetworkName 里的成员移动到
@@ -191,7 +260,11 @@ func (s *Store) EditNetworkMembershipWithSource(
 // 不改变任何数据。命令行等价面是先执行 devices member rm 再执行
 // devices member add。
 func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address string) (*models.NetworkMembership, error) {
-	return s.MoveNetworkMembershipWithSource(deviceName, fromNetworkName, toNetworkName, address, WriteSource{})
+	write, err := s.moveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address, WriteSource{})
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
 }
 
 // MoveNetworkMembershipWithSource 与 MoveNetworkMembership 相同，并把同一
@@ -199,6 +272,32 @@ func (s *Store) MoveNetworkMembership(deviceName, fromNetworkName, toNetworkName
 func (s *Store) MoveNetworkMembershipWithSource(
 	deviceName, fromNetworkName, toNetworkName, address string, source WriteSource,
 ) (*models.NetworkMembership, error) {
+	write, err := s.moveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address, source)
+	if write == nil {
+		return nil, err
+	}
+	return write.Membership, err
+}
+
+// MoveNetworkMembershipWithWarning 与 MoveNetworkMembership 相同，但把写入
+// 成功后仍需展示的警告返回给调用方。
+func (s *Store) MoveNetworkMembershipWithWarning(
+	deviceName, fromNetworkName, toNetworkName, address string,
+) (*NetworkMembershipWriteResult, error) {
+	return s.moveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address, WriteSource{})
+}
+
+// MoveNetworkMembershipWithSourceAndWarning 与
+// MoveNetworkMembershipWithWarning 相同，并把两条审计行都标为指定来源。
+func (s *Store) MoveNetworkMembershipWithSourceAndWarning(
+	deviceName, fromNetworkName, toNetworkName, address string, source WriteSource,
+) (*NetworkMembershipWriteResult, error) {
+	return s.moveNetworkMembership(deviceName, fromNetworkName, toNetworkName, address, source)
+}
+
+func (s *Store) moveNetworkMembership(
+	deviceName, fromNetworkName, toNetworkName, address string, source WriteSource,
+) (*NetworkMembershipWriteResult, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -270,7 +369,11 @@ func (s *Store) MoveNetworkMembershipWithSource(
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.member-add", membershipAuditSummary(moved), source); err != nil {
 		return nil, err
 	}
-	return moved, tx.Commit()
+	warning, err := physicalVirtualAddressConflictWarningTx(tx, moved)
+	if err != nil {
+		return nil, err
+	}
+	return &NetworkMembershipWriteResult{Membership: moved, Warning: warning}, tx.Commit()
 }
 
 // RemoveNetworkMembership 删除设备在指定网络里的成员。数据行与审计行在
@@ -472,6 +575,39 @@ func (s *Store) ListNetworkMembershipsForNetwork(networkName string) ([]*models.
 		return nil, err
 	}
 	return out, tx.Commit()
+}
+
+// physicalVirtualAddressConflictWarningTx 在一次网络成员写入完成后检查同一
+// 设备的其他成员：若另一类网络里有等价地址，返回不阻止写入的警告。地址
+// 等价判断复用统一的 SSH 主机规范化函数。
+func physicalVirtualAddressConflictWarningTx(
+	tx *sql.Tx, membership *models.NetworkMembership,
+) (string, error) {
+	if membership == nil ||
+		(membership.NetworkType != models.NetworkPhysical && membership.NetworkType != models.NetworkVirtual) {
+		return "", nil
+	}
+	memberships, err := networkMembershipsForDeviceTx(tx, membership.DeviceID)
+	if err != nil {
+		return "", err
+	}
+	addressKey := NormalizeSSHHost(membership.Address)
+	for _, other := range memberships {
+		if other == nil || other.NetworkType == membership.NetworkType ||
+			(other.NetworkType != models.NetworkPhysical && other.NetworkType != models.NetworkVirtual) ||
+			NormalizeSSHHost(other.Address) != addressKey {
+			continue
+		}
+		physicalNetwork, virtualNetwork := membership.NetworkName, other.NetworkName
+		if membership.NetworkType == models.NetworkVirtual {
+			physicalNetwork, virtualNetwork = membership.NetworkName, other.NetworkName
+		}
+		return fmt.Sprintf(
+			"警告：地址 %s 同时登记在物理局域网 %s 与虚拟局域网 %s。这样无法证明首次连接实际走的是虚拟局域网，这台设备的服务器条目将无法自动首次锚定。请把其中一个成员改成所在网络自己的地址；确需先连接时，可用带外锚定：sshmgr servers pin-hostkey <服务器条目名> --fingerprint SHA256:...。",
+			membership.Address, physicalNetwork, virtualNetwork,
+		), nil
+	}
+	return "", nil
 }
 
 // networkMembershipsForDeviceTx 返回一台设备在事务里的全部网络成员。

@@ -24,13 +24,15 @@ func (w openerWriter) AddNetworkMembership(
 	device, network, address string, source webui.TopologyWriteSource,
 ) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.AddNetworkMembershipWithSource(
+		write, err := st.AddNetworkMembershipWithSourceAndWarning(
 			device, network, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
+		membership := write.Membership
 		return fmt.Sprintf("已把设备 %s 加入网络 %s：%s",
-			membership.DeviceName, membership.NetworkName, membership.Address), nil
+			membership.DeviceName, membership.NetworkName, membership.Address) +
+			membershipWriteWarningSuffix(write.Warning), nil
 	})
 }
 
@@ -38,13 +40,15 @@ func (w openerWriter) EditNetworkMembership(
 	device, network, address string, source webui.TopologyWriteSource,
 ) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.EditNetworkMembershipWithSource(
+		write, err := st.EditNetworkMembershipWithSourceAndWarning(
 			device, network, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
+		membership := write.Membership
 		return fmt.Sprintf("已修改设备 %s 在网络 %s 的地址：%s",
-			membership.DeviceName, membership.NetworkName, membership.Address), nil
+			membership.DeviceName, membership.NetworkName, membership.Address) +
+			membershipWriteWarningSuffix(write.Warning), nil
 	})
 }
 
@@ -65,14 +69,25 @@ func (w openerWriter) MoveNetworkMembership(
 	device, fromNetwork, toNetwork, address string, source webui.TopologyWriteSource,
 ) (string, error) {
 	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
-		membership, err := st.MoveNetworkMembershipWithSource(
+		write, err := st.MoveNetworkMembershipWithSourceAndWarning(
 			device, fromNetwork, toNetwork, address, store.WebUISource(source.RemoteAddress))
 		if err != nil {
 			return "", err
 		}
+		membership := write.Membership
 		return fmt.Sprintf("已把设备 %s 从网络 %s 移到网络 %s：%s",
-			membership.DeviceName, fromNetwork, membership.NetworkName, membership.Address), nil
+			membership.DeviceName, fromNetwork, membership.NetworkName, membership.Address) +
+			membershipWriteWarningSuffix(write.Warning), nil
 	})
+}
+
+// membershipWriteWarningSuffix 把存储层警告追加到成功提示后，拓扑页把它
+// 显示在同一个保存结果提示里。
+func membershipWriteWarningSuffix(warning string) string {
+	if warning == "" {
+		return ""
+	}
+	return "\n" + warning
 }
 
 func (w openerWriter) RemovePhysicalNetworkMemberships(

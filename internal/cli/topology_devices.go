@@ -349,6 +349,14 @@ func printServerAnchorCopyResult(w io.Writer, result *store.ServerAnchorCopy) {
 	}
 }
 
+// printNetworkMembershipWarning 输出“保存成功但仍需修正”的拓扑警告；警告
+// 不改变命令的退出码。
+func printNetworkMembershipWarning(w io.Writer, warning string) {
+	if warning != "" {
+		fmt.Fprintln(w, warning)
+	}
+}
+
 func newDevicesMemberCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "member", Short: "Manage a device's network memberships"}
 	cmd.AddCommand(devicesMemberAddCmd(), devicesMemberEditCmd(), devicesMemberRmCmd())
@@ -367,12 +375,14 @@ func devicesMemberAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			membership, err := s.AddNetworkMembership(args[0], network, address)
+			write, err := s.AddNetworkMembershipWithWarning(args[0], network, address)
 			if err != nil {
 				return err
 			}
+			membership := write.Membership
 			fmt.Fprintf(cmd.OutOrStdout(), "已把设备 %s 加入网络 %s：%s\n",
 				membership.DeviceName, membership.NetworkName, membership.Address)
+			printNetworkMembershipWarning(cmd.ErrOrStderr(), write.Warning)
 			return nil
 		},
 	}
@@ -395,12 +405,14 @@ func devicesMemberEditCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			membership, err := s.EditNetworkMembership(args[0], network, address)
+			write, err := s.EditNetworkMembershipWithWarning(args[0], network, address)
 			if err != nil {
 				return err
 			}
+			membership := write.Membership
 			fmt.Fprintf(cmd.OutOrStdout(), "已修改设备 %s 在网络 %s 的地址：%s\n",
 				membership.DeviceName, membership.NetworkName, membership.Address)
+			printNetworkMembershipWarning(cmd.ErrOrStderr(), write.Warning)
 			return nil
 		},
 	}
