@@ -190,6 +190,7 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 	if detail.HostKeyAnchor != nil {
 		view.HostKeyAnchor = &webui.ServerDetailHostKeyAnchor{
 			Fingerprint:   store.PinFingerprint(detail.HostKeyAnchor.Blob, detail.HostKeyAnchor.Format),
+			KeyAlgorithm:  detail.HostKeyAnchor.DisplayKeyAlgorithm(),
 			SourceLabel:   webui.HostKeyAnchorSourceLabel(detail.HostKeyAnchor.Source),
 			Device:        detail.HostKeyAnchor.Device,
 			HandshakeAddr: detail.HostKeyAnchor.HandshakeAddr,

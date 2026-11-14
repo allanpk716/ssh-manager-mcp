@@ -48,8 +48,8 @@ the entry's candidate SSH addresses. Changing the entry's host or port keeps
 the anchor; deleting the entry removes it.
 
 Forms:
-  pin-hostkey <name>                     show fingerprint/format/source/device/handshake/created
-  pin-hostkey --list                     list every entry anchor with its handshake address
+  pin-hostkey <name>                     show fingerprint/key-type/format/source/device/handshake/created
+  pin-hostkey --list                     list every entry anchor with key type and handshake address
   pin-hostkey <name> --fingerprint SHA256:<base64> [--key-type ed25519|ecdsa|rsa] [--force]
   pin-hostkey <name> --from-keyscan <file|-> [--force]
   pin-hostkey <name> --clear             remove the entry's anchor (idempotent, audited)
@@ -184,7 +184,7 @@ func pinTime(unix int64) string {
 	return time.Unix(unix, 0).Local().Format("2006-01-02 15:04:05-07:00")
 }
 
-// runPinShow 实现显示形态：指纹、格式、来源、转发设备、握手地址与时间。
+// runPinShow 实现显示形态：指纹、算法、格式、来源、转发设备、握手地址与时间。
 func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 	m, err := s.GetEntryPinMeta(srv.ID)
 	if err != nil {
@@ -194,13 +194,13 @@ func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "no pin for %s (unanchored — first trust or pin forwarding will create it)\n", srv.Name)
 		return nil
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fingerprint=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fingerprint=%s (key-type=%s, format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
 		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(m.Blob, m.Format),
-		m.Format, m.Source, dash(m.Device), dash(m.HandshakeAddr), pinTime(m.CreatedAt))
+		m.DisplayKeyAlgorithm(), m.Format, m.Source, dash(m.Device), dash(m.HandshakeAddr), pinTime(m.CreatedAt))
 	return nil
 }
 
-// runPinList 实现 --list：按条目一行，显示每把锚经哪个地址学到。
+// runPinList 实现 --list：按条目一行，显示每把锚的算法与学习地址。
 func runPinList(cmd *cobra.Command, s *store.Store) error {
 	pins, err := s.ListEntryPins()
 	if err != nil {
@@ -225,9 +225,9 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 		if srv != nil {
 			name, hostPort = srv.Name, store.EntryFallbackAddr(srv)
 		}
-		fmt.Fprintf(out, "entry=%s host=%s fingerprint=%s (format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
-			name, hostPort, store.PinFingerprint(p.Blob, p.Format), p.Format, p.Source,
-			dash(p.Device), dash(p.HandshakeAddr), pinTime(p.CreatedAt))
+		fmt.Fprintf(out, "entry=%s host=%s fingerprint=%s (key-type=%s, format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
+			name, hostPort, store.PinFingerprint(p.Blob, p.Format), p.DisplayKeyAlgorithm(),
+			p.Format, p.Source, dash(p.Device), dash(p.HandshakeAddr), pinTime(p.CreatedAt))
 	}
 	return nil
 }

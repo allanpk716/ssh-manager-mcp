@@ -333,6 +333,7 @@ func TestClientUIServerSourceAssemblesCroppedReverseGroups(t *testing.T) {
 	}
 	if !detail.ShowHostKeyAnchor || detail.HostKeyAnchor == nil ||
 		detail.HostKeyAnchor.Fingerprint != "SHA256:"+strings.Repeat("b", 43) ||
+		detail.HostKeyAnchor.KeyAlgorithm != store.PinUndeterminedKeyAlgorithm ||
 		detail.HostKeyAnchor.SourceLabel != "首次信任" ||
 		detail.HostKeyAnchor.Device != "office-laptop" ||
 		detail.HostKeyAnchor.HandshakeAddr != "192.0.2.10:22" ||

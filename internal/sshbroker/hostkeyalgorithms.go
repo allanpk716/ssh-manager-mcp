@@ -13,12 +13,7 @@ func hostKeyAlgorithmsForPin(pin *store.Pin) []string {
 	if pin == nil {
 		return nil
 	}
-	algorithm := pin.KeyAlgorithm
-	if algorithm == "" && pin.Format == store.PinFormatBlob {
-		if pub, err := ssh.ParsePublicKey(pin.Blob); err == nil {
-			algorithm = pub.Type()
-		}
-	}
+	algorithm := pin.EffectiveKeyAlgorithm()
 	switch algorithm {
 	case ssh.KeyAlgoED25519:
 		return []string{ssh.KeyAlgoED25519}

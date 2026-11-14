@@ -24,11 +24,39 @@ const (
 	PinSourceManual  = "manual"
 )
 
+// PinUndeterminedKeyAlgorithm 是只有指纹的锚在展示层使用的算法说明。
+const PinUndeterminedKeyAlgorithm = "未确定（首次连接时自动确定）"
+
 // Pin is a stored host-key anchor: its value bytes and format.
 type Pin struct {
 	Blob         []byte
 	Format       string
 	KeyAlgorithm string
+}
+
+// EffectiveKeyAlgorithm 返回锚当前可用的主机密钥算法。已保存的算法优先；
+// 完整公钥锚没有保存算法时从公钥推导；只有指纹且未保存算法时返回空串。
+func (p *Pin) EffectiveKeyAlgorithm() string {
+	if p == nil {
+		return ""
+	}
+	if p.KeyAlgorithm != "" {
+		return p.KeyAlgorithm
+	}
+	if p.Format != PinFormatBlob {
+		return ""
+	}
+	return pinAlgorithmFromBlob(p.Blob)
+}
+
+// DisplayKeyAlgorithm 渲染给 owner 查看的主机密钥算法；算法未知时说明会在
+// 首次连接时自动确定。
+func (p *Pin) DisplayKeyAlgorithm() string {
+	algorithm := p.EffectiveKeyAlgorithm()
+	if algorithm == "" {
+		return PinUndeterminedKeyAlgorithm
+	}
+	return algorithm
 }
 
 // Matches reports whether the presented marshaled host key satisfies this pin
