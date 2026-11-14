@@ -60,7 +60,9 @@ func darwinMountPoint(shareName string) string {
 
 // buildDarwinMountCommand 生成 macOS autofs 固定命令。密码只经提权会话的
 // 标准输入进入远端脚本，再由脚本按字节百分号编码；它绝不进入命令文本。
-func buildDarwinMountCommand(share *models.SharedStorage, candidates []*Candidate) string {
+func buildDarwinMountCommand(
+	_ *models.Server, share *models.SharedStorage, candidates []*Candidate,
+) string {
 	return buildDarwinMountCommandWithOptions(share, candidates, mountCommandOptions{})
 }
 

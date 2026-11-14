@@ -597,6 +597,31 @@ func TestUpdateCheckDryRunNoSideEffects(t *testing.T) {
 	assertSelfUntouched(t, home, self, oldBytes)
 }
 
+func TestUpdateCheckWithServiceInstalledExitsBeforeRestartBranch(t *testing.T) {
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.2", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	fr := &fakeRestarter{status: service.StatusRunning}
+	restartInstalledSeam(t, fr)
+
+	out, err := runUpdate(t, "--check")
+	if err != nil {
+		t.Fatalf("update --check with installed service: %v\n%s", err, out)
+	}
+	if fr.restartReq != 0 {
+		t.Fatalf("Restart() called %d times on dry run, want 0", fr.restartReq)
+	}
+	for _, forbidden := range []string{"重启将断开活动隧道", "重启:", "替换已成功"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("dry-run output must not enter service restart branch (%q):\n%s", forbidden, out)
+		}
+	}
+	if !strings.Contains(out, "干跑:未下载、未替换、未重启任何东西") {
+		t.Fatalf("dry-run output missing its zero-change evidence line:\n%s", out)
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+}
+
 func TestUpdateAlreadyLatestExitZero(t *testing.T) {
 	home, self, oldBytes := writeSelfFixture(t)
 	startFakeUpdateSource(t, "v0.0.1", testBinBytes(t))
@@ -608,6 +633,31 @@ func TestUpdateAlreadyLatestExitZero(t *testing.T) {
 	}
 	if !strings.Contains(out, "已是最新") {
 		t.Errorf("output missing 已是最新:\n%s", out)
+	}
+	assertSelfUntouched(t, home, self, oldBytes)
+}
+
+func TestUpdateAlreadyLatestWithServiceInstalledExitsBeforeRestartBranch(t *testing.T) {
+	home, self, oldBytes := writeSelfFixture(t)
+	startFakeUpdateSource(t, "v0.0.1", testBinBytes(t))
+	seamUpdateDefaults(t, self, "0.0.1")
+	fr := &fakeRestarter{status: service.StatusRunning}
+	restartInstalledSeam(t, fr)
+
+	out, err := runUpdate(t)
+	if err != nil {
+		t.Fatalf("already-latest update with installed service: %v\n%s", err, out)
+	}
+	if fr.restartReq != 0 {
+		t.Fatalf("Restart() called %d times when already latest, want 0", fr.restartReq)
+	}
+	for _, forbidden := range []string{"重启", "替换已成功"} {
+		if strings.Contains(out, forbidden) {
+			t.Fatalf("already-latest output must not enter service restart branch (%q):\n%s", forbidden, out)
+		}
+	}
+	if !strings.Contains(out, "已是最新") {
+		t.Fatalf("already-latest output missing evidence line:\n%s", out)
 	}
 	assertSelfUntouched(t, home, self, oldBytes)
 }

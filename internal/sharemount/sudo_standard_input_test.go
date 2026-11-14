@@ -26,7 +26,7 @@ func TestLinuxAndDarwinMountCommandsReceiveOnlyMountPassword(t *testing.T) {
 
 	systems := []struct {
 		name         string
-		buildCommand func(*models.SharedStorage, []*Candidate) string
+		buildCommand func(*models.Server, *models.SharedStorage, []*Candidate) string
 		marker       string
 		scriptRead   func([]byte) string
 		scriptWanted string
@@ -117,7 +117,9 @@ func TestLinuxAndDarwinMountCommandsReceiveOnlyMountPassword(t *testing.T) {
 					ID: "share-001", Name: "datasets", Version: 1, MountUser: "mount-user",
 				}
 				server := &models.Server{SudoCredentialID: sudoCredentialID}
-				command := system.buildCommand(share, []*Candidate{{Address: "192.0.2.10"}})
+				command := system.buildCommand(
+					server, share, []*Candidate{{Address: "192.0.2.10"}},
+				)
 				result, err := RemoteExecOverClient(client, st, server, MaxOutputBytes)(
 					context.Background(), server,
 					RemoteExecRequest{

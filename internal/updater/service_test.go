@@ -623,6 +623,26 @@ func TestRegisteredServeAddrWindowsSeam(t *testing.T) {
 	}
 }
 
+func TestRegisteredServeTLSFilesWindowsSeam(t *testing.T) {
+	t.Cleanup(setGOOS(t, "windows"))
+	orig := scmQueryCommand
+	t.Cleanup(func() { scmQueryCommand = orig })
+
+	scmQueryCommand = func(string) (string, error) {
+		return `"C:\Tools\sshmgr.exe" serve --addr 0.0.0.0:9000 --tls-cert "C:\certs\serve.pem" --tls-key "C:\certs\serve.key"`, nil
+	}
+	cert, key, err := RegisteredServeTLSFiles(buildinfo.ServeServiceName)
+	if err != nil || cert != `C:\certs\serve.pem` || key != `C:\certs\serve.key` {
+		t.Fatalf("got (%q, %q, %v), want registered Windows certificate paths", cert, key, err)
+	}
+
+	scmQueryCommand = func(string) (string, error) { return `C:\sshmgr.exe serve`, nil }
+	cert, key, err = RegisteredServeTLSFiles(buildinfo.ServeServiceName)
+	if err != nil || cert != "" || key != "" {
+		t.Fatalf("no TLS flags: got (%q, %q, %v), want empty paths without error", cert, key, err)
+	}
+}
+
 // TestRegisteredServeAddrSystemd: the linux branch reads the unit file the
 // same way systemdRegisteredBinaryPath does (systemdUnitDir seam → temp dir).
 func TestRegisteredServeAddrSystemd(t *testing.T) {
@@ -667,6 +687,25 @@ func TestRegisteredServeAddrSystemd(t *testing.T) {
 	}
 	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
 		t.Fatal("unit without ExecStart must error")
+	}
+}
+
+func TestRegisteredServeTLSFilesSystemd(t *testing.T) {
+	t.Cleanup(setGOOS(t, "linux"))
+	origDir := systemdUnitDir
+	t.Cleanup(func() { systemdUnitDir = origDir })
+	systemdUnitDir = t.TempDir()
+
+	unit := `[Service]
+ExecStart=/usr/local/bin/sshmgr "serve" "--addr" "0.0.0.0:7878" "--tls-cert" "/etc/sshmgr/custom.pem" "--tls-key" "/etc/sshmgr/custom.key"
+`
+	path := filepath.Join(systemdUnitDir, buildinfo.ServeServiceName+".service")
+	if err := os.WriteFile(path, []byte(unit), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cert, key, err := RegisteredServeTLSFiles(buildinfo.ServeServiceName)
+	if err != nil || cert != "/etc/sshmgr/custom.pem" || key != "/etc/sshmgr/custom.key" {
+		t.Fatalf("got (%q, %q, %v), want registered systemd certificate paths", cert, key, err)
 	}
 }
 
@@ -720,5 +759,34 @@ func TestRegisteredServeAddrLaunchd(t *testing.T) {
 	}
 	if _, err := RegisteredServeAddr(buildinfo.ServeServiceName); err == nil {
 		t.Fatal("plist without ProgramArguments must error")
+	}
+}
+
+func TestRegisteredServeTLSFilesLaunchd(t *testing.T) {
+	t.Cleanup(setGOOS(t, "darwin"))
+	origDir := launchdPlistDir
+	t.Cleanup(func() { launchdPlistDir = origDir })
+	launchdPlistDir = t.TempDir()
+
+	plist := `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/local/bin/sshmgr</string>
+		<string>serve</string>
+		<string>--tls-cert=/Library/sshmgr/custom.pem</string>
+		<string>--tls-key=/Library/sshmgr/custom.key</string>
+	</array>
+</dict>
+</plist>
+`
+	path := filepath.Join(launchdPlistDir, buildinfo.ServeServiceName+".plist")
+	if err := os.WriteFile(path, []byte(plist), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cert, key, err := RegisteredServeTLSFiles(buildinfo.ServeServiceName)
+	if err != nil || cert != "/Library/sshmgr/custom.pem" || key != "/Library/sshmgr/custom.key" {
+		t.Fatalf("got (%q, %q, %v), want registered launchd certificate paths", cert, key, err)
 	}
 }

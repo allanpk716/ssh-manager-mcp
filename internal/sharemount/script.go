@@ -31,6 +31,7 @@ type mountCommandOptions struct {
 	PreferFirstCandidate bool
 	Reselect             bool
 	Force                bool
+	LoginUser            string
 }
 
 func candidateAddressSelectionScript(
@@ -71,8 +72,11 @@ fi
 }
 
 // parseMountCommandOutput 解析远端固定挂载命令的安全输出行。输出只包含
-// 动作、候选序号与 macOS 主配置重建标记，不携带地址、账号或机密。
-func parseMountCommandOutput(stdout, outputMarker, systemName string) (action string, selectedIndex int, reset bool, err error) {
+// 动作、候选序号、macOS 主配置重建标记与 Linux 属主映射补充标记，不携
+// 带地址、账号或机密。
+func parseMountCommandOutput(
+	stdout, outputMarker, systemName string,
+) (action string, selectedIndex int, reset bool, ownershipMappingAdded bool, err error) {
 	for _, line := range strings.Split(stdout, "\n") {
 		fields := strings.Fields(strings.TrimRight(line, "\r"))
 		if len(fields) == 0 || fields[0] != outputMarker {
@@ -86,19 +90,21 @@ func parseMountCommandOutput(stdout, outputMarker, systemName string) (action st
 				value := strings.TrimPrefix(field, "selected=")
 				parsed, parseErr := strconv.Atoi(value)
 				if parseErr != nil || parsed < 1 {
-					return "", 0, false, fmt.Errorf(
+					return "", 0, false, false, fmt.Errorf(
 						"%s 固定挂载命令返回了非法候选序号", systemName)
 				}
 				selectedIndex = parsed
 			case field == "reset=yes":
 				reset = true
+			case field == "ownership-mapping=added":
+				ownershipMappingAdded = true
 			}
 		}
 	}
 	if action == "" || selectedIndex == 0 {
-		return "", 0, false, fmt.Errorf("%s 固定挂载命令没有返回成功标记", systemName)
+		return "", 0, false, false, fmt.Errorf("%s 固定挂载命令没有返回成功标记", systemName)
 	}
-	return action, selectedIndex, reset, nil
+	return action, selectedIndex, reset, ownershipMappingAdded, nil
 }
 
 // linuxFstabOptionParserScript 生成 fstab 选项识别的 shell 函数，挂载脚本
@@ -109,6 +115,8 @@ func linuxFstabOptionParserScript() string {
   sshmgr_option_share=''
   sshmgr_option_version=''
   sshmgr_option_vers=''
+  sshmgr_option_uid=''
+  sshmgr_option_gid=''
   sshmgr_saved_ifs=$IFS
   IFS=,
   set -f
@@ -126,6 +134,8 @@ func linuxFstabOptionParserScript() string {
         sshmgr_option_version=${sshmgr_option_version#sshmgr-version=}
       ;;
       vers=*) sshmgr_option_vers=${sshmgr_option#vers=} ;;
+      uid=*) sshmgr_option_uid=present ;;
+      gid=*) sshmgr_option_gid=present ;;
     esac
   done
 }

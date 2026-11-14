@@ -163,18 +163,28 @@ func (s *Service) mountLinux(ctx context.Context, request Request) (*Result, err
 type systemMountFlow struct {
 	systemName      string
 	unsafeNameError error
-	buildCommand    func(share *models.SharedStorage, candidates []*Candidate) string
-	parseOutput     func(stdout string) (action string, selectedIndex int, reset bool, err error)
+	buildCommand    func(server *models.Server, share *models.SharedStorage, candidates []*Candidate) string
+	parseOutput     func(stdout string) (mountCommandOutput, error)
 	mountPoint      func(shareName string) string
 	exitCodeError   func(exitCode int) error
+}
+
+type mountCommandOutput struct {
+	action                string
+	selectedIndex         int
+	reset                 bool
+	ownershipMappingAdded bool
 }
 
 var darwinMountFlow = systemMountFlow{
 	systemName:      "macOS",
 	unsafeNameError: ErrUnsafeDarwinName,
-	buildCommand:    buildDarwinMountCommand,
-	parseOutput: func(stdout string) (string, int, bool, error) {
-		return parseMountCommandOutput(stdout, darwinMountMarker, "macOS")
+	buildCommand: func(server *models.Server, share *models.SharedStorage, candidates []*Candidate) string {
+		return buildDarwinMountCommand(server, share, candidates)
+	},
+	parseOutput: func(stdout string) (mountCommandOutput, error) {
+		action, index, reset, _, err := parseMountCommandOutput(stdout, darwinMountMarker, "macOS")
+		return mountCommandOutput{action: action, selectedIndex: index, reset: reset}, err
 	},
 	mountPoint:    darwinMountPoint,
 	exitCodeError: darwinMountExitCodeError,
@@ -183,9 +193,15 @@ var darwinMountFlow = systemMountFlow{
 var linuxMountFlow = systemMountFlow{
 	systemName:      "Linux",
 	unsafeNameError: ErrUnsafeShareName,
-	buildCommand:    buildLinuxMountCommand,
-	parseOutput: func(stdout string) (string, int, bool, error) {
-		return parseMountCommandOutput(stdout, linuxMountMarker, "Linux")
+	buildCommand: func(server *models.Server, share *models.SharedStorage, candidates []*Candidate) string {
+		return buildLinuxMountCommand(server, share, candidates)
+	},
+	parseOutput: func(stdout string) (mountCommandOutput, error) {
+		action, index, reset, ownershipAdded, err := parseMountCommandOutput(stdout, linuxMountMarker, "Linux")
+		return mountCommandOutput{
+			action: action, selectedIndex: index, reset: reset,
+			ownershipMappingAdded: ownershipAdded,
+		}, err
 	},
 	mountPoint:    linuxMountPoint,
 	exitCodeError: linuxMountExitCodeError,
@@ -205,7 +221,7 @@ func (s *Service) mountWithSystem(
 		return nil, err
 	}
 	candidates := selection.Reachable
-	command := flow.buildCommand(request.Share, candidates)
+	command := flow.buildCommand(request.Server, request.Share, candidates)
 	standardInput := append([]byte(nil), request.Password...)
 	standardInput = append(standardInput, '\n')
 	result, execErr := s.exec(ctx, request.Server, RemoteExecRequest{
@@ -221,10 +237,11 @@ func (s *Service) mountWithSystem(
 		}
 		return nil, fmt.Errorf("%s 固定挂载命令失败（退出码 %d）", flow.systemName, result.ExitCode)
 	}
-	action, selectedIndex, reset, parseErr := flow.parseOutput(result.Stdout)
+	parsed, parseErr := flow.parseOutput(result.Stdout)
 	if parseErr != nil {
 		return nil, parseErr
 	}
+	action, selectedIndex, reset := parsed.action, parsed.selectedIndex, parsed.reset
 	if selectedIndex > len(candidates) {
 		return nil, fmt.Errorf("%s 固定挂载命令返回了不存在的候选序号", flow.systemName)
 	}
@@ -237,6 +254,9 @@ func (s *Service) mountWithSystem(
 	notices := []string{}
 	if reset {
 		notices = append(notices, "系统配置被重置，已重建")
+	}
+	if parsed.ownershipMappingAdded {
+		notices = append(notices, "已补充文件属主映射")
 	}
 	for index := 0; index < selectedIndex-1; index++ {
 		if candidates[index].Physical {

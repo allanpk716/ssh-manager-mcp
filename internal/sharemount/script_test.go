@@ -107,8 +107,9 @@ func TestLinuxMountAndUnmountScanLegacyManagedFstab(t *testing.T) {
 		checksContent bool
 	}{
 		{
-			name:    "固定挂载命令",
-			command: buildLinuxMountCommand(share, []*Candidate{{Address: "192.0.2.10"}}),
+			name: "固定挂载命令",
+			command: buildLinuxMountCommand(
+				&models.Server{User: "deploy"}, share, []*Candidate{{Address: "192.0.2.10"}}),
 		},
 		{
 			name:          "固定卸载命令",
@@ -331,6 +332,7 @@ printf 'version=%s\n' "$sshmgr_revoked_version"
 func TestDarwinAutomountReloadAllowsNonzeroExitWhenMountSucceeds(t *testing.T) {
 	shell := posixShellForTest(t)
 	command := buildDarwinMountCommand(
+		&models.Server{User: "deploy"},
 		&models.SharedStorage{Name: "datasets", MountUser: "mount-user", Version: 2},
 		[]*Candidate{{Address: "192.0.2.10"}},
 	)

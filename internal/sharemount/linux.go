@@ -22,8 +22,11 @@ const (
 	linuxExitInvalidFstab       = 89
 	// linuxExitShareRevoked 表示目标服务器上的撤销标记仍对本次快照生效。
 	linuxExitShareRevoked = 90
-	linuxCredentialRoot   = "/etc/sshmgr/shares"
-	linuxMountRoot        = "/mnt/sshmgr"
+	// linuxExitLoginUserMissing 表示无法在目标服务器上解析 SSH 登录用户
+	// 的数字用户标识与用户组标识。
+	linuxExitLoginUserMissing = 92
+	linuxCredentialRoot       = "/etc/sshmgr/shares"
+	linuxMountRoot            = "/mnt/sshmgr"
 )
 
 // linuxMountExitCodeError 把 Linux 固定挂载命令的已知退出码翻译为中文
@@ -51,6 +54,9 @@ func linuxMountExitCodeError(exitCode int) error {
 	case linuxExitInvalidFstab:
 		return mountFailure(MountClassError, errors.New(
 			"目标服务器上的 sshmgr fstab 条目无法解析，请 owner 检查后再试"))
+	case linuxExitLoginUserMissing:
+		return mountFailure(MountClassError, errors.New(
+			"目标服务器上找不到服务器条目的 SSH 登录用户，不能确定共享文件属主映射"))
 	case linuxExitShareRevoked:
 		return mountFailure(MountClassShareRevoked, errors.New(
 			"共享存储已从这台服务器撤销，不能重新挂载；如 owner 已重新授权，请先同步快照后再试"))
@@ -77,8 +83,12 @@ func linuxTrialMountPoint(shareName string) string {
 // 级文件锁内读取 fstab、比较版本与配置、写入凭据与 fstab，并让挂载生
 // 效。地址、共享名与挂载账号全部经单引号包装；挂载密码只由调用方经标准
 // 输入传入，绝不出现在返回的命令文本里。
-func buildLinuxMountCommand(share *models.SharedStorage, candidates []*Candidate) string {
-	return buildLinuxMountCommandWithOptions(share, candidates, mountCommandOptions{})
+func buildLinuxMountCommand(
+	server *models.Server, share *models.SharedStorage, candidates []*Candidate,
+) string {
+	return buildLinuxMountCommandWithOptions(share, candidates, mountCommandOptions{
+		LoginUser: server.User,
+	})
 }
 
 func buildLinuxMountCommandWithOptions(
@@ -99,6 +109,7 @@ func buildLinuxMountCommandWithOptions(
 	command := `set -eu
 sshmgr_exit_missing_cifs=` + strconv.Itoa(linuxExitMissingCIFS) + `
 sshmgr_exit_invalid_fstab=` + strconv.Itoa(linuxExitInvalidFstab) + `
+sshmgr_exit_login_user_missing=` + strconv.Itoa(linuxExitLoginUserMissing) + `
 if ! command -v mount.cifs >/dev/null 2>&1; then
   echo ` + linuxMountMarker + ` missing-mount-cifs >&2
   exit "$sshmgr_exit_missing_cifs"
@@ -136,6 +147,8 @@ sshmgr_existing_line=''
 sshmgr_existing_address=''
 sshmgr_existing_version=''
 sshmgr_remote_version=''
+sshmgr_existing_uid=''
+sshmgr_existing_gid=''
 if [ ! -f /etc/fstab ]; then
   touch /etc/fstab
 fi
@@ -166,6 +179,8 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
   esac
   sshmgr_existing_address=${1#//}
   sshmgr_existing_address=${sshmgr_existing_address%/*}
+  sshmgr_existing_uid=$sshmgr_option_uid
+  sshmgr_existing_gid=$sshmgr_option_gid
 done < /etc/fstab
 
 ` + remoteVersionGuardScript(linuxMountMarker, linuxExitRemoteNewer) + `
@@ -180,6 +195,25 @@ if [ "$sshmgr_selected_address" = "$sshmgr_existing_address" ]; then
   sshmgr_selected_version=$sshmgr_existing_version
 fi
 
+sshmgr_login_user=` + sshbroker.POSIXShellQuote(options.LoginUser) + `
+sshmgr_uid=$(id -u -- "$sshmgr_login_user" 2>/dev/null || true)
+case "$sshmgr_uid" in ''|*[!0-9]*)
+  echo ` + linuxMountMarker + ` login-user-missing >&2
+  exit "$sshmgr_exit_login_user_missing"
+esac
+sshmgr_gid=$(id -g -- "$sshmgr_login_user" 2>/dev/null || true)
+case "$sshmgr_gid" in ''|*[!0-9]*)
+  echo ` + linuxMountMarker + ` login-user-missing >&2
+  exit "$sshmgr_exit_login_user_missing"
+esac
+sshmgr_owner_options=uid=$sshmgr_uid,gid=$sshmgr_gid
+sshmgr_ownership_mapping_added=no
+if [ "$sshmgr_managed_count" -gt 0 ] &&
+   [ "$sshmgr_existing_address" = "$sshmgr_selected_address" ] &&
+   { [ -z "$sshmgr_existing_uid" ] || [ -z "$sshmgr_existing_gid" ]; }; then
+  sshmgr_ownership_mapping_added=added
+fi
+
 sshmgr_is_mounted() {
 ` + mountTableCheckScript(CheckSystemLinux) + `  [ "$sshmgr_mounted" = yes ]
 }
@@ -188,6 +222,8 @@ sshmgr_preserve_working_existing() {
   [ "$sshmgr_managed_count" -eq 1 ] &&
     [ -n "$sshmgr_existing_line" ] &&
     [ "$sshmgr_existing_address" = "$sshmgr_selected_address" ] &&
+    [ -n "$sshmgr_existing_uid" ] &&
+    [ -n "$sshmgr_existing_gid" ] &&
     [ "$sshmgr_selected_index" -gt 1 ]
 }
 if sshmgr_preserve_working_existing && sshmgr_is_mounted; then
@@ -197,7 +233,7 @@ if sshmgr_preserve_working_existing && sshmgr_is_mounted; then
 fi
 
 sshmgr_build_fstab_line() {
-  sshmgr_fstab_line=$(printf '//%s/%s %s cifs credentials=%s,vers=%s,%s,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0\n' "$sshmgr_selected_address" "$share_name" "$mount_point" "$credential_file" "${sshmgr_selected_version:-none}" "$sshmgr_fstab_marker")
+  sshmgr_fstab_line=$(printf '//%s/%s %s cifs credentials=%s,vers=%s,%s,%s,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0\n' "$sshmgr_selected_address" "$share_name" "$mount_point" "$credential_file" "${sshmgr_selected_version:-none}" "$sshmgr_owner_options" "$sshmgr_fstab_marker")
 }
 sshmgr_build_fstab_line
 
@@ -233,12 +269,12 @@ install -d -m 755 "$sshmgr_trial_point"
 sshmgr_write_credentials
 sshmgr_trial_mounted=no
 if [ -n "$sshmgr_selected_version" ] &&
-   mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_selected_version,credentials=$sshmgr_credential_candidate"; then
+   mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_selected_version,credentials=$sshmgr_credential_candidate,$sshmgr_owner_options"; then
   sshmgr_trial_mounted=yes
 else
   sshmgr_selected_version=''
   for sshmgr_version in 3.1.1 3.0 2.1 2.0; do
-    if mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_version,credentials=$sshmgr_credential_candidate"; then
+    if mount -t cifs "//${sshmgr_selected_address}/${share_name}" "$sshmgr_trial_point" -o "vers=$sshmgr_version,credentials=$sshmgr_credential_candidate,$sshmgr_owner_options"; then
       sshmgr_selected_version=$sshmgr_version
       sshmgr_trial_mounted=yes
       break
@@ -309,7 +345,7 @@ else
   sshmgr_result=update-success
 fi
 rm -f "$sshmgr_revoked_marker"
-echo ` + linuxMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index`
+echo ` + linuxMountMarker + ` result=$sshmgr_result selected=$sshmgr_selected_index ownership-mapping=$sshmgr_ownership_mapping_added`
 	return command
 }
 

@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/store"
 )
 
 // testValidPin is a well-formed (but not server-anchored) sha256 pin.
@@ -58,6 +59,7 @@ type fakePairServer struct {
 	spki   string
 	edPriv ed25519.PrivateKey
 	xPub   []byte // 32B X25519 public half — the client's ECDH only needs a valid 32B input
+	server *httptest.Server
 
 	mu       sync.Mutex
 	statuses []int
@@ -135,6 +137,7 @@ func newFakePairServer(t *testing.T, statuses ...int) *fakePairServer {
 	srv.StartTLS()
 	fs.url = srv.URL
 	fs.spki = mcpserver.SPKIFingerprint(cert)
+	fs.server = srv
 	t.Cleanup(srv.Close)
 	return fs
 }
@@ -1011,6 +1014,38 @@ func TestPairFinish_FailurePathsCarryDoublePathHint(t *testing.T) {
 			}
 			assertHint(t, err)
 		})
+	}
+}
+
+func TestPairFinishConflictShowsServerMessage(t *testing.T) {
+	fs := newFakePairServer(t, http.StatusOK)
+	serverMessage := (&store.PairingProjectNotGeneratedError{ProjectName: "pair-conflict-dev"}).Error()
+	inner := fs.server.Config.Handler
+	fs.server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/pair/finish" {
+			http.Error(w, serverMessage, http.StatusConflict)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+
+	s, err := NewPairSession(sessionOpts(fs.url, fs.spki, "conflict-dev"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.Enroll(ctx); err != nil {
+		t.Fatalf("Enroll: %v", err)
+	}
+	if err := s.WaitApproval(ctx, nil); err != nil {
+		t.Fatalf("WaitApproval: %v", err)
+	}
+	err = s.Finish(ctx)
+	if err == nil || err.Error() != serverMessage {
+		t.Fatalf("Finish conflict error must show the server message verbatim, got %v", err)
+	}
+	if strings.Contains(err.Error(), "device-code-secret") || strings.Contains(err.Error(), "project-token-secret") {
+		t.Fatalf("Finish conflict message must not disclose credential material: %v", err)
 	}
 }
 

@@ -518,6 +518,41 @@ func TestPairFinish_AckAndWindow(t *testing.T) {
 	})
 }
 
+func TestPairFinish_ProjectNotGeneratedReturns409(t *testing.T) {
+	srv, st, _, certPub := newPairRunner(t)
+	profID, err := st.AddProfile("team-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectName := "pair-devProject"
+	_, existingToken, err := st.AddProject(projectName, profID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if existingToken == "" {
+		t.Fatal("AddProject must return the existing project's one-time token")
+	}
+
+	c := newPairClient(t, "devProject", "https://192.0.2.10:7878")
+	kAck, _ := enrollOK(t, srv, st, certPub, c)
+	approveOK(t, st, c, profID)
+
+	body := fmt.Sprintf(`{"id":%q,"ack":%q}`, hex.EncodeToString(c.id[:]), c.ackFor(kAck))
+	res := pairReq(t, srv, http.MethodPost, "/pair/finish", body)
+	fb := readBody(t, res)
+	if res.StatusCode != http.StatusConflict {
+		t.Fatalf("finish status = %d, want 409; body=%s", res.StatusCode, fb)
+	}
+	want := (&store.PairingProjectNotGeneratedError{ProjectName: projectName}).Error()
+	if strings.TrimSpace(string(fb)) != want {
+		t.Fatalf("finish body = %q, want %q", strings.TrimSpace(string(fb)), want)
+	}
+	if strings.Contains(string(fb), existingToken) {
+		t.Fatalf("finish body must not disclose the existing project token: %s", fb)
+	}
+}
+
 func TestPairFinish_ReplayReturnsCachedSealed(t *testing.T) {
 	srv, st, _, certPub := newPairRunner(t)
 	profID, err := st.AddProfile("team-a")

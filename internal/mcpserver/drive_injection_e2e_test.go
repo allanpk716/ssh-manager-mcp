@@ -356,7 +356,7 @@ func TestNetworkDriveInjectionSkipsSilentlyWhenAuthorityTooOld(t *testing.T) {
 	}
 
 	commands, _ := fixture.fake.recorded()
-	if len(commands) != 3 || countNetworkDriveProbeCommands(commands) != 0 {
+	if len(commands) != 2 || countNetworkDriveProbeCommands(commands) != 0 {
 		t.Fatalf("旧权威端不应探测或注入网络盘符：%#v", commands)
 	}
 }
@@ -1126,8 +1126,8 @@ func TestNetworkDriveInjectionContextPreviewDoesNotProbe(t *testing.T) {
 	}
 
 	commands, _ := fixture.fake.recorded()
-	if len(commands) != 1 || strings.Contains(commands[0], "probe-one ") {
-		t.Fatalf("preview commands = %#v, want only the context command", commands)
+	if len(commands) != 0 {
+		t.Fatalf("Windows 盘符预览不应下发任何命令：%#v", commands)
 	}
 
 	execNetworkDriveCommand(t, fixture, "Get-ChildItem S:\\datasets")
@@ -1290,8 +1290,7 @@ func TestNetworkDriveInjectionWindowsSudoDoesNotInject(t *testing.T) {
 		t.Fatalf("exec_context(sudo) uninjected drives = %#v", contextOutput.UninjectedNetworkDrives)
 	}
 	commands, inputs := fixture.fake.recorded()
-	if len(commands) != 2 || strings.Contains(commands[0], "WNetAddConnection2") ||
-		strings.Contains(commands[1], "WNetAddConnection2") {
+	if len(commands) != 1 || strings.Contains(commands[0], "WNetAddConnection2") {
 		t.Fatalf("sudo commands unexpectedly injected a network drive: %#v", commands)
 	}
 	for _, input := range inputs {

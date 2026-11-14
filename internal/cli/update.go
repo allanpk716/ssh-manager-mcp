@@ -366,6 +366,11 @@ func runUpdateCmd(cmd *cobra.Command, o updateOpts) error {
 		return runErr
 	}
 	clientRole := runResult.ClientRole
+	if !runResult.Replaced {
+		// 干跑、已是最新版本或使用者在替换前取消：服务没有新二进制可加载，
+		// 不能进入重启确认，更不能把「重启待手工」当成更新结果返回。
+		return nil
+	}
 
 	// --- 10. service branch -------------------------------------------------------
 	if clientRole || prNew.State != updater.ProbeInstalled {

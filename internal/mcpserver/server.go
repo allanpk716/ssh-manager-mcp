@@ -523,7 +523,7 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 				return &mcp.CallToolResult{
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-				}, emptyExecContextOutput(), nil
+				}, out, nil
 			}
 			return nil, out, nil
 		},

@@ -422,6 +422,9 @@ func (s *PairSession) Finish(ctx context.Context) error {
 		case http.StatusForbidden:
 			return errors.New("pairing finish: ack mismatch (403) — the SAS differed, the two sides are NOT the same pair; start over and compare the digits")
 		case http.StatusConflict:
+			if msg != "" {
+				return errors.New(msg)
+			}
 			return errors.New("pairing finish: request not approved yet (409)")
 		case http.StatusGone:
 			return errors.New("pairing finish: approval window over (410) — start over with `sshmgr pair`")

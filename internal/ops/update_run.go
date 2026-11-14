@@ -56,6 +56,10 @@ type UpdateRunResult struct {
 	CurrentVersion string
 	TargetVersion  string
 	CheckOnly      bool
+	// Replaced 表示本次执行是否已把新二进制提交到自身路径。false 覆盖干跑、
+	// 已是最新版本、使用者取消确认以及所有失败路径；调用方不得在这类路径
+	// 进入服务重启分支。
+	Replaced bool
 }
 
 // Run 执行命令行更新链的角色判定、版本发现、下载、校验、试运行、确认、替换
@@ -376,6 +380,7 @@ func (s *UpdateService) Run(ctx context.Context, req UpdateRunRequest) (UpdateRu
 	}
 	return UpdateRunResult{
 		ClientRole: clientRole, CurrentVersion: curStr, TargetVersion: targetVer,
+		Replaced: true,
 	}, nil
 }
 

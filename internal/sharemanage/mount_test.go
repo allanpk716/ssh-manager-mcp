@@ -68,6 +68,37 @@ func TestMountIsIdempotentAndReportsSafeResult(t *testing.T) {
 	}
 }
 
+func TestMountReportsSupplementedOwnerMapping(t *testing.T) {
+	st := newCheckTestStore(t)
+	fake := &mountFakeServer{}
+	target := startCheckSSH(t, fake.handler)
+	seedMountTopology(t, st)
+	addRemoteMountServer(t, st, "linux-web", target)
+	if err := st.AllowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	fake.setAction("update-success")
+	fake.setOwnershipMappingAdded(true)
+
+	result, err := New(st).Mount(t.Context(), MountRequest{
+		Share: "datasets", Server: "linux-web", Source: CLISource(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(result.Notices, "\n"), "已补充文件属主映射") {
+		t.Fatalf("补充属主映射提示 = %+v", result.Notices)
+	}
+}
+
 func TestMountRejectsWindowsWithoutConnecting(t *testing.T) {
 	st := newCheckTestStore(t)
 	if err := st.AddSecret(
@@ -103,15 +134,22 @@ func TestMountRejectsWindowsWithoutConnecting(t *testing.T) {
 }
 
 type mountFakeServer struct {
-	mu         sync.Mutex
-	nextAction string
-	credential string
+	mu                    sync.Mutex
+	nextAction            string
+	ownershipMappingAdded bool
+	credential            string
 }
 
 func (f *mountFakeServer) setAction(action string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.nextAction = action
+}
+
+func (f *mountFakeServer) setOwnershipMappingAdded(added bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ownershipMappingAdded = added
 }
 
 func (f *mountFakeServer) credentialValue() string {
@@ -132,13 +170,17 @@ func (f *mountFakeServer) handler(command string, stdin io.Reader) (string, stri
 		return "SSHMGR-PROBE 0 ok 2 \n", "", 0
 	case strings.Contains(command, "SSHMGR-LINUX-MOUNT"):
 		action := "first-mount-success"
+		ownership := ""
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.nextAction != "" {
 			action = f.nextAction
 		}
+		if f.ownershipMappingAdded {
+			ownership = " ownership-mapping=added"
+		}
 		f.credential = "username=mount-user\npassword=" + string(input)
-		return "SSHMGR-LINUX-MOUNT result=" + action + " selected=1\n", "", 0
+		return "SSHMGR-LINUX-MOUNT result=" + action + " selected=1" + ownership + "\n", "", 0
 	default:
 		return "", "unexpected command: " + command, 90
 	}

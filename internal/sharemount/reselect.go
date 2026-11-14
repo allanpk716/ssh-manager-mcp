@@ -42,19 +42,20 @@ type ReselectResult struct {
 }
 
 func buildLinuxReselectCommand(
-	share *models.SharedStorage, candidates []*Candidate, force bool,
+	loginUser string, share *models.SharedStorage, candidates []*Candidate, force bool,
 ) string {
 	command := buildLinuxMountCommandWithOptions(share, candidates, mountCommandOptions{
-		PreferFirstCandidate: true, Reselect: true, Force: force,
+		PreferFirstCandidate: true, Reselect: true, Force: force, LoginUser: loginUser,
 	})
 	return strings.ReplaceAll(command, linuxMountMarker, linuxReselectMarker)
 }
 
 func buildDarwinReselectCommand(
-	share *models.SharedStorage, candidates []*Candidate, force bool,
+	loginUser string, share *models.SharedStorage, candidates []*Candidate, force bool,
 ) string {
 	command := buildDarwinMountCommandWithOptions(share, candidates, mountCommandOptions{
 		PreferFirstCandidate: true, Reselect: true, Force: force,
+		LoginUser: loginUser,
 	})
 	return strings.ReplaceAll(command, darwinMountMarker, darwinReselectMarker)
 }
@@ -99,10 +100,12 @@ func (s *Service) Reselect(parent context.Context, request ReselectRequest) (*Re
 	switch systemName {
 	case CheckSystemLinux:
 		marker = linuxReselectMarker
-		command = buildLinuxReselectCommand(request.Share, selection.Reachable, request.Force)
+		command = buildLinuxReselectCommand(
+			request.Server.User, request.Share, selection.Reachable, request.Force)
 	case CheckSystemDarwin:
 		marker = darwinReselectMarker
-		command = buildDarwinReselectCommand(request.Share, selection.Reachable, request.Force)
+		command = buildDarwinReselectCommand(
+			request.Server.User, request.Share, selection.Reachable, request.Force)
 	}
 	standardInput := append([]byte(nil), request.Password...)
 	standardInput = append(standardInput, '\n')
@@ -215,7 +218,7 @@ func linuxReselectUnmountScript(options mountCommandOptions) string {
 	if options.Force {
 		return "    :\n"
 	}
-	return `    if ! umount "$mount_point" >/dev/null 2>&1; then
+	return mountTableCheckScript(CheckSystemLinux) + `    if [ "$sshmgr_mounted" = yes ] && ! umount "$mount_point" >/dev/null 2>&1; then
       echo ` + linuxReselectMarker + ` unmount-failed >&2
       exit 85
     fi

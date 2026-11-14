@@ -98,7 +98,7 @@ sshmgr serve --addr 0.0.0.0:7878
 
 **自签证书 + 指纹钉死 = 零证书分发。** 自签证书首次生成时，serve 把它的 **SPKI 指纹**（`sha256:...`）打印到启动日志（`client pin:` 那行）。客户端（`pair` / `cache pull` / 工作机）用这个指纹**钉死**对端 —— 连接时校验服务器证书公钥 == 钉死的指纹，不等即拒，**首次连接即校验（零 MITM 窗口）**。无需在每台客户端装根证书。
 
-**指纹怎么交给工作机**：pair 时代它**自动交付**——discovery 的 offer 报文自带指纹、pair 信封内也封入 spki（client 钉的正是它配对的这把 key）。手工路径（`cache-tokens add`）仍会把指纹一并打印（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。也可用 `sshmgr serve cert-info` 随时查当前指纹。
+**指纹怎么交给工作机**：pair 时代它**自动交付**——discovery 的 offer 报文自带指纹、pair 信封内也封入 spki（client 钉的正是它配对的这把 key）。手工路径（`cache-tokens add`）仍会把指纹一并打印（默认编进 `cache pull` 示例命令，形态 `<设备码>:<指纹>`）。也可用 `sshmgr serve cert-info` 随时查当前指纹；装有 serve 服务的机器会优先读服务注册时的 `--tls-cert/--tls-key` 自定义证书，未安装服务或读不到注册参数时才读默认 `serve-cert.pem`。
 
 > ⚠️ **客户端不带指纹 = 默认拒连（hard-fail）**：`cache pull` 在没拿到指纹（env / `--pin` / token 内嵌三处都没有）时，**默认拒绝拉取**（不再静默明文）——明文是 fail-open 隐患，已改为默认安全。pair 侧同理且更紧：`--url` 直连又不带 `--pin` 时**默认拒绝**（需显式 `--allow-tofu`，见 threat-model R12）。若确需明文（连旧明文 serve 调试），显式加 `--allow-plaintext` opt-in。详见下「离线只读缓存」节。
 
@@ -377,7 +377,7 @@ sshmgr cache-tokens add --name laptop --profile team-a
 - **存量未绑码**（Plan 39 之前签发的）：拉取被拒（**403，不毁本地缓存**），owner 跑 `sshmgr cache-tokens bind <name> <profile>` 原地补绑（保留名字/状态/拉取历史）即可恢复。
 - `--name` **必填**且在 **active** 码中唯一（比如 `laptop` / `desktop-2`）；**revoke 后可重发同名**（旧的 revoked 行会被自动清理），后续吊销靠它。
 - 设备码**只显示一次**——当场拉、或记进密码管理器。
-- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `sshmgr serve cert-info` 重查。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
+- **指纹是自动加密的关键**：设备码旁那行 `Server fingerprint` 是 serve 自签证书的 SPKI 指纹。`cache pull` 拿到它（任一形式：token 内嵌 `<码>:<指纹>`、`--pin`、或 `SSHMGR_SERVE_PIN`）就用 TLS + 指纹钉死连 serve；**拿不到则默认拒连**（hard-fail，需显式 `--allow-plaintext` 才明文）。指纹可随时用 `sshmgr serve cert-info` 重查；装有 serve 服务时该命令优先显示服务注册的 `--tls-cert` 自定义证书。另：有 pin 时 URL 必须是 `https://`（否则 hard-fail —— http 不协商 TLS 会让 pin 静默失效）。
 - 其他管理命令：
   ```bash
   sshmgr cache-tokens ls          # name / id / prefix / status / profile / last_pull（不显示码）

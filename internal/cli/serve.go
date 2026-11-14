@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -11,10 +12,19 @@ import (
 	"github.com/kardianos/service"
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/vault"
+)
+
+// serve 证书诊断只读取服务注册记录；测试用这两个变量注入临时结果，不接触
+// 开发机的真实 systemd、launchd 或 Windows 服务管理器记录。
+var (
+	serveServiceProbe       = updater.ProbeService
+	registeredServeTLSFiles = updater.RegisteredServeTLSFiles
 )
 
 // serveServiceModeFlag is the internal flag that distinguishes a
@@ -125,24 +135,45 @@ directly in the foreground.`,
 	return c
 }
 
-// newServeCertInfoCmd prints the serve TLS cert path, key path, and SPKI
-// fingerprint. If the cert is absent it is generated first (LoadOrCreateServeCert
-// is idempotent), so this command is also the explicit "bootstrap the cert"
-// affordance — useful before `serve` itself auto-loads it (Task 7) and as a
-// diagnostic when a client's pin doesn't match.
+// newServeCertInfoCmd prints the TLS certificate and private-key paths plus the
+// certificate's SubjectPublicKeyInfo fingerprint that clients pin. An installed
+// serve service registered with --tls-cert takes precedence; otherwise the
+// default generated certificate is read (and created on first run).
 func newServeCertInfoCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "cert-info",
-		Short: "Print the serve TLS cert's SPKI fingerprint (auto-generates on first run)",
+		Short: "Print the TLS certificate fingerprint the serve service uses",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			certPath, keyPath, fp, err := mcpserver.LoadOrCreateServeCert()
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "serve cert: %s\nserve key: %s\nfingerprint: %s\n", certPath, keyPath, fp)
-			return nil
+			return runServeCertInfo(cmd.OutOrStdout(), cmd.OutOrStderr())
 		},
 	}
+}
+
+func runServeCertInfo(out, warningOut io.Writer) error {
+	if pr := serveServiceProbe(buildinfo.ServeServiceName); pr.State == updater.ProbeInstalled {
+		certPath, keyPath, err := registeredServeTLSFiles(buildinfo.ServeServiceName)
+		switch {
+		case err != nil:
+			fmt.Fprintf(warningOut, "警告: 读取服务 %s 的证书参数失败，改用默认证书路径：%v\n", buildinfo.ServeServiceName, err)
+		case certPath != "":
+			fp, err := mcpserver.ServeCertificateFingerprint(certPath, keyPath)
+			if err != nil {
+				return fmt.Errorf("读取服务自定义证书 %s 失败: %w", certPath, err)
+			}
+			fmt.Fprintf(out, "serve cert: %s\nserve key: %s\nfingerprint: %s\n", certPath, keyPath, fp)
+			fmt.Fprintf(out, "服务使用自定义证书：%s\n", certPath)
+			return nil
+		}
+	} else if pr.State == updater.ProbeMechanismErr {
+		fmt.Fprintf(warningOut, "警告: 无法确认服务 %s 是否安装，改用默认证书路径：%s\n", buildinfo.ServeServiceName, pr.Desc)
+	}
+
+	certPath, keyPath, fp, err := mcpserver.LoadOrCreateServeCert()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "serve cert: %s\nserve key: %s\nfingerprint: %s\n", certPath, keyPath, fp)
+	return nil
 }
 
 // serveSwitchOpts lifts --pairing/--discovery into mcpserver.ServeOpts

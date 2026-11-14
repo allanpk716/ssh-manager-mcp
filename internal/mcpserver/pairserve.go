@@ -607,6 +607,9 @@ func (r *ServeRunner) handlePairFinish(w http.ResponseWriter, req *http.Request)
 			// recheck refused to revoke an in-use code. Same class as the enroll
 			// 419; row stays approved until its window lapses.
 			http.Error(w, "device name in use", 419)
+		case errors.As(err, new(*store.PairingProjectNotGeneratedError)):
+			// 同名项目不是配对生成:消息只含项目名与 owner 处理命令,原样回给客户端。
+			http.Error(w, err.Error(), http.StatusConflict)
 		default:
 			if !ackOK() {
 				// ack mismatch: FinishPairing aborts with a plain error before

@@ -200,40 +200,66 @@ func RegisteredBinaryPath(name string) (string, error) {
 // carry no --addr — the caller keeps its own default. Read failures return
 // the error; the caller treats the probe as best-effort evidence.
 func RegisteredServeAddr(name string) (string, error) {
+	args, err := registeredServeArgs(name)
+	if err != nil {
+		return "", err
+	}
+	return serveAddrFromArgs(args), nil
+}
+
+// RegisteredServeTLSFiles reads back the --tls-cert and --tls-key values from
+// the same service registration records as RegisteredServeAddr. Empty strings
+// with a nil error mean the registered service uses the generated default
+// certificate. A non-nil error means the registration record exists but cannot
+// be read or parsed; callers should warn and fall back to their default view.
+func RegisteredServeTLSFiles(name string) (certPath, keyPath string, err error) {
+	args, err := registeredServeArgs(name)
+	if err != nil {
+		return "", "", err
+	}
+	certPath, keyPath = serveTLSFilesFromArgs(args)
+	return certPath, keyPath, nil
+}
+
+// registeredServeArgs returns the arguments after the binary path from the
+// platform's service registration record. All registered-argument readers share
+// this implementation so --addr, --tls-cert and --tls-key can never drift
+// between different parsers.
+func registeredServeArgs(name string) ([]string, error) {
 	switch currentGOOS {
 	case "windows":
 		// scmQueryCommand is wired by service_windows.go's init on windows
 		// builds; nil elsewhere (and in tests that un-wire it).
 		if scmQueryCommand == nil {
-			return "", fmt.Errorf("registered-command lookup unavailable on %s (SCM wiring missing)", currentGOOS)
+			return nil, fmt.Errorf("registered-command lookup unavailable on %s (SCM wiring missing)", currentGOOS)
 		}
 		raw, err := scmQueryCommand(name)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return serveAddrFromArgs(commandTokensExceptBinary(raw)), nil
+		return commandTokensExceptBinary(raw), nil
 	case "linux":
 		data, err := os.ReadFile(filepath.Join(systemdUnitDir, name+".service"))
 		if err != nil {
-			return "", fmt.Errorf("read systemd unit for service %q: %w", name, err)
+			return nil, fmt.Errorf("read systemd unit for service %q: %w", name, err)
 		}
 		toks, ok := execStartTokens(string(data))
 		if !ok || len(toks) == 0 {
-			return "", fmt.Errorf("systemd unit for service %q has no parsable ExecStart", name)
+			return nil, fmt.Errorf("systemd unit for service %q has no parsable ExecStart", name)
 		}
-		return serveAddrFromArgs(toks[1:]), nil
+		return toks[1:], nil
 	case "darwin":
 		data, err := os.ReadFile(filepath.Join(launchdPlistDir, name+".plist"))
 		if err != nil {
-			return "", fmt.Errorf("read launchd plist for service %q: %w", name, err)
+			return nil, fmt.Errorf("read launchd plist for service %q: %w", name, err)
 		}
 		items := plistProgramArgumentsStrings(string(data))
 		if len(items) == 0 {
-			return "", fmt.Errorf("launchd plist for service %q has no parsable ProgramArguments", name)
+			return nil, fmt.Errorf("launchd plist for service %q has no parsable ProgramArguments", name)
 		}
-		return serveAddrFromArgs(items[1:]), nil
+		return items[1:], nil
 	default:
-		return "", fmt.Errorf("registered-addr lookup unsupported on %s", currentGOOS)
+		return nil, fmt.Errorf("registered-service arguments lookup unsupported on %s", currentGOOS)
 	}
 }
 
@@ -258,18 +284,38 @@ func commandTokensExceptBinary(raw string) []string {
 // dangling (a dangling --addr is not an address anyone can dial; the caller's
 // default is the safer answer than a guess).
 func serveAddrFromArgs(args []string) string {
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--addr":
-			if i+1 < len(args) {
-				return args[i+1]
-			}
-			return ""
-		case strings.HasPrefix(args[i], "--addr="):
-			return strings.TrimPrefix(args[i], "--addr=")
-		}
+	if value, _ := serveFlagValue(args, "--addr"); value != "" {
+		return value
 	}
 	return ""
+}
+
+// serveTLSFilesFromArgs returns the certificate and private-key paths from a
+// registered serve command line. A dangling or absent flag yields an empty
+// value; the diagnostic caller then either reads the default certificate or
+// reports the concrete certificate-load failure rather than guessing.
+func serveTLSFilesFromArgs(args []string) (string, string) {
+	cert, _ := serveFlagValue(args, "--tls-cert")
+	key, _ := serveFlagValue(args, "--tls-key")
+	return cert, key
+}
+
+// serveFlagValue returns the first value for a long flag in both
+// "--flag value" and "--flag=value" forms. ok is false when the flag is absent
+// or dangling.
+func serveFlagValue(args []string, flag string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == flag:
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", false
+		case strings.HasPrefix(args[i], flag+"="):
+			return strings.TrimPrefix(args[i], flag+"="), true
+		}
+	}
+	return "", false
 }
 
 // splitCommandTokens splits a command line into argv tokens: a double- or

@@ -494,14 +494,33 @@ func TestMintPairing_ReuseRules(t *testing.T) {
 		t.Fatal("branch3: the working token must be untouched by the refusal")
 	}
 
-	// 分支 4:owner 手建同名 project(pair_generated=0)→ 拒绝(而非 UNIQUE 撞库)。
+	// 分支 4:owner 手建同名 project(pair_generated=0)→ 拒绝(而非 UNIQUE 撞库),
+	// 并带回不含凭据的可操作处理说明。
 	if _, _, err := s.AddProject("pair-manual", pidA); err != nil {
 		t.Fatal(err)
 	}
 	tx, _ = s.db.Begin()
-	if _, _, err := s.MintPairingCredentials(tx, "manual", pidA, false); err == nil || !strings.Contains(err.Error(), "pair-generated") {
+	_, _, err = s.MintPairingCredentials(tx, "manual", pidA, false)
+	var projectConflict *PairingProjectNotGeneratedError
+	if err == nil || !errors.As(err, &projectConflict) {
 		tx.Rollback()
-		t.Fatalf("branch4 must refuse a non-pair-generated project by name, got err=%v", err)
+		t.Fatalf("branch4 must refuse a non-pair-generated project with a typed error, got err=%v", err)
+	}
+	if projectConflict.ProjectName != "pair-manual" {
+		tx.Rollback()
+		t.Fatalf("typed error project name = %q, want pair-manual", projectConflict.ProjectName)
+	}
+	for _, want := range []string{
+		"项目 pair-manual 已被占用", "sshmgr projects revoke pair-manual", "sshmgr projects remove pair-manual",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			tx.Rollback()
+			t.Fatalf("branch4 error missing %q: %v", want, err)
+		}
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "token") || strings.Contains(err.Error(), token2) {
+		tx.Rollback()
+		t.Fatalf("branch4 error must not disclose credential material: %v", err)
 	}
 	tx.Rollback()
 	// pair.project-create audit 恰好一次(分支 1)。

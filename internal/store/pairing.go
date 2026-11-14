@@ -45,6 +45,20 @@ var (
 	ErrPairingNameActive = errors.New("device name pulled since enroll; auto-revoke refused")
 )
 
+// PairingProjectNotGeneratedError 表示同名项目存在，但它没有「由配对功能生成」
+// 的标记，因此配对不能安全接管。消息只包含项目名和 owner 的处理命令，不包含
+// 任何令牌或密钥。
+type PairingProjectNotGeneratedError struct {
+	ProjectName string
+}
+
+func (e *PairingProjectNotGeneratedError) Error() string {
+	return fmt.Sprintf(
+		"项目 %s 已被占用，且不是配对功能生成的项目，不能自动接管。请 owner 在权威端依次执行 sshmgr projects revoke %s 和 sshmgr projects remove %s，处理后重新配对",
+		e.ProjectName, e.ProjectName, e.ProjectName,
+	)
+}
+
 // pairProjectPrefix is the deterministic project identity prefix for paired
 // instances ("pair-<name>"); reuse rules key off it + the pair_generated flag.
 const pairProjectPrefix = "pair-"
@@ -598,7 +612,7 @@ func (s *Store) MintPairingCredentials(tx *sql.Tx, name, profile string, replace
 	}
 	if proj != nil {
 		if !proj.PairGenerated {
-			return "", "", fmt.Errorf("project %q exists but was not pair-generated; refusing to reuse — pick another instance name or remove the project first", projName)
+			return "", "", &PairingProjectNotGeneratedError{ProjectName: projName}
 		}
 		if proj.ProfileID != profile {
 			return "", "", fmt.Errorf("project %q is pair-generated but bound to profile %q, not %q; refusing to rebind", projName, proj.ProfileID, profile)

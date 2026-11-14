@@ -36,6 +36,7 @@ import (
 
 	"ssh-manager-mcp/internal/clientfeatures"
 	"ssh-manager-mcp/internal/dialplan"
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
@@ -228,6 +229,7 @@ func emptyExecContextOutput() ExecContextOutput {
 func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, profileID, serverID string, sudo bool, hk ...sshbroker.HostKeyStore) (out ExecContextOutput, err error) {
 	var status string
 	start := time.Now()
+	out = emptyExecContextOutput()
 	defer func() {
 		if status == "" {
 			status = "error"
@@ -259,6 +261,13 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	if st.CacheAuthorityTooOld() {
 		networkDrivePreviewNote = clientfeatures.ErrTopologyAndSharedStorageAuthorityTooOld.Error()
 	}
+	out.InjectedEnvironmentNames = injectionPlan.injectedNames()
+	out.UninjectedEnvironmentVariables = injectionPlan.uninjectedVariables()
+	out.PlannedNetworkDrives = plannedDrives
+	out.UninjectedNetworkDrives = uninjectedDrives
+	out.NetworkDrivePreviewNote = networkDrivePreviewNote
+
+	shellType := models.NormalizeShellType(string(srv.ShellType))
 
 	auth, aerr := vault.AuthForServer(st, srv)
 	if aerr != nil {
@@ -286,6 +295,11 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 			return
 		}
 		sudoCred = cred.Secret
+	}
+
+	if shellType.IsWindows() {
+		status = "ok"
+		return
 	}
 
 	dialSource := dialplan.NewStoreSource(st, "")

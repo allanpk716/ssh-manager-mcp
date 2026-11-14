@@ -17,6 +17,7 @@ func TestDarwinMountCommandPassesPOSIXShellSyntaxCheck(t *testing.T) {
 		t.Skip("Windows 没有 POSIX shell 解释器")
 	}
 	command := buildDarwinMountCommand(
+		&models.Server{User: "deploy"},
 		&models.SharedStorage{Name: "datasets", MountUser: "mount-user"},
 		[]*Candidate{{Address: "192.0.2.10"}, {Address: "100.64.10.10"}},
 	)
@@ -34,6 +35,7 @@ func TestDarwinMountCommandPassesPOSIXShellSyntaxCheck(t *testing.T) {
 
 func TestDarwinMountExitCodesHaveExplanationsAndClasses(t *testing.T) {
 	command := buildDarwinMountCommand(
+		&models.Server{User: "deploy"},
 		&models.SharedStorage{Name: "datasets", MountUser: "mount-user"},
 		[]*Candidate{{Address: "192.0.2.10"}},
 	)
