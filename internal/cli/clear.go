@@ -86,6 +86,25 @@ func serveServiceInstalled() bool {
 	return err == nil
 }
 
+func isPrivilegedOperationDenied(err error) bool {
+	if errors.Is(err, fs.ErrPermission) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "permission denied") ||
+		strings.Contains(message, "access denied") ||
+		strings.Contains(message, "authentication required") ||
+		strings.Contains(message, "interactive authentication") ||
+		strings.Contains(message, "not authorized")
+}
+
+func clearUninstallFailure(err error) error {
+	if isPrivilegedOperationDenied(err) {
+		return fmt.Errorf("卸载 serve 服务失败: %w — 请以管理员/root 身份重新运行 sshmgr clear（已完成步骤会自动跳过）", err)
+	}
+	return fmt.Errorf("卸载 serve 服务失败: %w（已完成步骤会自动跳过）", err)
+}
+
 // ---------------------------------------------------------------------------
 // Target enumeration
 // ---------------------------------------------------------------------------
@@ -430,7 +449,7 @@ func runClear(cmd *cobra.Command, _ []string) error {
 	//    lock) and a registered service whose files are gone would crash-loop
 	//    at boot. Always attempted, not gated on the display probe.
 	if err := serveUninstallFn(out); err != nil {
-		return fmt.Errorf("卸载 serve 服务失败: %w — 请以管理员/root 身份重新运行 sshmgr clear（已完成步骤会自动跳过）", err)
+		return clearUninstallFailure(err)
 	}
 	// 2. Delete every enumerated file (ENOENT = already gone = fine).
 	for _, t := range targets {

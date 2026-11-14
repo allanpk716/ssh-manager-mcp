@@ -430,7 +430,7 @@ func runServeUninstall(cmd *cobra.Command) error {
 // is NOT deleted. Idempotent: "not installed" is reported to out, not an error.
 func uninstallServeService(out io.Writer) error {
 	cfg := &service.Config{Name: serveServiceName, Option: platformServiceOptions()}
-	s, err := service.New(&program{}, cfg)
+	s, err := newServeServiceUninstaller(&program{}, cfg)
 	if err != nil {
 		if errors.Is(err, service.ErrNoServiceSystemDetected) {
 			fmt.Fprintf(out, "no service manager detected on this host (nothing to uninstall)\n")
@@ -438,9 +438,13 @@ func uninstallServeService(out io.Writer) error {
 		}
 		return fmt.Errorf("configure service: %w", err)
 	}
-	// Best-effort Stop before Uninstall so the running serve releases the
-	// port. A "not installed" error from Stop is ignored.
+	// Stop before Uninstall so the running serve releases the port. A "not
+	// installed" error from Stop is ignored. On Linux systemd this is a required
+	// step; other service managers retain their historical best-effort Stop.
 	if serr := s.Stop(); serr != nil && !isServiceNotInstalled(serr) {
+		if s.stopFailureIsFatal() {
+			return fmt.Errorf("stop service: %w", serr)
+		}
 		fmt.Fprintf(out, "warning: service Stop before uninstall: %v (continuing)\n", serr)
 	}
 	if err := s.Uninstall(); err != nil {
