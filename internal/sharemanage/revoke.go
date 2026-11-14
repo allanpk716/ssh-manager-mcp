@@ -29,12 +29,15 @@ type RevokeRequest struct {
 // RevokeResult 是撤销登记与远端清理的安全结论，不包含共享地址、挂载账号
 // 或密码。
 type RevokeResult struct {
-	ShareName       string
-	ServerID        string
-	ServerName      string
-	System          string
-	Result          string
-	Version         int64
+	ShareName  string
+	ServerID   string
+	ServerName string
+	System     string
+	Result     string
+	Version    int64
+	// ScopeChanged 表示这次操作是否修改了可挂载范围。服务器仍在范围内
+	// 时为真；已移出范围后只清理远端，登记没有变化。
+	ScopeChanged    bool
 	Unmount         bool
 	Force           bool
 	MountPreserved  bool
@@ -76,8 +79,7 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 	}
 	inRange := sharedStorageHasMountableServer(share, server.ID)
 	if !inRange {
-		return nil, fmt.Errorf("服务器条目 %s 不在共享存储 %s 的可挂载范围内",
-			server.Name, share.Name)
+		return m.revokeRemoteOnly(ctx, share, server, request)
 	}
 
 	source := request.Source
@@ -99,7 +101,7 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 	result := &RevokeResult{
 		ShareName: revoked.Name, ServerID: server.ID, ServerName: server.Name,
 		Version: revoked.Version, Unmount: request.Unmount, Force: request.Force,
-		PasswordChanged: request.NewPassword != nil,
+		ScopeChanged: true, PasswordChanged: request.NewPassword != nil,
 	}
 	for _, candidate := range revoked.MountableServers {
 		if !models.NormalizeShellType(string(candidate.ShellType)).IsWindows() {
@@ -138,6 +140,59 @@ func (m *Manager) Revoke(ctx context.Context, request RevokeRequest) (*RevokeRes
 			"%w\n登记变更已保留；服务器仍可能留有共享存储配置，可用 shares residue 检查、用 shares unmount 清理", err)
 	}
 	if err := m.writeRevokeRemoteAudit(server.Name, revoked.Name, result.Version,
+		request.Unmount, request.Force, result.Result, false, source); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+// revokeRemoteOnly 处理已移出可挂载范围的服务器：可挂载范围、共享存储
+// 版本号与变更说明都不再改动，只按当前版本号清理远端持久配置，并按请
+// 求决定是否卸载挂载点。命令行与共享存储详情页对同一状态走这一段逻辑。
+func (m *Manager) revokeRemoteOnly(
+	ctx context.Context, share *models.SharedStorage, server *models.Server, request RevokeRequest,
+) (*RevokeResult, error) {
+	source := request.Source
+	if source.kind == "" {
+		source = CLISource()
+	}
+	result := &RevokeResult{
+		ShareName: share.Name, ServerID: server.ID, ServerName: server.Name,
+		Version: share.Version, Unmount: request.Unmount, Force: request.Force,
+	}
+	if request.NewPassword != nil {
+		return nil, errors.New(
+			"服务器条目已不在共享存储的可挂载范围内；这次只清理远端，不支持同时更换共享密码")
+	}
+	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
+		result.System = sharemount.CheckSystemWindows
+		result.Result = "success"
+		result.Notices = append(result.Notices,
+			"Windows 服务器不留共享存储配置；这台服务器已不在可挂载范围内，无需远端清理")
+		return result, nil
+	}
+	remote, err := m.RevokeRemote(ctx, RevokeRemoteRequest{
+		Server: server, ShareName: share.Name, ShareID: share.ID, Version: share.Version,
+		Unmount: request.Unmount, Force: request.Force,
+	})
+	if remote != nil {
+		result.System = remote.System
+		result.Result = remote.Result
+		result.BusyProcesses = remote.BusyProcesses
+		if !request.Unmount && remote.Result == "success" {
+			result.MountPreserved = true
+		}
+	}
+	if err != nil {
+		result.Result = unmountAuditResult(err, remote)
+		result.Notices = append(result.Notices,
+			"服务器仍可能留有共享存储配置，可用 shares residue 检查、用 shares unmount 清理")
+		_ = m.writeRevokeRemoteAudit(server.Name, share.Name, result.Version,
+			request.Unmount, request.Force, result.Result, true, source)
+		return result, fmt.Errorf(
+			"%w\n服务器仍可能留有共享存储配置，可用 shares residue 检查、用 shares unmount 清理", err)
+	}
+	if err := m.writeRevokeRemoteAudit(server.Name, share.Name, result.Version,
 		request.Unmount, request.Force, result.Result, false, source); err != nil {
 		return result, err
 	}

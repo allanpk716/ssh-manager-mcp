@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/sharemanage"
 	"ssh-manager-mcp/internal/sharemount"
 )
@@ -24,6 +25,7 @@ func sharesRevokeCmd() *cobra.Command {
 
 不带 --unmount 时保留现有挂载；带 --unmount 时被占用会列出进程，--force 表示强制卸载。
 Windows 服务器不留持久配置，命令只改登记并说明盘符注入的生效边界。
+服务器已移出可挂载范围时，命令不再修改登记，只清理远端持久配置并按 --unmount 决定是否卸载挂载点。
 需要安全撤销时可同时更换挂载密码；新密码只能来自标准输入或文件，不进入命令参数。
 换密码后，仍在可挂载范围内的 Linux 与 macOS 服务器要等 agent 按新版本号重新挂载，桌面上手动添加的共享连接也需要更换密码。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -43,7 +45,17 @@ Windows 服务器不留持久配置，命令只改登记并说明盘符注入的
 				newPassword = password
 				defer clearSharedStoragePassword(newPassword)
 			}
-			fmt.Fprintf(out, "将撤销共享存储 %s 在服务器 %s 上的可挂载范围。\n", args[0], args[1])
+			outOfScope := sharesRevokeTargetOutOfScope(s, args[0], args[1])
+			if outOfScope {
+				if newPassword != nil {
+					return errors.New(
+						"服务器条目已不在共享存储的可挂载范围内；这次只清理远端，不支持同时更换共享密码")
+				}
+				fmt.Fprintf(out, "服务器 %s 已不在共享存储 %s 的可挂载范围内；本次只清理远端，不修改登记。\n",
+					args[1], args[0])
+			} else {
+				fmt.Fprintf(out, "将撤销共享存储 %s 在服务器 %s 上的可挂载范围。\n", args[0], args[1])
+			}
 			if unmount {
 				fmt.Fprintln(out, "Linux 与 macOS 服务器将删除远端持久配置并卸载挂载。")
 			} else {
@@ -79,8 +91,13 @@ Windows 服务器不留持久配置，命令只改登记并说明盘符注入的
 					return err
 				}
 			}
-			fmt.Fprintf(out, "已撤销共享存储 %s 在服务器 %s 上的可挂载范围；版本号：%d\n",
-				result.ShareName, result.ServerName, result.Version)
+			if result.ScopeChanged {
+				fmt.Fprintf(out, "已撤销共享存储 %s 在服务器 %s 上的可挂载范围；版本号：%d\n",
+					result.ShareName, result.ServerName, result.Version)
+			} else {
+				fmt.Fprintf(out, "服务器 %s 已不在共享存储 %s 的可挂载范围内；本次只清理远端；版本号：%d\n",
+					result.ServerName, result.ShareName, result.Version)
+			}
 			if result.Result == "success" {
 				if result.System == sharemount.CheckSystemWindows {
 					fmt.Fprintln(out, "未连接 Windows 服务器；各客户端同步快照后停止注入。")
@@ -123,6 +140,33 @@ Windows 服务器不留持久配置，命令只改登记并说明盘符注入的
 		"从标准输入读到结束并按字节原样保存新的共享存储挂载密码（末尾换行保留）")
 	c.Flags().BoolVar(&yes, "yes", false, "跳过共享存储撤销确认；非交互终端必须显式给出")
 	return c
+}
+
+// sharesRevokeTargetOutOfScope 判断命令行要撤销的服务器是否已经不在共享
+// 存储的可挂载范围内；读取失败时按仍在范围内处理，让共享存储管理模块
+// 在确认后返回真实错误。
+func sharesRevokeTargetOutOfScope(s sharedStorageReader, shareName, serverName string) bool {
+	share, err := s.GetSharedStorage(shareName)
+	if err != nil || share == nil {
+		return false
+	}
+	server, err := s.ResolveServer(serverName)
+	if err != nil || server == nil {
+		return false
+	}
+	for _, candidate := range share.MountableServers {
+		if candidate.ID == server.ID {
+			return false
+		}
+	}
+	return true
+}
+
+// sharedStorageReader 是撤销命令预览文案需要的读取入口，实际由打开的
+// 权威存储提供。
+type sharedStorageReader interface {
+	GetSharedStorage(name string) (*models.SharedStorage, error)
+	ResolveServer(name string) (*models.Server, error)
 }
 
 func clearSharedStoragePassword(password []byte) {

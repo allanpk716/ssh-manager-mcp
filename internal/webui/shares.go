@@ -35,6 +35,9 @@ type ShareRow struct {
 	MountableServers []ShareServerView
 	MountableCount   int
 	PasswordSecret   string
+	// PasswordSecretID 是挂载密码机密项的标识符，只用于把共享名与授权差
+	// 异关联；机密项的值永远不出现在展示行里。
+	PasswordSecretID string
 	MountUser        string
 	Directories      []ShareDirectoryView
 	Note             string
@@ -457,6 +460,7 @@ func (h *handler) shareDetailData(r *http.Request, detail *ShareRow) (pageData, 
 	}
 	if h.caps.CanRevokeShares {
 		data.ShareRevokeEntries = shareRevokeEntries(detail)
+		data.ShareOutOfScopeRevokeEntries = h.shareOutOfScopeRevokeEntries(r, detail)
 	}
 	if h.caps.CanReselectShares {
 		data.ShareReselectEntries = shareReselectEntries(detail)

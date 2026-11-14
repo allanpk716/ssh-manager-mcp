@@ -110,6 +110,122 @@ func TestShareRevokeWithUnmountSucceedsAndAuditsWebUISource(t *testing.T) {
 	}
 }
 
+// TestShareRevokeOutOfScopeEntryCleansRemoteWithoutChangingScope 覆盖欠账
+// 第 23 条的主路径：服务器移出可挂载范围后，最近现场探测登记仍显示远端
+// 有配置或挂载时，详情页继续提供撤销授权入口；确认后只清理远端，不再
+// 修改可挂载范围、共享存储版本号或变更说明。
+func TestShareRevokeOutOfScopeEntryCleansRemoteWithoutChangingScope(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	started := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/check", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+	})
+	if started.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动现场探测状态码 = %d：%s", started.StatusCode, body(t, started))
+	}
+	waitRemoteTaskDone(t, fixture.handler, started.Header.Get("Location"))
+	// 模拟另一个入口先把服务器移出可挂载范围；数据库触发器会把共享存
+	// 储版本号从 1 加到 2，变更说明保持为空。
+	if err := fixture.store.DisallowSecrets(
+		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := body(t, fixture.handler.do(http.MethodGet, "/ui/shares/"+fixture.shareID, nil))
+	for _, want := range []string{
+		"已移出范围、远端可能仍有配置",
+		"linux-web",
+		"最近登记：已挂载，且已有 sshmgr 挂载配置",
+		`href="` + fixture.revokePath(fixture.linuxID) + `"`,
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("共享存储详情页的已移出范围区域缺少 %q：\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "DATASETS_MOUNT_PASSWORD-value-不回显") {
+		t.Fatalf("已移出范围区域不得显示密码：\n%s", detail)
+	}
+
+	confirm := body(t, fixture.handler.do(http.MethodGet, fixture.revokePath(fixture.linuxID), nil))
+	for _, want := range []string{
+		"撤销 datasets · linux-web",
+		"这台服务器已不在可挂载范围内",
+		"清理远端持久配置与挂载点",
+		"不再修改可挂载范围、共享存储版本号或变更说明",
+		`name="server_id" value="` + fixture.linuxID + `"`,
+		`name="unmount" value="1" checked`,
+		"确认撤销授权",
+	} {
+		if !strings.Contains(confirm, want) {
+			t.Fatalf("已移出范围条目的撤销授权确认页缺少 %q：\n%s", want, confirm)
+		}
+	}
+	if strings.Contains(confirm, "同时更换共享密码") ||
+		strings.Contains(confirm, `name="new_password"`) ||
+		strings.Contains(confirm, "mount-password") ||
+		strings.Contains(confirm, "共享存储版本号将加一") {
+		t.Fatalf("已移出范围条目不得提供换密码或登记变更文案：\n%s", confirm)
+	}
+
+	post := fixture.handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, fixture.handler)},
+		"server_id":  {fixture.linuxID},
+		"unmount":    {"1"},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动已移出范围条目的撤销授权状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	page := waitUntilRevokeDone(t, fixture.handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"撤销授权完成", "远端清理完成，登记没有变化",
+		"远端持久配置已删除，挂载已卸载", "共享存储版本号", "2",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("已移出范围条目的撤销授权结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{
+		"共享已从服务器撤销",
+		"DATASETS_MOUNT_PASSWORD-value-不回显", "mount-password", "login-pw", "sudo-pw", "192.0.2.10",
+	} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("已移出范围条目的撤销授权结果页泄露 %q：\n%s", forbidden, page)
+		}
+	}
+
+	share, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != 2 || share.ChangeNote != "" || len(share.MountableServers) != 1 ||
+		share.MountableServers[0].Name != "windows-web" {
+		t.Fatalf("已移出范围条目的撤销授权不应再修改登记：%+v", share)
+	}
+	state := fixture.linux.State()
+	if state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("已移出范围条目的远端清理不完整：%+v", state)
+	}
+	if state.RevokedMarker != "sshmgr-share=datasets;sshmgr-version=2;sshmgr-state=revoked" {
+		t.Fatalf("已移出范围条目的撤销标记 = %q", state.RevokedMarker)
+	}
+	remoteRows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remoteRows) != 1 || remoteRows[0].Source != store.AuditSourceWebUI ||
+		remoteRows[0].Status != "ok" || remoteRows[0].SourceIP != "192.0.2.1" {
+		t.Fatalf("已移出范围条目的远端撤销审计不正确：%+v", remoteRows)
+	}
+	revokeRows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke"},
+	})
+	if err != nil || len(revokeRows) != 0 {
+		t.Fatalf("已移出范围条目不应再写登记撤销审计：%v %+v", err, revokeRows)
+	}
+}
+
 func TestShareRevokeBusyListsProcessesAndForceCleanupSucceeds(t *testing.T) {
 	fixture := newUnmountFixture(t)
 	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{

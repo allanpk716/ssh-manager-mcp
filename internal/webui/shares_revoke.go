@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
 	"ssh-manager-mcp/internal/models"
@@ -17,8 +18,17 @@ type ShareRevokeEntry struct {
 	ServerName  string
 	DeviceName  string
 	ShellType   string
+	MountPoint  string
 	Windows     bool
 	ConfirmPath string
+}
+
+// ShareOutOfScopeRevokeEntry 是已移出可挂载范围、但最近一次现场探测登记
+// 显示远端可能仍留有挂载配置或挂载点的服务器条目。Evidence 描述这份登
+// 记依据；入口只清理远端，不再修改登记。
+type ShareOutOfScopeRevokeEntry struct {
+	ShareRevokeEntry
+	Evidence string
 }
 
 // SecretAuthorizationShareUnmount 是可挂载范围确认页里一台将移除服务器的
@@ -55,6 +65,9 @@ type ShareRevokeRequest struct {
 	Force       bool
 	// CleanupOnly 表示登记撤销已提交，只需继续完成占挂载后的强制清理。
 	CleanupOnly bool
+	// OutOfScope 表示启动任务时服务器已不在可挂载范围内；任务页据此展
+	// 示“只清理远端、登记没有变化”的结论。
+	OutOfScope  bool
 	NewPassword []byte
 	Source      ShareWriteSource
 }
@@ -91,6 +104,7 @@ type ShareRevokeTaskStatus struct {
 	ServerName     string
 	ServerShell    string
 	MountPoint     string
+	OutOfScope     bool
 	FailureMessage string
 	Result         *ShareRevokeResult
 }
@@ -124,6 +138,7 @@ type ShareRevokeView struct {
 	Share            *ShareRow
 	Server           ShareServerView
 	Windows          bool
+	OutOfScope       bool
 	ConfirmPath      string
 	RecentlyMounted  bool
 	RequestedUnmount bool
@@ -180,12 +195,13 @@ func (h *handler) handleShareRevokePage(w http.ResponseWriter, r *http.Request, 
 				ShellType: status.ServerShell, MountPoint: status.MountPoint,
 			}
 			view.Windows = models.NormalizeShellType(status.ServerShell).IsWindows()
+			view.OutOfScope = status.OutOfScope
 			view.PollPath = r.URL.RequestURI()
 		}
 	}
 	if view.Server.ID == "" && !view.TaskInvalid {
 		h.renderError(w, r, http.StatusNotFound, "服务器不在可挂载范围内",
-			"这台服务器不在这个共享的可挂载范围内；范围外机器请使用「检查残留」。")
+			"这台服务器不在这个共享的可挂载范围内；登记显示远端仍有配置时，详情页会提供撤销授权入口，否则请使用「检查残留」。")
 		return
 	}
 	if view.ConfirmPath == "" {
@@ -212,10 +228,15 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 	}
 	if view == nil {
 		h.renderError(w, r, http.StatusNotFound, "服务器不在可挂载范围内",
-			"这台服务器不在这个共享的可挂载范围内；范围外机器请使用「检查残留」。")
+			"这台服务器不在这个共享的可挂载范围内；登记显示远端仍有配置时，详情页会提供撤销授权入口，否则请使用「检查残留」。")
 		return
 	}
 	changePassword := r.PostFormValue("change_password") == "1"
+	if view.OutOfScope && changePassword {
+		h.renderError(w, r, http.StatusBadRequest, "不能同时更换共享密码",
+			"这台服务器已不在可挂载范围内，这个入口只清理远端持久配置与挂载点，不修改登记或共享密码。")
+		return
+	}
 	if changePassword && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		resume := url.Values{"change_password": {"1"}}
 		if r.PostFormValue("unmount") == "1" {
@@ -245,6 +266,7 @@ func (h *handler) handleShareRevokePost(w http.ResponseWriter, r *http.Request, 
 		ServerShell: view.Server.ShellType, MountPoint: view.Server.MountPoint,
 		Unmount:     r.PostFormValue("unmount") == "1",
 		Force:       r.PostFormValue("force") == "1",
+		OutOfScope:  view.OutOfScope,
 		NewPassword: newPassword,
 		Source:      ShareWriteSource{RemoteAddress: remoteIP(r)},
 	})
@@ -289,7 +311,8 @@ func (h *handler) handleShareRevokeCleanupPost(w http.ResponseWriter, r *http.Re
 		ServerShell: string(shellType),
 		MountPoint:  store.SharedStorageMountPoint(detail.Drive, detail.Name, shellType),
 		Force:       r.PostFormValue("force") == "1", CleanupOnly: true,
-		Source: ShareWriteSource{RemoteAddress: remoteIP(r)},
+		OutOfScope: shareServerByID(detail.MountableServers, server.ID) == nil,
+		Source:     ShareWriteSource{RemoteAddress: remoteIP(r)},
 	})
 	if err != nil {
 		h.logError(r, "启动共享存储撤销授权清理任务失败", err)
@@ -321,7 +344,98 @@ func (h *handler) shareRevokeView(
 			}, nil
 		}
 	}
+	return h.outOfScopeShareRevokeView(r, detail, serverIdentifier)
+}
+
+// outOfScopeShareRevokeView 查找已移出可挂载范围、登记显示远端可能仍有
+// 配置的服务器，并组装成撤销授权确认页；查不到时返回空值，页面按不存
+// 在处理。
+func (h *handler) outOfScopeShareRevokeView(
+	r *http.Request, detail *ShareRow, serverIdentifier string,
+) (*ShareRevokeView, error) {
+	for _, entry := range h.shareOutOfScopeRevokeEntries(r, detail) {
+		if entry.ServerID == serverIdentifier ||
+			strings.EqualFold(entry.ServerName, strings.TrimSpace(serverIdentifier)) {
+			return &ShareRevokeView{
+				Share: detail,
+				Server: ShareServerView{
+					ID: entry.ServerID, Name: entry.ServerName, DeviceName: entry.DeviceName,
+					ShellType: entry.ShellType, MountPoint: entry.MountPoint,
+				},
+				Windows:     entry.Windows,
+				OutOfScope:  true,
+				ConfirmPath: entry.ConfirmPath,
+				// 已移出范围后的清理目标包含挂载点；默认勾选同时卸载，
+				// owner 仍可以取消勾选只删持久配置。
+				RecentlyMounted: true,
+			}, nil
+		}
+	}
 	return nil, nil
+}
+
+// shareOutOfScopeRevokeEntries 列出不在可挂载范围内、但最近一次现场探
+// 测或成功挂载留下的登记显示远端仍可能有挂载配置或挂载点的服务器条
+// 目。Windows 服务器不留持久配置，不会出现在这里；需要重新探测时用详
+// 情页的「现场探测」。
+func (h *handler) shareOutOfScopeRevokeEntries(
+	r *http.Request, detail *ShareRow,
+) []ShareOutOfScopeRevokeEntry {
+	if detail == nil || h.cfg.ShareLatestChecks == nil {
+		return nil
+	}
+	latest, ok := h.cfg.ShareLatestChecks.LatestShareCheck(detail.ID)
+	if !ok {
+		return nil
+	}
+	entries := make([]ShareOutOfScopeRevokeEntry, 0)
+	for _, result := range latest {
+		if shareServerByID(detail.MountableServers, result.ServerID) != nil {
+			continue
+		}
+		if result.Status != ShareCheckStatusMounted && !result.Managed {
+			continue
+		}
+		server, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), result.ServerID)
+		if err != nil || server == nil {
+			continue
+		}
+		shellType := models.NormalizeShellType(server.Shell)
+		if shellType.IsWindows() {
+			continue
+		}
+		entry := ShareOutOfScopeRevokeEntry{
+			ShareRevokeEntry: ShareRevokeEntry{
+				ServerID:    server.ID,
+				ServerName:  server.Name,
+				DeviceName:  server.DeviceName,
+				ShellType:   string(shellType),
+				Windows:     false,
+				MountPoint:  store.SharedStorageMountPoint(detail.Drive, detail.Name, shellType),
+				ConfirmPath: shareRevokeConfirmPath(detail.ID, server.ID),
+			},
+			Evidence: outOfScopeRevokeEvidence(result),
+		}
+		entries = append(entries, entry)
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		return entries[i].ServerName < entries[j].ServerName
+	})
+	return entries
+}
+
+// outOfScopeRevokeEvidence 把最近一次现场探测或成功挂载留下的登记换成
+// 人能读懂的依据说明；不包含地址、挂载账号或密码。
+func outOfScopeRevokeEvidence(result ShareCheckResult) string {
+	mounted := result.Status == ShareCheckStatusMounted
+	switch {
+	case mounted && result.Managed:
+		return "最近登记：已挂载，且已有 sshmgr 挂载配置"
+	case mounted:
+		return "最近登记：已挂载"
+	default:
+		return "最近登记：已有 sshmgr 挂载配置"
+	}
 }
 
 func (h *handler) latestShareCheckMounted(
