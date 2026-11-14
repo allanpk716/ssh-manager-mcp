@@ -253,8 +253,14 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			if anchor.ServerID != srv.ID {
 				continue
 			}
+			anchorPin := store.Pin{
+				Blob:         anchor.KeyBlob,
+				Format:       anchor.PinFormat,
+				KeyAlgorithm: anchor.KeyAlgorithm,
+			}
 			view.HostKeyAnchor = &webui.ServerDetailHostKeyAnchor{
 				Fingerprint:   store.PinFingerprint(anchor.KeyBlob, anchor.PinFormat),
+				KeyAlgorithm:  anchorPin.DisplayKeyAlgorithm(),
 				SourceLabel:   webui.HostKeyAnchorSourceLabel(anchor.PinSource),
 				Device:        anchor.PinDevice,
 				HandshakeAddr: anchor.HandshakeAddr,

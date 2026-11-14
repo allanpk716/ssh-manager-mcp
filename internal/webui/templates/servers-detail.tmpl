@@ -28,6 +28,7 @@
 {{if .ServerDetail.HostKeyAnchor}}
 <dl class="detail-list">
 <dt>主机密钥指纹</dt><dd>{{.ServerDetail.HostKeyAnchor.Fingerprint}}</dd>
+<dt>主机密钥算法</dt><dd>{{.ServerDetail.HostKeyAnchor.KeyAlgorithm}}</dd>
 <dt>来源</dt><dd>{{.ServerDetail.HostKeyAnchor.SourceLabel}}</dd>
 <dt>转发设备</dt><dd>{{or .ServerDetail.HostKeyAnchor.Device "-"}}</dd>
 <dt>学到锚的地址</dt><dd>{{or .ServerDetail.HostKeyAnchor.HandshakeAddr "-"}}</dd>

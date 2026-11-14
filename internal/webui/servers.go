@@ -92,8 +92,11 @@ type ServerDetailView struct {
 // 指纹按存储里的锚完整渲染，不缩写。
 type ServerDetailHostKeyAnchor struct {
 	Fingerprint string
-	SourceLabel string
-	Device      string
+	// KeyAlgorithm 是这把主机密钥锚的算法；只有指纹且算法未知时使用固定
+	// 中文说明。
+	KeyAlgorithm string
+	SourceLabel  string
+	Device       string
 	// HandshakeAddr 是学到这把锚时实际握手的地址；手工指纹锚没有这个
 	// 地址，模板显示占位符。
 	HandshakeAddr string

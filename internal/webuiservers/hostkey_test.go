@@ -248,7 +248,8 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 
 	rootPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID)
 	for _, want := range []string{
-		"主机密钥锚", rootAnchor.fingerprint, "首次信任", "学到锚的地址", "192.0.2.10:22", "锚定时间",
+		"主机密钥锚", rootAnchor.fingerprint, "主机密钥算法", rootAnchor.key.Type(),
+		"首次信任", "学到锚的地址", "192.0.2.10:22", "锚定时间",
 	} {
 		if !strings.Contains(rootPage, want) {
 			t.Fatalf("root 条目详情页主机密钥锚信息缺少 %q：\n%s", want, rootPage)
@@ -433,6 +434,7 @@ func TestClientServerDetailShowsReadOnlyHostKeyAnchorArea(t *testing.T) {
 		ShowHostKeyAnchor: true,
 		HostKeyAnchor: &webui.ServerDetailHostKeyAnchor{
 			Fingerprint:   "SHA256:" + strings.Repeat("a", 43),
+			KeyAlgorithm:  store.PinUndeterminedKeyAlgorithm,
 			SourceLabel:   "首次信任",
 			Device:        "office-laptop",
 			HandshakeAddr: "192.0.2.10:22",
@@ -457,7 +459,8 @@ func TestClientServerDetailShowsReadOnlyHostKeyAnchorArea(t *testing.T) {
 	}
 	page := hostKeyPage(t, handler, cookies[0], "/ui/servers/srv-web")
 	for _, want := range []string{
-		"主机密钥锚", "SHA256:" + strings.Repeat("a", 43), "首次信任",
+		"主机密钥锚", "SHA256:" + strings.Repeat("a", 43), "主机密钥算法",
+		store.PinUndeterminedKeyAlgorithm, "首次信任",
 		"office-laptop", "192.0.2.10:22", "锚定时间",
 		"仅显示本地快照中的主机密钥锚，修改请到权威端。",
 	} {

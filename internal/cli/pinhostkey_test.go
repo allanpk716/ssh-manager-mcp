@@ -3,6 +3,7 @@ package cli
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"os"
 	"path/filepath"
@@ -142,12 +143,12 @@ func TestPinHostkey_Display(t *testing.T) {
 	if !strings.Contains(out, "entry=alpha host=192.0.2.50:22 fingerprint="+fpA) {
 		t.Fatalf("display missing entry/host/fp:\n%s", out)
 	}
-	if !strings.Contains(out, "(format=blob, source=tofu, device=-, handshake=192.0.2.50:22, created=") {
+	if !strings.Contains(out, "(key-type=ssh-ed25519, format=blob, source=tofu, device=-, handshake=192.0.2.50:22, created=") {
 		t.Fatalf("display missing format/source/device/learned/created:\n%s", out)
 	}
 
 	out = runCli(t, "servers", "pin-hostkey", "gamma")
-	if !strings.Contains(out, "(format=blob, source=forward, device=dev-pad, handshake=192.0.2.60:2222, created=") {
+	if !strings.Contains(out, "(key-type=ssh-ed25519, format=blob, source=forward, device=dev-pad, handshake=192.0.2.60:2222, created=") {
 		t.Fatalf("forward pin display missing provenance:\n%s", out)
 	}
 
@@ -159,6 +160,68 @@ func TestPinHostkey_Display(t *testing.T) {
 	runCliErr(t, "servers", "pin-hostkey", "ghost")
 	if n := len(pinAuditRows(t, mk, "pin-manual")) + len(pinAuditRows(t, mk, "pin-clear")); n != 0 {
 		t.Fatalf("display must not audit, got %d rows", n)
+	}
+}
+
+// TestPinHostkey_DisplayAndListKeyAlgorithm 覆盖算法展示的三种输出契约：
+// 指纹锚已保存算法、完整公钥锚从公钥推导算法、指纹锚算法未知。
+func TestPinHostkey_DisplayAndListKeyAlgorithm(t *testing.T) {
+	dbPath, mk := withCliStoreEnv(t)
+	blobKey, _ := genHostKey(t)
+	_, typedFingerprint := genHostKey(t)
+	_, unknownFingerprint := genHostKey(t)
+	seedPinServers(t, mk,
+		models.Server{Name: "stored", Host: "192.0.2.10", Port: 22, User: "u"},
+		models.Server{Name: "derived", Host: "192.0.2.20", Port: 22, User: "u"},
+		models.Server{Name: "unknown", Host: "192.0.2.30", Port: 22, User: "u"},
+	)
+	runCli(t, "servers", "pin-hostkey", "stored", "--fingerprint", typedFingerprint, "--key-type", "ed25519")
+	runCli(t, "servers", "pin-hostkey", "unknown", "--fingerprint", unknownFingerprint)
+	tofuPin(t, mk, "derived", blobKey)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE entry_host_keys
+		SET key_algorithm=''
+		WHERE server_id=(SELECT id FROM servers WHERE name='derived')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name      string
+		algorithm string
+	}{
+		{name: "stored", algorithm: ssh.KeyAlgoED25519},
+		{name: "derived", algorithm: ssh.KeyAlgoED25519},
+		{name: "unknown", algorithm: store.PinUndeterminedKeyAlgorithm},
+	}
+	for _, tc := range tests {
+		out := runCli(t, "servers", "pin-hostkey", tc.name)
+		want := "(key-type=" + tc.algorithm + ", format="
+		if !strings.Contains(out, want) {
+			t.Fatalf("%s 单条显示缺少算法 %q：\n%s", tc.name, tc.algorithm, out)
+		}
+	}
+
+	list := runCli(t, "servers", "pin-hostkey", "--list")
+	found := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimRight(list, "\n"), "\n") {
+		for _, tc := range tests {
+			if strings.HasPrefix(line, "entry="+tc.name+" ") &&
+				strings.Contains(line, "(key-type="+tc.algorithm+", format=") {
+				found[tc.name] = true
+			}
+		}
+	}
+	for _, tc := range tests {
+		if !found[tc.name] {
+			t.Fatalf("--list 中 %s 缺少算法 %q：\n%s", tc.name, tc.algorithm, list)
+		}
 	}
 }
 
