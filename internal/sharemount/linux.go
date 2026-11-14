@@ -184,6 +184,18 @@ sshmgr_is_mounted() {
 ` + mountTableCheckScript(CheckSystemLinux) + `  [ "$sshmgr_mounted" = yes ]
 }
 
+sshmgr_preserve_working_existing() {
+  [ "$sshmgr_managed_count" -eq 1 ] &&
+    [ -n "$sshmgr_existing_line" ] &&
+    [ "$sshmgr_existing_address" = "$sshmgr_selected_address" ] &&
+    [ "$sshmgr_selected_index" -gt 1 ]
+}
+if sshmgr_preserve_working_existing && sshmgr_is_mounted; then
+  rm -f "$sshmgr_revoked_marker"
+  echo ` + linuxMountMarker + ` result=no-change selected=$sshmgr_selected_index
+  exit 0
+fi
+
 sshmgr_build_fstab_line() {
   sshmgr_fstab_line=$(printf '//%s/%s %s cifs credentials=%s,vers=%s,%s,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0\n' "$sshmgr_selected_address" "$share_name" "$mount_point" "$credential_file" "${sshmgr_selected_version:-none}" "$sshmgr_fstab_marker")
 }

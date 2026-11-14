@@ -240,7 +240,9 @@ func (s *Service) mountWithSystem(
 	}
 	for index := 0; index < selectedIndex-1; index++ {
 		if candidates[index].Physical {
-			notices = append(notices, "存在更靠前的物理局域网地址；挂载工具不会卸载现有挂载，如需切换请由 owner 手动切换")
+			notices = append(notices, fmt.Sprintf(
+				"存在更优物理局域网地址（网络 %s）；如需切换请执行 sshmgr shares reselect %s %s --yes",
+				candidates[index].Network, request.Share.Name, request.Server.Name))
 			break
 		}
 	}

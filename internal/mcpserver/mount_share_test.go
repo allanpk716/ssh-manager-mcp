@@ -156,7 +156,15 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 		wasExisting := f.existingAddress != ""
 		selectedAddress := "192.0.2.10"
 		selectedIndex := 1
-		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] {
+		metadataChanged := f.remoteVersion != f.shareVersion
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] &&
+			strings.Contains(command, `[ "$sshmgr_selected_index" -gt 1 ]`) {
+			return "SSHMGR-LINUX-MOUNT result=no-change selected=2\n", "", 0
+		}
+		// 真机缺陷记录显示：共享版本号变化时，旧命令进入改写路径并采
+		// 用第一个物理局域网地址。
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] &&
+			!(metadataChanged && f.reachableAddresses["192.0.2.10"]) {
 			selectedAddress = "100.64.10.10"
 			if f.reachableAddresses["192.0.2.10"] {
 				selectedIndex = 2
@@ -384,7 +392,15 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		selectedAddress := "192.0.2.10"
 		selectedIndex := 1
-		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] {
+		metadataChanged := f.remoteVersion != f.shareVersion
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] &&
+			strings.Contains(command, `[ "$sshmgr_selected_index" -gt 1 ]`) {
+			return "SSHMGR-DARWIN-MOUNT result=no-change selected=2 reset=no\n", "", 0
+		}
+		// 共享版本号变化时，旧命令进入改写路径并采用第一个物理局域
+		// 网地址。
+		if f.existingAddress == "100.64.10.10" && f.reachableAddresses[f.existingAddress] &&
+			!(metadataChanged && f.reachableAddresses["192.0.2.10"]) {
 			selectedAddress = "100.64.10.10"
 			if f.reachableAddresses["192.0.2.10"] {
 				selectedIndex = 2
@@ -1478,7 +1494,7 @@ func TestMountShareDarwinUpdatesOnlyCurrentMarkerEntry(t *testing.T) {
 		setup.darwinTarget = true
 		setup.darwinExistingAddress = "100.64.10.10"
 		setup.darwinRemoteVersion = 0
-		setup.reachable = []string{"192.0.2.10", "100.64.10.10"}
+		setup.reachable = []string{"192.0.2.10"}
 	})
 	darwinFake := fixture.fake.(*fakeDarwinMountServer)
 	darwinFake.mapLines = []string{
@@ -1494,7 +1510,7 @@ func TestMountShareDarwinUpdatesOnlyCurrentMarkerEntry(t *testing.T) {
 	if isError {
 		t.Fatalf("macOS 更新映射失败：%s", text)
 	}
-	if output["result"] != "update-success" || output["network_name"] != "办公虚拟局域网" ||
+	if output["result"] != "update-success" || output["network_name"] != "办公物理局域网" ||
 		output["network_sequence"] != float64(1) {
 		t.Fatalf("macOS 更新输出 = %#v", output)
 	}
@@ -1503,7 +1519,7 @@ func TestMountShareDarwinUpdatesOnlyCurrentMarkerEntry(t *testing.T) {
 		otherMarker,
 		otherEntry,
 		"# sshmgr-share=datasets;sshmgr-version=1",
-		"datasets -fstype=smbfs ://mount-user:" + mountShareTestPasswordURLEncoded + "@100.64.10.10/datasets",
+		"datasets -fstype=smbfs ://mount-user:" + mountShareTestPasswordURLEncoded + "@192.0.2.10/datasets",
 		ownerAfter,
 	}
 	_, _, _, mapLines := darwinFake.recordedDarwin()
@@ -1533,6 +1549,40 @@ func TestMountShareDarwinReselectsWhenExistingAddressUnreachable(t *testing.T) {
 	_, _, _, mapLines := darwinFake.recordedDarwin()
 	if len(mapLines) != 2 || !strings.Contains(mapLines[1], "@192.0.2.10/datasets") {
 		t.Fatalf("macOS 重新选址后的映射 = %#v", mapLines)
+	}
+}
+
+func TestMountShareDarwinKeepsWorkingExistingAddressWhenShareVersionChanges(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "100.64.10.10"
+		setup.darwinRemoteVersion = 0
+		setup.reachable = []string{"192.0.2.10", "100.64.10.10"}
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("共享版本号变化但旧地址可用时 mount_share 失败：%s", text)
+	}
+	if output["result"] != "no-change" || output["network_name"] != "办公虚拟局域网" {
+		t.Fatalf("版本号变化时的幂等挂载输出 = %#v", output)
+	}
+	notices, ok := output["mount_notes"].([]any)
+	if !ok || len(notices) != 1 || notices[0] != "存在更优物理局域网地址（网络 办公物理局域网）；如需切换请执行 "+
+		"sshmgr shares reselect datasets darwin-web --yes" {
+		t.Fatalf("切换提示 = %#v", output["mount_notes"])
+	}
+	if strings.Contains(notices[0].(string), "192.0.2.10") ||
+		strings.Contains(notices[0].(string), "100.64.10.10") {
+		t.Fatalf("切换提示不应包含候选地址：%q", notices[0])
+	}
+	fake := fixture.fake.(*fakeDarwinMountServer)
+	mapWrites, autoMasterWrites := fake.writeCounts()
+	if mapWrites != 0 || autoMasterWrites != 0 || fake.remountCount() != 0 {
+		t.Fatalf("旧地址仍可用时不应改写：映射 %d 次，主配置 %d 次，重挂载 %d 次",
+			mapWrites, autoMasterWrites, fake.remountCount())
 	}
 }
 
@@ -1994,9 +2044,13 @@ func TestMountShareLinuxKeepsWorkingExistingAddress(t *testing.T) {
 		t.Fatalf("保留现有地址的输出 = %#v", output)
 	}
 	notices, ok := output["mount_notes"].([]any)
-	if !ok || len(notices) != 1 || !strings.Contains(notices[0].(string), "存在更靠前的物理局域网地址") ||
-		!strings.Contains(notices[0].(string), "由 owner 手动切换") {
+	if !ok || len(notices) != 1 || notices[0] != "存在更优物理局域网地址（网络 办公物理局域网）；如需切换请执行 "+
+		"sshmgr shares reselect datasets linux-web --yes" {
 		t.Fatalf("切换提示 = %#v", output["mount_notes"])
+	}
+	if strings.Contains(notices[0].(string), "192.0.2.10") ||
+		strings.Contains(notices[0].(string), "100.64.10.10") {
+		t.Fatalf("切换提示不应包含候选地址：%q", notices[0])
 	}
 
 	commands, _, credential, fstab := fixture.fake.recorded()
@@ -2012,6 +2066,45 @@ func TestMountShareLinuxKeepsWorkingExistingAddress(t *testing.T) {
 	credentialWrites, configurationWrites := fixture.fake.writeCounts()
 	if credentialWrites != 0 || configurationWrites != 0 {
 		t.Fatalf("现有配置无需改写：凭据写入 %d 次，配置写入 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxKeepsWorkingExistingAddressWhenShareVersionChanges(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.reachable = []string{"192.0.2.10", "100.64.10.10"}
+		setup.existingAddress = "100.64.10.10"
+		setup.existingProtocol = "2.0"
+		setup.remoteVersion = 0
+	})
+
+	output, text, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("共享版本号变化但旧地址可用时 mount_share 失败：%s", text)
+	}
+	if output["result"] != "no-change" || output["network_name"] != "办公虚拟局域网" {
+		t.Fatalf("版本号变化时的幂等挂载输出 = %#v", output)
+	}
+	notices, ok := output["mount_notes"].([]any)
+	if !ok || len(notices) != 1 {
+		t.Fatalf("应只有一条切换提示：%#v", output["mount_notes"])
+	}
+	wantNotice := "存在更优物理局域网地址（网络 办公物理局域网）；如需切换请执行 " +
+		"sshmgr shares reselect datasets linux-web --yes"
+	if notices[0] != wantNotice {
+		t.Fatalf("切换提示 = %q，期待 %q", notices[0], wantNotice)
+	}
+	if strings.Contains(notices[0].(string), "192.0.2.10") ||
+		strings.Contains(notices[0].(string), "100.64.10.10") {
+		t.Fatalf("切换提示不应包含候选地址：%q", notices[0])
+	}
+
+	fake := fixture.fake.(*fakeLinuxMountServer)
+	credentialWrites, configurationWrites := fake.writeCounts()
+	if credentialWrites != 0 || configurationWrites != 0 || fake.remountCount() != 0 {
+		t.Fatalf("旧地址仍可用时不应改写：凭据写入 %d 次，配置写入 %d 次，重挂载 %d 次",
+			credentialWrites, configurationWrites, fake.remountCount())
 	}
 }
 

@@ -249,6 +249,17 @@ if [ "$sshmgr_reference_present" -eq 0 ]; then
 fi
 
 ` + mountTableCheckScript(CheckSystemDarwin) + `
+sshmgr_preserve_working_existing() {
+  [ "$sshmgr_managed_count" -eq 1 ] &&
+    [ -n "$sshmgr_existing_line" ] &&
+    [ "$sshmgr_existing_address" = "$sshmgr_selected_address" ] &&
+    [ "$sshmgr_selected_index" -gt 1 ]
+}
+if sshmgr_preserve_working_existing && [ "$sshmgr_mounted" = yes ]; then
+  rm -f "$sshmgr_revoked_marker"
+  echo ` + darwinMountMarker + ` result=no-change selected=$sshmgr_selected_index reset=no
+  exit 0
+fi
 if [ "$sshmgr_existing_configuration" = yes ] && [ "$sshmgr_reset" = no ] &&
    [ "$sshmgr_mounted" = yes ]; then
   rm -f "$sshmgr_revoked_marker"
