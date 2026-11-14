@@ -23,9 +23,9 @@ type ShareRevokeEntry struct {
 	ConfirmPath string
 }
 
-// ShareOutOfScopeRevokeEntry 是已移出可挂载范围、但最近一次现场探测登记
-// 显示远端可能仍留有挂载配置或挂载点的服务器条目。Evidence 描述这份登
-// 记依据；入口只清理远端，不再修改登记。
+// ShareOutOfScopeRevokeEntry 是已移出可挂载范围、但最近一次现场探测或残
+// 留检查登记显示远端可能仍留有挂载配置、凭据文件或挂载的服务器条目。
+// Evidence 描述这份登记依据；入口只清理远端，不再修改登记。
 type ShareOutOfScopeRevokeEntry struct {
 	ShareRevokeEntry
 	Evidence string
@@ -47,7 +47,7 @@ type SecretAuthorizationShareUnmount struct {
 }
 
 // ShareLatestCheckSource 由远端任务视图实现，返回一处共享存储最近一次完
-// 成的现场探测结果。
+// 成的现场探测或残留检查结果。
 type ShareLatestCheckSource interface {
 	LatestShareCheck(shareID string) ([]ShareCheckResult, bool)
 }
@@ -375,9 +375,9 @@ func (h *handler) outOfScopeShareRevokeView(
 }
 
 // shareOutOfScopeRevokeEntries 列出不在可挂载范围内、但最近一次现场探
-// 测或成功挂载留下的登记显示远端仍可能有挂载配置或挂载点的服务器条
-// 目。Windows 服务器不留持久配置，不会出现在这里；需要重新探测时用详
-// 情页的「现场探测」。
+// 测、成功挂载或残留检查留下的登记显示远端仍可能有挂载配置、凭据文件
+// 或挂载的服务器条目。Windows 服务器不留持久配置，不会出现在这里；需
+// 要重新检查时用详情页的「现场探测」或「检查残留」。
 func (h *handler) shareOutOfScopeRevokeEntries(
 	r *http.Request, detail *ShareRow,
 ) []ShareOutOfScopeRevokeEntry {
@@ -393,7 +393,8 @@ func (h *handler) shareOutOfScopeRevokeEntries(
 		if shareServerByID(detail.MountableServers, result.ServerID) != nil {
 			continue
 		}
-		if result.Status != ShareCheckStatusMounted && !result.Managed {
+		if result.Status != ShareCheckStatusMounted &&
+			!result.Managed && !result.HasConfigEntry && !result.HasCredentialFile {
 			continue
 		}
 		server, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), result.ServerID)
@@ -424,8 +425,8 @@ func (h *handler) shareOutOfScopeRevokeEntries(
 	return entries
 }
 
-// outOfScopeRevokeEvidence 把最近一次现场探测或成功挂载留下的登记换成
-// 人能读懂的依据说明；不包含地址、挂载账号或密码。
+// outOfScopeRevokeEvidence 把最近一次现场探测、成功挂载或残留检查留下
+// 的登记换成人能读懂的依据说明；不包含地址、挂载账号或密码。
 func outOfScopeRevokeEvidence(result ShareCheckResult) string {
 	mounted := result.Status == ShareCheckStatusMounted
 	switch {
@@ -433,8 +434,14 @@ func outOfScopeRevokeEvidence(result ShareCheckResult) string {
 		return "最近登记：已挂载，且已有 sshmgr 挂载配置"
 	case mounted:
 		return "最近登记：已挂载"
-	default:
+	case result.HasConfigEntry && result.HasCredentialFile:
+		return "最近登记：已有 sshmgr 挂载配置与凭据文件"
+	case result.Managed || result.HasConfigEntry:
 		return "最近登记：已有 sshmgr 挂载配置"
+	case result.HasCredentialFile:
+		return "最近登记：已有 sshmgr 凭据文件"
+	default:
+		return "最近登记：已有 sshmgr 挂载痕迹"
 	}
 }
 

@@ -35,9 +35,13 @@ type ShareCheckResult struct {
 	Reason     string
 	Notice     string
 	Managed    bool
-	Version    int64
-	Restricted bool
-	ObservedAt string
+	// HasConfigEntry 与 HasCredentialFile 分别表示现场检查确认远端仍有
+	// sshmgr 持久挂载配置与凭据文件，供页面给出准确的撤销依据。
+	HasConfigEntry    bool
+	HasCredentialFile bool
+	Version           int64
+	Restricted        bool
+	ObservedAt        string
 }
 
 // ShareMountResult 是页面展示的一次单台服务器挂载结论。
@@ -83,11 +87,18 @@ type ShareRemoteTasks interface {
 }
 
 // ShareRemoteTasksWithLatestChecks 是既能启动现场探测与单台挂载任务、又
-// 能读取最近一次现场探测结果的远端任务视图。装配处把同一个实例同时交给
-// SharesRemoteTasks 与 ShareLatestChecks 两个配置字段。
+// 能读写最近一次现场检查结果的远端任务视图。装配处把同一个实例同时交
+// 给 SharesRemoteTasks、ShareLatestChecks 与残留检查任务。
 type ShareRemoteTasksWithLatestChecks interface {
 	ShareRemoteTasks
 	ShareLatestCheckSource
+	ShareCheckRecorder
+}
+
+// ShareCheckRecorder 把一处共享存储的一台服务器现场结论登记到最近现场
+// 状态。残留检查完成后用它补充现场探测留下的登记。
+type ShareCheckRecorder interface {
+	RecordShareCheckResult(shareID string, result ShareCheckResult)
 }
 
 // ShareRemoteTaskView 是任务页与任务片段的展示数据。Lost 为真时表示任务

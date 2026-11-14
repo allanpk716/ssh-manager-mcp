@@ -133,9 +133,9 @@ type Config struct {
 	// SharesRemoteTasks 启动并读取共享存储现场探测与单台挂载任务。单机
 	// 与权威端提供；客户端不提供，任务路由不存在。
 	SharesRemoteTasks ShareRemoteTasks
-	// ShareLatestChecks 读取一处共享存储最近一次完成的现场探测结果，供
-	// 撤销授权页与取消勾选联动卸载使用。提供撤销授权任务的可写角色必须
-	// 提供；客户端不提供。
+	// ShareLatestChecks 读取一处共享存储最近一次完成的现场探测或残留检
+	// 查结果，供撤销授权页与取消勾选联动卸载使用。提供撤销授权任务的可
+	// 写角色必须提供；客户端不提供。
 	ShareLatestChecks ShareLatestCheckSource
 	// ShareUnmountRunner 启动并读取共享存储单台卸载任务。单机与权威端提
 	// 供；客户端不提供，卸载路由不存在。

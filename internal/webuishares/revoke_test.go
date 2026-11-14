@@ -226,6 +226,181 @@ func TestShareRevokeOutOfScopeEntryCleansRemoteWithoutChangingScope(t *testing.T
 	}
 }
 
+func TestShareRevokeOutOfScopeTaskReachesSuccessAndFailureTerminals(t *testing.T) {
+	startTask := func(fixture *unmountFixture) (string, *revokeRunner, chan struct{}) {
+		t.Helper()
+		if err := fixture.store.DisallowSecrets(
+			[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+		); err != nil {
+			t.Fatal(err)
+		}
+		release := make(chan struct{})
+		runner := RevokeTasksFromStore(func() (*store.Store, func(), error) {
+			<-release
+			return fixture.store, func() {}, nil
+		}).(*revokeRunner)
+		taskID, err := runner.StartShareRevoke(webui.ShareRevokeRequest{
+			ShareID: fixture.shareID, ShareName: "datasets",
+			ServerID: fixture.linuxID, ServerName: "linux-web",
+			ServerShell: string(models.ShellPOSIX), Unmount: true,
+			OutOfScope: true, Source: webui.ShareWriteSource{RemoteAddress: "192.0.2.1"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return taskID, runner, release
+	}
+	waitTerminal := func(runner *revokeRunner, taskID string) *webui.ShareRevokeTaskStatus {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			status, ok := runner.ShareRevokeStatus(taskID)
+			if !ok {
+				t.Fatal("撤销授权任务丢失")
+			}
+			if status.State != webui.ShareTaskRunning {
+				return status
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("撤销授权任务超时未完成：%+v", status)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+
+	success := newUnmountFixture(t)
+	successID, successRunner, successRelease := startTask(success)
+	if status, ok := successRunner.ShareRevokeStatus(successID); !ok ||
+		status.State != webui.ShareTaskRunning {
+		t.Fatalf("已移出范围任务启动后应先处于进行中：%+v %v", status, ok)
+	}
+	close(successRelease)
+	successStatus := waitTerminal(successRunner, successID)
+	if successStatus.State != webui.ShareTaskDone ||
+		successStatus.Result == nil || successStatus.Result.Result != "success" ||
+		successStatus.FailureMessage != "" {
+		t.Fatalf("已移出范围任务成功终态不正确：%+v", successStatus)
+	}
+	if share, err := success.store.GetSharedStorage("datasets"); err != nil ||
+		share.Version != 2 || len(share.MountableServers) != 1 {
+		t.Fatalf("已移出范围任务不应修改登记：%+v %v", share, err)
+	}
+
+	failure := newUnmountFixture(t)
+	failure.linux.LockHeld = true
+	failureID, failureRunner, failureRelease := startTask(failure)
+	if status, ok := failureRunner.ShareRevokeStatus(failureID); !ok ||
+		status.State != webui.ShareTaskRunning {
+		t.Fatalf("失败的已移出范围任务启动后应先处于进行中：%+v %v", status, ok)
+	}
+	close(failureRelease)
+	failureStatus := waitTerminal(failureRunner, failureID)
+	if failureStatus.State != webui.ShareTaskDone || failureStatus.Result == nil ||
+		failureStatus.Result.Result != "lock-timeout" ||
+		failureStatus.FailureMessage != "另一个共享存储操作正在进行。" {
+		t.Fatalf("已移出范围任务失败终态不正确：%+v", failureStatus)
+	}
+}
+
+func TestShareRevokeOutOfScopeTaskPageReplacesRunningHeaderAndOffersReturn(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	release := make(chan struct{})
+	blockedRunner := RevokeTasksFromStore(func() (*store.Store, func(), error) {
+		<-release
+		return fixture.store, func() {}, nil
+	})
+	handler := startIntegrationHandler(t, fixture.store, func(config *webui.Config) {
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(fixture.store))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareRevokeRunner = blockedRunner
+	})
+	started := handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/check", url.Values{
+		"csrf_token": {csrfToken(t, handler)},
+	})
+	waitRemoteTaskDone(t, handler, started.Header.Get("Location"))
+	if err := fixture.store.DisallowSecrets(
+		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	post := handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, handler)}, "server_id": {fixture.linuxID}, "unmount": {"1"},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动已移出范围撤销授权状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	running := body(t, handler.do(http.MethodGet, post.Header.Get("Location"), nil))
+	if !strings.Contains(running, "撤销授权进行中") {
+		t.Fatalf("任务启动后应显示进行中：\n%s", running)
+	}
+	if !strings.Contains(running, `<section class="share-revoke" id="share-revoke-task"`) {
+		t.Fatalf("轮询目标必须覆盖包含标题的整个页面片段：\n%s", running)
+	}
+
+	close(release)
+	page := waitUntilRevokeDone(t, handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"撤销授权结果", "远端清理完成，登记没有变化", "返回共享存储详情",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("已移出范围撤销授权结果页缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Count(page, "撤销授权进行中") != 0 {
+		t.Fatalf("任务完成后页面仍显示进行中：\n%s", page)
+	}
+}
+
+func TestShareRevokeOutOfScopeTaskPageShowsFailureReason(t *testing.T) {
+	fixture := newUnmountFixture(t)
+	fixture.linux.LockHeld = true
+	release := make(chan struct{})
+	blockedRunner := RevokeTasksFromStore(func() (*store.Store, func(), error) {
+		<-release
+		return fixture.store, func() {}, nil
+	})
+	handler := startIntegrationHandler(t, fixture.store, func(config *webui.Config) {
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(fixture.store))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareRevokeRunner = blockedRunner
+	})
+	started := handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/check", url.Values{
+		"csrf_token": {csrfToken(t, handler)},
+	})
+	waitRemoteTaskDone(t, handler, started.Header.Get("Location"))
+	if err := fixture.store.DisallowSecrets(
+		[]string{"DATASETS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	post := handler.do(http.MethodPost, "/ui/shares/"+fixture.shareID+"/revoke", url.Values{
+		"csrf_token": {csrfToken(t, handler)}, "server_id": {fixture.linuxID}, "unmount": {"1"},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动失败的已移出范围撤销授权状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	if running := body(t, handler.do(http.MethodGet, post.Header.Get("Location"), nil)); !strings.Contains(
+		running, "撤销授权进行中",
+	) {
+		t.Fatalf("失败任务启动后应显示进行中：\n%s", running)
+	}
+	close(release)
+	page := waitUntilRevokeDone(t, handler, post.Header.Get("Location"))
+	for _, want := range []string{
+		"另一个共享存储操作正在进行。",
+		"另一个共享存储操作正在进行",
+		"返回共享存储详情",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("已移出范围撤销授权失败页缺少 %q：\n%s", want, page)
+		}
+	}
+}
+
 func TestShareRevokeBusyListsProcessesAndForceCleanupSucceeds(t *testing.T) {
 	fixture := newUnmountFixture(t)
 	fixture.linux.BusyProcesses = []sharemounttest.BusyProcess{
