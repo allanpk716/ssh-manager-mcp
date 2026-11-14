@@ -40,3 +40,25 @@ func (s *Store) SetSetting(key, value string) error {
 		key, value, now())
 	return err
 }
+
+// snapshotSettings 读取设置存储中可跨机迁移的行。当前设置表只保存操作偏
+// 好，不保存机密值；一次性迁移完成标记属于目标库本机状态，不随快照迁移。
+func (s *Store) snapshotSettings() ([]SnapshotSetting, error) {
+	rows, err := s.db.Query(`
+		SELECT key,value,COALESCE(updated_at,0)
+		FROM settings WHERE key<>? ORDER BY key`, serverDeviceMigrationSetting)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]SnapshotSetting, 0)
+	for rows.Next() {
+		var row SnapshotSetting
+		if err := rows.Scan(&row.Key, &row.Value, &row.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}

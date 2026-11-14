@@ -22,8 +22,12 @@ type Snapshot struct {
 	SnapshotRevision int64 `json:"snapshot_revision"`
 	// RecommendedVersion 是导出这份快照的二进制版本。多机客户端用它比较
 	// 自己是否落后；旧快照与旧客户端分别解码、忽略该字段。
-	RecommendedVersion string               `json:"recommended_version"`
-	Credentials        []SnapshotCredential `json:"credentials"`
+	RecommendedVersion string `json:"recommended_version"`
+	// Settings 是设置存储里的非机密偏好值。owner 的全量导出与加密备份携带；
+	// profile 裁剪的客户端快照不携带。旧快照没有该段时解码为 nil，导入时保
+	// 留目标库的设置现状。
+	Settings    []SnapshotSetting    `json:"settings"`
+	Credentials []SnapshotCredential `json:"credentials"`
 	// Sites / Networks 是网络拓扑里的站点与网络。全量快照全部携带；
 	// profile 裁剪快照也全部携带，让授权服务器引用的名字不因授权裁剪丢失。
 	Sites    []SnapshotSite    `json:"sites,omitempty"`
@@ -91,6 +95,13 @@ type SnapshotPolicyRule struct {
 	Alternative  string   `json:"alternative"`
 	CreatedAt    int64    `json:"created_at"`
 	UpdatedAt    int64    `json:"updated_at"`
+}
+
+// SnapshotSetting 是设置存储里一行可迁移的偏好值。
+type SnapshotSetting struct {
+	Key       string `json:"key"`
+	Value     string `json:"value"`
+	UpdatedAt int64  `json:"updated_at"`
 }
 
 type SnapshotCredential struct {
@@ -438,6 +449,10 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 		return nil, err
 	}
 	snap := &Snapshot{Version: 1, SnapshotRevision: revision, RecommendedVersion: buildinfo.Version}
+	snap.Settings, err = s.snapshotSettings()
+	if err != nil {
+		return nil, fmt.Errorf("read settings: %w", err)
+	}
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
@@ -1246,6 +1261,23 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	var currentRevision int64
 	if err = tx.QueryRow(`SELECT revision FROM snapshot_revision WHERE id=1`).Scan(&currentRevision); err != nil {
 		return err
+	}
+
+	// owner 快照带设置段时整体恢复设置存储：先清空再按快照写回。旧快照
+	// 没有 settings 字段时这里是 nil，保留目标库现状；客户端缓存即使收到
+	// 异常带段的文件也不写入设置。
+	if ownerImport && snap.Settings != nil {
+		if _, err := tx.Exec(`DELETE FROM settings WHERE key<>?`, serverDeviceMigrationSetting); err != nil {
+			return fmt.Errorf("clear settings: %w", err)
+		}
+		for _, setting := range snap.Settings {
+			if _, err := tx.Exec(
+				`INSERT INTO settings(key,value,updated_at) VALUES(?,?,?)`,
+				setting.Key, setting.Value, setting.UpdatedAt,
+			); err != nil {
+				return fmt.Errorf("insert setting %s: %w", setting.Key, err)
+			}
+		}
 	}
 
 	// 0. 网络拓扑（票 #123）：站点先写回，网络随后按站点标识符恢复。

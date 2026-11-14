@@ -61,3 +61,67 @@ func TestSettings_ReadOnlyRejectsMutation(t *testing.T) {
 		t.Fatalf("read must stay allowed on read-only store: ok=%v err=%v", ok, err)
 	}
 }
+
+// TestSnapshotSettingsImportRules pins both sides of the format boundary: a
+// current owner snapshot replaces the settings table, while an old snapshot
+// without the section leaves every target setting untouched.
+func TestSnapshotSettingsImportRules(t *testing.T) {
+	source := newTestStore(t)
+	if err := source.SetSetting("serve.pairing", "false"); err != nil {
+		t.Fatal(err)
+	}
+	if err := source.SetSetting("serve.ui_port", "18790"); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := source.ExportSnapshot()
+	if err != nil {
+		t.Fatalf("export source snapshot: %v", err)
+	}
+	if len(snapshot.Settings) != 2 {
+		t.Fatalf("snapshot settings = %+v, want two rows", snapshot.Settings)
+	}
+
+	target := newTestStore(t)
+	if err := target.SetSetting("serve.pairing", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.SetSetting("local.only", "target-value"); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.ImportSnapshot(snapshot); err != nil {
+		t.Fatalf("import current snapshot: %v", err)
+	}
+	if value, exists, err := target.GetSetting("serve.pairing"); err != nil || !exists || value != "false" {
+		t.Fatalf("serve.pairing after current import = %q exists=%v err=%v, want false", value, exists, err)
+	}
+	if _, exists, err := target.GetSetting("local.only"); err != nil || exists {
+		t.Fatalf("local.only after current import exists=%v err=%v, want removed", exists, err)
+	}
+	if value, exists, err := target.GetSetting(serverDeviceMigrationSetting); err != nil || !exists || value != "done" {
+		t.Fatalf("migration marker after current import = %q exists=%v err=%v, want done",
+			value, exists, err)
+	}
+
+	oldTarget := newTestStore(t)
+	if err := oldTarget.SetSetting("serve.pairing", "true"); err != nil {
+		t.Fatal(err)
+	}
+	if err := oldTarget.SetSetting("local.only", "old-target-value"); err != nil {
+		t.Fatal(err)
+	}
+	oldSnapshot := *snapshot
+	oldSnapshot.Settings = nil
+	if err := oldTarget.ImportSnapshot(&oldSnapshot); err != nil {
+		t.Fatalf("import old snapshot: %v", err)
+	}
+	for key, want := range map[string]string{
+		"serve.pairing": "true",
+		"local.only":    "old-target-value",
+	} {
+		got, exists, err := oldTarget.GetSetting(key)
+		if err != nil || !exists || got != want {
+			t.Fatalf("old snapshot setting %s = %q exists=%v err=%v, want %q",
+				key, got, exists, err, want)
+		}
+	}
+}
