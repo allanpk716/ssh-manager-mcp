@@ -70,14 +70,18 @@ func buildCtxBody(n string) string {
 
 // buildCtxCommand assembles the full command for the requested channel:
 // plain (login shell) or elevated (sshenv pre-capture + exec into sudo).
-func buildCtxCommand(n string, sudo bool) string {
+func buildCtxCommand(n string, sudo, sudoWithoutPassword bool) string {
 	sshenv := fmt.Sprintf("echo %s%s:sshenv C=[$SSH_CLIENT] S=[$SSH_CONNECTION]; ", ctxSectionPrefix, n)
 	if !sudo {
 		return sshenv + buildCtxBody(n)
 	}
+	sudoFlags := "-S -p ''"
+	if sudoWithoutPassword {
+		sudoFlags = "-n"
+	}
 	// env is load-bearing (see file header); shellQuote is the sshbroker
 	// single-point discipline for anything entering bash -c.
-	return sshenv + "exec env LC_ALL=C sudo -S -p '' -- bash -c " + shellQuoteForCtx(buildCtxBody(n))
+	return sshenv + "exec env LC_ALL=C sudo " + sudoFlags + " -- bash -c " + shellQuoteForCtx(buildCtxBody(n))
 }
 
 // shellQuoteForCtx mirrors sshbroker's single-quote quoting. mcpserver cannot
@@ -292,12 +296,22 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 
 	nonce := newCtxNonce()
 	timeout := 30 * time.Second // fixed: a context probe is tiny; runaway probes must not linger
+	operationCtx := ctx
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		operationCtx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 
 	var res sshbroker.ExecResult
 	if sudo {
-		res, err = cli.ExecSudoWrapped(ctx, buildCtxCommand(nonce, true), sudoCred, timeout, MaxOutputBytes)
+		sudoWithoutPassword := cli.SudoRunsWithoutPassword(operationCtx, sudoCred)
+		res, err = cli.ExecSudoWrapped(
+			operationCtx, buildCtxCommand(nonce, true, sudoWithoutPassword),
+			sudoCred, sudoWithoutPassword, 0, MaxOutputBytes,
+		)
 	} else {
-		res, err = cli.Exec(ctx, buildCtxCommand(nonce, false), timeout, MaxOutputBytes)
+		res, err = cli.Exec(operationCtx, buildCtxCommand(nonce, false, false), 0, MaxOutputBytes)
 	}
 	switch {
 	case res.TimedOut:

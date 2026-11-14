@@ -109,6 +109,38 @@ func TestExecContextElevatedChannel(t *testing.T) {
 	}
 }
 
+func TestExecContextElevatedChannelWithoutSudoPassword(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "pw", SudoPassword: "sudopw", SudoDoesNotReadPassword: true,
+		Exec: func(cmd string, stdin io.Reader) (string, string, int) {
+			input, err := io.ReadAll(stdin)
+			if err != nil {
+				return "", "read standard input: " + err.Error(), 1
+			}
+			if len(input) != 0 {
+				return "", "non-interactive sudo received standard input", 1
+			}
+			if out, ok := fakeCtxBody(cmd, 0); ok {
+				return out, "", 0
+			}
+			return "", "unknown: " + cmd + "\n", 1
+		},
+	})
+	defer cleanup()
+	st := newStore(t)
+	srvID := seedRealServer(t, st, "real", addr, hk, "sudopw")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srvID})
+
+	out, err := ExecContextForProfile(context.Background(), st, "proj-test", pid, srvID, true)
+	if err != nil {
+		t.Fatalf("exec_context: %v", err)
+	}
+	if !out.Elevated || out.UID != 0 {
+		t.Fatalf("out = %+v, want elevated uid=0", out)
+	}
+}
+
 func TestExecCommandSudoFailLoud(t *testing.T) {
 	// Vault holds one sudo password; the simulated sudo expects another — the
 	// credential is rejected, and the call must come back as a TOOL ERROR with

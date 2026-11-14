@@ -158,7 +158,7 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&password, "password", "", "password auth (mutually exclusive with --key; omit both for a credential-less server)")
 	c.Flags().StringVar(&keyPath, "key", "", "path to private key file (mutually exclusive with --password; omit both for a credential-less server)")
 	c.Flags().StringVar(&keyPass, "key-passphrase", "", "passphrase for encrypted private key")
-	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo -S)")
+	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo execution)")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags")
 	c.Flags().StringVar(&description, "description", "", "owner notes (shown to the agent); prefer structured fields below")
 	c.Flags().StringVar(&location, "location", "", "where deployed (datacenter/region/rack/tenant) — shown to the agent")

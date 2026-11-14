@@ -34,7 +34,7 @@ var suiteResults = []suiteRecordedResult{
 	},
 	{
 		task:   "T2 htop-install",
-		ref:    "§12 T2 — exec_command sudo=true path (broker runs sudo -S)",
+		ref:    "§12 T2 — exec_command sudo=true path (broker runs sudo)",
 		pass:   "5/5 (sudo=true install path discovered from list_servers has_sudo + the schema hint)",
 		scorer: "deterministic (scoreT2: sudo=true htop exec + dockerExec end-state + no-leak)",
 		runCmd: "SSHMGR_AGENT_EVAL=1 ANTHROPIC_API_KEY=eval go test ./internal/eval/ -run TestEvalT2Htop -v",

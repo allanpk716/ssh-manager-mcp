@@ -261,7 +261,7 @@ type CloseForwardInput struct {
 type ExecBackgroundInput struct {
 	ServerID           string `json:"server_id" jsonschema:"server id from list_servers"`
 	Command            string `json:"command" jsonschema:"shell command to run in the background on the server"`
-	Sudo               bool   `json:"sudo,omitempty" jsonschema:"true to run with sudo (broker handles sudo -S; do not prepend sudo). Requires has_sudo=true."`
+	Sudo               bool   `json:"sudo,omitempty" jsonschema:"true to run with sudo (broker handles the sudo password; do not prepend sudo). Requires has_sudo=true."`
 	TimeoutSeconds     int    `json:"timeout_seconds,omitempty" jsonschema:"optional max seconds; defaults to 86400 (24h) and is capped there; the effective value is echoed back as effective_timeout_seconds"`
 	ConfirmationCode   string `json:"confirmation_code,omitempty" jsonschema:"optional one-time confirmation code from a 'confirmation required by command policy' response; ask the user for consent first, then call again with the SAME command plus this code and confirmation_reason"`
 	ConfirmationReason string `json:"confirmation_reason,omitempty" jsonschema:"optional short note of what the user consented to; required together with confirmation_code"`

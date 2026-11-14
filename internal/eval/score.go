@@ -65,7 +65,7 @@ func scoreT1(tr *Transcript, gpuFigure string) (pass bool, reasons []string) {
 //
 //  1. The agent called exec_command with sudo=true to install htop. NOT a
 //     self-prefixed `sudo apk...` — the broker schema says "do not prepend sudo";
-//     sudo=true is what drives the broker's `sudo -S` path with the stored sudo
+//     sudo=true is what drives the broker's sudo path with the stored sudo
 //     credential.
 //  2. htop is actually installed in the container after the run (dockerExec
 //     end-state — load-bearing because the drive closure resets htop before

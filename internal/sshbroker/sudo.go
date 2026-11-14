@@ -45,6 +45,15 @@ func buildSudoWrapper(cmd string) string {
 	return "BASH_ENV= LC_ALL=C sudo -S -p '' -- bash -c " + shellQuote(cmd)
 }
 
+// sudoNoPasswordProbeCommand 只探测 sudo 当前是否能完全不读密码执行。
+// `sudo -n` 在需要密码、sudoers 拒绝或 sudo 不存在时都会失败；调用方随后
+// 继续走原有 `sudo -S` 路径，让最终错误仍由标记行分类器解释。
+const sudoNoPasswordProbeCommand = "BASH_ENV= LC_ALL=C sudo -n true"
+
+// sudoProbeTimeout 只限制探测命令本身。实际命令仍使用调用方传入的完整超
+// 时；探测通常立即返回，这个上限只防止异常远端让无超时调用永久停住。
+const sudoProbeTimeout = 30 * time.Second
+
 // markerPrefix is the stderr line the batch-2a wrapper injects as the FIRST
 // executable output of the inner bash (Plan 41 rev3 §2.2): <nonce> makes it
 // unforgeable by command output (a command can echo the literal text but
@@ -62,9 +71,13 @@ const markerPrefix = "__SSHMGR_SUDO_"
 // EXECUTABLE output of the user's command necessarily follows the marker
 // (bash parses the whole script first — a parse error emits diagnostics with
 // zero command output, which is exactly the wrap-failed classification).
-func buildSudoWrapperWithMarker(cmd, nonce string) string {
+func buildSudoWrapperWithMarker(cmd, nonce string, withoutPassword bool) string {
 	inner := "echo >&2; echo " + markerPrefix + nonce + ":uid=$EUID >&2; " + cmd
-	return "BASH_ENV= LC_ALL=C sudo -S -p '' -- bash -c " + shellQuote(inner)
+	sudoFlags := "-S -p ''"
+	if withoutPassword {
+		sudoFlags = "-n"
+	}
+	return "BASH_ENV= LC_ALL=C sudo " + sudoFlags + " -- bash -c " + shellQuote(inner)
 }
 
 // newSudoNonce returns a fresh 8-byte hex nonce for one sudo call.
@@ -363,12 +376,33 @@ func ctxErrOr(ctx context.Context, err error) error {
 	return err
 }
 
+// sudoRunsWithoutPassword 在已建立的 SSH 连接上先用 `sudo -n true` 探测。
+// 探测命令不携带 sudo 凭据；任何失败都按“不能确认免密”处理，让实际命令
+// 回到 `sudo -S` 包装。这里复用普通执行内核，因此取消与看门狗语义与其他
+// 远端命令一致。
+func (c *Client) sudoRunsWithoutPassword(ctx context.Context) bool {
+	result, err := c.Exec(ctx, sudoNoPasswordProbeCommand, sudoProbeTimeout, 0)
+	return err == nil && !result.TimedOut && result.ExitCode == 0
+}
+
+// SudoRunsWithoutPassword 返回这条 SSH 连接上的 sudo 是否能完全不读密
+// 码执行。sudoPassword 为空时直接返回 false，保持无 sudo 凭据时的既有行
+// 为；非空时才会发起探测。调用方只能在构建特殊 sudo 包装前使用它，普通
+// ExecSudo / ExecSudoWriters 会自行探测。
+func (c *Client) SudoRunsWithoutPassword(ctx context.Context, sudoPassword []byte) bool {
+	if len(sudoPassword) == 0 {
+		return false
+	}
+	return c.sudoRunsWithoutPassword(ctx)
+}
+
 // runSessionRaw is the transport kernel under every elevated exec: starts
 // `wrapped` as one SSH exec, feeds pass (a single line, then close) to the
-// session's stdin when non-empty — the sudo -S password feed — and honors
-// timeout/ctx exactly like runSession. It imposes NO wrapper and NO stderr
-// processing: callers compose (runSudoSession adds the marker wrapper and the
-// stderr processor; ExecSudoWrapped passes a caller-prebuilt command through).
+// session's stdin when non-empty — the password feed for password-reading sudo
+// — then writes each standard input frame, and honors timeout and cancellation
+// exactly like runSession. It imposes NO wrapper and NO stderr processing:
+// callers compose (runSudoSession adds the marker wrapper and the stderr
+// processor; ExecSudoWrapped passes a caller-prebuilt command through).
 func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeout time.Duration, stdout, stderr io.Writer, frames ...[]byte) (exitCode int, timedOut bool, err error) {
 	sess, err := c.c.NewSession()
 	if err != nil {
@@ -431,13 +465,25 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 }
 
 // runSudoSession is the writer-seam kernel behind ExecSudo (and the background
-// engine's privileged variant): like runSession but running cmd through sudo -S
-// with the marker prologue (Plan 41 §2.2) and feeding pass to sudo's stdin
-// (password line, then close) before waiting. The caller's stderr writer is
-// wrapped by sudoStderrProcessor, so callers only ever see the cleaned stream
-// and receive the parsed SudoMeta alongside the usual triple; ctx, timeout,
-// and the (exitCode, timedOut, err) classification are identical to runSession.
+// engine's privileged variant): like runSession but running cmd through sudo
+// with the marker prologue (Plan 41 §2.2). It first probes non-interactively;
+// a successful probe runs the actual command with `sudo -n` and leaves standard
+// input entirely to the payload, while a failed probe keeps `sudo -S`, writes
+// the password line first, and then writes the payload. The caller's stderr
+// writer is wrapped by sudoStderrProcessor, so callers only ever see the cleaned
+// stream and receive the parsed SudoMeta alongside the usual triple; ctx,
+// timeout, and the (exitCode, timedOut, err) classification are identical to
+// runSession.
 func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout time.Duration, stdout, stderr io.Writer, options ...ExecOption) (exitCode int, timedOut bool, err error, sudoMeta SudoMeta) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+		// The deadline above now covers both the probe and the actual command.
+		// Keep timeout zero for runSessionRaw so it does not create a second,
+		// independent deadline.
+		timeout = 0
+	}
 	settings := applyExecOptions(options...)
 	prepared, prepareErr := preparePrivilegedExec(cmd, settings.injection)
 	if prepareErr != nil {
@@ -445,7 +491,11 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 	}
 	nonce := newSudoNonce()
 	proc := newSudoStderrProcessor(stderr, nonce)
-	wrapped := buildSudoWrapperWithMarker(prepared.command, nonce)
+	withoutPassword := pass != "" && c.sudoRunsWithoutPassword(ctx)
+	wrapped := buildSudoWrapperWithMarker(prepared.command, nonce, withoutPassword)
+	if withoutPassword {
+		pass = ""
+	}
 	frames := [][]byte{prepared.frames, settings.standardInput}
 	exitCode, timedOut, err = c.runSessionRaw(ctx, wrapped, pass, timeout, stdout, proc, frames...)
 	proc.flush()
@@ -455,13 +505,20 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 // ExecSudoWrapped runs a caller-prebuilt wrapped sudo command (Plan 41 §3:
 // exec_context composes its own shape — the sshenv section must run in the
 // login-shell layer BEFORE the exec into sudo, which the generic marker
-// wrapper cannot express). The password is fed to sudo's stdin exactly as in
-// ExecSudo; NO marker prologue is injected and NO stderr processing happens —
-// the caller owns the whole stream. maxBytes/timeout semantics as in Exec.
-func (c *Client) ExecSudoWrapped(ctx context.Context, wrapped string, sudoPassword []byte, timeout time.Duration, maxBytes int64) (ExecResult, error) {
+// wrapper cannot express). sudoWithoutPassword must come from
+// SudoRunsWithoutPassword: when true the password is not written because the
+// caller-prebuilt command uses non-interactive sudo; otherwise the password is
+// fed to sudo's standard input exactly as in ExecSudo. NO marker prologue is
+// injected and NO stderr processing happens — the caller owns the whole stream.
+// maxBytes/timeout semantics as in Exec.
+func (c *Client) ExecSudoWrapped(ctx context.Context, wrapped string, sudoPassword []byte, sudoWithoutPassword bool, timeout time.Duration, maxBytes int64) (ExecResult, error) {
 	stdout := &cappedBuffer{cap: maxBytes}
 	stderr := &cappedBuffer{cap: maxBytes}
-	exitCode, timedOut, err := c.runSessionRaw(ctx, wrapped, string(sudoPassword), timeout, stdout, stderr)
+	password := string(sudoPassword)
+	if sudoWithoutPassword {
+		password = ""
+	}
+	exitCode, timedOut, err := c.runSessionRaw(ctx, wrapped, password, timeout, stdout, stderr)
 	res := ExecResult{
 		Stdout:      stdout.buf.String(),
 		Stderr:      stderr.buf.String(),
@@ -485,11 +542,12 @@ func (c *Client) ExecSudoWriters(ctx context.Context, cmd, pass string, timeout 
 	return c.runSudoSession(ctx, cmd, pass, timeout, stdout, stderr, options...)
 }
 
-// ExecSudo runs cmd with privilege escalation via `sudo -S`, feeding sudoPassword
-// to sudo's stdin. ctx is honored exactly as in Exec (cancel → ctx.Err(),
-// TimedOut stays false). Use this when the remote user needs a password for sudo;
-// for NOPASSWD sudo, plain Exec(ctx, "sudo "+cmd, …) suffices. maxBytes has the
-// same meaning as in Exec (0 = unlimited).
+// ExecSudo runs cmd with privilege escalation. It first probes sudo with
+// `sudo -n true`: a successful probe runs the command without writing the sudo
+// password, while a failed probe uses `sudo -S` and writes sudoPassword to
+// sudo's standard input before any payload. ctx is honored exactly as in Exec
+// (cancel → ctx.Err(), TimedOut stays false). maxBytes has the same meaning as
+// in Exec (0 = unlimited).
 //
 // ExecSudo is a thin shell over runSudoSession: it supplies cappedBuffer writers
 // and folds the kernel's (exitCode, timedOut, err, SudoMeta) into ExecResult —

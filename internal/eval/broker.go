@@ -96,8 +96,8 @@ func seedBroker(t *testing.T, host string, port int, names []string) (mcpConfigP
 	}
 	// SudoCredentialID reuses the SSH login credential (same testpw123). The eval
 	// sshd's sudoers is `agent ALL=(ALL) ALL` (password-required) and the agent
-	// user's own password unlocks it, so the broker's `sudo -S` path feeds
-	// testpw123. T2 (htop install via sudo) and T5 (uname on every server)
+	// user's own password unlocks it, so the broker's password-reading sudo path
+	// feeds testpw123. T2 (htop install via sudo) and T5 (uname on every server)
 	// depend on has_sudo=true here; T1/T6 don't use sudo, so this is additive
 	// (no regression). Every seeded server shares the ONE password credential —
 	// there is a single sshd user "agent" behind all of them (fine for T5, which

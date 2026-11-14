@@ -107,7 +107,7 @@ func (c CredentialType) AuthMethodForServer() AuthMethod {
 	return AuthPassword
 }
 
-// Server is an SSH target. Credential holds the login secret; SudoCredential (optional) holds a password for sudo -S.
+// Server is an SSH target. Credential holds the login secret; SudoCredential (optional) holds a password for sudo when the target asks for one.
 // Structured metadata fields (Location/Hardware/Services/Role/Caveats) plus Tags and Description are surfaced to
 // the agent via list_servers (full-open, reversing Plan-8's owner-only rule — see
 // docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md).

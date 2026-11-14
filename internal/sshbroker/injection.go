@@ -108,9 +108,9 @@ func WithPreCommandInjection(options ExecInjectionOptions) ExecOption {
 	}
 }
 
-// WithSudoStandardInput 附加在 sudo 密码行之后写入 SSH 会话标准输入的字
-// 节。调用方用它把机密项值送进提权后的固定命令；值绝不进入命令文本，也
-// 不进入日志或审计。
+// WithSudoStandardInput 把调用方的标准输入载荷送进提权后的固定命令。目
+// 标需要 sudo 密码时，载荷写在密码行之后；目标免密 sudo 时，标准输入只
+// 有载荷。值绝不进入命令文本，也不进入日志或审计。
 func WithSudoStandardInput(input []byte) ExecOption {
 	return func(dst *execOptions) {
 		dst.standardInput = append([]byte(nil), input...)

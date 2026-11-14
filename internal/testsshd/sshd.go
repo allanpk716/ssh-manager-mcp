@@ -25,7 +25,7 @@ type Options struct {
 	ListenPort    int
 	Password      string        // accept this password (empty = no password auth)
 	AuthorizedKey ssh.PublicKey // accept this client public key (nil = no key auth)
-	SudoPassword  string        // if set, Exec handler simulates sudo -S (reads pw from stdin)
+	SudoPassword  string        // if set, the server simulates sudo password handling
 	// SudoDoesNotReadPassword 模拟免密 sudo：命令会提权执行，但不消费标准
 	// 输入里的密码行。
 	SudoDoesNotReadPassword bool
@@ -205,6 +205,17 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPasswor
 			req.Reply(true, nil)
 			cmd := payload.Command
 			stdin := io.Reader(ch)
+			// sudoRunsWithoutPassword sends this exact probe first. Simulate
+			// sudo itself rather than handing it to the test Exec callback, so
+			// every fixture gets the same 免密 sudo 与需要密码 sudo 的行为差异。
+			if cmd == "BASH_ENV= LC_ALL=C sudo -n true" && sudoPw != "" {
+				code := uint32(1)
+				if sudoDoesNotReadPassword {
+					code = 0
+				}
+				ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{Code: code}))
+				return
+			}
 			// exec_context's sudo shape (Plan 41 §3) runs an sshenv echo in the
 			// login-shell layer BEFORE `exec env LC_ALL=C sudo …`: simulate that
 			// layer by evaluating the variables and emitting the section line.
@@ -214,18 +225,24 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPasswor
 				pre = strings.ReplaceAll(pre, "$SSH_CONNECTION", "fakeclient 1111 fakeserver 22")
 				ch.Write([]byte(pre + "\n"))
 			}
-			// If this is a sudo -S invocation and the server simulates sudo,
-			// read the password line from stdin first; a mismatching line fails
-			// like real sudo (prompt fused onto the diagnostic line, no newline
-			// in between — pipe mode; exit 1 + the incorrect-password signature
-			// the batch-2a classifier keys on). On success, simulate ALL shell
-			// layers of the batch-2a wrapper (Plan 41 rev3 §2.2) for the
-			// generic shape, or plain decoding for caller-prebuilt shapes
-			// (exec_context): locate `sudo -S -p '' --`, take what follows,
-			// consume the `bash -c '<quoted>'` wrapper, run the marker prologue
-			// the inner bash would run first (generic shape only).
-			if sudoIdx := strings.Index(cmd, "sudo -S -p '' --"); sudoIdx >= 0 && sudoPw != "" {
-				if !sudoDoesNotReadPassword {
+			// If this is a password-reading sudo invocation and the server
+			// simulates sudo, read the password line from stdin first; a
+			// mismatching line fails like real sudo (prompt fused onto the
+			// diagnostic line, no newline in between — pipe mode; exit 1 + the
+			// incorrect-password signature the batch-2a classifier keys on). A
+			// `sudo -n` invocation never reads the password line. On success,
+			// simulate ALL shell layers of the batch-2a wrapper (Plan 41 rev3
+			// §2.2) for the generic shape, or plain decoding for
+			// caller-prebuilt shapes (exec_context): locate the sudo token, take
+			// what follows, consume the `bash -c '<quoted>'` wrapper, and run the
+			// marker prologue the inner bash would run first (generic shape only).
+			sudoIdx := strings.Index(cmd, "sudo -S -p '' --")
+			sudoNoPasswordIdx := strings.Index(cmd, "sudo -n --")
+			if sudoIdx < 0 && sudoNoPasswordIdx >= 0 {
+				sudoIdx = sudoNoPasswordIdx
+			}
+			if sudoIdx >= 0 && sudoPw != "" {
+				if sudoIdx != sudoNoPasswordIdx && !sudoDoesNotReadPassword {
 					buf := make([]byte, 0, 256)
 					one := make([]byte, 1)
 					for {
@@ -248,7 +265,13 @@ func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPasswor
 					ch.SendRequest("exit-status", false, ssh.Marshal(struct{ Code uint32 }{1}))
 					return
 				}
-				inner := strings.TrimSpace(cmd[sudoIdx+len("sudo -S -p '' --"):])
+				inner := strings.TrimSpace(cmd[sudoIdx:])
+				if strings.HasPrefix(inner, "sudo -S -p '' --") {
+					inner = strings.TrimPrefix(inner, "sudo -S -p '' --")
+				} else {
+					inner = strings.TrimPrefix(inner, "sudo -n --")
+				}
+				inner = strings.TrimSpace(inner)
 				if strings.HasPrefix(inner, "bash -c '") && strings.HasSuffix(inner, "'") {
 					quoted := strings.TrimSuffix(strings.TrimPrefix(inner, "bash -c '"), "'")
 					inner = strings.ReplaceAll(quoted, `'\''`, `'`)

@@ -36,8 +36,10 @@ var (
 	ErrUnsafeDarwinName    = errors.New("共享名不能作为 macOS 挂载点使用")
 )
 
-// RemoteExecRequest 是一次固定命令执行请求。StandardInput 只会写在 sudo
-// 密码行之后，机密值绝不进入 Command，也绝不能进入工具结果、日志或审计。
+// RemoteExecRequest 是一次固定命令执行请求。StandardInput 是提权后固定命
+// 令的标准输入载荷；目标免密 sudo 时它就是全部标准输入，目标需要 sudo 密
+// 码时它写在密码行之后。机密值绝不进入 Command，也绝不能进入工具结果、
+// 日志或审计。
 type RemoteExecRequest struct {
 	Command       string
 	Privileged    bool
@@ -343,8 +345,8 @@ func (s *Service) Exec(
 }
 
 // defaultRemoteExec 按服务器条目解析凭据、经统一入口拨号并执行固定命令。
-// 提权路径与软件清单共用 ExecSudo 的标记行证实；标准输入只在 sudo 密码行
-// 后追加。
+// 提权路径与软件清单共用 ExecSudo 的标记行证实；标准输入载荷由包装层保
+// 证送达提权后的固定命令。
 func (s *Service) defaultRemoteExec(
 	ctx context.Context, server *models.Server, request RemoteExecRequest,
 ) (RemoteExecResult, error) {
@@ -374,8 +376,8 @@ func (s *Service) defaultRemoteExec(
 }
 
 // RemoteExecOverClient 返回在一条已经建立的 SSH 连接上执行共享存储固定
-// 命令的注入点；提权请求经 sudo 标准输入送入机密值。共享地址本地拷贝与
-// 挂载工具共用这一条路径，不另建远程执行通道。
+// 命令的注入点；提权请求的标准输入只送入固定命令需要的机密值。共享地址
+// 本地拷贝与挂载工具共用这一条路径，不另建远程执行通道。
 func RemoteExecOverClient(
 	client *sshbroker.Client, st *store.Store, server *models.Server, maxOutputBytes int64,
 ) RemoteExecFunc {

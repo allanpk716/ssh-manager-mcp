@@ -133,7 +133,7 @@ func topologyFieldsForServer(device *models.Device) (deviceName, site string, ne
 }
 
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).
-// sudo=true uses sudo -S with the server's stored sudo password.
+// sudo=true uses the server's stored sudo password only when sudo asks for it.
 // Plan 32 T7 (spec §6): the clamped timeout is echoed as
 // ExecOutput.EffectiveTimeoutSeconds — behavior otherwise unchanged (120s
 // default, 5min hard cap).
