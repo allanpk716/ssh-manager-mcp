@@ -13,7 +13,45 @@
 
 ## 总表
 
-（执行中逐条追加）
+| 条目 | 结论 | 证据小节 | 备注 |
+| --- | --- | --- | --- |
+| 单机276-2 | 通过（第 1–8 步） | 1.7 | 第 9 步清理推迟到 #278 收尾轮；短认证码由 agent 代证 |
+| 权威端275-1 | 失败 | 2.6 | 默认 ED25519 证书无法在当前 Chromium/Firefox 打开（欠账第 36 条）；向导三步与已初始化入口通过 |
+| 权威端270-1 | 通过 | 2.1 | 审计与值检索通过 |
+| 权威端270-2 | 通过 | 2.1 | 首轮误授权已撤销并重跑 |
+| 权威端270-3 | 通过 | 2.1 | 级联删除与预览通过 |
+| 权威端271-1 | 通过 | 2.2 | 四类分组与只读边界通过 |
+| 权威端271-2 | 通过（附欠账第 38 条） | 2.2 | 手写客户端角色文件后转发落库通过 |
+| 权威端272-1 | 通过 | 2.3 | 版本联动与变更提示通过 |
+| 权威端272-2 | 移交下一轮 | 2.3 | 需要 macOS 靶机 |
+| 权威端272-3 | 失败 | 2.3 | 幂等挂载主动改写仍连通地址（欠账第 39 条）；其余判据通过 |
+| 权威端273-1 | 通过 | 2.4 | 浏览器用 WebKit 代跑 |
+| 权威端273-2 | 通过（两子判据移交） | 2.4 | 重验成功回跳与敏感入口扫描未完成 |
+| 权威端273-3 | 通过 | 2.4 | 421/403 与响应头通过 |
+| 权威端273-4 | 通过 | 2.4 | update 等价面移交下一轮 |
+| 权威端274-1 | 通过（位置保存子项未复现） | 2.5 | 拖动归类与远端探测通过 |
+| 权威端274-2 | 移交下一轮 | 2.5 | 时间窗口用尽 |
+| 权威端274-3 | 移交下一轮 | 2.5 | 需要 macOS 靶机；桌面目验移交 owner |
+| 权威端274-4 | 移交下一轮 | 2.5 | 时间窗口用尽 |
+| 权威端276-1 | 移交下一轮 | 2.7 | 按 Brief 应最后执行，本轮未到达 |
+| 客户端270-1 | 通过 | 3 | secrets add --instance 旗标缺失见备注 |
+| 客户端270-2 | 通过 | 3 | 连接前整体拒绝通过 |
+| 客户端270-3 | 通过 | 3 | 输出遮蔽通过 |
+| 客户端270-4 | 通过 | 3 | 替换审计明细随收尾轮归档 |
+| 客户端270-Windows-1 | 通过 | 3 | 环境变量与进程命令行通过 |
+| 客户端270-Windows-2 | 通过 | 3 | cmd 进程命令行一步超时，移交下一轮 |
+| 客户端270-路径-1 | 通过 | 3 | 反斜杠/正斜杠路径均正确写入 |
+| 客户端271-1 | 通过（附欠账第 38 条） | 3 | 本地结果边界与写拒绝通过 |
+| 客户端271-2 | 通过（连接说明未取到） | 3 | connection_notes 与错误靶机日志移交下一轮 |
+| 客户端271-3 | 通过（与权威端271-2 同路径） | 3 | 第二次连接摘要随收尾轮补查 |
+| 客户端272-1 | 通过 | 3 | 现场检测只读通过 |
+| 客户端272-2 | 失败 | 3 | 盘符注入与暂停/恢复通过；exec_context 结构校验失败（欠账第 41 条） |
+| 客户端272-3 | 移交下一轮 | 3 | 中继长流程时间窗口用尽 |
+| 客户端273-1 | 移交下一轮 | 3 | 客户端 Web UI 未及执行 |
+| 客户端273-2 | 移交下一轮 | 3 | 同上 |
+| 客户端274-1 | 移交下一轮 | 3 | 同上 |
+| 客户端274-2 | 移交下一轮 | 3 | 同上 |
+| 客户端275-1 | 移交下一轮 | 3 | 新实例向导长流程未及执行 |
 
 ## 安装与版本
 
@@ -341,3 +379,427 @@ go test ./internal/mcpserver -run '^(TestPinHostkey_ForwardsAndLands201|TestPinH
 → ok  ssh-manager-mcp/internal/mcpserver （全部通过）
 ```
 【清理】共享条目与设备按 Brief 保留到收尾轮。
+
+## 2.3 共享存储（#272）
+
+### 权威端272-1 权威登记、版本变化与客户端名单查询
+
+【结论】通过。agent 工具面 + owner 命令行代跑。共享前置数据按 Brief 保留到收尾轮统一清理。
+
+【执行位置】一次性演练权威端；客户端为工作机 1 一次性实例。共享登记：<NAS 共享名>（真实共享名即 SMB 共享名，证据中以代称记录），提供方设备 <NAS 设备>，专用一次性挂载账号（已脱敏），挂载密码引用真实 10 字节机密项。
+
+【证据摘录】
+```text
+shares list（客户端 list_shares）：
+  只返回 <NAS 共享名>；版本号、盘符、目录约定、约定挂载点齐全；
+  servers 只含 profile 内且可挂载的条目（Linux 条目 A、其转发条目、Linux 条目 B、
+  Windows PowerShell 条目、Windows cmd 条目），profile 外条目不出现在结果里。
+devices member edit（提供方设备网络成员地址改为只写入 vault 的新地址）→
+  权威端 shares show 版本号 +1，变更说明清空（「无」）。
+客户端 cache pull 后同一 MCP 会话内的下一次工具调用（list_shares）结果开头出现变更提示：
+  「权威端配置已更新（修订号 <旧> → <新>）：网络拓扑已变化…；共享存储 <NAS 共享名> 版本 <旧> → <新>；
+    以下服务器上的挂载可能需要更新：<全部可挂载条目>」
+  同一提示只出现一次（后续调用不再出现）。
+权威端 shares list --server <profile 外条目> → 没有匹配的共享存储。
+客户端 shares list --server <Linux 条目A> --instance e2e278-win → 返回该条目与约定挂载点。
+audit --owner --action share-add,device.member-edit → 两类动作均有审计行，摘要不含地址原文以外的密码或值。
+现场探测 shares show --check：
+  Linux 条目 A：已挂载，远端配置版本号匹配；Windows 条目：不检测并说明「盘符由每条命令执行前注入」；
+  不可达转发条目：如实报不可达。结果不含地址、账号或密码明文（地址已脱敏）。
+```
+【masked 记录】工具返回无 `masked` 字段；审计与工具返回不含挂载密码值。
+
+### 权威端272-2 撤销、残留检查与换密码说明
+
+【结论】移交下一轮。册中要求同时使用 Linux 靶子、macOS 靶子与 Windows 靶子，并核对 macOS autofs 映射删除；
+macOS 受管服务器 A 不在本轮设备范围（Brief 明确本轮不涉及），无法按册执行完整三靶子路径。
+已具备的条件：Linux 靶子（Linux 受管服务器 A）已真实挂载 <NAS 共享名>，可执行撤销/残留/换密码的 Linux 部分；
+Windows 靶子条目已登记但 NAS 与 Windows 受管服务器 A 之间的 SMB 可达性待测（见客户端272-2）。
+未执行任何破坏性撤销动作，保留现场供下一轮。
+
+### 权威端272-3 owner 重选共享地址
+
+【结论】失败（一处期望不满足，登记欠账第 39 条）。初始虚拟局域网挂载、物理地址加入后重选、
+二次重选幂等、fstab 改写、挂载读写均通过；但「现有地址仍连通时幂等挂载返回无需改动、提示由 owner 切换」
+不满足——把靶机设备加入提供方的物理局域网后再次执行 `shares mount`，命令直接返回
+`update-success` 并把挂载地址从虚拟局域网第 1 个地址改写为物理局域网第 1 个地址（版本号 9 → 10），
+没有先提示「存在更优物理局域网地址、应由 owner 切换」。
+
+【证据摘录】
+```text
+初始（提供方与靶机仅共同虚拟局域网）：
+sudo sshmgr shares mount <NAS 共享名> <Linux 条目A>
+→ 已挂载；结果：first-mount-success；版本号：9；实际网络：e2e278_virtual（第 1 个地址）
+shares show --check → 已挂载；远端配置版本号：9；观察时间留档
+把靶机设备与提供方设备加入同一物理局域网后再次 mount：
+→ 已挂载；结果：update-success；版本号：10；实际网络：e2e278_nas_net（第 1 个地址）
+  （旧虚拟局域网地址当时仍连通；agent 挂载主动改写，见欠账第 39 条）
+sudo sshmgr shares reselect <NAS 共享名> <Linux 条目A> --yes（两次）：
+→ 「当前地址已是最优可达地址，未做改动。」（第一次与第二次均如此；重选本身不再加版本号）
+靶机 /etc/fstab 管理行已改写：凭据文件路径更换，管理标记含共享名（脱敏）与版本号 10；
+挂载仍可读写（经管理权限写入并删除测试文件成功）。
+```
+【说明】共享名必须等于提供方上的真实 SMB 共享名：先前用一次性名字登记时，产品挂载按该名字拼 SMB 路径，
+四个 SMB 协议版本全部试挂失败；把登记改为真实共享名（沿用导入备份中的同名共享并编辑其提供方/账号/机密项/盘符）
+后按册通过，失败输出已如实留证。
+
+## 2.4 Web UI 基础、安全与等价面（#273）
+
+### 权威端273-1 独立监听与虚拟局域网地址交集推导
+
+【结论】通过。owner 命令行与浏览器动作由 agent 代跑；浏览器为 WebKit（Chromium/Firefox 与默认 ED25519 证书
+不兼容，见欠账第 36 条；Linux WebKit 平台 TLS 栈可完成握手）。
+
+【证据摘录】
+```text
+前置：拓扑中本机设备登记虚拟局域网成员 <虚拟局域网辅助地址>，且该地址已加到本机网卡（不持久辅助地址）。
+serve.ui_listen 恢复为自动推导（原继承导入值 127.0.0.1，属设置覆盖，先 unset 再重启，事后已恢复原值并留证）：
+sudo sshmgr serve admin status → Web UI 地址 3 行：<回环地址>（仅本机）、<权威端虚拟局域网地址>、
+  <本机物理地址>；监听表显示三个地址各一个监听 + 主监听端口独立。
+主监听端口 /ui 与 /ui/login → 404（Web UI 不在主监听提供）。
+物理局域网地址（非虚拟局域网成员时）访问 Web UI 端口 → connection refused。
+  交集核对（owner 代证）：状态输出的每个非回环地址都同时存在于拓扑虚拟局域网成员集合与本机网卡地址集合；
+  把导入数据中一台设备同时登记在物理与虚拟局域网的旧地址移出虚拟局域网后，该物理地址随即不再监听
+  （产品还在 devices member add 时输出「地址同时登记在物理与虚拟局域网」的告警，行为一致）。
+浏览器从虚拟局域网地址打开登录页 → 「登录」页面可见（WebKit）。
+```
+【自动化测试（候选源码根目录）】
+```text
+go test ./internal/webui -run '^(TestDeriveListenAddresses|TestDeriveListenAddressesRejectsInvalidManualAddress)$' → ok
+go test ./internal/mcpserver -run '^(TestRunServeSeparatesWebUIListenerFromMainListener|TestRunServeFallsBackToLoopbackWhenListenDerivationFails|TestWebUIListenerManagerClosesOldAndOpensNewListeners|TestWebUIListenerManagerRetriesFailedAddressAfterThirtySeconds)$' → ok
+```
+
+### 权威端273-2 管理员口令登录、锁定、会话与重验证
+
+【结论】通过（两处子判据移交下一轮补证）。浏览器动作用 WebKit 代跑（Chromium/Firefox 与默认证书不兼容，见欠账第 36 条）；
+12 小时滑动会话与全局延迟 10 秒封顶两项按册由自动化测试代证。已证：登录与 cookie 属性、全局延迟、
+来源地址锁定与解锁、审计四动作、5 分钟内直开与超时后跳重验页；未完成：重验成功后回跳原页与
+全部敏感写入口的超时重验逐项扫描（脚本在重验按钮选择器上失败，时间窗口不足），移交下一轮。
+
+【证据摘录】
+```text
+正确口令登录：URL 进入 /ui/；会话 cookie：
+  name=__Host-sshmgr_ui secure=True httpOnly=True sameSite=Strict path=/ ✓
+错误口令一次后紧接正确登录耗时=1.09s（体现全局延迟 ≥1s）
+同一来源地址连续错误（含前次会话残留失败计数）后锁定：
+  第 5 类失败页显示「这个来源 IP 已被锁定，请等剩余时间结束后再试。」
+sudo sshmgr serve admin unlock 127.0.0.1 → 来源 IP 的登录锁定已解除。
+登录成功、失败、锁定、注销审计：admin.login(ok) / admin.login_fail(error) /
+  admin.lockout(blocked) / admin.logout(ok)，来源均为 web_ui。
+5 分钟内打开 /ui/password → 直接显示修改口令页（不跳重验）。
+超过 5 分零 1 秒后打开 /ui/password → 跳转 /ui/reverify?next=/ui/password；
+  重验页显示「重新验证 管理员口令 验证并继续」。
+（第二轮 5 分钟等待与全部敏感写入口重验扫描未能在本轮时间窗口完成，移交下一轮。）
+```
+【自动化测试】
+```text
+go test ./internal/webui -run '^(TestAuthorityLoginExchangesPasswordForSecureSession|TestAuthoritySessionSlidesAndGenerationInvalidates|TestAuthorityLoginFailuresLockIPAndDelayAllRequests|TestAuthorityLoginGlobalDelayIsCappedAtTenSeconds|TestAuthorityPasswordChangeRequiresRecentReverification)$' → ok
+```
+【登录页核对】登录页无找回口令入口；重置口令的唯一入口提示为权威端命令行 `sshmgr serve admin set`。
+
+### 权威端273-3 Host、Origin、防跨站请求伪造与审计来源
+
+【结论】通过。agent 以本机 HTTP 客户端（浏览器 fetch 与 curl）代证。
+
+【证据摘录】
+```text
+/ui/login 与登录后 /ui/ 响应头均包含：
+  content-security-policy: default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self';
+    img-src 'self'; font-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'
+  x-content-type-options: nosniff
+  referrer-policy: same-origin
+  cache-control: no-store
+错误 Host（curl -H "Host: <非法主机>"）→ HTTP 421（拒绝）
+有效会话 + Origin: https://example.invalid 的写请求（POST /ui/access/profiles）→ 403
+有效会话 + 正确 Origin 但缺失防跨站请求伪造令牌 → 403
+```
+【自动化测试】
+```text
+go test ./internal/webui -run '^(TestAuthorityHostOriginAndCSRFGuards|TestAuthorityLoginExchangesPasswordForSecureSession)$' → ok
+```
+【审计】`sshmgr audit --source web_ui --action admin.login --action admin.login_fail --action admin.lockout --action admin.logout --action profile.add --action profile.rm --limit 100`
+→ 登录/失败/锁定/注销与 Profile 新增删除均为 来源=web_ui；摘要不含口令、cookie、令牌或机密值。
+
+### 权威端273-4 权威端基础页面、命令行等价面与唯一例外
+
+【结论】通过。浏览器动作用 WebKit 代跑；命令行等价面由 agent 代跑（`sshmgr update` 除外，见备注）。
+
+【页面证据】
+```text
+/ui/（服务器）、/ui/access/profiles、/ui/access/projects、/ui/access/device-codes、
+/ui/access/pairing/list、/ui/secrets/、/ui/ops/backup、/ui/ops/settings、/ui/ops/update、/ui/ops/audit
+全部打开成功并渲染对应数据（标题与行数已留档）；配对队列为空页可打开。
+手机视口 390×844 复核 /ui/、profiles、secrets、audit 四页：无横向溢出。
+  owner 不在场，按 owner 指示由 agent 以视口模拟代证，真实手机观感仍移交 owner。
+```
+【命令行等价面（一次性对象 e2e278_2734_*，全部清理）】
+```text
+servers ls / show：列表与详情一致（条目名、连接、shell、凭据类型）。
+servers pin-hostkey <条目>：显示指纹、算法、来源、握手地址（地址已脱敏）。
+profiles add / grant / revoke / remove：全部成功并回显。
+projects add / show / rotate / disable / enable / revoke / remove：全部成功；
+  add 与 rotate 的一次性令牌输出不进入证据（rotate 输出已落在 root 文件后随项目删除）。
+cache-tokens ls：两台客户端设备码以令牌前缀 + 安全字段显示，不显示完整令牌。
+serve pair ls：空队列输出一致。
+secrets add / edit / allow / disallow / records / rm：全部成功；rm 交互确认后清理。
+backup status：config missing（未配置备份）如实输出；backup config show 在未配置时返回错误
+  （file not found）——按册保存该失败输出，不放宽判据。
+settings ls / get：设置键值可查询（本轮未执行 set/unset 等价面以外的额外写操作；
+  serve.pairing 与 serve.ui_listen 的 set/unset 已在 276-2 与 273-1 分别留证）。
+audit --source web_ui：见权威端273-3。
+```
+【Web UI 一次性写操作】
+```text
+浏览器新增一次性 Profile e2e278_2734_web → 列表出现；随后浏览器删除 → 列表不再出现；
+profile.add / profile.rm 来源=web_ui 审计各一行；清理后无残留。
+```
+【唯一例外登记】网络拓扑画布的布局坐标是图形界面能力对照的唯一例外，无命令行等价命令；
+本条不执行画布操作（画布与探测交互归 #274，见权威端274-1）。
+【备注】`sshmgr update` 等价面未执行：真实升级会替换演练机二进制并可能中断后续条目，
+超出本轮安全边界，移交下一轮在收尾阶段执行。
+
+### 权威端274-1 拓扑画布可写、远端起点探测与布局审计
+
+【结论】通过（一处子判据未复现，见备注）。浏览器为 WebKit；owner 不在场，画布操作由 agent 代跑。
+
+【证据摘录】
+```text
+把未归类设备 rc4_provider 拖入一次性物理局域网 rc4_phys_linux：
+  对话框「把设备加入网络 设备：<设备> · 网络：<网络> 地址（IP 或域名）」；
+  填一次性地址后「加入网络」→ 页面提示「已把设备 rc4_provider 加入网络 rc4_phys_linux：<地址>」
+  （地址为一次性文档网段值，已脱敏）；设备从未归类托盘进入网络框。
+审计 device.member-add 来源=web_ui，摘要含设备、网络与地址。
+刷新后拓扑页正常，已归类设备保持归类。
+探测起点下拉从「本机（e2e278_authority）」切换为 Linux 受管服务器 A 的一次性条目：
+  画布 data-probe-origin 不再是 self；起点列表含本机与全部授权条目。
+打开 NAS A 设备详情并触发「开始探测」：
+  状态「探测完成：0 台可达，1 台不通。」——远端起点探测经 Linux 受管服务器 A 执行；
+  详情页显示当前起点、共同物理局域网与探测结果（NAS 对该端口不可达，结果如实呈现）。
+手机视口无横向溢出（agent 以视口模拟代证，真实手机观感仍移交 owner）。
+```
+【等价命令与审计】`sshmgr audit --owner --action probe-connectivity,topology.layout.save,device.member-add`
+→ 本轮 device.member-add（web_ui）与 probe-connectivity 行可见；命令行 `sshmgr devices probe --from <Linux条目> <目标>` 的等价结论已由权威端271-1 的 MCP probe_connectivity 覆盖。
+【未复现子判据】移动站点/网络位置后的「布局已保存。」提示未在本轮 WebKit 会话复现
+（拖动归类写入成功，位置保存未观察到）；布局坐标无命令行等价命令的例外已在权威端273-4 登记。
+移交下一轮以 Chromium 复核位置保存提示。
+
+## 3 客户端组合
+
+### 客户端270-1 客户端快照可见列表与只读边界
+
+【结论】通过（一处附带发现：`secrets add --instance` 不识别该旗标，见备注）。agent 工具面 + owner 命令行代跑。
+
+【证据摘录】
+```text
+cache pull → pulled 12 servers / 14 credentials
+list_secrets（不带参数）→ 只显示快照内机密项的安全字段（名字、备注、环境变量名、可写入服务器）；
+  profile 外条目筛选 → 「没有可用的机密项」（见权威端270-2）。
+sshmgr secrets list --instance e2e278-win → 与快照一致的安全字段输出。
+sshmgr secrets add <一次性名字> --stdin（客户端命令行）→
+  「本机是缓存客户端：机密项在权威端维护，客户端只能执行只读的 secrets list——请在权威端执行这条命令」
+客户端 cache audit 只有列表、拉取或拒绝摘要。
+```
+【备注】`sshmgr secrets add … --instance <实例>` 返回 unknown flag: --instance（写命令未提供实例旗标），
+按册以不带 --instance 的原始命令判据为准；旗标缺失移交下一轮与欠账第 37 条一并复核。
+
+### 客户端270-2 客户端占位符填值与连接前整体拒绝
+
+【结论】通过。工作机 1 一次性客户端实例驱动。
+
+【证据摘录】
+```text
+成功写入（模板引用两个机密项并重复第一个）：
+→ {"bytes":94,"delivery_record_status":"recorded","filled_secret_names":["e2e278_generic","e2e278_win_ps_token"]}
+  （按首次出现顺序去重；不返回文件哈希或值版本号）
+故意不可达目标 + 模板含两处格式错误与一个未授权引用：
+→ 一次全部列出：「<行字节偏移>：机密项占位符格式错误；原文片段：<片段>」
+  「机密项 nonexistent 不存在，或不允许写入服务器 <条目>」
+  「机密项 <profile 外机密项> 不存在，或不允许写入服务器 <条目>」isError=true
+  目标本不可达而返回整体校验错误 → 证明连接前拒绝；远端无 deny 文件。
+合法占位符写入未授权目标 → 同类拒绝，目标文件不存在。
+```
+【masked 记录】上传成功返回无 `masked` 字段；拒绝与审计不含值。
+
+### 客户端270-3 客户端输出遮蔽当前值与上一个值
+
+【结论】通过。两次 `exec_command cat <一次性路径>`：
+```text
+两次 stdout 均只含 A={{sshmgr-secret:e2e278_generic}} B={{...}} A2={{...}}（占位符）；
+masked=["e2e278_generic"]；旧值与新值（同源值）都不出现。
+```
+
+### 客户端270-4 客户端下发记录登记与替换
+
+【结论】通过。同一路径两次 upload_content 均返回 recorded；
+权威端 `sshmgr audit --action secret-delivery-record --action secret-delivery-replace` 的逐项核对随收尾轮
+复核输出归档（本轮审计已有 upload-content/replace 行，见客户端 cache audit 摘要）。
+
+### 客户端270-Windows-1 Windows PowerShell 环境变量回显与进程命令行检查
+
+【结论】通过。`Write-Output $env:WIN_PS_TOKEN` → stdout 只含占位符文本（值被输出遮蔽替换），
+masked 名单含该值对应机密项；无未注入警告。进程命令行检查返回 PowerShell 进程完整命令行
+（含 sshmgr 注入包装），命令行参数里无测试值；值检索见收尾。
+
+### 客户端270-Windows-2 Windows cmd 环境变量回显与进程命令行检查
+
+【结论】通过（进程命令行一步超时未取回，见备注）。`echo %WIN_CMD_TOKEN%` → stdout 只含占位符文本，
+无未注入警告；两次调用均出现共享盘注入提示（见客户端272-2）。cmd 进程命令行检查两次调用均超时未返回，
+移交下一轮补取证；PowerShell 侧进程命令行已验证不含值。
+
+### 客户端270-路径-1 Windows 反斜杠路径上传复设
+
+【结论】通过。候选版本 0.22.0-rc5。
+```text
+反斜杠绝对路径 upload_content → {"bytes":39,"delivery_record_status":"recorded","filled_secret_names":[...]}
+  Test-Path/Get-Item → 文件存在，长度 39（>0）。
+正斜杠对照路径 upload_content → 同样 39 字节 recorded；文件存在，长度 39。
+两条路径文件长度与返回字节数一致；无「成功且 bytes:0 但文件不存在」现象。
+```
+权威端下发记录的规范化路径核对与远端两个文件清理随收尾轮执行（记录登记已产生）。
+
+### 客户端271-1 客户端拓扑查询、连通探测与本地结果边界
+
+【结论】通过（先触发欠账第 38 条：配对后无 role.json 时客户端报「本机部署角色未知」；
+在一次性客户端环境补写客户端角色文件并登记客户端设备后按册通过）。
+
+【证据摘录】
+```text
+query_topology from=self →
+  出发点：<工作机1客户端设备>；所属网络 <物理局域网>；
+  「同在物理局域网」分组含 Windows 受管服务器 A 设备与两条条目；
+  「只能经虚拟局域网到达：无」「无共同网络不可达：<其余设备>」「未登记服务器：无」；
+  末尾「本工具不主动探测…」。
+probe_connectivity from=self targets=[<Windows 设备>:22,<NAS 设备>:445] →
+  Windows 设备 ✓（本物理局域网第 1 个地址）；NAS:445 → 无共同网络，未探测。
+客户端实例目录存在 probe-results.json；cache audit 出现本地 probe-connectivity 行。
+权威端 audit 在客户端探测后无新的 probe-connectivity 行（观察不回传）。
+sshmgr sites add（客户端写命令）→ 「本机是缓存客户端：网络拓扑在权威端维护——请在权威端执行这条命令」
+```
+
+### 客户端271-2 多地址试连与主机密钥不一致跳过
+
+【结论】通过（连接说明字段与错误靶机日志摘要未取到，见备注）。Linux 一次性客户端实例经
+一次性多地址条目执行命令成功；本地 probe-results 含多个地址的拨号观察（物理地址在前）。
+返回结构中未见 connection_notes 字段、错误靶机（本机 sshd）日志摘要未在验收窗口内取回——
+移交下一轮补取证；跳过行为由「命令最终成功 + 锚为主机正确密钥」代证。
+
+### 客户端271-3 首次锚定仅走虚拟局域网并转发
+
+【结论】通过（与权威端271-2 同一路径执行）。首次连接仅经虚拟局域网候选完成握手，
+锚以 source=forward 转发落库（审计含设备码名字）；第二次连接复用锚正常执行。
+第二次连接按正常选址使用物理地址的 probe-results 摘要未单独取证，随收尾轮补查。
+
+### 客户端272-1 快照裁剪、名单查询与幂等挂载
+
+【结论】通过（版本联动与变更提示见权威端272-1；现场检测在此补证）。
+```text
+list_shares live_check=true check_server=<Linux 转发条目> →
+  mount_status="mounted"；mount_notes 说明该条目未配 sudo 凭据时只确认挂载点可访问；
+  检测命令只读，不修改远端文件；结果不含地址、账号或密码。
+```
+
+### 客户端272-2 Windows PowerShell 与 cmd 会话内网络盘符注入
+
+【结论】失败（一处期望不满足，登记欠账第 41 条）；盘符注入、认证失败暂停与恢复全部通过。
+```text
+前置：Windows 受管服务器 A 到 NAS A 的 445 端口可达（真机探测 True）；
+把 Windows 设备与提供方设备加入同一 owner 声明物理局域网后，注入开始工作。
+PowerShell Get-ChildItem X:\ → 列出共享内容（内容脱敏）；
+  injected_network_drives=[{drive:"X",share:<共享名已脱敏>}]，无未注入警告。
+cmd dir X:\ → 返回目录行数；同样注入成功。
+错误挂载密码（owner 换值 + 客户端同步）后第一次命令：
+  「共享 <名> 的网络盘符 X：未注入：共享密码认证失败，已暂停注入，请同步或检查机密项」；
+  用户命令本身仍执行（不被映射失败阻断）。
+第二次命令：同样暂停提示（不再重试该共享）。
+正确密码写回并同步后：盘符 X 重新注入，命令正常。
+exec_context（两条 Windows 条目）→ 工具输出结构校验失败：
+  validating /properties/injected_environment_names: type null, want array（欠账第 41 条），
+  planned_network_drives 与 uninjected_network_drives 无法经该工具核对。
+```
+
+### 客户端272-3 共享地址中继本地拷贝、流式回退与重跑
+
+【结论】移交下一轮。原因：条目组合要求两条 Linux 条目都已实际挂载且需大文件中继、
+中断重跑与哈希比对的长流程；本轮时间窗口已用尽。已具备条件：Linux 条目 A 已挂载、
+Linux 条目 B 设备已登记虚拟局域网成员、Windows 条目与共享授权齐备、客户端可达权威端。
+
+### 客户端273-1 / 客户端273-2 / 客户端274-1 / 客户端274-2 客户端 Web UI
+
+【结论】移交下一轮。原因：客户端 Web UI 需在演练机 2 的一次性客户端实例上启动回环监听并经端口转发
+用浏览器取证；本轮时间窗口已用尽。已具备条件：一次性客户端实例已配对并可拉取快照、
+演练机 1 的浏览器可用（客户端回环为纯 HTTP，不涉及证书问题）。
+册中要求工作机 1 的条目由 Linux 一次性客户端代替的原因：工作机 1 禁止打开浏览器与触碰桌面，
+客户端 Web UI 只监听回环，需经端口转发访问。
+
+### 客户端275-1 客户端角色的配对指引与退出
+
+【结论】移交下一轮。原因：需要一个全新一次性实例的向导浏览、配对与清理长流程；
+本轮两个已配对实例与共享数据需保留，时间窗口已用尽。
+
+## 2.5 Web UI 新功能页面（#274）
+
+### 权威端274-2 新增服务器、凭据重验与首次锚定
+
+【结论】移交下一轮。原因：需在浏览器完成带凭据表单、五分钟重验回跳保留字段、连接测试轮询、
+同设备第二条目与等价命令对照的长流程；本轮 WebKit 会话已用于 273-2/273-3/273-4/274-1，
+时间窗口用尽。已具备条件：权威端 Web UI 可用（WebKit）、一次性 SSH 靶机与带外指纹事实齐备。
+
+### 权威端274-3 共享存储授权、远端操作与桌面引导
+
+【结论】移交下一轮。原因：册中要求 Linux 受管服务器 A 与 macOS 受管服务器 A 两个一次性条目
+均已挂载并做撤销/重选/卸载/残留检查；macOS 受管服务器 A 不在本轮设备范围。
+Windows 桌面手动添加引导的目验按 Brief 固定为移交 owner。
+
+### 权威端274-4 服务器详情反向视图与删除预览
+
+【结论】移交下一轮。原因：需构造同设备双条目、普通机密项、两个共用挂载密码的共享、
+锚/凭据/下发记录并执行逐组授权编辑与一次确认删除的浏览器长流程；时间窗口用尽。
+命令行等价面（servers rm 预览与级联删除）已由权威端270-3 覆盖。
+
+## 2.7 备份迁移（#276）
+
+### 权威端276-1 权威端备份恢复与客户端重新入网
+
+【结论】移交下一轮。原因：按 Brief 本条应在本轮 §2 与 §3 全部完成后最后执行，涉及停止并替换当前
+演练权威端服务、两个空恢复 vault、重新配对与恢复后复核；本轮时间窗口在 §3 中途用尽，
+且后续条目（客户端 Web UI、中继、274-2/274-4）仍依赖当前演练权威端。
+已具备条件：备份产物与口令文件保留、四类新数据与六个设置在位、两个客户端实例可重新配对。
+
+## 收尾与机密值检索
+
+【工作机 1 生产目录指纹（结束前）】
+```text
+文件数=5
+整体 SHA-256=ad4edf0d837b734178a1231610f94370fa7d2ed053ebe5db580734834376566c
+与开始前一致（ad4edf0d…），文件数一致；一次性实例未改动生产目录。
+```
+
+【机密值检索（只输出命中计数，不展开模式）】
+```text
+工作机 1 证据汇总（13 份含值风险的工具返回/执行输出）：通用测试值命中 0
+演练机 1 证据文件（浏览器脚本输出与权威端 MCP 输出，11 份）：通用测试值命中 0（逐份均为 0）
+NAS 挂载密码检索：工作机 1 证据汇总 0；权威端浏览器输出 0；权威端 serve.log 0
+非零计数文件数：0
+```
+
+【本轮清理】
+```text
+本机临时 HTTP 服务：已停止（监听端口无进程）。
+演练机 1 → 演练机 2 的一次性 SSH 端口转发：已全部关闭。
+虚拟局域网辅助地址（两台演练机共 4 个不持久地址）：已全部删除。
+NAS A 一次性子目录 sshmgr-e2e-20261114：已删除（先删文件再删空目录）。
+Windows 受管服务器 A 一次性写入文件（反斜杠/正斜杠两个上传目标）：已删除。
+Linux 受管服务器 A 一次性上传目录（含全部条目写入文件）：已删除（先删文件再删空目录）。
+```
+
+【按 Brief 保留（供 #278 收尾轮与 #279 使用）】
+```text
+演练权威端 serve 服务与 vault（含共享前置数据、一次性凭据、机密项授权、共享登记与挂载状态）
+两个已配对客户端实例（工作机 1 e2e278-win、演练机 2 e2e278-linux）及其隔离目录
+演练机 1 的一次性备份目录（未改动）与仅 root 可读的口令/密钥文件
+工作机 1 的 C:\sshmgr-e2e-20261114\（含一次性 exe、vault/config/dek 隔离目录与证据文件）
+演练机 2 上 Linux 受管服务器 A 的共享挂载（真实共享名以代称记录，属共享前置数据）
+Linux 受管服务器 A 与 Windows 受管服务器 A authorized_keys 中的一次性公钥行
+  （注释 sshmgr-e2e-278-20261114，含备份文件与 ACL 复核结论）
+演练机 1 → 演练机 2 的一次性机器密钥（演练机 1 用户目录下的一次性密钥文件及其对端授权行）
+```
