@@ -282,19 +282,22 @@ type fakeDarwinMountServer struct {
 	mounted            bool
 	// mountTableMissing 模拟挂载点目录可以列出、但挂载表里没有对应
 	// cifs 文件系统：挂载工具的最终验证必须失败。
-	mountTableMissing   bool
-	mountTableFirmlink  bool
-	unmounts            int
-	unmountFails        bool
-	reachableAddresses  map[string]bool
-	existingAddress     string
-	remoteVersion       int64
-	shareVersion        int64
-	shareID             string
-	missingAutomount    bool
-	lockHeld            bool
-	staleLock           bool
-	autoMasterReference bool
+	mountTableMissing  bool
+	mountTableFirmlink bool
+	unmounts           int
+	unmountFails       bool
+	// automountReloadReturnsOne 模拟 macOS 的 automount 刷新做完挂载后
+	// 仍返回 1；真实可用性必须由挂载表验证决定。
+	automountReloadReturnsOne bool
+	reachableAddresses        map[string]bool
+	existingAddress           string
+	remoteVersion             int64
+	shareVersion              int64
+	shareID                   string
+	missingAutomount          bool
+	lockHeld                  bool
+	staleLock                 bool
+	autoMasterReference       bool
 	// revokedMarkerVersion 为 0 表示没有撤销标记；非 0 表示服务器上存在
 	// 这个版本的撤销标记。
 	revokedMarkerVersion int64
@@ -328,6 +331,10 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 	case strings.Contains(command, "SSHMGR-DARWIN-MOUNT"):
 		if f.missingAutomount {
 			return "", "SSHMGR-DARWIN-MOUNT missing-automount", 83
+		}
+		if f.automountReloadReturnsOne &&
+			!strings.Contains(command, "automount -cv >/dev/null 2>&1 || true") {
+			return "", "SSHMGR-DARWIN-MOUNT automount-returned-one", 1
 		}
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -1610,6 +1617,83 @@ func TestMountShareDarwinRejectsRevokedShare(t *testing.T) {
 	assertMountShareAuditResult(t, fixture.store, "share-revoked")
 }
 
+func TestMountShareFirstMountRemovesOlderRevokedMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		darwin bool
+	}{
+		{name: "Linux", darwin: false},
+		{name: "macOS", darwin: true},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+				setup.darwinTarget = testCase.darwin
+			})
+			changeNote := "重新授权共享存储"
+			if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+				ChangeNote: &changeNote,
+			}, store.CLISource()); err != nil {
+				t.Fatal(err)
+			}
+			updatedShare, err := fixture.store.GetSharedStorage("datasets")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if testCase.darwin {
+				darwinFake, ok := fixture.fake.(*fakeDarwinMountServer)
+				if !ok {
+					t.Fatalf("测试夹具没有使用 macOS 假服务器：%T", fixture.fake)
+				}
+				darwinFake.setShareVersion(updatedShare.Version)
+				darwinFake.revokedMarkerVersion = 1
+			} else {
+				linuxFake, ok := fixture.fake.(*fakeLinuxMountServer)
+				if !ok {
+					t.Fatalf("测试夹具没有使用 Linux 假服务器：%T", fixture.fake)
+				}
+				linuxFake.setShareVersion(updatedShare.Version)
+				linuxFake.revokedMarkerVersion = 1
+			}
+
+			output, text, isError := callMountShare(t, fixture.session, map[string]any{
+				"share": "datasets", "server_id": fixture.targetID,
+			})
+			if isError {
+				t.Fatalf("较新授权首次挂载失败：%s", text)
+			}
+			if output["result"] != "first-mount-success" ||
+				output["version"] != float64(updatedShare.Version) {
+				t.Fatalf("较新授权首次挂载输出 = %#v", output)
+			}
+
+			if testCase.darwin {
+				darwinFake := fixture.fake.(*fakeDarwinMountServer)
+				if darwinFake.revokedMarkerVersion != 0 {
+					t.Fatalf("macOS 旧撤销标记未清理，版本号 = %d", darwinFake.revokedMarkerVersion)
+				}
+				mapWrites, autoMasterWrites := darwinFake.writeCounts()
+				if mapWrites != 1 || autoMasterWrites != 1 {
+					t.Fatalf("macOS 首次挂载写入错误：映射 %d 次，主配置 %d 次",
+						mapWrites, autoMasterWrites)
+				}
+			} else {
+				linuxFake := fixture.fake.(*fakeLinuxMountServer)
+				if linuxFake.revokedMarkerVersion != 0 {
+					t.Fatalf("Linux 旧撤销标记未清理，版本号 = %d", linuxFake.revokedMarkerVersion)
+				}
+				credentialWrites, configurationWrites := linuxFake.writeCounts()
+				if credentialWrites != 1 || configurationWrites != 1 {
+					t.Fatalf("Linux 首次挂载写入错误：凭据 %d 次，配置 %d 次",
+						credentialWrites, configurationWrites)
+				}
+			}
+			assertMountShareAuditResult(t, fixture.store, "success")
+		})
+	}
+}
+
 func TestMountShareDarwinNewerAuthorizationRemovesRevokedMarker(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.darwinTarget = true
@@ -1701,9 +1785,21 @@ func TestMountShareDarwinRemountsAfterMapRewrite(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.darwinTarget = true
 		setup.darwinExistingAddress = "192.0.2.10"
-		setup.darwinRemoteVersion = 0
+		setup.darwinRemoteVersion = 1
 	})
+	changeNote := "迁移旧版本间接映射"
+	if _, err := fixture.store.EditSharedStorage("datasets", store.SharedStorageChanges{
+		ChangeNote: &changeNote,
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	updatedShare, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
 	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	darwinFake.setShareVersion(updatedShare.Version)
+	darwinFake.automountReloadReturnsOne = true
 	if !darwinFake.mounted {
 		t.Fatal("改写场景应从已挂载状态开始")
 	}

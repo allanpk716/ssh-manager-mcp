@@ -70,6 +70,7 @@ func parseSharedStorageMarkerOptions(marker string) (SharedStorageMarker, error)
 // 把服务器级挂载锁内读取标记；标记版本号不低于本次共享存储版本号时拒
 // 绝。标记不合法同样拒绝，避免把无法识别的撤销状态误当成可覆盖。
 func revokedMarkerGuardScript(markerPath, outputMarker string, revokedExitCode, invalidExitCode int) string {
+	// 注意：下面整体经过 fmt.Sprintf 拼接，脚本里的字面百分号要写成两个。
 	return fmt.Sprintf(`sshmgr_revoked_marker=%s
 sshmgr_revoked_version=0
 if [ -r "$sshmgr_revoked_marker" ]; then
@@ -83,7 +84,7 @@ if [ -r "$sshmgr_revoked_marker" ]; then
       ;;
   esac
   sshmgr_revoked_version=${sshmgr_revoked_content#"$sshmgr_revoked_prefix"}
-  sshmgr_revoked_version=${sshmgr_revoked_version%;sshmgr-state=revoked}
+  sshmgr_revoked_version=${sshmgr_revoked_version%%;sshmgr-state=revoked}
   case "$sshmgr_revoked_version" in
     ''|*[!0-9]*)
       echo `+outputMarker+` invalid-revoked-marker >&2
