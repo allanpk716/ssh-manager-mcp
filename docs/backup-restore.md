@@ -1,6 +1,6 @@
 # 备份与迁移（export / import）
 
-> 把整个 vault（服务器 + 凭据 + profile + project + host key + 审计）导出成一个**口令加密的便携文件**，用来备份、迁移、灾难恢复。文件**与机器的 master key 无关**——只要有口令，任何机器都能恢复。
+> 把整个 vault（服务器 + 凭据 + profile + project + host key + 审计 + Web UI 设置 + 物理视图、虚拟视图、叠加视图的拓扑布局坐标）导出成一个**口令加密的便携文件**，用来备份、迁移、灾难恢复。文件**与机器的 master key 无关**——只要有口令，任何机器都能恢复。
 
 ## 它解决什么
 
@@ -45,6 +45,7 @@ vault 损坏 / 丢失：删掉坏的 `store.db`（或把 `SSHMGR_STORE` 指向�
 ## 限制（如实）
 
 - **import 只入空 vault**：不覆盖既有数据（防误删）。要恢复到一个非空 vault，先删 / 移走 `store.db` 得到一个空 vault 再 import。
+- 新版快照会整体恢复 Web UI 设置与三种拓扑视图的布局坐标；不含这两段的旧快照仍可导入，缺失部分保持目标 vault 的现状。
 - **不增量同步**：export / import 是**全量快照**，不是多机实时同步（实时共享见 [multi-machine.md](./multi-machine.md) 的 serve 模式）。
 - **审计自增 id 不保留**：audit 行的时间戳和内容保留，但 id 是目标库重新分配的（id 不被其他表引用，无影响）。
 - **原 project token 仍有效**：导入保留 token 的 `hash/salt/prefix`，所以导出时拿到的明文 token 在导入后照样验证——agent 配置不用动。
