@@ -110,7 +110,8 @@ func buildLinuxEnumerateCommand() string {
     set -- $sshmgr_line
     set +f
     [ "$#" -eq 6 ] || continue
-    [ "$1" = "//"* ] && [ "$3" = cifs ] || continue
+    case "$1" in //*) ;; *) continue ;; esac
+    [ "$3" = cifs ] || continue
     case "$2" in /mnt/sshmgr/?*) ;; *) continue ;; esac
     sshmgr_parse_options "$4"
     [ -n "$sshmgr_option_share" ] || continue
@@ -184,9 +185,14 @@ mount | while IFS= read -r sshmgr_mount_entry || [ -n "$sshmgr_mount_entry" ]; d
   set +f
   [ "$#" -ge 4 ] || continue
   [ "$2" = on ] || continue
-  case "$3" in /mnt/sshmgr/?*) ;; *) continue ;; esac
+  case "$3" in
+    /mnt/sshmgr/?*|/System/Volumes/Data/mnt/sshmgr/?*) ;;
+    *) continue ;;
+  esac
   case "$4" in '(smbfs'*) ;; *) continue ;; esac
-  printf '%s mount=%s\n' '` + darwinEnumerateMarker + `' "${3#/mnt/sshmgr/}"
+  sshmgr_mount_share=${3#'/System/Volumes/Data/mnt/sshmgr/'}
+  sshmgr_mount_share=${sshmgr_mount_share#'/mnt/sshmgr/'}
+  printf '%s mount=%s\n' '` + darwinEnumerateMarker + `' "$sshmgr_mount_share"
 done
 ` + revokedMarkerEnumerateScript("/etc/sshmgr/*.revoked", darwinEnumerateMarker)
 }

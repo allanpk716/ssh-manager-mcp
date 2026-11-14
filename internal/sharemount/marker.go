@@ -21,16 +21,26 @@ type SharedStorageMarker struct {
 	Version int64
 }
 
-// sharedStorageMarkerOptions 生成跨操作系统共用的标记文本：
+// sharedStorageMarkerOptions 生成 macOS 映射文件与撤销文件共用的标记文本：
 //
 //	sshmgr-share=<百分号编码的共享名>;sshmgr-version=<十进制版本号>
 //
 // 共享名按网址路径规则做百分号编码，因此逗号、分号、等号、斜杠与空格都
-// 不会破坏字段边界。Linux fstab 使用逗号分隔选项，会把这两个字段拆成两
-// 个选项；macOS autofs 可以把同一段文本作为独立标记行写入。
+// 不会破坏字段边界。macOS autofs 可以把同一段文本作为独立标记行写入。
 func sharedStorageMarkerOptions(shareName string, version int64) string {
 	return "sshmgr-share=" + url.PathEscape(shareName) +
 		";sshmgr-version=" + strconv.FormatInt(version, 10)
+}
+
+// linuxSharedStorageFstabMarkerOptions 生成 Linux fstab 里的管理标记：
+//
+//	x-sshmgr-share=<百分号编码的共享名>,x-sshmgr-version=<十进制版本号>
+//
+// util-linux mount(8) 约定 x- 前缀选项只属于用户空间，不会传给挂载帮助
+// 程序和内核；直接使用 sshmgr- 前缀会让 CIFS 收到未知参数。
+func linuxSharedStorageFstabMarkerOptions(shareName string, version int64) string {
+	return "x-" + strings.ReplaceAll(
+		sharedStorageMarkerOptions(shareName, version), ";", ",x-")
 }
 
 // parseSharedStorageMarkerOptions 解析 sharedStorageMarkerOptions 生成的标

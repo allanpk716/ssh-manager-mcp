@@ -88,7 +88,7 @@ func buildLinuxMountCommandWithOptions(
 	mountPoint := sshbroker.POSIXShellQuote(linuxMountPoint(share.Name))
 	credential := sshbroker.POSIXShellQuote(linuxCredentialPath(share.ID))
 	marker := sshbroker.POSIXShellQuote(sharedStorageMarkerOptions(share.Name, share.Version))
-	fstabMarker := strings.ReplaceAll(sharedStorageMarkerOptions(share.Name, share.Version), ";", ",")
+	fstabMarker := linuxSharedStorageFstabMarkerOptions(share.Name, share.Version)
 	shareValue := sshbroker.POSIXShellQuote(url.PathEscape(share.Name))
 	versionValue := sshbroker.POSIXShellQuote(strconv.FormatInt(share.Version, 10))
 	forceValue := "no"
@@ -145,7 +145,8 @@ while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
   set -- $sshmgr_line
   set +f
   [ "$#" -eq 6 ] || continue
-  [ "$1" = "//"* ] && [ "$2" = "$mount_point" ] && [ "$3" = cifs ] || continue
+  case "$1" in //*) ;; *) continue ;; esac
+  [ "$2" = "$mount_point" ] && [ "$3" = cifs ] || continue
   sshmgr_parse_options "$4"
   [ "$sshmgr_option_share" = "$sshmgr_expected_share" ] || continue
   case "$sshmgr_option_version" in ''|*[!0-9]*)

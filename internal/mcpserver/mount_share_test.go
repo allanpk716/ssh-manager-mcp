@@ -52,6 +52,7 @@ type fakeLinuxMountServer struct {
 	existingProtocol   string
 	remoteVersion      int64
 	ownerFstabLines    []string
+	legacyFstabMarker  bool
 	lockHeld           bool
 	staleLock          bool
 	// revokedMarkerVersion 为 0 表示没有撤销标记；非 0 表示服务器上存在
@@ -164,7 +165,8 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 			selectedAddress = "100.64.10.10"
 			selectedIndex = 1
 		}
-		needsChange := f.existingAddress != selectedAddress || f.remoteVersion != f.shareVersion || !f.mounted
+		needsChange := f.existingAddress != selectedAddress || f.remoteVersion != f.shareVersion ||
+			!f.mounted || !f.containsCurrentManagedFstabMarker()
 		if !needsChange && len(f.fstabLines) > 0 {
 			return fmt.Sprintf("SSHMGR-LINUX-MOUNT result=no-change selected=%d\n", selectedIndex), "", 0
 		}
@@ -217,6 +219,15 @@ func (f *fakeLinuxMountServer) handler(command string, stdin io.Reader) (string,
 	}
 }
 
+func (f *fakeLinuxMountServer) containsCurrentManagedFstabMarker() bool {
+	for _, line := range f.fstabLines {
+		if strings.Contains(line, ",x-sshmgr-share=datasets,x-sshmgr-version=") {
+			return true
+		}
+	}
+	return false
+}
+
 func (f *fakeLinuxMountServer) recorded() (commands []string, inputs [][]byte, credential string, fstab []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -250,7 +261,7 @@ func (f *fakeLinuxMountServer) setShareMetadata(shareID string) {
 func (f *fakeLinuxMountServer) managedFstabLine(address, protocolVersion string, version int64) string {
 	return "//" + address + "/datasets /mnt/sshmgr/datasets cifs " +
 		"credentials=/etc/sshmgr/shares/" + f.shareID + ".credentials,vers=" + protocolVersion +
-		",sshmgr-share=datasets,sshmgr-version=" + fmt.Sprint(version) +
+		",x-sshmgr-share=datasets,x-sshmgr-version=" + fmt.Sprint(version) +
 		",_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
 }
 
@@ -272,6 +283,7 @@ type fakeDarwinMountServer struct {
 	// mountTableMissing 模拟挂载点目录可以列出、但挂载表里没有对应
 	// cifs 文件系统：挂载工具的最终验证必须失败。
 	mountTableMissing   bool
+	mountTableFirmlink  bool
 	unmounts            int
 	unmountFails        bool
 	reachableAddresses  map[string]bool
@@ -352,6 +364,16 @@ func (f *fakeDarwinMountServer) handler(command string, stdin io.Reader) (string
 		}
 		if f.mountTableMissing && !strings.Contains(command, `(smbfs`) {
 			return "", "macOS 固定命令的最终验证必须核验 mount 输出挂载表", 91
+		}
+		if f.mountTableFirmlink {
+			for _, want := range []string{
+				`sshmgr_data_mount_point="/System/Volumes/Data$mount_point"`,
+				`grep -qF " on $sshmgr_data_mount_point (smbfs"`,
+			} {
+				if !strings.Contains(command, want) {
+					return "", "macOS 固定命令的挂载表核验必须接受数据卷 firmlink 路径", 91
+				}
+			}
 		}
 		selectedAddress := "192.0.2.10"
 		selectedIndex := 1
@@ -564,6 +586,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			existingAddress:    setup.darwinExistingAddress,
 			missingAutomount:   setup.darwinMissingAutomount, lockHeld: setup.lockHeld,
 			staleLock: setup.staleLock, mountTableMissing: setup.mountTableMissing,
+			mountTableFirmlink: setup.darwinMountTableFirmlink,
 			autoMasterLines: []string{
 				"# Automounter master map",
 				"/System/Volumes/Data /System/Volumes/Data auto_databackup",
@@ -587,6 +610,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			existingAddress:    setup.existingAddress, existingProtocol: setup.existingProtocol,
 			ownerFstabLines: append([]string(nil), setup.ownerFstabLines...), lockHeld: setup.lockHeld,
 			staleLock: setup.staleLock, mountTableMissing: setup.mountTableMissing,
+			legacyFstabMarker: setup.legacyFstabMarker,
 		}
 		if len(setup.reachable) != 0 {
 			linuxFake.reachableAddresses = make(map[string]bool, len(setup.reachable))
@@ -743,6 +767,9 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 		managedLine := linuxFake.managedFstabLine(
 			linuxFake.existingAddress, linuxFake.existingProtocol, linuxFake.remoteVersion,
 		)
+		if linuxFake.legacyFstabMarker {
+			managedLine = strings.ReplaceAll(managedLine, ",x-sshmgr-", ",sshmgr-")
+		}
 		if len(linuxFake.fstabLines) > 1 {
 			linuxFake.fstabLines = append(linuxFake.fstabLines[:1],
 				append([]string{managedLine}, linuxFake.fstabLines[1:]...)...)
@@ -826,29 +853,31 @@ func newMountShareFixture(t *testing.T, options ...func(*mountShareFixtureSetup)
 }
 
 type mountShareFixtureSetup struct {
-	sudo                   bool
-	missingMountCIFS       bool
-	workingVersion         string
-	probeOutput            string
-	reachable              []string
-	existingAddress        string
-	existingProtocol       string
-	remoteVersion          int64
-	ownerFstabLines        []string
-	lockHeld               bool
-	staleLock              bool
-	mountTableMissing      bool
-	notWritable            bool
-	targetOutOfProfile     bool
-	windowsTarget          bool
-	shareInvisible         bool
-	targetWithoutDevice    bool
-	targetNoCommonNetwork  bool
-	darwinTarget           bool
-	darwinExistingAddress  string
-	darwinRemoteVersion    int64
-	darwinMissingAutomount bool
-	oldAuthoritySnapshot   bool
+	sudo                     bool
+	missingMountCIFS         bool
+	workingVersion           string
+	probeOutput              string
+	reachable                []string
+	existingAddress          string
+	existingProtocol         string
+	remoteVersion            int64
+	ownerFstabLines          []string
+	legacyFstabMarker        bool
+	lockHeld                 bool
+	staleLock                bool
+	mountTableMissing        bool
+	notWritable              bool
+	targetOutOfProfile       bool
+	windowsTarget            bool
+	shareInvisible           bool
+	targetWithoutDevice      bool
+	targetNoCommonNetwork    bool
+	darwinTarget             bool
+	darwinExistingAddress    string
+	darwinRemoteVersion      int64
+	darwinMountTableFirmlink bool
+	darwinMissingAutomount   bool
+	oldAuthoritySnapshot     bool
 }
 
 func TestMountShareTargetWithoutDeviceFailsWithoutProbe(t *testing.T) {
@@ -1359,6 +1388,35 @@ func TestMountShareDarwinRebuildsResetAutoMasterReference(t *testing.T) {
 	}
 }
 
+func TestMountShareDarwinFirmlinkMountTableReturnsNoChange(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.darwinTarget = true
+		setup.darwinExistingAddress = "192.0.2.10"
+		setup.darwinRemoteVersion = 1
+		setup.darwinMountTableFirmlink = true
+	})
+
+	for callIndex := 1; callIndex <= 2; callIndex++ {
+		output, text, isError := callMountShare(t, fixture.session, map[string]any{
+			"share": "datasets", "server_id": fixture.targetID,
+		})
+		if isError {
+			t.Fatalf("第 %d 次 macOS mount_share 失败：%s", callIndex, text)
+		}
+		if output["result"] != "no-change" {
+			t.Fatalf("第 %d 次 macOS 输出 = %#v，应识别数据卷 firmlink 挂载点",
+				callIndex, output)
+		}
+	}
+
+	darwinFake := fixture.fake.(*fakeDarwinMountServer)
+	mapWrites, autoMasterWrites := darwinFake.writeCounts()
+	if mapWrites != 0 || autoMasterWrites != 0 || darwinFake.remountCount() != 0 {
+		t.Fatalf("firmlink 挂载不应触发改写：映射 %d 次，主配置 %d 次，挂载刷新 %d 次",
+			mapWrites, autoMasterWrites, darwinFake.remountCount())
+	}
+}
+
 func TestMountShareDarwinRepeatReturnsNoChange(t *testing.T) {
 	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
 		setup.darwinTarget = true
@@ -1816,7 +1874,7 @@ func TestMountShareLinuxCommandUsesLockAndMarker(t *testing.T) {
 	if strings.Contains(mountCommand, "rm -rf") {
 		t.Fatalf("远端固定命令不能递归删除目录：%s", mountCommand)
 	}
-	if len(fstab) != 1 || !strings.Contains(fstab[0], "sshmgr-share=datasets,sshmgr-version=1") {
+	if len(fstab) != 1 || !strings.Contains(fstab[0], "x-sshmgr-share=datasets,x-sshmgr-version=1") {
 		t.Fatalf("带标记的 fstab = %#v", fstab)
 	}
 }
@@ -1858,6 +1916,45 @@ func TestMountShareLinuxKeepsWorkingExistingAddress(t *testing.T) {
 	credentialWrites, configurationWrites := fixture.fake.writeCounts()
 	if credentialWrites != 0 || configurationWrites != 0 {
 		t.Fatalf("现有配置无需改写：凭据写入 %d 次，配置写入 %d 次", credentialWrites, configurationWrites)
+	}
+}
+
+func TestMountShareLinuxRewritesLegacyFstabMarker(t *testing.T) {
+	fixture := newMountShareFixture(t, func(setup *mountShareFixtureSetup) {
+		setup.existingAddress = "192.0.2.10"
+		setup.existingProtocol = "3.1.1"
+		setup.remoteVersion = 1
+		setup.legacyFstabMarker = true
+	})
+
+	first, firstText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("改写旧格式标记失败：%s", firstText)
+	}
+	if first["result"] != "update-success" {
+		t.Fatalf("旧格式标记应触发更新，输出 = %#v", first)
+	}
+	_, _, _, fstab := fixture.fake.recorded()
+	if len(fstab) != 1 || strings.Contains(fstab[0], ",sshmgr-share=") ||
+		!strings.Contains(fstab[0], ",x-sshmgr-share=datasets,x-sshmgr-version=1,") {
+		t.Fatalf("旧格式标记没有改写为用户空间选项：%#v", fstab)
+	}
+
+	second, secondText, isError := callMountShare(t, fixture.session, map[string]any{
+		"share": "datasets", "server_id": fixture.targetID,
+	})
+	if isError {
+		t.Fatalf("改写后重复挂载失败：%s", secondText)
+	}
+	if second["result"] != "no-change" {
+		t.Fatalf("改写后重复挂载输出 = %#v", second)
+	}
+	credentialWrites, configurationWrites := fixture.fake.writeCounts()
+	if credentialWrites != 1 || configurationWrites != 1 {
+		t.Fatalf("旧格式只应改写一次：凭据写入 %d 次，配置写入 %d 次",
+			credentialWrites, configurationWrites)
 	}
 }
 
@@ -2182,7 +2279,7 @@ func TestMountShareLinuxPreservesOwnerFstabEntries(t *testing.T) {
 
 	_, _, _, fstab := fixture.fake.recorded()
 	if len(fstab) != 3 || fstab[0] != ownerBefore || fstab[2] != ownerAfter ||
-		!strings.Contains(fstab[1], "sshmgr-share=datasets,sshmgr-version=1") {
+		!strings.Contains(fstab[1], "x-sshmgr-share=datasets,x-sshmgr-version=1") {
 		t.Fatalf("owner 手写条目没有保持原位：%#v", fstab)
 	}
 }
