@@ -52,12 +52,12 @@ func TestConnectServerEntryObservesEveryTriedTopologyCandidate(t *testing.T) {
 	recorder := &dialObserverRecorder{results: results}
 
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
 		switch host {
 		case "192.0.2.10":
 			return nil, errors.New("connect failed")
 		case "100.64.10.5", "198.51.100.10", "203.0.113.99":
-			return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+			return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 		}
 		return nil, errors.New("unexpected candidate address")
 	}
@@ -129,8 +129,8 @@ func TestConnectServerEntryObservesHostKeyMismatchAsFailure(t *testing.T) {
 	recorder := &dialObserverRecorder{results: results}
 	fixtureByAddress := map[string]string{"192.0.2.10": wrongAddr, "198.51.100.10": correctAddr}
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
-		return connectWith(ctx, hostOf(fixtureByAddress[host]), portOf(fixtureByAddress[host]), user, auth, hostKeyCb, ka)
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
+		return connectWith(ctx, hostOf(fixtureByAddress[host]), portOf(fixtureByAddress[host]), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 

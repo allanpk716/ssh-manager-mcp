@@ -34,6 +34,9 @@ type Options struct {
 	// fixtures with known, distinct keys). Nil keeps the original behavior:
 	// a random RSA key per Start call.
 	HostKey ssh.Signer
+	// HostKeys 配置多把主机密钥。测试服务器按客户端算法偏好选择其中一
+	// 把；为空时沿用 HostKey 或随机 RSA 密钥。它与 HostKey 互斥。
+	HostKeys []ssh.Signer
 	// AuthRequests, when non-nil, is atomically bumped for every user
 	// authentication request that reaches a configured password or public-key
 	// callback. Host-key verification happens BEFORE user authentication, so a
@@ -77,19 +80,28 @@ type Options struct {
 // (LIFO) so the client closes first and server goroutines exit cleanly.
 func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 	t.Helper()
-	signer := opts.HostKey
-	if signer == nil {
-		rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-		if err != nil {
-			t.Fatalf("rsa key: %v", err)
+	signers := opts.HostKeys
+	if len(signers) == 0 {
+		signer := opts.HostKey
+		if signer == nil {
+			rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+			if err != nil {
+				t.Fatalf("rsa key: %v", err)
+			}
+			signer, err = ssh.NewSignerFromKey(rsaKey)
+			if err != nil {
+				t.Fatalf("signer: %v", err)
+			}
 		}
-		signer, err = ssh.NewSignerFromKey(rsaKey)
-		if err != nil {
-			t.Fatalf("signer: %v", err)
-		}
+		signers = []ssh.Signer{signer}
+	}
+	if opts.HostKey != nil && len(opts.HostKeys) > 0 {
+		t.Fatal("HostKey and HostKeys are mutually exclusive")
 	}
 	cfg := &ssh.ServerConfig{}
-	cfg.AddHostKey(signer)
+	for _, signer := range signers {
+		cfg.AddHostKey(signer)
+	}
 	if opts.Password != "" {
 		pw := opts.Password
 		cfg.PasswordCallback = func(_ ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
@@ -150,7 +162,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 		case <-time.After(2 * time.Second):
 		}
 	}
-	return ln.Addr().String(), signer.PublicKey(), cleanup
+	return ln.Addr().String(), signers[0].PublicKey(), cleanup
 }
 
 func bytesEqual(a, b []byte) bool {

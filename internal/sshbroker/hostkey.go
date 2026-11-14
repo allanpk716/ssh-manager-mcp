@@ -46,6 +46,10 @@ type hostKeyStoreWithSource interface {
 	) error
 }
 
+type hostKeyAlgorithmLearner interface {
+	LearnEntryPinAlgorithm(srv *models.Server, marshaledKey []byte) error
+}
+
 // HostKeyTOFU returns a trust-on-first-use host-key callback bound to st and one
 // server entry. First connection: records the key on the entry. Subsequent:
 // must satisfy the stored anchor under the system-wide dual-mode semantics
@@ -110,6 +114,14 @@ func hostKeyTOFU(st HostKeyStore, srv *models.Server, source store.WriteSource) 
 		if !pin.Matches(marshaled) {
 			return fmt.Errorf("%w: presented %s != pinned %s",
 				ErrHostKeyMismatch, ssh.FingerprintSHA256(remote), pinnedFingerprint(pin))
+		}
+		if pin.KeyAlgorithm == "" {
+			if learner, ok := st.(hostKeyAlgorithmLearner); ok {
+				if err := learner.LearnEntryPinAlgorithm(srv, marshaled); err != nil &&
+					!errors.Is(err, store.ErrReadOnly) {
+					return fmt.Errorf("learn host key algorithm: %w", err)
+				}
+			}
 		}
 		return nil
 	}, nil

@@ -468,6 +468,11 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "host_keys", "pin_device", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// 指纹锚可以记录算法族，连接时用它约束主机密钥算法。旧锚为空表示算
+	// 法未知；完整公钥锚读取时能推导算法，不需要重写旧数据。
+	if err := addColumnIfMissing(db, "entry_host_keys", "key_algorithm", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// Plan 51: servers.revision — the monotonic optimistic-lock token for
 	// metadata edits (every UPDATE servers path bumps it; see metadata.go).
 	// DEFAULT 0 back-fills legacy rows losslessly ("never written").
@@ -1014,7 +1019,8 @@ CREATE TABLE IF NOT EXISTS entry_host_keys (
   pin_format TEXT NOT NULL DEFAULT 'blob',
   pin_source TEXT NOT NULL DEFAULT 'tofu',
   pin_device TEXT NOT NULL DEFAULT '',
-  handshake_addr TEXT NOT NULL DEFAULT ''
+  handshake_addr TEXT NOT NULL DEFAULT '',
+  key_algorithm TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS secrets (
   id TEXT PRIMARY KEY,

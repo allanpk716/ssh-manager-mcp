@@ -600,7 +600,7 @@ func physicalVirtualAddressConflictWarningTx(
 		}
 		physicalNetwork, virtualNetwork := membership.NetworkName, other.NetworkName
 		if membership.NetworkType == models.NetworkVirtual {
-			physicalNetwork, virtualNetwork = membership.NetworkName, other.NetworkName
+			physicalNetwork, virtualNetwork = other.NetworkName, membership.NetworkName
 		}
 		return fmt.Sprintf(
 			"警告：地址 %s 同时登记在物理局域网 %s 与虚拟局域网 %s。这样无法证明首次连接实际走的是虚拟局域网，这台设备的服务器条目将无法自动首次锚定。请把其中一个成员改成所在网络自己的地址；确需先连接时，可用带外锚定：sshmgr servers pin-hostkey <服务器条目名> --fingerprint SHA256:...。",

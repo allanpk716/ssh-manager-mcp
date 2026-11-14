@@ -26,8 +26,9 @@ const (
 
 // Pin is a stored host-key anchor: its value bytes and format.
 type Pin struct {
-	Blob   []byte
-	Format string
+	Blob         []byte
+	Format       string
+	KeyAlgorithm string
 }
 
 // Matches reports whether the presented marshaled host key satisfies this pin
@@ -93,4 +94,38 @@ type PinMeta struct {
 	Device        string
 	HandshakeAddr string
 	CreatedAt     int64
+}
+
+// ParsePinKeyAlgorithm 校验命令行传入的算法族写法，并转成锚内保存的算法
+// 名。空值表示不指定；ecdsa 只能先保存算法族，具体曲线要等首次连接呈现
+// 完整公钥后才能确定。
+func ParsePinKeyAlgorithm(input string) (string, error) {
+	switch strings.TrimSpace(strings.ToLower(input)) {
+	case "":
+		return "", nil
+	case "ed25519":
+		return ssh.KeyAlgoED25519, nil
+	case ssh.KeyAlgoED25519:
+		return ssh.KeyAlgoED25519, nil
+	case "ecdsa":
+		return "ecdsa", nil
+	case ssh.KeyAlgoECDSA256, ssh.KeyAlgoECDSA384, ssh.KeyAlgoECDSA521:
+		return input, nil
+	case "rsa":
+		return "rsa", nil
+	case ssh.KeyAlgoRSA:
+		return "rsa", nil
+	default:
+		return "", fmt.Errorf("key type must be one of ed25519, ecdsa, rsa (got %q)", input)
+	}
+}
+
+// pinAlgorithmFromBlob 从完整 SSH 公钥字节推导算法名；无法解析时返回空串，
+// 由调用方按“算法未知”的保守路径处理。
+func pinAlgorithmFromBlob(blob []byte) string {
+	pub, err := ssh.ParsePublicKey(blob)
+	if err != nil {
+		return ""
+	}
+	return pub.Type()
 }

@@ -28,7 +28,7 @@ func TestNetworkMembershipPhysicalVirtualAddressConflictWarnsButWrites(t *testin
 		}
 	}
 
-	t.Run("add", func(t *testing.T) {
+	t.Run("add virtual then physical", func(t *testing.T) {
 		st := newTestStore(t)
 		seedMembershipNetworks(t, st)
 		if _, err := st.AddDevice("工作站", "", ""); err != nil {
@@ -41,8 +41,31 @@ func TestNetworkMembershipPhysicalVirtualAddressConflictWarnsButWrites(t *testin
 			"工作站", "家A局域网", "2001:0db8:0000:0000:0000:0000:0000:0001",
 		)
 		assertConflict(t, write, err)
+		if !strings.Contains(write.Warning,
+			"同时登记在物理局域网 家A局域网 与虚拟局域网 虚拟网") {
+			t.Fatalf("新增冲突警告必须按网络类型显示名称：%s", write.Warning)
+		}
 		if !strings.Contains(write.Warning, "2001:0db8:0000:0000:0000:0000:0000:0001") {
 			t.Fatalf("新增冲突警告应使用本次登记的地址：%s", write.Warning)
+		}
+	})
+
+	t.Run("add physical then virtual", func(t *testing.T) {
+		st := newTestStore(t)
+		seedMembershipNetworks(t, st)
+		if _, err := st.AddDevice("工作站", "", ""); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership("工作站", "家A局域网", "2001:db8::1"); err != nil {
+			t.Fatal(err)
+		}
+		write, err := st.AddNetworkMembershipWithWarning(
+			"工作站", "虚拟网", "2001:db8::1",
+		)
+		assertConflict(t, write, err)
+		if !strings.Contains(write.Warning,
+			"同时登记在物理局域网 家A局域网 与虚拟局域网 虚拟网") {
+			t.Fatalf("反向新增冲突警告必须按网络类型显示名称：%s", write.Warning)
 		}
 	})
 

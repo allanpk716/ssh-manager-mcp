@@ -45,8 +45,8 @@ func TestConnectServerEntryResolvesObserverFromTopologySource(t *testing.T) {
 		},
 	}}
 	original := lowLevelDial
-	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec) (*Client, error) {
-		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka)
+	lowLevelDial = func(ctx context.Context, host string, port int, user string, auth ssh.AuthMethod, hostKeyCb ssh.HostKeyCallback, ka keepAliveSpec, _ []string) (*Client, error) {
+		return connectWith(ctx, hostOf(fixtureAddr), portOf(fixtureAddr), user, auth, hostKeyCb, ka, nil)
 	}
 	t.Cleanup(func() { lowLevelDial = original })
 

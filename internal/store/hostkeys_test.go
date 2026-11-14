@@ -82,6 +82,9 @@ func TestMigrateHostKeysPinColumnsOldShape(t *testing.T) {
 			t.Fatalf("migrated host_keys missing %s", col)
 		}
 	}
+	if !hasColumn(t, s.db, "entry_host_keys", "key_algorithm") {
+		t.Fatal("migrated entry_host_keys missing key_algorithm")
+	}
 	pins, err := s.ListEntryPins()
 	if err != nil || len(pins) != 1 {
 		t.Fatalf("迁移后按条目的锚 = %+v, %v", pins, err)

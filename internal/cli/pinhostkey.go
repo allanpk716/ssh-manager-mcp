@@ -27,13 +27,14 @@ import (
 //	pin-hostkey <name> --from-keyscan <file|-> [--force]
 //	pin-hostkey <name> --clear               删除该条目的锚（幂等、写审计）
 //
-// 所有变更走存储层的单事务原语（UpsertManualEntryPin / ClearEntryPin），
+// 所有变更走存储层的单事务原语（UpsertManualEntryPin 系列 / ClearEntryPin），
 // --force 是唯一覆盖入口。
 func serversPinHostkeyCmd() *cobra.Command {
 	var (
 		list        bool
 		fingerprint string
 		keyscan     string
+		keyType     string
 		clear       bool
 		force       bool
 	)
@@ -49,21 +50,22 @@ the anchor; deleting the entry removes it.
 Forms:
   pin-hostkey <name>                     show fingerprint/format/source/device/handshake/created
   pin-hostkey --list                     list every entry anchor with its handshake address
-  pin-hostkey <name> --fingerprint SHA256:<base64> [--force]
+  pin-hostkey <name> --fingerprint SHA256:<base64> [--key-type ed25519|ecdsa|rsa] [--force]
   pin-hostkey <name> --from-keyscan <file|-> [--force]
   pin-hostkey <name> --clear             remove the entry's anchor (idempotent, audited)
 
---clear is mutually exclusive with --force/--fingerprint/--from-keyscan.
+--clear is mutually exclusive with --force/--fingerprint/--from-keyscan/--key-type.
 --force is the ONLY way to replace an existing pin.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fl := cmd.Flags()
 			fingerprintSet := fl.Changed("fingerprint")
 			keyscanSet := fl.Changed("from-keyscan")
+			keyTypeSet := fl.Changed("key-type")
 
 			// 参数组合检查在打开 vault 之前判定：错误调用绝不触库、绝不写审计。
 			if clear {
-				if force || fingerprintSet || keyscanSet {
-					return fmt.Errorf("--clear is mutually exclusive with --force/--fingerprint/--from-keyscan")
+				if force || fingerprintSet || keyscanSet || keyTypeSet {
+					return fmt.Errorf("--clear is mutually exclusive with --force/--fingerprint/--from-keyscan/--key-type")
 				}
 				if list {
 					return fmt.Errorf("--clear is mutually exclusive with --list")
@@ -72,7 +74,7 @@ Forms:
 					return fmt.Errorf("--clear needs a server name (the anchor follows the entry)")
 				}
 			} else if list {
-				if len(args) > 0 || force || fingerprintSet || keyscanSet {
+				if len(args) > 0 || force || fingerprintSet || keyscanSet || keyTypeSet {
 					return fmt.Errorf("--list takes no other arguments")
 				}
 			} else {
@@ -87,6 +89,9 @@ Forms:
 				}
 				if fingerprintSet && keyscanSet {
 					return fmt.Errorf("--fingerprint and --from-keyscan are mutually exclusive — pick one input channel")
+				}
+				if keyTypeSet && !fingerprintSet {
+					return fmt.Errorf("--key-type requires --fingerprint")
 				}
 			}
 
@@ -114,8 +119,13 @@ Forms:
 				if err != nil {
 					return err
 				}
+				keyAlgorithm, err := store.ParsePinKeyAlgorithm(keyType)
+				if err != nil {
+					return err
+				}
 				// 指纹锚没有握手地址可学，握手地址记空（展示为 "-"）。
-				return runPinManual(cmd, s, srv, "", blob, store.PinFormatFingerprint, fp, "fingerprint", "", force)
+				return runPinManual(cmd, s, srv, "", blob, store.PinFormatFingerprint,
+					fp, "fingerprint", "", keyAlgorithm, force)
 			case keyscanSet:
 				srv, err := pinResolve(s, args[0])
 				if err != nil {
@@ -129,7 +139,8 @@ Forms:
 				if m.skipHashed > 0 || m.skipMarker > 0 {
 					note = fmt.Sprintf("skipped %d hashed-hostname (|1|) and %d marker (@) lines\n", m.skipHashed, m.skipMarker)
 				}
-				return runPinManual(cmd, s, srv, store.EntryFallbackAddr(srv), m.blob, store.PinFormatBlob, m.fp, "keyscan", note, force)
+				return runPinManual(cmd, s, srv, store.EntryFallbackAddr(srv), m.blob,
+					store.PinFormatBlob, m.fp, "keyscan", note, "", force)
 			default:
 				srv, err := pinResolve(s, args[0])
 				if err != nil {
@@ -142,6 +153,7 @@ Forms:
 	c.Flags().BoolVar(&list, "list", false, "list every entry anchor with its handshake address")
 	c.Flags().StringVar(&fingerprint, "fingerprint", "", "pin by OpenSSH fingerprint SHA256:<base64, unpadded> (must decode to exactly 32 bytes)")
 	c.Flags().StringVar(&keyscan, "from-keyscan", "", "pin from a known_hosts / ssh-keyscan file (\"-\" = stdin)")
+	c.Flags().StringVar(&keyType, "key-type", "", "host-key family for --fingerprint: ed25519, ecdsa, or rsa (omit to learn it on first connect)")
 	c.Flags().BoolVar(&clear, "clear", false, "remove the entry's anchor (idempotent; audited)")
 	c.Flags().BoolVar(&force, "force", false, "replace an existing pin (the only override channel)")
 	return c
@@ -222,7 +234,10 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 
 // runPinManual 落 --fingerprint / --from-keyscan 锚：单事务原语，审计行在
 // 这里构造、在事务里写入，was= 指纹是事务内读到的旧锚。
-func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handshakeAddr string, blob []byte, format, fp, via, note string, force bool) error {
+func runPinManual(
+	cmd *cobra.Command, s *store.Store, srv *models.Server, handshakeAddr string,
+	blob []byte, format, fp, via, note, keyAlgorithm string, force bool,
+) error {
 	hostPort := store.EntryFallbackAddr(srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
 		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=%s forced=%t", srv.Name, hostPort, fp, via, force)
@@ -237,7 +252,9 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handsh
 			Status:   "ok",
 		}
 	}
-	old, err := s.UpsertManualEntryPin(srv, handshakeAddr, blob, format, force, auditFor)
+	old, err := s.UpsertManualEntryPinWithAlgorithm(
+		srv, handshakeAddr, blob, format, keyAlgorithm, force, auditFor,
+	)
 	if err != nil {
 		if errors.Is(err, store.ErrPinExists) {
 			return fmt.Errorf("refusing to replace the existing pin for %s: fingerprint=%s (source=%s) — pass --force to replace it",
@@ -254,6 +271,9 @@ func runPinManual(cmd *cobra.Command, s *store.Store, srv *models.Server, handsh
 	}
 	fmt.Fprintf(out, "pinned %s host=%s fingerprint=%s (format=%s, source=manual, handshake=%s, forced=%t)\n",
 		srv.Name, hostPort, fp, format, dash(handshakeAddr), force)
+	if keyAlgorithm != "" {
+		fmt.Fprintf(out, "key-type=%s\n", keyAlgorithm)
+	}
 	return nil
 }
 
