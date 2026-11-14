@@ -320,7 +320,8 @@ fi
 
 ` + darwinReselectUnmountScript(options) + `
 
-automount -cv
+# macOS 的 automount 刷新可能在做完挂载后仍返回 1；最终结论以挂载表验证为准。
+automount -cv >/dev/null 2>&1 || true
 ` + mountTableCheckScript(CheckSystemDarwin) + `if [ "$sshmgr_mounted" != yes ]; then
   echo ` + darwinMountMarker + ` verify-failed >&2
   exit ` + strconv.Itoa(darwinExitVerifyFailed) + `

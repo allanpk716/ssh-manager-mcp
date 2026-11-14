@@ -221,6 +221,151 @@ mount_point='/mnt/sshmgr/datasets'
 	})
 }
 
+func TestRevokedMarkerGuardScriptParsesVersionsUnderPOSIXShell(t *testing.T) {
+	shell := posixShellForTest(t)
+	directory := t.TempDir()
+	markerPath := filepath.Join(directory, "datasets.revoked")
+	otherShareMarkerPath := filepath.Join(directory, "archive.revoked")
+
+	tests := []struct {
+		name          string
+		marker        string
+		wantExitCode  int
+		wantStderr    string
+		wantVersion   string
+		keepOtherFile bool
+	}{
+		{
+			name:        "旧版本撤销标记可以越过",
+			marker:      "sshmgr-share=datasets;sshmgr-version=1;sshmgr-state=revoked\n",
+			wantVersion: "1",
+		},
+		{
+			name:         "相同版本撤销标记拒绝挂载",
+			marker:       "sshmgr-share=datasets;sshmgr-version=2;sshmgr-state=revoked\n",
+			wantExitCode: 90,
+			wantStderr:   "share-revoked",
+		},
+		{
+			name:         "更高版本撤销标记拒绝挂载",
+			marker:       "sshmgr-share=datasets;sshmgr-version=3;sshmgr-state=revoked\n",
+			wantExitCode: 90,
+			wantStderr:   "share-revoked",
+		},
+		{
+			name:          "其他共享名的撤销标记不受影响",
+			marker:        "",
+			wantVersion:   "0",
+			keepOtherFile: true,
+		},
+	}
+
+	for _, system := range []struct {
+		name   string
+		marker string
+	}{
+		{name: "Linux", marker: linuxMountMarker},
+		{name: "macOS", marker: darwinMountMarker},
+	} {
+		for _, testCase := range tests {
+			t.Run(system.name+" / "+testCase.name, func(t *testing.T) {
+				if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				if testCase.marker != "" {
+					if err := os.WriteFile(markerPath, []byte(testCase.marker), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				otherMarker := "sshmgr-share=archive;sshmgr-version=9;sshmgr-state=revoked\n"
+				if err := os.Remove(otherShareMarkerPath); err != nil && !os.IsNotExist(err) {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(otherShareMarkerPath, []byte(otherMarker), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				guard := revokedMarkerGuardScript(
+					markerPath, system.marker, 90, 89,
+				)
+				script := `set -eu
+sshmgr_expected_share=datasets
+sshmgr_expected_version=2
+` + guard + `
+rm -f "$sshmgr_revoked_marker"
+printf 'version=%s\n' "$sshmgr_revoked_version"
+`
+				output, err := exec.Command(shell, "-c", script).CombinedOutput()
+				if testCase.wantExitCode == 0 {
+					if err != nil {
+						t.Fatalf("撤销标记检查片段执行失败：%v\n%s\n脚本：\n%s", err, output, script)
+					}
+					if !strings.Contains(string(output), "version="+testCase.wantVersion) {
+						t.Fatalf("撤销标记版本号解析结果 = %q，期待 %s；脚本：\n%s",
+							string(output), testCase.wantVersion, script)
+					}
+					if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+						t.Fatalf("可越过的旧撤销标记应被清理：%v", statErr)
+					}
+				} else {
+					exitErr, ok := err.(*exec.ExitError)
+					if !ok || exitErr.ExitCode() != testCase.wantExitCode {
+						t.Fatalf("撤销标记检查片段退出结果 = %v，期待退出码 %d；输出：\n%s\n脚本：\n%s",
+							err, testCase.wantExitCode, output, script)
+					}
+					if !strings.Contains(string(output), testCase.wantStderr) {
+						t.Fatalf("撤销拒绝输出 = %q，应包含 %q", string(output), testCase.wantStderr)
+					}
+				}
+				if testCase.keepOtherFile {
+					if _, statErr := os.Stat(otherShareMarkerPath); statErr != nil {
+						t.Fatalf("其他共享名的撤销标记不应被清理：%v", statErr)
+					}
+				} else if _, statErr := os.Stat(otherShareMarkerPath); statErr != nil {
+					t.Fatalf("核对其他共享名撤销标记失败：%v", statErr)
+				}
+			})
+		}
+	}
+}
+
+func TestDarwinAutomountReloadAllowsNonzeroExitWhenMountSucceeds(t *testing.T) {
+	shell := posixShellForTest(t)
+	command := buildDarwinMountCommand(
+		&models.SharedStorage{Name: "datasets", MountUser: "mount-user", Version: 2},
+		[]*Candidate{{Address: "192.0.2.10"}},
+	)
+	reloadStart := strings.Index(command, "\n# macOS 的 automount 刷新可能在做完挂载后仍返回 1；最终结论以挂载表验证为准。\nautomount -cv >/dev/null 2>&1 || true\n")
+	if reloadStart < 0 {
+		t.Fatalf("macOS 固定挂载命令缺少自动挂载刷新步骤：%s", command)
+	}
+	resultStart := strings.Index(command[reloadStart:], "\nif [ \"$sshmgr_managed_count\"")
+	if resultStart < 0 {
+		t.Fatalf("macOS 固定挂载命令缺少刷新后的结果判定：%s", command)
+	}
+	fragment := command[reloadStart : reloadStart+resultStart]
+	script := `set -eu
+mount_point='/mnt/sshmgr/datasets'
+sshmgr_managed_count=1
+sshmgr_existing_configuration=no
+automount() {
+  return 1
+}
+mount() {
+  printf 'smbfs@//192.0.2.10/datasets on /System/Volumes/Data/mnt/sshmgr/datasets (smbfs, automounted)\n'
+}
+` + fragment + `
+echo 'SSHMGR-DARWIN-MOUNT reload-accepted'
+`
+	output, err := exec.Command(shell, "-c", script).CombinedOutput()
+	if err != nil {
+		t.Fatalf("macOS 自动挂载刷新返回非零但真实挂载成功时不应失败：%v\n%s\n脚本：\n%s",
+			err, output, script)
+	}
+	if !strings.Contains(string(output), "reload-accepted") {
+		t.Fatalf("macOS 刷新片段输出 = %q，未到达最终判定", string(output))
+	}
+}
+
 func posixShellForTest(t *testing.T) string {
 	t.Helper()
 	if path, err := exec.LookPath("dash"); err == nil {
