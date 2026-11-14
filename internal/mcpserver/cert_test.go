@@ -1,17 +1,24 @@
 package mcpserver
 
 import (
+	"bytes"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/paths"
 )
@@ -351,5 +358,167 @@ func TestGenerateServeCert_KeyUsage_NoKeyEncipherment(t *testing.T) {
 	}
 	if cert.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
 		t.Errorf("cert should set DigitalSignature, got KeyUsage=%v", cert.KeyUsage)
+	}
+}
+
+// TestGenerateServeCert_DefaultECDSAP256 pins the browser-compatibility fix:
+// a fresh serve certificate must use ECDSA P-256. Chrome, Edge and Firefox
+// all accept ECDSA signatures; the previous ed25519-only default made the
+// authoritative Web UI unreachable from those browsers.
+func TestGenerateServeCert_DefaultECDSAP256(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	if err := generateServeCert(certPath, keyPath); err != nil {
+		t.Fatalf("generateServeCert: %v", err)
+	}
+	cert := parseCertFile(t, certPath)
+	publicKey, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("serve cert public key = %T, want *ecdsa.PublicKey", cert.PublicKey)
+	}
+	if publicKey.Curve != elliptic.P256() {
+		t.Fatalf("serve cert curve = %v, want P-256", publicKey.Curve)
+	}
+	if len(cert.RawSubjectPublicKeyInfo) == 0 {
+		t.Fatal("serve cert must carry a SubjectPublicKeyInfo DER block")
+	}
+}
+
+// TestLoadOrCreateServeCert_KeepsExistingEd25519 pins the compatibility
+// contract: an ed25519 certificate already on disk (what every production
+// authoritative endpoint generated before this change) must be loaded and
+// used as-is — never migrated or regenerated, so its pinned fingerprint and
+// its pairing signature key keep working.
+func TestLoadOrCreateServeCert_KeepsExistingEd25519(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	t.Setenv("SSHMGR_SERVE_CERT", certPath)
+	t.Setenv("SSHMGR_SERVE_KEY", keyPath)
+	seedEd25519ServeCert(t, certPath, keyPath)
+	before := parseCertFile(t, certPath)
+	wantFingerprint := SPKIFingerprint(before)
+
+	gotCertPath, gotKeyPath, gotFingerprint, err := LoadOrCreateServeCert()
+	if err != nil {
+		t.Fatalf("LoadOrCreateServeCert with an existing ed25519 cert: %v", err)
+	}
+	if gotCertPath != certPath || gotKeyPath != keyPath {
+		t.Fatalf("paths = (%q,%q), want (%q,%q)", gotCertPath, gotKeyPath, certPath, keyPath)
+	}
+	if gotFingerprint != wantFingerprint {
+		t.Fatalf("fingerprint = %q, want the existing cert's %q (no regeneration)", gotFingerprint, wantFingerprint)
+	}
+	after := parseCertFile(t, certPath)
+	if !bytes.Equal(after.Raw, before.Raw) {
+		t.Fatal("existing ed25519 certificate was rewritten — must be kept byte-identical")
+	}
+	if _, ok := after.PublicKey.(ed25519.PublicKey); !ok {
+		t.Fatalf("existing ed25519 cert was migrated to %T — must stay ed25519", after.PublicKey)
+	}
+	if _, err := os.Stat(filepath.Join(dir, paths.ServeCertMarkerFilename)); !os.IsNotExist(err) {
+		t.Fatalf("loading an existing cert must not create the initialization marker, stat err=%v", err)
+	}
+}
+
+// TestDefaultServeCert_TLSHandshake_ECDSAOnlyCipherSuites is the browser
+// compatibility stand-in: a Go standard-library TLS 1.2 client offering ONLY
+// ECDSA cipher suites must complete a handshake against the default serve
+// certificate and observe an ECDSA P-256 peer certificate. With the old
+// ed25519 default this handshake fails, which mirrors what Chrome, Edge and
+// Firefox report.
+func TestDefaultServeCert_TLSHandshake_ECDSAOnlyCipherSuites(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "serve-cert.pem")
+	keyPath := filepath.Join(dir, "serve-key.pem")
+	if err := generateServeCert(certPath, keyPath); err != nil {
+		t.Fatalf("generateServeCert: %v", err)
+	}
+	certificate, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatalf("load generated keypair: %v", err)
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{certificate},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_, _ = connection.Read(make([]byte, 1))
+			_ = connection.Close()
+		}
+	}()
+
+	connection, err := tls.Dial("tcp", listener.Addr().String(), &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS12,
+		InsecureSkipVerify: true,
+		CipherSuites:       []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+	})
+	if err != nil {
+		t.Fatalf("ECDSA-only TLS handshake failed: %v", err)
+	}
+	defer connection.Close()
+	peer := connection.ConnectionState().PeerCertificates[0]
+	publicKey, ok := peer.PublicKey.(*ecdsa.PublicKey)
+	if !ok || publicKey.Curve != elliptic.P256() {
+		t.Fatalf("peer certificate key = %T, want ECDSA P-256", peer.PublicKey)
+	}
+}
+
+// parseCertFile reads and parses the PEM certificate at path.
+func parseCertFile(t *testing.T, path string) *x509.Certificate {
+	t.Helper()
+	der, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode(der)
+	if block == nil {
+		t.Fatalf("no PEM block in %s", path)
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
+}
+
+// seedEd25519ServeCert writes an ed25519 self-signed certificate shaped like
+// the pre-change serve default (the compatibility fixture).
+func seedEd25519ServeCert(t *testing.T, certPath, keyPath string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(7),
+		Subject:      pkix.Name{CommonName: serveCertSubject},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }

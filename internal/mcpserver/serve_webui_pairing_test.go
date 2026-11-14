@@ -3,7 +3,7 @@ package mcpserver
 import (
 	"bytes"
 	"context"
-	"crypto/ed25519"
+	"crypto"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/base64"
@@ -167,7 +167,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	}
 }
 
-func serveCertificatePublicKey(t *testing.T) ed25519.PublicKey {
+func serveCertificatePublicKey(t *testing.T) crypto.PublicKey {
 	t.Helper()
 	certPath, _, _, err := LoadOrCreateServeCert()
 	if err != nil {
@@ -185,11 +185,7 @@ func serveCertificatePublicKey(t *testing.T) ed25519.PublicKey {
 	if err != nil {
 		t.Fatal(err)
 	}
-	publicKey, ok := certificate.PublicKey.(ed25519.PublicKey)
-	if !ok {
-		t.Fatalf("权威端证书公钥类型错误：%T", certificate.PublicKey)
-	}
-	return publicKey
+	return certificate.PublicKey
 }
 
 func waitTCPListener(t *testing.T, address string, done <-chan error) {

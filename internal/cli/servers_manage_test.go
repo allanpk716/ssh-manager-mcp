@@ -203,6 +203,37 @@ func TestServersShowOnClientSnapshot(t *testing.T) {
 	}
 }
 
+// TestServersShowOnClientSnapshotWithInstance 校验客户端按命名实例查看：
+// `servers show <条目> --instance <实例>` 必须读取该实例的缓存快照，而不是
+// 把实例名当作角色强制参数传给角色解析（旧缺陷导致任何实例名都报
+// `invalid --mode`）。
+func TestServersShowOnClientSnapshotWithInstance(t *testing.T) {
+	snapshot := &store.Snapshot{Version: 1, Servers: []store.SnapshotServer{
+		{ID: "s1", Name: "instance-web", User: "root", Host: "192.0.2.20", Port: 2222,
+			CredentialID: "c1", Role: "实例角色", ShellType: "posix", DeviceID: "device-workstation"},
+	}, Devices: []store.SnapshotDevice{{ID: "device-workstation", Name: "workstation"}},
+		Profiles: []store.SnapshotProfile{{ID: "profile-1", Name: "客户端配置组"}},
+		Grants:   []store.SnapshotGrant{{ProfileID: "profile-1", ServerID: "s1"}},
+	}
+	seedClientCacheSnapshot(t, snapshot, "laptop")
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := runCli(t, "servers", "show", "instance-web", "--instance", "laptop")
+	for _, want := range []string{
+		"instance-web", "root@192.0.2.20:2222", "实例角色",
+		"仅显示本客户端可用的部分，修改请到权威端。",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("命名实例详情缺少 %q：\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "invalid --mode") {
+		t.Fatalf("实例名不得被当作角色强制参数：%s", out)
+	}
+}
+
 // TestServersShowReverseGroups 从根命令进入，校验单机 `servers show` 输出与
 // 详情页同一份反向查询结果，且不包含机密项值。
 func TestServersShowReverseGroups(t *testing.T) {

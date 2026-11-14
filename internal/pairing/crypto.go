@@ -8,10 +8,15 @@ package pairing
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hmac"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -78,6 +83,68 @@ func FinishAck(kAck [32]byte, id []byte) []byte {
 	m.Write([]byte("finish"))
 	m.Write(id)
 	return m.Sum(nil)
+}
+
+// SupportedSignatureKey reports whether publicKey belongs to a serve
+// certificate key family that can sign a pairing transcript: ed25519,
+// ECDSA P-256, or RSA. Other families are refused explicitly rather than
+// signed with an undefined convention.
+func SupportedSignatureKey(publicKey crypto.PublicKey) bool {
+	switch key := publicKey.(type) {
+	case ed25519.PublicKey:
+		return true
+	case *ecdsa.PublicKey:
+		return key.Curve == elliptic.P256()
+	case *rsa.PublicKey:
+		return true
+	default:
+		return false
+	}
+}
+
+// SignTranscript signs the pairing transcript with the serve certificate's
+// private key, choosing the convention by that key's family:
+//   - ed25519 signs the raw transcript (identical bytes to the original
+//     protocol, so already-paired endpoints keep working);
+//   - ECDSA P-256 and RSA sign SHA-256(transcript) (ASN.1 / PKCS #1 v1.5).
+func SignTranscript(signer crypto.Signer, transcript []byte) ([]byte, error) {
+	switch publicKey := signer.Public().(type) {
+	case ed25519.PublicKey:
+		return signer.Sign(rand.Reader, transcript, crypto.Hash(0))
+	case *ecdsa.PublicKey:
+		if publicKey.Curve != elliptic.P256() {
+			return nil, fmt.Errorf("pairing: unsupported serve certificate key type %T (want ed25519, ECDSA P-256, or RSA)", publicKey)
+		}
+		digest := sha256.Sum256(transcript)
+		return signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	case *rsa.PublicKey:
+		digest := sha256.Sum256(transcript)
+		return signer.Sign(rand.Reader, digest[:], crypto.SHA256)
+	default:
+		return nil, fmt.Errorf("pairing: unsupported serve certificate key type %T (want ed25519, ECDSA P-256, or RSA)", publicKey)
+	}
+}
+
+// VerifyTranscript verifies a pairing transcript signature against a serve
+// certificate public key using the family-specific convention of
+// SignTranscript. An unsupported key family or malformed signature simply
+// does not verify.
+func VerifyTranscript(publicKey crypto.PublicKey, transcript, signature []byte) bool {
+	switch key := publicKey.(type) {
+	case ed25519.PublicKey:
+		return ed25519.Verify(key, transcript, signature)
+	case *ecdsa.PublicKey:
+		if key.Curve != elliptic.P256() {
+			return false
+		}
+		digest := sha256.Sum256(transcript)
+		return ecdsa.VerifyASN1(key, digest[:], signature)
+	case *rsa.PublicKey:
+		digest := sha256.Sum256(transcript)
+		return rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], signature) == nil
+	default:
+		return false
+	}
 }
 
 // SealCreds 用 K_creds 做 AES-256-GCM 加密,随机 12B nonce 前置随文,

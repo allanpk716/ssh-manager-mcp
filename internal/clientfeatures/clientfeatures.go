@@ -46,7 +46,10 @@ func clientVersionLabelWithFeatures(clientVersion string, features []feature) st
 		if err != nil {
 			return clientVersion
 		}
-		if updater.CompareVersions(client, since) < 0 {
+		// 能力按「版本代」比较：X.Y.Z-预发布与 X.Y.Z 同代。严格语义化版本
+		// 会把 rc 判为旧于正式版，但候选版本客户端实际已具备同代能力，
+		// 设备码列表不能把它标成旧版客户端。
+		if compareFeatureGeneration(client, since) < 0 {
 			missing = append(missing, feature.Name)
 		}
 	}
@@ -54,6 +57,32 @@ func clientVersionLabelWithFeatures(clientVersion string, features []feature) st
 		return clientVersion
 	}
 	return clientVersion + "（" + oldClientLabelPrefix + strings.Join(missing, "、") + "）"
+}
+
+// compareFeatureGeneration 比较两个版本的主版本、次版本与修订号，忽略预
+// 发布后缀；返回值语义与 updater.CompareVersions 一致（-1/0/1）。
+func compareFeatureGeneration(client, since updater.Version) int {
+	switch {
+	case client.Major != since.Major:
+		return signForFeatureGeneration(client.Major, since.Major)
+	case client.Minor != since.Minor:
+		return signForFeatureGeneration(client.Minor, since.Minor)
+	case client.Patch != since.Patch:
+		return signForFeatureGeneration(client.Patch, since.Patch)
+	default:
+		return 0
+	}
+}
+
+func signForFeatureGeneration(x, y int) int {
+	switch {
+	case x < y:
+		return -1
+	case x > y:
+		return 1
+	default:
+		return 0
+	}
 }
 
 func oldClientLabel(features []feature) string {

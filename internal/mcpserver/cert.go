@@ -1,7 +1,8 @@
 package mcpserver
 
 import (
-	"crypto/ed25519"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
@@ -57,8 +58,8 @@ func ParsePin(s string) (string, bool) {
 // LoadOrCreateServeCert is a three-state idempotent initializer:
 //  1. cert present + parses as a valid keypair → load (return fingerprint).
 //  2. cert absent + init marker ABSENT → first-time init: generate a fresh
-//     ed25519 self-signed cert+key, write with HardenACL, AND write the init
-//     marker, then return the fingerprint.
+//     ECDSA P-256 self-signed cert+key (browser-compatible), write with
+//     HardenACL, AND write the init marker, then return the fingerprint.
 //  3. cert absent + init marker PRESENT → the cert was generated once (so
 //     clients are pinned to its fingerprint) and has since been deleted
 //     out-of-band. Return an error; refuse to silently regenerate, because a
@@ -69,6 +70,10 @@ func ParsePin(s string) (string, bool) {
 // If the files exist but are corrupt or mismatched (state 1's parse fails), an
 // error is returned — the caller MUST refuse to start, never silently
 // regenerate. (xcheck F10)
+//
+// Existing certificates of ANY supported key family (including the ed25519
+// certificates generated before the ECDSA default) are loaded as-is — never
+// migrated or regenerated.
 func LoadOrCreateServeCert() (certPath, keyPath, fingerprint string, err error) {
 	certPath, err = paths.ServeCertPath()
 	if err != nil {
@@ -214,13 +219,13 @@ func loadServeCertFingerprint(certPath, keyPath string) (string, error) {
 	return SPKIFingerprint(cert), nil
 }
 
-// generateServeCert creates a fresh ed25519 self-signed cert and key at the
+// generateServeCert creates a fresh ECDSA P-256 self-signed cert and key at the
 // given paths via temp+rename atomic writes, then calls store.HardenACL on
 // each (Windows ACL hardening; no-op on Unix where 0600 is enforced).
 func generateServeCert(certPath, keyPath string) error {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return fmt.Errorf("generate ed25519 key: %w", err)
+		return fmt.Errorf("generate ECDSA P-256 key: %w", err)
 	}
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
@@ -235,12 +240,12 @@ func generateServeCert(certPath, keyPath string) error {
 		Subject:      pkix.Name{CommonName: serveCertSubject},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(100 * 365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature, // ed25519 is a pure-signature algorithm; KeyEncipherment is meaningless for it (xcheck F9)
+		KeyUsage:     x509.KeyUsageDigitalSignature, // ECDSA is a pure-signature algorithm; KeyEncipherment is meaningless for it (xcheck F9)
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		DNSNames:     []string{host},
 		IPAddresses:  LocalNonLoopbackIPs(),
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, priv.Public(), priv)
 	if err != nil {
 		return fmt.Errorf("create certificate: %w", err)
 	}

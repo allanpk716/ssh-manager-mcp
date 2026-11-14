@@ -1,8 +1,8 @@
 package mcpserver
 
 import (
+	"crypto"
 	"crypto/ecdh"
-	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/tls"
@@ -94,17 +94,22 @@ type pairCredsEnvelope struct {
 }
 
 // loadPairSigner extracts the pairing signature key + SPKI pin from the serve
-// TLS cert: the ed25519 private key (auto-TLS always generates ed25519; an
-// operator-supplied RSA/ECDSA --tls-cert cannot sign pairings) and the cert's
-// SPKI fingerprint (the same pin clients cache). Called once at RunServe.
-func loadPairSigner(certPath, keyPath string) (ed25519.PrivateKey, string, error) {
+// TLS cert: the certificate private key (ed25519, ECDSA P-256 or RSA —
+// whichever family that certificate uses) and the cert's SPKI fingerprint
+// (the same pin clients cache). Called once at RunServe. Unsupported key
+// families yield an explicit error so pairing fails loudly instead of
+// producing signatures nobody can verify.
+func loadPairSigner(certPath, keyPath string) (crypto.Signer, string, error) {
 	k, err := tls.LoadX509KeyPair(certPath, keyPath)
 	if err != nil {
 		return nil, "", err
 	}
-	priv, ok := k.PrivateKey.(ed25519.PrivateKey)
-	if !ok || len(priv) != ed25519.PrivateKeySize {
-		return nil, "", fmt.Errorf("serve key is %T, want ed25519.PrivateKey — pairing signatures need the auto-TLS ed25519 cert", k.PrivateKey)
+	priv, ok := k.PrivateKey.(crypto.Signer)
+	if !ok {
+		return nil, "", fmt.Errorf("serve key is %T, want a signing private key (ed25519, ECDSA P-256 or RSA)", k.PrivateKey)
+	}
+	if !pairing.SupportedSignatureKey(priv.Public()) {
+		return nil, "", fmt.Errorf("serve certificate key is %T, which cannot sign pairing transcripts (want ed25519, ECDSA P-256 or RSA)", priv.Public())
 	}
 	if k.Leaf == nil {
 		if len(k.Certificate) == 0 {
@@ -121,14 +126,15 @@ func loadPairSigner(certPath, keyPath string) (ed25519.PrivateKey, string, error
 
 // LoadPairingSigner wires the pairing signer + SPKI pin from a TLS cert/key
 // pair on disk (RunServe's startup path, extracted so both callers share one
-// body): the serve cert's ed25519 key signs every pairing transcript and its
-// SPKI pin rides the sealed envelope. RunServe calls it at startup and only
-// logs a failure (the TLS surface itself is unaffected); the clientops pairing
-// e2e test calls it to stand up the REAL /pair surface over httptest TLS
-// without a full RunServe (no udp/7878 side effects, no port bookkeeping).
-// Auto-TLS is always ed25519; an operator-supplied non-ed25519 --tls-cert
-// returns an error — /pair enroll then answers 500 (a server-side
-// misconfiguration, not a client input problem).
+// body): the serve cert's private key signs every pairing transcript with its
+// own key family's convention (ed25519 raw; ECDSA P-256 and RSA over
+// SHA-256) and its SPKI pin rides the sealed envelope. RunServe calls it at
+// startup and only logs a failure (the TLS surface itself is unaffected); the
+// clientops pairing e2e test calls it to stand up the REAL /pair surface over
+// httptest TLS without a full RunServe (no udp/7878 side effects, no port
+// bookkeeping). A cert whose key family cannot sign returns an error — /pair
+// enroll then answers 500 (a server-side misconfiguration, not a client input
+// problem).
 func (r *ServeRunner) LoadPairingSigner(certPath, keyPath string) error {
 	signer, spki, err := loadPairSigner(certPath, keyPath)
 	if err != nil {
@@ -287,7 +293,7 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	if r.pairSigner == nil {
-		// Operator-supplied non-ed25519 --tls-cert: pairing cannot sign. 500
+		// Serve cert whose key family cannot sign: pairing is unavailable. 500
 		// (a server-side misconfiguration, not a client input problem).
 		http.Error(w, "pairing unavailable: serve cert cannot sign", http.StatusInternalServerError)
 		return
@@ -326,7 +332,11 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 		return
 	}
 	transcript := buildPairTranscript(id, []byte(in.Name), []byte(in.TargetURL), clientPub, cnonce, serverPub, snonce)
-	sig := ed25519.Sign(r.pairSigner, transcript)
+	sig, err := pairing.SignTranscript(r.pairSigner, transcript)
+	if err != nil {
+		http.Error(w, "pairing signature failed", http.StatusInternalServerError)
+		return
+	}
 
 	// SAS 落行(2026-09-01,撤销 spec rev4:69 的降级勘误):此刻 priv(刚生成)
 	// 与 clientPub(请求体)都在手,当场派生两侧一致的 6 位比对码随行落库,

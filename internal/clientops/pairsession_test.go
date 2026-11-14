@@ -242,6 +242,7 @@ func TestForceCleanup_RequiresValidatedSession(t *testing.T) {
 func TestForceCleanup_BadInputKeepsCredentials(t *testing.T) {
 	dir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 	validPin := testValidPin()
 	if err := WriteCacheCredFor("fc-keep", &CacheCred{URL: "https://old:7878", Token: "in-use-code", Pin: validPin}); err != nil {
 		t.Fatal(err)
@@ -267,6 +268,7 @@ func TestForceCleanup_BadInputKeepsCredentials(t *testing.T) {
 func TestForceCleanup_DeletesEnrollStateKeepsConfig(t *testing.T) {
 	dir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 	for name, body := range map[string]string{
 		"cache.auth.json":   `{"url":"https://old:7878","token":"c"}`,
 		"cache.bin":         "OLD",
@@ -308,6 +310,7 @@ func TestForceCleanup_DeletesEnrollStateKeepsConfig(t *testing.T) {
 func TestIsEnrolled(t *testing.T) {
 	dir := t.TempDir()
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	enrolled, err := IsEnrolled("is-enr")
 	if err != nil || enrolled {
@@ -443,6 +446,7 @@ func TestPairSession_HappyPath(t *testing.T) {
 		dir := t.TempDir()
 		withDEK(t)
 		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		withClientRoleRoot(t)
 		ctx := context.Background()
 
 		if enrolled, err := IsEnrolled("sess-laptop"); err != nil || enrolled {
@@ -504,6 +508,7 @@ func TestPairSession_HappyPath(t *testing.T) {
 		dir := t.TempDir()
 		withDEK(t)
 		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		withClientRoleRoot(t)
 		ctx := context.Background()
 
 		s, err := NewPairSession(PairOpts{Instance: "bind-laptop", Stdout: io.Discard, Stderr: io.Discard})
@@ -699,6 +704,7 @@ func TestPairForce_EnrollFailureKeepsOldSlotByteIdentical(t *testing.T) {
 		dir := t.TempDir()
 		withDEK(t)
 		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		withClientRoleRoot(t)
 
 		driveFullChain(t, srv.url, srv.spki, "gold-dev", true)
 		before := slotSnapshot(t, dir)
@@ -730,6 +736,7 @@ func TestPairForce_EnrollFailureKeepsOldSlotByteIdentical(t *testing.T) {
 	t.Run("enroll_network_failure", func(t *testing.T) {
 		dir := t.TempDir()
 		withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+		withClientRoleRoot(t)
 		// 富集旧槽:auth/bin/meta/config + quarantine/ 子树 + 产物,全在黄金面内。
 		for name, body := range map[string]string{
 			"cache.auth.json":          `{"url":"https://old:7878","token":"in-use-code","pin":"sha256:aa"}`,
@@ -771,6 +778,7 @@ func TestPairForce_FinishDropThenRerun_SelfHeals(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 	ctx := context.Background()
 
 	// 第一轮:finish 成功,写盘「失败」(= 不调 WriteAndPull)。
@@ -817,6 +825,7 @@ func TestPairForce_PulledThenRerun_Enroll419(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	driveFullChain(t, srv.url, srv.spki, "pulled-dev", true)
 
@@ -842,6 +851,7 @@ func TestPairForce_FirstPullCommitFail_DoublePathHint(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	s, err := NewPairSession(sessionOpts(srv.url, srv.spki, "rename-dev"))
 	if err != nil {
@@ -970,6 +980,7 @@ func TestPairFinish_FailurePathsCarryDoublePathHint(t *testing.T) {
 			dir := t.TempDir()
 			withDEK(t)
 			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+			withClientRoleRoot(t)
 			ctx := context.Background()
 
 			inner := srv.srv.Config.Handler
@@ -1012,6 +1023,7 @@ func TestPairForce_FinishTruncated_DoublePathHint_RerunAdmitted(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 	ctx := context.Background()
 
 	// 仅截断第一轮 /pair/finish 的响应(httptest 的 Config.Handler 每请求读取,
@@ -1079,6 +1091,7 @@ func TestPairForce_ConfigWriteFailThenRerun419_DoublePathStands(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 	ctx := context.Background()
 
 	FailNextConfigWriteForTest()

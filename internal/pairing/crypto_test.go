@@ -2,10 +2,17 @@ package pairing
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -102,5 +109,114 @@ func TestSealOpen_RoundTrip(t *testing.T) {
 	}
 	if _, err := OpenCreds([32]byte{8}, sealed); err == nil {
 		t.Fatal("wrong key must fail")
+	}
+}
+
+// TestSignAndVerifyTranscript_SupportedKeys pins the pairing signature
+// contract across the serve certificate key families: ed25519 signs the raw
+// transcript (byte-for-byte identical to the previous protocol), ECDSA P-256
+// signs the SHA-256 digest of the transcript, and RSA is accepted as a
+// courtesy for operator-supplied certificates.
+func TestSignAndVerifyTranscript_SupportedKeys(t *testing.T) {
+	transcript := TranscriptParts([]byte("sshmgr-pair-v2"), bytes.Repeat([]byte{9}, 32), []byte("dev"))
+
+	edPub, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecPriv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPriv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		signer crypto.Signer
+		public crypto.PublicKey
+	}{
+		{"ed25519", edPriv, edPub},
+		{"ecdsa-p256", ecPriv, ecPriv.Public()},
+		{"rsa-2048", rsaPriv, rsaPriv.Public()},
+	} {
+		sig, err := SignTranscript(tc.signer, transcript)
+		if err != nil {
+			t.Fatalf("%s sign: %v", tc.name, err)
+		}
+		if !VerifyTranscript(tc.public, transcript, sig) {
+			t.Fatalf("%s signature does not verify", tc.name)
+		}
+		if VerifyTranscript(tc.public, append(append([]byte{}, transcript...), 'x'), sig) {
+			t.Fatalf("%s signature verified against a different transcript", tc.name)
+		}
+		if VerifyTranscript(tc.public, transcript, append(append([]byte{}, sig...), 'x')) {
+			t.Fatalf("%s corrupted signature verified", tc.name)
+		}
+
+		// Independent verification with a second implementation pins the
+		// digest choice: ed25519 signs the raw transcript; ECDSA and RSA sign
+		// SHA-256(transcript).
+		switch key := tc.public.(type) {
+		case ed25519.PublicKey:
+			if !ed25519.Verify(key, transcript, sig) {
+				t.Fatalf("%s independent raw verification failed", tc.name)
+			}
+			if len(sig) != ed25519.SignatureSize {
+				t.Fatalf("%s signature length = %d, want %d", tc.name, len(sig), ed25519.SignatureSize)
+			}
+		case *ecdsa.PublicKey:
+			digest := sha256.Sum256(transcript)
+			if !ecdsa.VerifyASN1(key, digest[:], sig) {
+				t.Fatalf("%s independent SHA-256 digest verification failed", tc.name)
+			}
+		case *rsa.PublicKey:
+			digest := sha256.Sum256(transcript)
+			if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, digest[:], sig); err != nil {
+				t.Fatalf("%s independent SHA-256 digest verification failed: %v", tc.name, err)
+			}
+		}
+	}
+}
+
+// TestVerifyTranscript_RejectsECDSACurveOutsideContract ensures verification
+// accepts only ECDSA P-256 keys, matching signing and certificate loading.
+func TestVerifyTranscript_RejectsECDSACurveOutsideContract(t *testing.T) {
+	transcript := []byte("sshmgr-pair-transcript")
+	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(transcript)
+	signature, err := ecdsa.SignASN1(rand.Reader, privateKey, digest[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ecdsa.VerifyASN1(&privateKey.PublicKey, digest[:], signature) {
+		t.Fatal("test premise failed: P-384 signature must verify with crypto/ecdsa")
+	}
+	if VerifyTranscript(privateKey.Public(), transcript, signature) {
+		t.Fatal("P-384 pairing signature must not verify")
+	}
+}
+
+// TestSignTranscript_UnsupportedKeyRefusesExplicitly ensures an unsupported
+// certificate key family yields a clear error instead of a bogus signature.
+func TestSignTranscript_UnsupportedKeyRefusesExplicitly(t *testing.T) {
+	privateKey, err := ecdsa.GenerateKey(elliptic.P224(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = SignTranscript(privateKey, []byte("m"))
+	if err == nil {
+		t.Fatal("P-224 signing must not silently succeed")
+	}
+	if !strings.Contains(err.Error(), "unsupported") {
+		t.Fatalf("error should say the key family is unsupported, got: %v", err)
+	}
+	if SupportedSignatureKey(privateKey.Public()) {
+		t.Fatal("P-224 must not be reported as a supported pairing signature key")
 	}
 }

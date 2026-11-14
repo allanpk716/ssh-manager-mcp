@@ -51,10 +51,26 @@ func TestClientVersionLabel(t *testing.T) {
 			want:          "dev",
 		},
 		{
-			name:          "预发布版本按语义版本比较",
+			name:          "同代预发布版本具备该版本能力",
 			clientVersion: "v2.0.0-rc.1",
 			features:      injected,
-			want:          "v2.0.0-rc.1（旧版客户端:不支持机密项、网络拓扑、共享存储）",
+			want:          "v2.0.0-rc.1（旧版客户端:不支持网络拓扑、共享存储）",
+		},
+		{
+			name:          "候选版本与正式版本同代",
+			clientVersion: "0.22.0-rc6",
+			features: []feature{
+				{Name: "机密项", SinceVersion: "v0.22.0"},
+				{Name: "网络拓扑", SinceVersion: "v0.22.0"},
+				{Name: "共享存储", SinceVersion: "v0.22.0"},
+			},
+			want: "0.22.0-rc6",
+		},
+		{
+			name:          "旧版本的预发布仍是旧版",
+			clientVersion: "v2.9.0-rc.1",
+			features:      injected,
+			want:          "v2.9.0-rc.1（旧版客户端:不支持网络拓扑、共享存储）",
 		},
 	}
 	for _, test := range tests {

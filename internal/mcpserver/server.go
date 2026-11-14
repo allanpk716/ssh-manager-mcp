@@ -517,11 +517,13 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 			st := storeFromContext(ctx, storeFn)
 			out, err := ExecContextForProfile(ctx, st, projectID, profileID, in.ServerID, in.Sudo, toolHostKeyStoreFromContext(ctx))
 			if err != nil {
-				// Surface the error to the agent as a tool error (IsError), not a transport error.
+				// Surface the error to the agent as a tool error (IsError), not a transport
+				// error. The typed output must stay schema-valid: the SDK serializes and
+				// validates it even alongside an error result.
 				return &mcp.CallToolResult{
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-				}, ExecContextOutput{}, nil
+				}, emptyExecContextOutput(), nil
 			}
 			return nil, out, nil
 		},

@@ -2,18 +2,27 @@ package mcpserver
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdh"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +47,7 @@ func pairLimitsLoose() pairLimits {
 // newPairRunner stands up a ServeRunner with an in-test ed25519 pairing signer
 // (the real one comes from the serve cert at RunServe time) and loose rate
 // limits. Returns the server, the store, the runner and the signer's public key.
-func newPairRunner(t *testing.T) (*httptest.Server, *store.Store, *ServeRunner, ed25519.PublicKey) {
+func newPairRunner(t *testing.T) (*httptest.Server, *store.Store, *ServeRunner, crypto.PublicKey) {
 	t.Helper()
 	st := newTestStore(t)
 	r, err := NewServeRunner(st)
@@ -150,7 +159,7 @@ func (c *pairClient) enrollBody() string {
 
 // learnServer computes the transcript + both keys from the enroll response
 // (server_pub/snonce/sig), verifying sig against the given cert public key.
-func (c *pairClient) learnServer(t *testing.T, body []byte, certPub ed25519.PublicKey) (kAck, kCreds [32]byte) {
+func (c *pairClient) learnServer(t *testing.T, body []byte, certPub crypto.PublicKey) (kAck, kCreds [32]byte) {
 	t.Helper()
 	var resp struct {
 		ServerPub string `json:"server_pub"`
@@ -169,12 +178,12 @@ func (c *pairClient) learnServer(t *testing.T, body []byte, certPub ed25519.Publ
 		t.Fatalf("snonce bad: %v len=%d", err, len(snonce))
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(resp.Sig)
-	if err != nil || len(sig) != ed25519.SignatureSize {
+	if err != nil || len(sig) == 0 {
 		t.Fatalf("sig bad: %v len=%d", err, len(sig))
 	}
 	tr := buildPairTranscript(c.id[:], []byte(c.name), []byte(c.url),
 		c.priv.PublicKey().Bytes(), c.cnonce[:], serverPub, snonce)
-	if !ed25519.Verify(certPub, tr, sig) {
+	if !pairing.VerifyTranscript(certPub, tr, sig) {
 		t.Fatal("sig does not verify over the transcript with the serve cert public key")
 	}
 	remote, err := ecdh.X25519().NewPublicKey(serverPub)
@@ -223,7 +232,7 @@ func findRow(t *testing.T, st *store.Store, id []byte) *store.PendingPairing {
 }
 
 // enrollOK runs one enroll expected to succeed and returns the derived keys.
-func enrollOK(t *testing.T, srv *httptest.Server, st *store.Store, certPub ed25519.PublicKey, c *pairClient) (kAck, kCreds [32]byte) {
+func enrollOK(t *testing.T, srv *httptest.Server, st *store.Store, certPub crypto.PublicKey, c *pairClient) (kAck, kCreds [32]byte) {
 	t.Helper()
 	res := pairReq(t, srv, http.MethodPost, "/pair/enroll", c.enrollBody())
 	body := readBody(t, res)
@@ -619,4 +628,105 @@ func TestPairLimitsFromEnv_Clamps(t *testing.T) {
 	if perIP != 1 || global != 128 {
 		t.Fatalf("pending clamps wrong: perIP=%d global=%d (want 1/128)", perIP, global)
 	}
+}
+
+// TestPairEnroll_ECDSAAndEd25519ServeCertificates pins the pairing signature
+// round trip for both certificate generations: a P-256 serve certificate
+// (the new default) AND an existing ed25519 certificate (already deployed in
+// production) must both load as pairing signers, sign enroll transcripts with
+// their own key family, and verify against the same certificate's public key.
+func TestPairEnroll_ECDSAAndEd25519ServeCertificates(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		generate func(*testing.T) (crypto.Signer, crypto.PublicKey)
+	}{
+		{"ecdsa-p256", generateECDSAPairingCertificate},
+		{"ed25519", generateEd25519PairingCertificate},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			signer, publicKey := tc.generate(t)
+			certPath, keyPath, certificate := writeSelfSignedPairingCert(t, signer, publicKey)
+
+			st := newTestStore(t)
+			runner, err := NewServeRunner(st)
+			if err != nil {
+				t.Fatalf("NewServeRunner: %v", err)
+			}
+			t.Cleanup(runner.Close)
+			if err := runner.LoadPairingSigner(certPath, keyPath); err != nil {
+				t.Fatalf("LoadPairingSigner with %s cert: %v", tc.name, err)
+			}
+			if runner.pairSPKI != SPKIFingerprint(certificate) {
+				t.Fatalf("pairSPKI = %q, want the certificate SPKI fingerprint %q", runner.pairSPKI, SPKIFingerprint(certificate))
+			}
+			runner.pairLimits = pairLimitsLoose()
+			srv := httptest.NewServer(runner.HTTPHandler())
+			t.Cleanup(srv.Close)
+
+			client := newPairClient(t, "dev-"+tc.name, "https://192.0.2.10:7878")
+			kAck, _ := enrollOK(t, srv, st, publicKey, client)
+			if kAck == [32]byte{} {
+				t.Fatal("ack key must not be zero")
+			}
+		})
+	}
+}
+
+// generateECDSAPairingCertificate creates a P-256 keypair (the new serve
+// default certificate shape).
+func generateECDSAPairingCertificate(t *testing.T) (crypto.Signer, crypto.PublicKey) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey, privateKey.Public()
+}
+
+// generateEd25519PairingCertificate creates an ed25519 keypair (the
+// pre-change serve default certificate shape).
+func generateEd25519PairingCertificate(t *testing.T) (crypto.Signer, crypto.PublicKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey, publicKey
+}
+
+// writeSelfSignedPairingCert writes a self-signed certificate for the given
+// keypair and returns its paths plus the parsed certificate.
+func writeSelfSignedPairingCert(t *testing.T, signer crypto.Signer, publicKey crypto.PublicKey) (string, string, *x509.Certificate) {
+	t.Helper()
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(21),
+		Subject:      pkix.Name{CommonName: "pair-sign-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, publicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "cert.pem")
+	keyPath := filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyBytes}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	certificate, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certPath, keyPath, certificate
 }

@@ -328,6 +328,10 @@ func TestCacheTokensLsShowsClientVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,client_version,last_pull_at,created_at,updated_at)
+		VALUES ('ct-rc','laptop-rc',x'00',x'00','rcXXXXXX','active','p1','v0.22.0-rc5',1000,1,1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO cache_tokens (id,name,token_hash,token_salt,token_prefix,status,profile_id,client_version,last_pull_at,created_at,updated_at)
 		VALUES ('ct-dev','laptop-dev',x'00',x'00','devrXXXX','active','p1','dev',1000,1,1)`); err != nil {
 		t.Fatal(err)
 	}
@@ -348,6 +352,8 @@ func TestCacheTokensLsShowsClientVersion(t *testing.T) {
 		"client_version=v0.21.1（旧版客户端:不支持机密项、网络拓扑、共享存储）",
 		"laptop-current",
 		"client_version=v0.22.0",
+		"laptop-rc",
+		"client_version=v0.22.0-rc5",
 		"laptop-dev",
 		"client_version=dev",
 		"laptop-old",

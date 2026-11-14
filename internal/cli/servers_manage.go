@@ -92,7 +92,10 @@ func serversShowCmd() *cobra.Command {
 		Short: "Show one server's details (never prints credential contents)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			launch, err := resolveMachineRole(instance)
+			// --instance 只选择缓存读取路径，不是角色强制参数；角色必须
+			// 读取本机真实状态（role.json 与文件探测），实例名传给
+			// resolveMachineRole 会被当成 --mode 拒绝。
+			launch, err := resolveMachineRole("")
 			if err != nil {
 				return err
 			}

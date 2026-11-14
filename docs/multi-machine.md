@@ -93,7 +93,7 @@ sshmgr serve --addr 0.0.0.0:7878
 | 选项 | 说明 |
 |---|---|
 | `--addr` | 监听地址。默认 `127.0.0.1:7878`（**只本机**——远程用不了）。多机场景写 `0.0.0.0:7878` 或服务器的 VLAN IP。 |
-| `--tls-cert` / `--tls-key` | **可选**。不挂时（默认）serve 首次启动**自动生成一张自签 ed25519 证书**，落 vault 固定目录（`serve-cert.pem` / `serve-key.pem`，ACL 与 `master.key.plain` 同级）。要用自己的证书才挂这两个 flag。 |
+| `--tls-cert` / `--tls-key` | **可选**。不挂时（默认）serve 首次启动**自动生成一张自签 ECDSA P-256 证书**（0.22.0 前为 ed25519；已存在的证书照常沿用），落 vault 固定目录（`serve-cert.pem` / `serve-key.pem`，ACL 与 `master.key.plain` 同级）。要用自己的证书才挂这两个 flag。 |
 | `--pairing` / `--discovery` | **可选**。SAS 配对面（`/pair/*`）与 UDP 发现（udp/7878）的三态开关：显式置位才参与裁决，优先级 **显式 env（`SSHMGR_SERVE_PAIRING`/`SSHMGR_SERVE_DISCOVERY`）> 显式 flag > store 设置 > 缺省 true**；store 变更 ≤5s 生效，env/flag 变更需重启 serve。 |
 
 **自签证书 + 指纹钉死 = 零证书分发。** 自签证书首次生成时，serve 把它的 **SPKI 指纹**（`sha256:...`）打印到启动日志（`client pin:` 那行）。客户端（`pair` / `cache pull` / 工作机）用这个指纹**钉死**对端 —— 连接时校验服务器证书公钥 == 钉死的指纹，不等即拒，**首次连接即校验（零 MITM 窗口）**。无需在每台客户端装根证书。
@@ -679,7 +679,7 @@ serve 自签证书长生（不靠过期驱动轮换），但若私钥疑似泄�
 1. 在 serve 机**同时删** cert + key + init-marker：
    `rm "<VaultDir>/serve-cert.pem" "<VaultDir>/serve-key.pem" "<VaultDir>/.serve-cert-initialized"`
    （⚠️ 必须三个一起删。只删 cert/key 而 marker 还在 → serve 拒启动，防误删静默重生。）
-2. 重启 serve → 生成全新 ed25519 key + 新自签证书 + 新 marker。
+2. 重启 serve → 生成全新 ECDSA P-256 key + 新自签证书 + 新 marker。
 3. `sshmgr serve cert-info` → 拿**新** SPKI 指纹。
 4. **全量重新 enroll** 所有工作机：重新 `cache-tokens add` 发带新指纹的设备码，或更新各机 `SSHMGR_SERVE_PIN=<新指纹>`。旧 pin 全部失配（看起来像 MITM，属预期）。
 5. 各工作机手动 `cache pull` 带新 `--pin`（会同时更新 `cache.auth.json` 里的 pin）→ 走新指纹成功；之后的自动拉取恢复正常。

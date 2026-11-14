@@ -2,7 +2,7 @@ package mcpserver
 
 import (
 	"context"
-	"crypto/ed25519"
+	"crypto"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
@@ -70,12 +70,12 @@ type ServeRunner struct {
 	// unfinishable and expire through the store's time predicates).
 	pairMu   sync.Mutex
 	pairKeys map[[32]byte]pairKeyEntry
-	// pairSigner is the serve cert's ed25519 private key (the long-term
-	// identity that signs each pairing transcript — F5); pairSPKI is the
+	// pairSigner is the serve cert's private key (ed25519, ECDSA P-256 or RSA;
+	// the long-term identity that signs each pairing transcript — F5); pairSPKI is the
 	// cert's SPKI fingerprint handed to the client inside the sealed
 	// envelope so it pins the same key it is paired with. Both are set once
 	// at RunServe startup (nil/"" = pairing signing unavailable).
-	pairSigner ed25519.PrivateKey
+	pairSigner crypto.Signer
 	pairSPKI   string
 	// per-IP rate limiters + pending-queue quotas (frozen env seams, read at
 	// construction — restart-effective).
@@ -745,11 +745,11 @@ func RunServe(ctx context.Context, st *store.Store, addr, tlsCert, tlsKey string
 		serveCertFingerprint = fp
 	}
 
-	// Pairing signature state (Plan 42 批1 T5): the serve cert's ed25519 key
-	// signs every pairing transcript and its SPKI pin rides the sealed
-	// envelope. A load failure (operator-supplied non-ed25519 --tls-cert) is
-	// logged and serve continues — /pair enroll answers 500, the TLS surface
-	// is unaffected (LoadPairingSigner doc).
+	// Pairing signature state (Plan 42 批1 T5): the serve cert's private key
+	// signs every pairing transcript with its own key family and its SPKI pin
+	// rides the sealed envelope. A load failure (a cert whose key family
+	// cannot sign) is logged and serve continues — /pair enroll answers 500,
+	// the TLS surface is unaffected (LoadPairingSigner doc).
 	if err := runner.LoadPairingSigner(tlsCert, tlsKey); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: /pair disabled: serve key unusable for pairing signatures: %v\n", err)
 	}

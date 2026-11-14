@@ -2,7 +2,10 @@ package clientops
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -20,7 +23,9 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/dialdevice"
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -39,14 +44,19 @@ type pairingServer struct {
 	hits int32 // requests that REACHED the handler (TLS-pin failures never count)
 }
 
-// newPairingServer stands up the full pairing + snapshot surface. The
-// auto-approver approves the FIRST pending row with profile "team-a".
+// newPairingServer stands up the full pairing + snapshot surface with an
+// ed25519 serve certificate. The auto-approver approves the FIRST pending row
+// with profile "team-a".
 func newPairingServer(t *testing.T) *pairingServer {
+	return newPairingServerForSigner(t, newEd25519PairKey)
+}
+
+// newPairingServerForSigner stands up the full pairing + snapshot surface
+// with a serve certificate minted from the given key factory. The
+// auto-approver approves the FIRST pending row with profile "team-a".
+func newPairingServerForSigner(t *testing.T, newKey func(*testing.T) (crypto.Signer, crypto.PublicKey)) *pairingServer {
 	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	signer, publicKey := newKey(t)
 	tmpl := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "pair-test"},
@@ -56,7 +66,7 @@ func newPairingServer(t *testing.T) *pairingServer {
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, publicKey, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +76,7 @@ func newPairingServer(t *testing.T) *pairingServer {
 	if err := os.WriteFile(certPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	keyBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	keyBytes, err := x509.MarshalPKCS8PrivateKey(signer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +115,7 @@ func newPairingServer(t *testing.T) *pairingServer {
 		runner.HTTPHandler().ServeHTTP(w, r)
 	})
 	srv := httptest.NewUnstartedServer(handler)
-	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: priv}}}
+	srv.TLS = &tls.Config{Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: signer}}}
 	srv.StartTLS()
 	ps.srv = srv
 	ps.url = srv.URL
@@ -138,6 +148,26 @@ func newPairingServer(t *testing.T) *pairingServer {
 	return ps
 }
 
+// newEd25519PairKey creates the pre-change serve certificate key family.
+func newEd25519PairKey(t *testing.T) (crypto.Signer, crypto.PublicKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey, publicKey
+}
+
+// newECDSAP256PairKey creates the new default serve certificate key family.
+func newECDSAP256PairKey(t *testing.T) (crypto.Signer, crypto.PublicKey) {
+	t.Helper()
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey, privateKey.Public()
+}
+
 // pairOpts is the common RunPair input with per-test overrides.
 func pairOpts(srv *pairingServer, instance string, mutate func(*PairOpts)) PairOpts {
 	o := PairOpts{
@@ -152,11 +182,22 @@ func pairOpts(srv *pairingServer, instance string, mutate func(*PairOpts)) PairO
 	return o
 }
 
+// withClientRoleRoot isolates role.json (written on pair completion) from the
+// operator's real user configuration directory and vault directory.
+func withClientRoleRoot(t *testing.T) {
+	t.Helper()
+	withEnv(t, map[string]string{
+		"SSHMGR_CONFIG_ROOT": t.TempDir(),
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "absent-store.db"),
+	})
+}
+
 func TestRunPair_EndToEnd(t *testing.T) {
 	srv := newPairingServer(t)
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	var out, errb bytes.Buffer
 	o := pairOpts(srv, "it-laptop", func(p *PairOpts) { p.Stdout, p.Stderr = &out, &errb })
@@ -222,11 +263,141 @@ func TestRunPair_EndToEnd(t *testing.T) {
 	}
 }
 
+// TestRunPair_EndToEnd_ECDSAAndEd25519ServeCerts pins the CLIENT half of the
+// serve certificate key-family matrix: the enroll response signature must be
+// verified by the certificate's own family — P-256 (the new default) signs
+// the SHA-256 transcript digest, ed25519 (already deployed) signs the raw
+// transcript — and pairing must complete end to end for both.
+func TestRunPair_EndToEnd_ECDSAAndEd25519ServeCerts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		newKey func(*testing.T) (crypto.Signer, crypto.PublicKey)
+	}{
+		{"ecdsa-p256", newECDSAP256PairKey},
+		{"ed25519", newEd25519PairKey},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newPairingServerForSigner(t, tc.newKey)
+			dir := t.TempDir()
+			withDEK(t)
+			withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+			withClientRoleRoot(t)
+
+			var out bytes.Buffer
+			if err := RunPair(pairOpts(srv, "it-"+tc.name, func(p *PairOpts) {
+				p.Stdout, p.Stderr = &out, &out
+			})); err != nil {
+				t.Fatalf("RunPair: %v\nstdout=%s", err, out.String())
+			}
+			cred, err := ReadCacheCredFor("it-" + tc.name)
+			if err != nil || cred == nil {
+				t.Fatalf("cache.auth.json: cred=%+v err=%v", cred, err)
+			}
+			if cred.Pin != srv.spki {
+				t.Fatalf("cred.Pin = %q, want the serve certificate pin %q", cred.Pin, srv.spki)
+			}
+			if _, err := LoadCacheSnapshotFor("it-" + tc.name); err != nil {
+				t.Fatalf("first pull must land a readable cache snapshot: %v", err)
+			}
+		})
+	}
+}
+
+// TestRunPair_WritesClientRoleForDialDevice reproduces the first-anchoring
+// defect: pairing used to leave no client role.json behind, so
+// dialdevice.Current answered "role-unknown" and every first anchoring of a
+// topology-backed entry was refused. Pair completion must record the client
+// role; after the authority associates the device code with a topology
+// device and the client pulls again, Current must identify this machine.
+func TestRunPair_WritesClientRoleForDialDevice(t *testing.T) {
+	srv := newPairingServer(t)
+	cacheDir := t.TempDir()
+	configRoot := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR":   cacheDir,
+		"SSHMGR_CONFIG_ROOT": configRoot,
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "absent-store.db"),
+	})
+
+	if err := RunPair(pairOpts(srv, "role-laptop", nil)); err != nil {
+		t.Fatalf("RunPair: %v", err)
+	}
+	state, err := roles.Load()
+	if err != nil {
+		t.Fatalf("roles.Load after pair: %v", err)
+	}
+	if state == nil || state.Role != roles.RoleClient || !state.SetupComplete {
+		t.Fatalf("role.json after pair = %+v, want role=client setup_complete=true", state)
+	}
+	if _, err := os.Stat(filepath.Join(configRoot, "ssh-manager", "role.json")); err != nil {
+		t.Fatalf("client role.json must live beside the client cache data: %v", err)
+	}
+
+	// The owner associates the new device code with a topology device, the
+	// client pulls the refreshed snapshot, and the dialer must now resolve
+	// this machine's own device.
+	device, err := srv.st.AddDevice("office-device", "", "role-laptop")
+	if err != nil {
+		t.Fatalf("AddDevice bound to the paired device code: %v", err)
+	}
+	cred, err := ReadCacheCredFor("role-laptop")
+	if err != nil || cred == nil {
+		t.Fatalf("ReadCacheCredFor: cred=%+v err=%v", cred, err)
+	}
+	if _, err := DoPull(cred.URL, cred.Token, cred.Pin, PullOpts{Instance: "role-laptop", StatusOut: io.Discard}); err != nil {
+		t.Fatalf("second pull after device association: %v", err)
+	}
+	snapshot, err := LoadCacheSnapshotFor("role-laptop")
+	if err != nil {
+		t.Fatalf("LoadCacheSnapshotFor: %v", err)
+	}
+	temporary, err := store.OpenTemporaryClientCacheStore(snapshot, "pair-role-*.db")
+	if err != nil {
+		t.Fatalf("OpenTemporaryClientCacheStore: %v", err)
+	}
+	t.Cleanup(func() { _ = temporary.Close() })
+	current, err := dialdevice.Current(temporary.Store, "role-laptop")
+	if err != nil {
+		t.Fatalf("dialdevice.Current: %v", err)
+	}
+	if !current.Known || current.Device == nil || current.Device.ID != device.ID {
+		t.Fatalf("dialdevice.Current = %+v, want the device associated with the paired device code (%s)", current, device.ID)
+	}
+}
+
+// TestRunPair_KeepsExistingNonClientRole pins that pairing a client cache on
+// the authoritative machine itself succeeds without rewriting that machine's
+// authoritative role.
+func TestRunPair_KeepsExistingNonClientRole(t *testing.T) {
+	srv := newPairingServer(t)
+	cacheDir := t.TempDir()
+	configRoot := t.TempDir()
+	withDEK(t)
+	withEnv(t, map[string]string{
+		"SSHMGR_CACHE_DIR":   cacheDir,
+		"SSHMGR_CONFIG_ROOT": configRoot,
+		"SSHMGR_STORE":       filepath.Join(t.TempDir(), "vault.db"),
+	})
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: true}); err != nil {
+		t.Fatalf("seed server role: %v", err)
+	}
+
+	if err := RunPair(pairOpts(srv, "downgrade-laptop", nil)); err != nil {
+		t.Fatalf("RunPair must keep an existing non-client role.json and still succeed: %v", err)
+	}
+	state, loadErr := roles.Load()
+	if loadErr != nil || state == nil || state.Role != roles.RoleServer {
+		t.Fatalf("server role.json must survive the pairing: state=%+v err=%v", state, loadErr)
+	}
+}
+
 func TestRunPair_FirstPullFails_ArtifactAlreadyOnDisk(t *testing.T) {
 	srv := newPairingServer(t)
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	pairBeforePullTestHook = func() { srv.srv.Close() } // 首拉前强杀 server(确定性)
 	defer func() { pairBeforePullTestHook = nil }()
@@ -266,6 +437,7 @@ func TestRunPair_PinMismatchAborts(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	wrong := "sha256:" + strings.Repeat("ab", 32)
 	err := RunPair(pairOpts(srv, "pinmiss", func(p *PairOpts) { p.Pin = wrong }))
@@ -282,6 +454,7 @@ func TestRunPair_SameNameNeedsForce(t *testing.T) {
 	dir := t.TempDir()
 	withDEK(t)
 	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	withClientRoleRoot(t)
 
 	// 预置已 enroll 态 + 干扰物(bin/meta/quarantine)+ 保留对象(config)。
 	if err := WriteCacheCredFor("re-pair", &CacheCred{URL: "https://old:7878", Token: "old-code", Pin: srv.spki}); err != nil {

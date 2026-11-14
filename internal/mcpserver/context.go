@@ -206,6 +206,20 @@ func bracketValue(line string, key byte) (string, bool) {
 	return rest[:end], true
 }
 
+// emptyExecContextOutput returns a schema-valid zero output for the tool's
+// error path. The Model Context Protocol SDK serializes and schema-validates
+// the typed output even when the handler already returned an error result;
+// nil slices would serialize as JSON null and turn the real error into a
+// transport-level "type null, want array" validation failure.
+func emptyExecContextOutput() ExecContextOutput {
+	return ExecContextOutput{
+		InjectedEnvironmentNames:       []string{},
+		UninjectedEnvironmentVariables: []UninjectedEnvironmentVariable{},
+		PlannedNetworkDrives:           []PlannedNetworkDrive{},
+		UninjectedNetworkDrives:        []UninjectedNetworkDrive{},
+	}
+}
+
 // ExecContextForProfile captures the exec channel's true context on serverID
 // iff serverID is in profileID (iron rule — same gate as exec_command). Every
 // branch is audited with Action="exec-context". Statuses mirror exec_command:
@@ -335,6 +349,12 @@ func ExecContextForProfile(ctx context.Context, st *store.Store, projectID, prof
 	out.ConnectionNotes = connectionNotes
 	out.InjectedEnvironmentNames = injectionPlan.injectedNames()
 	out.UninjectedEnvironmentVariables = injectionPlan.uninjectedVariables()
+	if plannedDrives == nil {
+		plannedDrives = []PlannedNetworkDrive{}
+	}
+	if uninjectedDrives == nil {
+		uninjectedDrives = []UninjectedNetworkDrive{}
+	}
 	out.PlannedNetworkDrives = plannedDrives
 	out.UninjectedNetworkDrives = uninjectedDrives
 	out.NetworkDrivePreviewNote = networkDrivePreviewNote

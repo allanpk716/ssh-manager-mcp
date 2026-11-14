@@ -30,7 +30,6 @@ package clientops
 import (
 	"context"
 	"crypto/ecdh"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
@@ -49,6 +48,7 @@ import (
 	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/pairing"
+	"ssh-manager-mcp/internal/roles"
 )
 
 var (
@@ -292,23 +292,19 @@ func (s *PairSession) Enroll(ctx context.Context) error {
 		return fmt.Errorf("pairing enroll: bad snonce (err=%v len=%d)", err, len(snonce))
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(er.Sig)
-	if err != nil || len(sig) != ed25519.SignatureSize {
+	if err != nil || len(sig) == 0 {
 		return fmt.Errorf("pairing enroll: bad sig (err=%v len=%d)", err, len(sig))
 	}
 
 	transcript := buildPairTranscript(pairID[:], s.opts.Instance, s.targetURL,
 		priv.PublicKey().Bytes(), cnonce[:], serverPub, snonce)
-	// 响应签名绑定 TLS 端点:enroll 响应必须由(被 pin 的)TLS 证书的 ed25519
-	// 私钥签署 — 一个 HTTP 层注入者无法伪造(F5 的客户端半边)。
+	// 响应签名绑定 TLS 端点:enroll 响应必须由(被 pin 的)TLS 证书的私钥
+	// 按其算法族签署(ed25519 原文;ECDSA P-256/RSA 签 SHA-256 摘要)—
+	// 一个 HTTP 层注入者无法伪造(F5 的客户端半边)。
 	if res.TLS == nil || len(res.TLS.PeerCertificates) == 0 {
 		return errors.New("pairing enroll: no TLS peer certificate to anchor the response signature")
 	}
-	certPub, ok := res.TLS.PeerCertificates[0].PublicKey.(ed25519.PublicKey)
-	if !ok {
-		return fmt.Errorf("pairing enroll: serve cert key is %T, want ed25519 — cannot verify the response signature",
-			res.TLS.PeerCertificates[0].PublicKey)
-	}
-	if !ed25519.Verify(certPub, transcript, sig) {
+	if !pairing.VerifyTranscript(res.TLS.PeerCertificates[0].PublicKey, transcript, sig) {
 		return errors.New("pairing enroll: response signature does not verify against the TLS certificate — aborting")
 	}
 
@@ -521,6 +517,9 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 		// 策略写失败与 cache pull 同姿势:WARNING(拉取照跑,只是 cap 未持久化)。
 		fmt.Fprintf(errw, "WARNING: could not persist cache.config.json (the max_offline cap is not persisted): %v\n", werr)
 	}
+	if err := ensureClientRoleAfterPair(); err != nil {
+		return PullResult{}, err
+	}
 	artifact, err := pairArtifactJSON(o.Instance, env.ProjectToken)
 	if err != nil {
 		return PullResult{}, fmt.Errorf("%w\n%s", err, pairRecoverHint(o.Instance))
@@ -559,6 +558,29 @@ func (s *PairSession) WriteAndPull(ctx context.Context) (PullResult, error) {
 		fmt.Fprintf(errw, "WARNING: quarantine/ cleanup failed (pairing is fine; 下次成功时重清): %v\n", rerr)
 	}
 	return res2, nil
+}
+
+// ensureClientRoleAfterPair records this machine as a paired client in
+// role.json. The pairing finish has already succeeded on the broker side by
+// the time this runs, so the machine is factually a client — without the
+// file, dialdevice.Current answers "role-unknown" and first anchoring of
+// topology-backed entries is refused. An existing standalone or authoritative
+// role is kept unchanged: an authoritative machine may legitimately also run
+// a named client cache instance, and pairing that instance must not downgrade
+// the machine-wide role. A missing or existing client role is written as
+// setup-complete.
+func ensureClientRoleAfterPair() error {
+	state, err := roles.Load()
+	if err != nil {
+		return fmt.Errorf("read role.json before recording the paired client role: %w", err)
+	}
+	if state != nil && state.Role != roles.RoleClient {
+		return nil
+	}
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		return fmt.Errorf("write client role.json: %w", err)
+	}
+	return nil
 }
 
 // pairRecoverHint 是 finish 后一切失败的统一恢复指引(plan 冻结双路径措辞,
