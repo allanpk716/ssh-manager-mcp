@@ -15,15 +15,33 @@ import (
 // virtualFilesystemHandler 把 SFTP 的绝对路径映射到一个临时目录，让测试能
 // 使用生产代码固定的挂载路径，同时不写测试进程所在机器的其他目录。
 type virtualFilesystemHandler struct {
-	root string
+	root    string
+	statVFS func(*sftp.Request) (*sftp.StatVFS, error)
 }
 
-func newVirtualFilesystemHandler(root string) sftp.Handlers {
-	handler := &virtualFilesystemHandler{root: root}
+func newVirtualFilesystemHandler(
+	root string, statVFS func(*sftp.Request) (*sftp.StatVFS, error),
+) sftp.Handlers {
+	handler := &virtualFilesystemHandler{root: root, statVFS: statVFS}
 	return sftp.Handlers{FileGet: handler, FilePut: handler, FileCmd: handler, FileList: handler}
 }
 
+// VirtualFilesystemHostPath 返回虚拟远端路径在测试主机上的真实路径。测试
+// 的命令执行回调使用同一映射，才能和 SFTP 虚拟文件系统看到相同文件。
+func VirtualFilesystemHostPath(root, remotePath string) string {
+	return (&virtualFilesystemHandler{root: root}).hostPath(remotePath)
+}
+
 func (handler *virtualFilesystemHandler) hostPath(remotePath string) string {
+	normalizedPath := strings.ReplaceAll(remotePath, `\`, "/")
+	// 盘符路径使用反斜杠分隔；即使测试进程在类 Unix 主机上运行，也要按远
+	// 端 Windows 语义转换。普通 POSIX 路径中的反斜杠仍是文件名字符。
+	hasDrivePrefix := len(normalizedPath) >= 2 && normalizedPath[1] == ':' &&
+		((normalizedPath[0] >= 'A' && normalizedPath[0] <= 'Z') ||
+			(normalizedPath[0] >= 'a' && normalizedPath[0] <= 'z'))
+	if runtime.GOOS == "windows" || hasDrivePrefix {
+		remotePath = normalizedPath
+	}
 	cleanRemote := path.Clean(strings.TrimPrefix(path.Clean("/"+remotePath), "/"))
 	if runtime.GOOS == "windows" {
 		// Windows 远端路径自带盘符前缀。虚拟文件系统仍须把它限制在测试
@@ -106,7 +124,13 @@ func (handler *virtualFilesystemHandler) Filecmd(request *sftp.Request) error {
 }
 
 func (handler *virtualFilesystemHandler) StatVFS(request *sftp.Request) (*sftp.StatVFS, error) {
-	return nil, os.ErrInvalid
+	if handler.statVFS != nil {
+		result, err := handler.statVFS(request)
+		if result != nil || err != nil {
+			return result, err
+		}
+	}
+	return statVirtualFilesystemHostPath(handler.hostPath(request.Filepath))
 }
 
 func (handler *virtualFilesystemHandler) Filelist(request *sftp.Request) (sftp.ListerAt, error) {

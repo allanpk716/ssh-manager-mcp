@@ -504,6 +504,38 @@ func TestRelayAvailableNormalAndAncestorWalk(t *testing.T) {
 	}
 }
 
+// TestRelayAvailableZeroTotalBlocksIsUnavailable 钉住自动文件系统占位目录
+// 的边界：StatVFS 成功但块总数为 0 时，这个结果不是可信的 0 字节；空间检
+// 查必须记为不可用，并且不能继续向上借用其他文件系统的统计值。
+func TestRelayAvailableZeroTotalBlocksIsUnavailable(t *testing.T) {
+	paths := make(map[string]*sftp.StatVFS)
+	paths["/mnt/sshmgr/datasets/reports"] = &sftp.StatVFS{
+		Frsize: 1024, Blocks: 0, Bfree: 0, Bavail: 0,
+	}
+	paths["/data/reports"] = &sftp.StatVFS{
+		Frsize: 1024, Blocks: 4096, Bfree: 2048, Bavail: 1024,
+	}
+
+	calls := make([]string, 0, 2)
+	statVFS := func(path string) (*sftp.StatVFS, error) {
+		calls = append(calls, path)
+		return paths[path], nil
+	}
+
+	avail, ok, err := relayAvailable("/mnt/sshmgr/datasets/reports", statVFS)
+	if avail != 0 || ok || err != nil {
+		t.Fatalf("块总数为 0：avail=%d ok=%v err=%v，期待 (0,false,nil)", avail, ok, err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("块总数为 0 时不应上溯父目录，StatVFS 调用=%v", calls)
+	}
+
+	avail, ok, err = relayAvailable("/data/reports", statVFS)
+	if avail != 1024*1024 || !ok || err != nil {
+		t.Fatalf("正常统计：avail=%d ok=%v err=%v，期待 1048576,true,nil", avail, ok, err)
+	}
+}
+
 // TestRelayAvailableHardErrorPropagates: a StatVFS failure that is NOT
 // not-exist-class (unsupported extension / permission) must propagate as err
 // with ok=false and avail=0 — the caller fail-opens ANY error to

@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/pkg/sftp"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -43,6 +44,8 @@ type relayLocalCopyFakeServer struct {
 	robocopyExit int
 	blockCopy    chan struct{}
 	keepPartial  bool
+	statVFS      *sftp.StatVFS
+	statVFSError error
 }
 
 // takeBlockCopy 在锁内取出并清空阻塞通道：停止后重跑的第二个会话与第一个
@@ -57,13 +60,19 @@ func (fake *relayLocalCopyFakeServer) takeBlockCopy() chan struct{} {
 
 func newRelayLocalCopyEnv(t *testing.T, mounted bool) *relayLocalCopyEnv {
 	t.Helper()
+	root := t.TempDir()
 	environment := &relayLocalCopyEnv{
 		serverName: "本地拷贝服务器",
 		fake:       &relayLocalCopyFakeServer{mounted: mounted, systemName: "Linux"},
+		root:       toSlash(root),
 	}
 	address, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
 		Password: "pw", SudoPassword: "sudo-pw",
-		Connections: &environment.connections,
+		Connections:           &environment.connections,
+		VirtualFilesystemRoot: environment.root,
+		VirtualFilesystemStatVFS: func(request *sftp.Request) (*sftp.StatVFS, error) {
+			return environment.serveStatVFS(request)
+		},
 		ExecStream: func(command string, stdin io.Reader, stdout, stderr io.Writer) int {
 			return environment.serveCommand(command, stdin, stdout, stderr)
 		},
@@ -158,8 +167,15 @@ func newRelayLocalCopyEnv(t *testing.T, mounted bool) *relayLocalCopyEnv {
 	environment.serverID = serverID
 	environment.windowsID = windowsID
 	environment.notMountableID = notMountableID
-	environment.root = toSlash(t.TempDir())
 	return environment
+}
+
+// serveStatVFS 让单个夹具可以固定空间充足、空间不足或空间检查不可用的
+// 统计结果；没有注入时返回空值，由测试 SSH 服务器读取虚拟根目录的真实统计。
+func (environment *relayLocalCopyEnv) serveStatVFS(*sftp.Request) (*sftp.StatVFS, error) {
+	environment.fake.mu.Lock()
+	defer environment.fake.mu.Unlock()
+	return environment.fake.statVFS, environment.fake.statVFSError
 }
 
 // openSession 按现有 relay 端到端夹具的形态建立内存 MCP 会话。
@@ -500,15 +516,7 @@ func (environment *relayLocalCopyEnv) serveCopyCommand(
 }
 
 func (environment *relayLocalCopyEnv) hostPath(remotePath string) string {
-	relative := strings.TrimPrefix(remotePath, "/mnt/sshmgr/datasets/")
-	normalized := strings.ReplaceAll(remotePath, `\`, `/`)
-	for _, driveRoot := range []string{"Z:/", "C:/"} {
-		if strings.HasPrefix(normalized, driveRoot) {
-			relative = strings.TrimPrefix(normalized, driveRoot)
-			break
-		}
-	}
-	return filepath.Join(environment.root, filepath.FromSlash(relative))
+	return testsshd.VirtualFilesystemHostPath(environment.root, remotePath)
 }
 
 func (fake *relayLocalCopyFakeServer) recordedCommands() []string {
