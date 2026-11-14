@@ -343,6 +343,7 @@
 .topology-notice {
   margin: 0;
   padding: 8px 12px;
+  white-space: pre-line;
   border: 1px solid var(--ok-border, #2e7d32);
   border-radius: 6px;
   background: var(--ok-bg, #ecf7ee);

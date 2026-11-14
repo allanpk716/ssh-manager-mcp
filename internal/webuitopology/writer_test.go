@@ -153,6 +153,71 @@ func TestTopologyWriterDelegatesToStoreSemantics(t *testing.T) {
 	}
 }
 
+// TestTopologyWriterIncludesPhysicalVirtualAddressWarning 覆盖 Web UI 的三
+// 种成员写法：冲突时保存成功，返回提示里附带完整警告。
+func TestTopologyWriterIncludesPhysicalVirtualAddressWarning(t *testing.T) {
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
+	assertMessage := func(t *testing.T, message string) {
+		t.Helper()
+		for _, want := range []string{
+			"警告：地址", "同时登记在物理局域网", "与虚拟局域网",
+			"无法自动首次锚定", "servers pin-hostkey", "--fingerprint",
+		} {
+			if !strings.Contains(message, want) {
+				t.Fatalf("Web UI 提示缺少警告片段 %q：%s", want, message)
+			}
+		}
+	}
+
+	t.Run("add", func(t *testing.T) {
+		st := newWriterTestStore(t)
+		if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.1"); err != nil {
+			t.Fatal(err)
+		}
+		message, err := WriterFromStore(st).AddNetworkMembership(
+			"工作站", "家A局域网", "100.64.0.1", source,
+		)
+		if err != nil {
+			t.Fatalf("冲突时新增仍应成功：%v", err)
+		}
+		assertMessage(t, message)
+	})
+
+	t.Run("edit", func(t *testing.T) {
+		st := newWriterTestStore(t)
+		if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.0.2.1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.1"); err != nil {
+			t.Fatal(err)
+		}
+		message, err := WriterFromStore(st).EditNetworkMembership(
+			"工作站", "家A局域网", "100.64.0.1", source,
+		)
+		if err != nil {
+			t.Fatalf("冲突时修改仍应成功：%v", err)
+		}
+		assertMessage(t, message)
+	})
+
+	t.Run("move", func(t *testing.T) {
+		st := newWriterTestStore(t)
+		if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.0.2.1"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.1"); err != nil {
+			t.Fatal(err)
+		}
+		message, err := WriterFromStore(st).MoveNetworkMembership(
+			"工作站", "家A局域网", "机房局域网", "100.64.0.1", source,
+		)
+		if err != nil {
+			t.Fatalf("冲突时移动仍应成功：%v", err)
+		}
+		assertMessage(t, message)
+	})
+}
+
 func TestTopologyWriterMarksNetworkWritesAsWebUI(t *testing.T) {
 	st := newWriterTestStore(t)
 	writer := WriterFromStore(st)

@@ -393,6 +393,56 @@ func TestConnectServerEntryFirstTrustWithoutCommonVirtualLanFails(t *testing.T) 
 	}
 }
 
+// TestConnectServerEntryFirstTrustEquivalentPhysicalAndVirtualAddressFails：
+// 同一个等价地址同时登记在共同物理局域网与共同虚拟局域网时，首次锚定仍
+// 拒绝；错误必须说明冲突地址与两个网络名，并且不能开始任何拨号。
+func TestConnectServerEntryFirstTrustEquivalentPhysicalAndVirtualAddressFails(t *testing.T) {
+	srv := entryAt("srv-a", "198.51.100.10", 2202)
+	attempts := 0
+	original := lowLevelDial
+	lowLevelDial = func(_ context.Context, host string, _ int, _ string, _ ssh.AuthMethod, _ ssh.HostKeyCallback, _ keepAliveSpec) (*Client, error) {
+		attempts++
+		return nil, fmt.Errorf("must not dial %s", host)
+	}
+	t.Cleanup(func() { lowLevelDial = original })
+
+	_, _, err := ConnectServerEntry(context.Background(), ServerDialRequest{
+		Server: srv, Auth: PasswordAuth("pw"), HostKeys: &fakeHostKeyStore{},
+		Topology: StaticDialTopology{
+			TargetMemberships: []*models.NetworkMembership{
+				membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "2001:0db8:0000:0000:0000:0000:0000:0001", 2),
+				membershipAt("device-target", "network-virtual", "虚拟局域网", models.NetworkVirtual, "2001:db8::1", 1),
+			},
+			DialerKnown: true,
+			DialerMemberships: []*models.NetworkMembership{
+				membershipAt("device-dialer", "network-home", "家A局域网", models.NetworkPhysical, "2001:db8::2", 3),
+				membershipAt("device-dialer", "network-virtual", "虚拟局域网", models.NetworkVirtual, "2001:db8::3", 4),
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("an equivalent physical and virtual address must refuse first trust")
+	}
+	if !errors.Is(err, ErrFirstTrustVirtualLanAddressAlsoPhysical) {
+		t.Fatalf("error must match the dedicated sentinel: %v", err)
+	}
+	if errors.Is(err, ErrFirstTrustNoCommonVirtualLan) {
+		t.Fatalf("the common virtual LAN exists, so the generic error is wrong: %v", err)
+	}
+	for _, want := range []string{
+		"2001:db8::1", "家A局域网", "虚拟局域网",
+		"同时登记在物理局域网", "无法证明这次连接走的是虚拟局域网",
+		"servers pin-hostkey", "--fingerprint",
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error text must contain %q:\n%s", want, err.Error())
+		}
+	}
+	if attempts != 0 {
+		t.Fatalf("no address may be attempted, got %d attempts", attempts)
+	}
+}
+
 // TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan：即使
 // 拨号请求没有提供拓扑视图，也不能把尚无锚的多地址条目退回兜底地址。
 func TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan(t *testing.T) {

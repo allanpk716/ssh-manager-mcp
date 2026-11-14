@@ -819,6 +819,38 @@ func TestQueryTopologyPairUnanchoredWithoutCommonVirtualLanContinues(t *testing.
 	}
 }
 
+// TestQueryTopologyPairEquivalentPhysicalAndVirtualAddressShowsRefusal 确认
+// 等价地址冲突时，只读查询也说明真正拨号会失败，并区分出冲突原因。
+func TestQueryTopologyPairEquivalentPhysicalAndVirtualAddressShowsRefusal(t *testing.T) {
+	fixture := newQueryTopologyFixture(t)
+	if _, err := fixture.store.EditNetworkMembership("工作设备", "虚拟A", "192.0.2.2"); err != nil {
+		t.Fatal(err)
+	}
+	workServer, err := fixture.store.GetServerByName("入口一")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pinned, err := fixture.store.GetEntryPin(workServer); err != nil || pinned != nil {
+		t.Fatalf("测试前提是条目尚无锚：pin=%v err=%v", pinned, err)
+	}
+
+	text, isError := fixture.callQuery(t, map[string]any{
+		"from": "self", "to": []string{workServer.ID},
+	})
+	if isError {
+		t.Fatalf("query_topology 失败：%s", text)
+	}
+	for _, want := range []string{
+		"真正拨号会失败",
+		"地址 192.0.2.2 同时登记在物理局域网 家A物理 与虚拟局域网 虚拟A",
+		"无法证明这次连接走的是虚拟局域网",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("输出缺少冲突原因 %q：\n%s", want, text)
+		}
+	}
+}
+
 // TestQueryTopologyPairSkipsSuccessCacheForOtherOrigin 确认出发点不是本实
 // 例所在设备时，不读本实例的成功地址缓存：缓存记录的是本实例拨出的结
 // 果，不代表别的出发点，因此只按登记顺序标记。
