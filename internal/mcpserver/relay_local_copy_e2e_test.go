@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/pkg/sftp"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -146,7 +147,7 @@ func TestRelayFileTargetShareLocalCopySuccess(t *testing.T) {
 	if strings.Contains(stdout, "mount-password") || strings.Contains(stdout, "mount-user") {
 		t.Fatalf("任务输出泄漏挂载凭据：\n%s", stdout)
 	}
-	target := filepath.Join(environment.root, filepath.FromSlash("Reports/2026.bin"))
+	target := environment.hostPath("/mnt/sshmgr/datasets/Reports/2026.bin")
 	content, err := os.ReadFile(target)
 	if err != nil || string(content) != "local copy payload" {
 		t.Fatalf("目标文件内容 = %q err=%v", content, err)
@@ -733,6 +734,53 @@ func TestRelayFileDarwinLocalCopySuccess(t *testing.T) {
 	content, err := os.ReadFile(environment.hostPath(targetRemote))
 	if err != nil || string(content) != "darwin payload" {
 		t.Fatalf("macOS 目标文件内容 = %q err=%v", content, err)
+	}
+}
+
+// TestRelayFileLocalCopySpaceCheckUnavailableContinues 钉住自动文件系统占
+// 位目录的统计结果：块总数为 0 时空间检查只能标记不可用，本地拷贝仍会继
+// 续执行并保留任务输出中的 unavailable 语义。
+func TestRelayFileLocalCopySpaceCheckUnavailableContinues(t *testing.T) {
+	environment := newRelayLocalCopyEnv(t, true)
+	environment.fake.mu.Lock()
+	environment.fake.statVFS = &sftp.StatVFS{Frsize: 1024, Blocks: 0, Bavail: 0}
+	environment.fake.mu.Unlock()
+	session := environment.openSession(t)
+	sourceRemote := "/mnt/sshmgr/datasets/ordinary/source.bin"
+	targetRemote := "/mnt/sshmgr/datasets/Reports/target.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("unavailable payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := session.cli.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "relay_file",
+		Arguments: map[string]any{
+			"from_server_id":   environment.serverID,
+			"from_path":        sourceRemote,
+			"to_share_address": `\\192.0.2.10\datasets\Reports\target.bin`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("调用 relay_file：%v", err)
+	}
+	if result.IsError {
+		t.Fatalf("relay_file 失败：%s", toolResultText(result))
+	}
+	var output RelayOutput
+	unmarshalToolJSON(t, result, &output)
+	if output.SpaceCheck != "unavailable" {
+		t.Fatalf("SpaceCheck = %q，期待 unavailable", output.SpaceCheck)
+	}
+	stdout, status, errorText := relayE2EPoll(t, session, output.TaskID, 30*time.Second)
+	if status != bgStatusDone || errorText != "" {
+		t.Fatalf("空间检查不可用时的拷贝终态 = %q 错误 = %q 输出 =\n%s", status, errorText, stdout)
+	}
+	content, err := os.ReadFile(environment.hostPath(targetRemote))
+	if err != nil || string(content) != "unavailable payload" {
+		t.Fatalf("目标文件内容 = %q err=%v", content, err)
 	}
 }
 
@@ -1501,6 +1549,9 @@ func TestRelayFileWindowsLocalCopyDriveRootDirectories(t *testing.T) {
 	session := environment.openSession(t)
 	sourceRemote := `Z:\f.bin`
 	targetRemote := "C:/t.bin"
+	if err := os.MkdirAll(filepath.Dir(environment.hostPath(sourceRemote)), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(environment.hostPath(sourceRemote), []byte("drive root"), 0o644); err != nil {
 		t.Fatal(err)
 	}

@@ -57,12 +57,24 @@ func (c *Client) RelayPosixRenameOK(sc *sftp.Client) bool {
 // extension, permission, transport) propagate as err untouched — the caller
 // fail-opens ANY error to space_check="unavailable" and proceeds (grilling
 // decision, §2⑦), so ok is true only when a real byte figure was obtained.
+// 如果 StatVFS 成功但文件系统块总数为 0，这个结果可能来自自动文件系统占
+// 位目录或伪文件系统，不能当作真实 0 字节；函数把它记为空间检查不可用，
+// 也不会继续向上越过这一层去借用其他文件系统的数据。
 // avail is int64-safe: a uint64 Bavail×Frsize product that would exceed int64
 // (pathological Frsize) saturates at MaxInt64 instead of wrapping negative.
 func (c *Client) RelayAvailable(sc *sftp.Client, dir string) (avail int64, ok bool, err error) {
+	return relayAvailable(dir, sc.StatVFS)
+}
+
+// relayAvailable 是 RelayAvailable 的可测核心：statVFS 由调用方提供，便于
+// 测试固定文件系统统计结果和上溯路径。
+func relayAvailable(dir string, statVFS func(string) (*sftp.StatVFS, error)) (int64, bool, error) {
 	for {
-		vfs, serr := sc.StatVFS(dir)
+		vfs, serr := statVFS(dir)
 		if serr == nil {
+			if vfs.Blocks == 0 {
+				return 0, false, nil
+			}
 			u := vfs.Bavail * vfs.Frsize
 			if vfs.Frsize != 0 && vfs.Bavail > math.MaxInt64/vfs.Frsize {
 				u = math.MaxInt64 // product exceeds int64 — saturate, never wrap
