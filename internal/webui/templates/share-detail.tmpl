@@ -126,7 +126,7 @@
 {{if .Caps.CanRevokeShares}}
 <section class="share-out-of-scope-revoke">
 <h2>已移出范围、远端可能仍有配置</h2>
-<p>下列服务器条目不在可挂载范围内，但最近一次现场探测或成功挂载留下的登记显示远端可能仍留有挂载配置或挂载点。「撤销授权」只清理远端持久配置与挂载点，不再修改登记。</p>
+<p>下列服务器条目不在可挂载范围内，但最近一次现场探测、成功挂载或残留检查留下的登记显示远端可能仍留有挂载配置、凭据文件或挂载点。「撤销授权」只清理远端持久配置与挂载点，不再修改登记。</p>
 {{if .ShareOutOfScopeRevokeEntries}}
 <table class="server-table">
 <thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>登记依据</th><th>操作</th></tr></thead>

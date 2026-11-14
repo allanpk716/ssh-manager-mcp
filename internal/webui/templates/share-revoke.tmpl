@@ -1,10 +1,10 @@
 {{define "content"}}
-<section class="share-revoke">
+<section class="share-revoke"{{if and .ShareRevoke.Task (eq .ShareRevoke.Task.State "running")}} id="share-revoke-task" hx-get="{{.ShareRevoke.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
 <h1>撤销授权 {{.ShareRevoke.Share.Name}} · {{.ShareRevoke.Server.Name}}</h1>
 {{if .ShareRevoke.Error}}<div class="notice notice-error"><p>{{.ShareRevoke.Error}}</p></div>{{end}}
 {{if .ShareRevoke.Task}}
 {{if eq .ShareRevoke.Task.State "running"}}<h2>撤销授权进行中</h2>{{else if eq .ShareRevoke.Task.State "error"}}<h2>撤销授权失败</h2>{{else}}<h2>撤销授权结果</h2>{{end}}
-<section{{if eq .ShareRevoke.Task.State "running"}} id="share-revoke-task" hx-get="{{.ShareRevoke.PollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<section>
 {{if .ShareRevoke.Task.FailureMessage}}<div class="notice notice-error"><p>{{.ShareRevoke.Task.FailureMessage}}</p></div>{{end}}
 {{if and .ShareRevoke.Task.Result (eq .ShareRevoke.Task.Result.Result "ssh-error")}}<div class="notice notice-warning"><p>任务已当场失败，未排队重试；{{if not .ShareRevoke.OutOfScope}}登记变更已保留，{{end}}可用「检查残留」兜底检查这台服务器。</p></div>{{end}}
 {{if .ShareRevoke.Task.Result}}
@@ -40,6 +40,7 @@
 <div class="operation-result"><p>已更换共享密码。仍可挂载的 Linux 与 macOS 服务器：{{if .ShareRevoke.Task.Result.RemainingMountServers}}{{range .ShareRevoke.Task.Result.RemainingMountServers}}{{.}} {{end}}{{else}}无{{end}}。这些服务器需要 agent 按新版本号重新挂载；桌面手动连接也需要更新密码。</p></div>
 {{end}}
 {{end}}
+<div class="inline-form"><a class="button-link" href="/ui/shares/{{.ShareRevoke.Share.ID}}">返回共享存储详情</a></div>
 </section>
 {{else if .ShareRevoke.TaskInvalid}}
 {{template "shareTaskLostNotice" "撤销授权"}}

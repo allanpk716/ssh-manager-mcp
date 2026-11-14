@@ -1,6 +1,7 @@
 package webuishares
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -124,6 +125,9 @@ func newResidueWebFixture(t *testing.T) *residueWebFixture {
 	}
 	out.ShareID = datasets.ID
 	out.SeedManagedConfiguration("192.0.2.10", datasets.Version)
+	// 第 23 条剩余问题来自“仅有持久配置与凭据文件、当前没有挂载”的自
+	// 然靶子；默认让残留靶子保持未挂载，占用流程测试再单独补回挂载。
+	out.Mounted = false
 	in.ShareID = datasets.ID
 	in.SeedManagedConfiguration("192.0.2.10", datasets.Version)
 	media.ShareID = mediaShare.ID
@@ -138,9 +142,15 @@ func newResidueWebFixture(t *testing.T) *residueWebFixture {
 		t.Fatal(err)
 	}
 
+	remoteTasks := RemoteTasksFromStore(openStoreForTest(st))
 	h := startIntegrationHandler(t, st, func(config *webui.Config) {
-		config.ShareResidueRunner = ResidueTasksFromStore(openStoreForTest(st))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareResidueRunner = ResidueTasksFromStoreWithContext(
+			openStoreForTest(st), context.Background(), remoteTasks,
+		)
 		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(st))
+		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(st))
 	})
 	return &residueWebFixture{
 		store: st, handler: h, servers: serverIDs,
@@ -207,7 +217,7 @@ func TestShareResidueTaskReportsMixedServersAndCounts(t *testing.T) {
 	for _, want := range []string{
 		"残留检查完成", "检查范围",
 		"汇总：1 台有残留，1 台仅有撤销标记，1 台未检查，3 台无残留，1 台跳过",
-		"linux-out", "发现残留", "datasets", "配置条目、凭据文件、挂载",
+		"linux-out", "发现残留", "datasets", "配置条目、凭据文件",
 		"服务器不在可挂载范围内", "清理",
 		"linux-marker", "仅有撤销标记", "撤销后的预期状态，不需要清理",
 		"linux-offline", "未检查", "连接服务器或执行枚举命令失败",
@@ -272,6 +282,80 @@ func TestShareResidueTaskReportsMixedServersAndCounts(t *testing.T) {
 	if strings.Contains(rows[0].Command, "192.0.2.10") ||
 		strings.Contains(rows[0].Command, "mount-user") {
 		t.Fatalf("残留检查审计摘要不得含地址或账号：%s", rows[0].Command)
+	}
+}
+
+func TestShareResidueBecomesOutOfScopeRevokeEvidenceAndClears(t *testing.T) {
+	f := newResidueWebFixture(t)
+	csrf := csrfToken(t, f.handler)
+
+	runResidue := func(scope string) string {
+		post := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/residue", url.Values{
+			"csrf_token": {csrf}, "scope": {scope},
+		})
+		if post.StatusCode != http.StatusSeeOther {
+			t.Fatalf("启动残留检查状态码 = %d：%s", post.StatusCode, body(t, post))
+		}
+		return waitUntilResidueDone(t, f.handler, post.Header.Get("Location"))
+	}
+
+	runResidue("share")
+	detail := body(t, f.handler.do(http.MethodGet, "/ui/shares/"+f.shareID, nil))
+	for _, want := range []string{
+		"已移出范围、远端可能仍有配置",
+		"linux-out",
+		"最近登记：已有 sshmgr 挂载配置与凭据文件",
+		`href="/ui/shares/` + f.shareID + `/revoke?server=` + f.servers["linux-out"] + `"`,
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("残留检查后详情页缺少 %q：\n%s", want, detail)
+		}
+	}
+
+	check := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/check", url.Values{
+		"csrf_token": {csrf},
+	})
+	if check.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动现场探测状态码 = %d：%s", check.StatusCode, body(t, check))
+	}
+	waitRemoteTaskDone(t, f.handler, check.Header.Get("Location"))
+	detail = body(t, f.handler.do(http.MethodGet, "/ui/shares/"+f.shareID, nil))
+	if !strings.Contains(detail, `revoke?server=`+f.servers["linux-out"]) {
+		t.Fatalf("只检查仍在范围内的服务器后丢失范围外残留登记：\n%s", detail)
+	}
+
+	cleanup := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/residue-cleanup", url.Values{
+		"csrf_token": {csrf}, "share_name": {"datasets"},
+		"server_id": {f.servers["linux-out"]}, "server_name": {"linux-out"},
+		"scope": {"share"},
+	})
+	if cleanup.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动残留清理状态码 = %d：%s", cleanup.StatusCode, body(t, cleanup))
+	}
+	waitUntilResidueDone(t, f.handler, cleanup.Header.Get("Location"))
+
+	runResidue("share")
+	detail = body(t, f.handler.do(http.MethodGet, "/ui/shares/"+f.shareID, nil))
+	if strings.Contains(detail, `revoke?server=`+f.servers["linux-out"]) {
+		t.Fatalf("确认无残留后详情页仍提供撤销入口：\n%s", detail)
+	}
+}
+
+func TestAllShareResidueBecomesOutOfScopeRevokeEvidence(t *testing.T) {
+	f := newResidueWebFixture(t)
+
+	post := f.handler.do(http.MethodPost, "/ui/shares/"+f.shareID+"/residue", url.Values{
+		"csrf_token": {csrfToken(t, f.handler)}, "scope": {"all"},
+	})
+	if post.StatusCode != http.StatusSeeOther {
+		t.Fatalf("启动全部共享残留检查状态码 = %d：%s", post.StatusCode, body(t, post))
+	}
+	waitUntilResidueDone(t, f.handler, post.Header.Get("Location"))
+
+	detail := body(t, f.handler.do(http.MethodGet, "/ui/shares/"+f.shareID, nil))
+	if !strings.Contains(detail, "linux-out") ||
+		!strings.Contains(detail, "最近登记：已有 sshmgr 挂载配置与凭据文件") {
+		t.Fatalf("全部共享残留检查后详情页缺少可撤销证据：\n%s", detail)
 	}
 }
 
@@ -359,6 +443,7 @@ func TestShareResidueCleanupRunsSameRemoteCleanupAsUnmount(t *testing.T) {
 
 func TestShareResidueCleanupBusyListsProcessesAndForceCleans(t *testing.T) {
 	f := newResidueWebFixture(t)
+	f.out.Mounted = true
 	f.out.BusyProcesses = []sharemounttest.BusyProcess{{
 		ProcessID: "3456", User: "backup", Command: "rsync",
 	}}

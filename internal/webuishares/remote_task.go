@@ -87,8 +87,8 @@ func (s *shareRemoteTaskStore) ShareRemoteTaskStatus(
 	return s.tasks.status(taskID)
 }
 
-// LatestShareCheck 返回一处共享存储最近一次完成的现场探测结果。结果只
-// 保存在当前进程内存里，进程重启后需要重新探测。
+// LatestShareCheck 返回一处共享存储最近一次完成的现场探测或残留检查结
+// 果。结果只保存在当前进程内存里，进程重启后需要重新检查。
 func (s *shareRemoteTaskStore) LatestShareCheck(shareID string) ([]webui.ShareCheckResult, bool) {
 	s.checkMu.Lock()
 	defer s.checkMu.Unlock()
@@ -97,6 +97,20 @@ func (s *shareRemoteTaskStore) LatestShareCheck(shareID string) ([]webui.ShareCh
 		return nil, false
 	}
 	return append([]webui.ShareCheckResult(nil), results...), true
+}
+
+// RecordShareCheckResult 把一台服务器的现场结论合并进一处共享存储的最近
+// 现场状态。已有同标识服务器时覆盖旧结论，避免清理完成后详情页继续使用
+// 过期证据。
+func (s *shareRemoteTaskStore) RecordShareCheckResult(
+	shareID string, result webui.ShareCheckResult,
+) {
+	if shareID == "" || result.ServerID == "" {
+		return
+	}
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	s.recordLatestShareCheckLocked(shareID, result)
 }
 
 func (s *shareRemoteTaskStore) run(
@@ -139,13 +153,32 @@ func (s *shareRemoteTaskStore) runCheck(
 		})
 	}
 	s.checkMu.Lock()
-	s.latestChecks[request.ShareID] = append([]webui.ShareCheckResult(nil), results...)
+	s.replaceLatestShareChecks(request.ShareID, results)
 	s.checkMu.Unlock()
 	s.tasks.update(task.ID, func(task *webui.ShareRemoteTaskStatus) {
 		task.State = webui.ShareTaskDone
 		task.ShareName = report.ShareName
 		task.CheckResult = results
 	})
+}
+
+// replaceLatestShareChecks 用一次按共享的现场探测覆盖被探测服务器的旧结
+// 论，并保留这次没有探测的服务器条目。可挂载范围移除后，现场探测只检查
+// 仍在范围内的服务器，不能因此丢掉范围外服务器的残留检查登记。
+func (s *shareRemoteTaskStore) replaceLatestShareChecks(
+	shareID string, results []webui.ShareCheckResult,
+) {
+	checked := make(map[string]bool, len(results))
+	for _, result := range results {
+		checked[result.ServerID] = true
+	}
+	merged := append([]webui.ShareCheckResult(nil), results...)
+	for _, oldResult := range s.latestChecks[shareID] {
+		if !checked[oldResult.ServerID] {
+			merged = append(merged, oldResult)
+		}
+	}
+	s.latestChecks[shareID] = merged
 }
 
 func (s *shareRemoteTaskStore) runMount(
@@ -192,6 +225,12 @@ func (s *shareRemoteTaskStore) recordLatestMount(shareID string, result *sharema
 	}
 	s.checkMu.Lock()
 	defer s.checkMu.Unlock()
+	s.recordLatestShareCheckLocked(shareID, entry)
+}
+
+func (s *shareRemoteTaskStore) recordLatestShareCheckLocked(
+	shareID string, entry webui.ShareCheckResult,
+) {
 	results := s.latestChecks[shareID]
 	for index := range results {
 		if results[index].ServerID == entry.ServerID {
