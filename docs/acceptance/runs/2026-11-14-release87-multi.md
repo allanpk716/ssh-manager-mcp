@@ -24,11 +24,11 @@
 | 权威端271-2 | 通过（附欠账第 38 条） | 2.2 | 手写客户端角色文件后转发落库通过 |
 | 权威端272-1 | 通过 | 2.3 | 版本联动与变更提示通过 |
 | 权威端272-2 | 移交下一轮 | 2.3 | 需要 macOS 靶机 |
-| 权威端272-3 | 失败（第 39 条已修复，新欠账第 46 条） | 2.3 | 第二轮（rc7）：幂等挂载不改写且只以网络名提示 owner（第 39 条修复）；但 `shares reselect --yes` 切换路径在 Linux 上恒失败（新欠账第 46 条）；--force 路径与幂等重选通过 |
+| 权威端272-3 | 失败→第三轮通过 | 2.3 | 第二轮（rc7）：幂等挂载不改写且只以网络名提示 owner；非 force 重选失败登记第 46 条。第三轮（rc8）：旧挂载行幂等补属主映射且地址不变（第 49 条），非 force 重选切换、读写与二次幂等全部通过（第 46 条） |
 | 权威端273-1 | 通过 | 2.4 | 浏览器用 WebKit 代跑 |
 | 权威端273-2 | 通过（两子判据移交） | 2.4 | 重验成功回跳与敏感入口扫描未完成 |
 | 权威端273-3 | 通过 | 2.4 | 421/403 与响应头通过 |
-| 权威端273-4 | 通过 | 2.4 | 第二轮（rc7）：update 等价面补证（--check 干跑 + 本地包拒绝同版本重装）；附带发现 --check 干跑后误入重启分支（欠账第 48 条） |
+| 权威端273-4 | 通过（第 48 条第三轮复核通过） | 2.4 | 第二轮（rc7）：update 等价面补证并发现干跑误入重启分支（第 48 条）。第三轮（rc8）：root 与非 root `update --check` 均退出码 0、无误导输出且二进制哈希不变 |
 | 权威端274-1 | 通过 | 2.5 | 第二轮（rc7）：位置移动「布局已保存。」子项补证通过（容器节点拖动 + POST 204 + 刷新保持） |
 | 权威端274-2 | 第二轮通过 | 2.5 | 第二轮（rc7）：全条通过——重验拦截与回跳保留字段、虚拟地址首锚、同设备第二条目复制同端口锚、命令行等价面 |
 | 权威端274-3 | 移交下一轮 | 2.5 | 需要 macOS 靶机；桌面目验移交 owner |
@@ -45,12 +45,12 @@
 | 客户端271-2 | 通过 | 3 | 第二轮（rc7）：connection_notes（仅网络名+序号）、错误靶机 preauth 日志、实际尝试顺序全部补证 |
 | 客户端271-3 | 通过（与权威端271-2 同路径） | 3 | 第二次连接摘要随收尾轮补查 |
 | 客户端272-1 | 通过 | 3 | 现场检测只读通过 |
-| 客户端272-2 | 失败（第 41 条已修复，新欠账第 47 条） | 3 | 第二轮（rc7）：exec_context 空名单输出 [] 且结构校验通过（第 41 条修复）；但 Windows 探测脚本本身恒失败、盘符预览不可用（新欠账第 47 条）；注入/暂停/恢复/审计通过 |
-| 客户端272-3 | 第二轮部分通过（新欠账第 49、50 条） | 3 | 第二轮（rc7）：共享翻译/Linux 本地拷贝/Windows robocopy/双共享拒绝/停止留半成品通过；共享为目标端的写入全部失败（49）、停止后重跑挂起（50） |
-| 客户端273-1 | 移交下一轮 | 3 | 客户端 Web UI 未及执行 |
-| 客户端273-2 | 移交下一轮 | 3 | 同上 |
-| 客户端274-1 | 移交下一轮 | 3 | 同上 |
-| 客户端274-2 | 移交下一轮 | 3 | 同上 |
+| 客户端272-2 | 失败→第三轮通过 | 3 | 第二轮（rc7）：结构修复通过但 Windows POSIX 探测恒失败登记第 47 条。第三轮（rc8）：PowerShell/cmd `exec_context` 均正常返回盘符预览，数组字段为 [] 且盘符注入成功 |
+| 客户端272-3 | 第二轮部分通过→第三轮通过 | 3 | 第二轮共享目标写入失败（49）、停止后重跑挂起（50）。第三轮（rc8）：反向本地拷贝与流式写入共享均完成且 SHA-256 一致；停止后同参数重跑约 2 秒完成且哈希一致 |
+| 客户端273-1 | 第三轮通过 | 3 | 回环随机端口、一次性启动令牌、安全头/cookie、二次访问 403、只读入口、自动化测试与退出即停全部通过 |
+| 客户端273-2 | 第三轮通过 | 3 | 五页面、命令行等价、本机探测、写路由 404、成功/失败同步与旧快照保留、权威端无回传全部通过 |
+| 客户端274-1 | 第三轮通过 | 3 | 三视图、平移缩放、同设备合并角标、本机可达/不可达探测、写路由 404、手机视口与权威端无回传全部通过 |
+| 客户端274-2 | 第三轮通过 | 3 | 新增入口与写路由缺失、反向视图值裁剪、共享只读、命令行等价全部通过 |
 | 客户端275-1 | 第二轮通过（含欠账第 38 条复核） | 3 | 第二轮（rc7）：向导指引/进程退出/角色不变/配对+SAS/二次只读界面/清理全部通过；pair 自动写 role.json |
 
 ## 安装与版本
@@ -569,6 +569,50 @@ shares residue <NAS 共享名> → e2e278_linux_a：无残留；其余一次性�
 【清理说明】按本轮 Brief，共享登记、共享挂载与拓扑登记保留到 #278 收尾轮（#279 仍需使用）；
 本轮已执行 residue 复查并留证。临时转发进程与临时登记已全部恢复。
 
+【第三轮（rc8）执行记录】通过（第 49 条的幂等补属主映射与第 46 条的非 force 重选切换均复核通过）。
+owner 不在场，owner 命令行由 agent 代跑。本轮开始时靶机上的持久挂载行仍是 rc7 写入的版本 14，
+缺少数字用户标识与用户组标识映射。
+
+【第 49 条：旧挂载行幂等补映射（rc8）】
+```text
+靶机事实：共享挂载点在产品 fstab 管理行中地址为真实 NAS 地址，x-sshmgr-version=14；
+  旧行无 uid=/gid= 选项；实际 CIFS 挂载显示 uid=0、gid=0、noforceuid、noforcegid；
+  挂载点与既有样例文件属主均为 root。服务器条目的 SSH 登录用户数字用户标识=1000、用户组标识=1000。
+权威端幂等执行 shares mount <NAS 共享名> <Linux 条目A> →
+  已挂载共享存储 <NAS 共享名>；结果：update-success；版本号：16；
+  实际网络：e2e278_nas_net（第 1 个地址）；提示：已补充文件属主映射；退出码 0。
+复核：fstab 仍指向原真实 NAS 地址（地址未变），新增 uid=1000、gid=1000，
+  x-sshmgr-version=16；实际挂载为 uid=1000、forceuid、gid=1000、forcegid。
+  挂载点与既有样例文件属主变为 SSH 登录用户（1000:1000）。
+  以该 SSH 登录用户直接写入共享 → 文件属主 1000:1000，可读回，SHA-256 留档后删除成功。
+```
+
+【第 46 条：非 force 重选切换（rc8）】
+```text
+测试辅助：沿用第二轮方法，临时启动一次性透明 TCP 转发，把提供方设备的物理局域网成员地址临时指向
+  该转发路径；虚拟局域网成员仍指向真实 NAS 地址，形成「当前虚拟地址仍连通、且存在不同且更优的
+  物理候选地址」场景。
+临时改动物理成员后执行 shares mount <NAS 共享名> <Linux 条目A> →
+  「无需改动；版本号：17；实际网络：e2e278_virtual（第 1 个地址）
+   提示：存在更优物理局域网地址（网络 e2e278_nas_net）；如需切换请执行 shares reselect … --yes」
+  ✓ 仍连通地址未被改写，提示只含网络名。
+执行 shares reselect <NAS 共享名> <Linux 条目A> --yes（不加 --force）→
+  「已在服务器上重选地址；网络：e2e278_nas_net；版本号：17」；退出码 0 ✓
+  不再出现「卸载共享存储挂载点失败」。
+切换后：fstab 地址换为临时转发路径、uid/gid 映射保留、版本号 17；实际 CIFS 挂载处于挂载状态；
+  以 SSH 登录用户写入/读回/删除测试文件成功。
+第二次执行 shares reselect … --yes →
+  「当前地址已是最优可达地址，未做改动。」；退出码 0 ✓
+```
+
+【第三轮恢复与清理（rc8）】
+```text
+提供方物理局域网成员地址已恢复为真实 NAS 地址；再次 shares reselect --yes 成功切回原地址，
+  版本号联动为 18；现场探测 Linux 条目 A：已挂载、远端配置版本号 18。
+以 SSH 登录用户对原地址路径读写测试成功后删除测试文件；一次性透明 TCP 转发与临时文件停止/删除，
+  拓扑登记恢复为第三轮开始前的双成员同真实 NAS 地址状态。
+```
+
 ## 2.4 Web UI 基础、安全与等价面（#273）
 
 ### 权威端273-1 独立监听与虚拟局域网地址交集推导
@@ -694,6 +738,21 @@ sshmgr update --file <rc7 本地包> --sha256 <与候选产物一致> --yes →
 并退出码 3。实际二进制未被替换（哈希/时间戳不变）。root 与非 root 运行均复现。
 候选源码核对：internal/cli/update.go 的 RunE 在 updateService.Run 返回后无条件进入服务分支，
 未区分 CheckOnly 结果。
+
+【第三轮（rc8）：第 48 条复核】通过。owner 不在场，命令行由 agent 代跑。
+```text
+二进制 SHA-256（执行前）=9b64cbea…dd41。
+root 执行 sshmgr update --check →
+  update base: https://api.github.com
+  当前版本: 0.22.0-rc8；最新版本: v0.21.1；资产: sshmgr_0.21.1_linux_amd64.tar.gz
+  干跑:未下载、未替换、未重启任何东西
+  退出码 0。
+非 root 执行同一命令 → 先输出权限导致的角色判定警告（按产品语义），随后同样输出当前/最新/资产
+  与「干跑:未下载、未替换、未重启任何东西」；退出码 0。
+两次输出均不再出现 rc7 的「⚠ 重启将断开活动隧道…」或「替换已成功,但服务重启未完成(待手工)」；
+  上文「未重启任何东西」为否定式干跑结果，不是重启提示。
+二进制 SHA-256（执行后）=9b64cbea…dd41，与执行前一致；serve 服务保持 HEALTHY。
+```
 
 【Web UI 一次性写操作】
 ```text
@@ -952,6 +1011,33 @@ owner 面（agent 代跑）把正确密码写回机密项 → 新会话自动同
 ```
 【清理说明】共享授权与两条 Windows 条目按 Brief 保留到收尾轮；本轮未删除共享登记与机密项。
 
+【第三轮（rc8）执行记录】通过（第 47 条复核通过）。owner 不在场，工具调用由 agent 代跑。
+执行前一次性实例先用 rc8 拉取权威端快照（服务器 12、凭据 14），`mcp` 握手报告版本 0.22.0-rc8。
+
+【exec_context（rc8）】
+```text
+PowerShell 条目 → JSON-RPC 正常 result（无 isError 字段，即 false），退出到调用方无异常；
+  structuredContent.planned_network_drives=[{drive:"X",share:<NAS 共享名>,
+    address_plan:"执行时探测"}]；
+  injected_environment_names=[两条一次性环境变量名]；uninjected_environment_variables=[]；
+  uninjected_network_drives=[]。
+cmd 条目 → 同样正常 result；planned_network_drives=[{drive:"X",share:<NAS 共享名>,
+    address_plan:"执行时探测"}]；uninjected_environment_variables=[]；
+  uninjected_network_drives=[]。
+核对：不再出现 rc7 的 PowerShell 解析错误、`exec_context probe failed` 或 `server is not in your profile`
+（本轮第一次误用条目名代替真实服务器标识时出现该提示；改用 list_servers 返回的标识后不再出现，
+该误用操作未触达目标机）。
+```
+
+【盘符注入复证（rc8）】
+```text
+PowerShell 条目执行只输出共享目录计数的命令 → exit_code=0；
+  injected_network_drives=[{drive:"X",share:<NAS 共享名>}]；stdout 仅含计数。
+cmd 条目执行只输出目录行计数的命令 → exit_code=0；
+  injected_network_drives=[{drive:"X",share:<NAS 共享名>}]；stdout 仅含计数。
+两条命令均未把目录内容写入证据；认证失败暂停/恢复沿用第二轮结论，rc8 未改动该路径。
+```
+
 ### 客户端272-3 共享地址中继本地拷贝、流式回退与重跑
 
 【结论】移交下一轮。原因：条目组合要求两条 Linux 条目都已实际挂载且需大文件中继、
@@ -1018,6 +1104,49 @@ relay_file 同时传 from_share_address 与 to_share_address →
 【哈希与清理说明】源/目标 SHA-256 均为 14578de7…8f761（比对一致的两处：Linux 本地拷贝、Windows robocopy）。
 共享内一次性文件、普通服务器文件与半成品随收尾清理；本轮登记的欠账见第 49、50 条。
 
+【第三轮（rc8）执行记录】通过（第 49 条的第 3、5 步与第 50 条第 7 步均复核通过）。
+执行实例仍按网络事实由 Linux 一次性客户端代替工作机 1 执行 Linux 端点；一次性源文件 20 MiB。
+开始时共享目标端目录已按第 49 条修复映射为 SSH 登录用户 1000:1000。owner 不在场，工具调用由 agent 代跑。
+
+【第 3 步：反向本地拷贝写入共享（rc8）】
+```text
+relay_file from=<Linux 条目A 普通路径> to_share_address=<共享目标> →
+  mode=local_copy；restart_after_interruption=true；bytes_total=20971520；space_check=ok。
+同一 MCP 会话内轮询到终态：status=done；输出含固定 cp 到 <目标>.sshmgr-partial 与 mv 到真名。
+目标真名出现、半成品消失；目标属主=SSH 登录用户（1000:1000）、大小 20971520；
+  目标 SHA-256=6f608ea1…f9aa，与源一致 ✓。
+```
+
+【第 5 步：流式回退写入共享目标（rc8）】
+```text
+relay_file from=<执行实例本地文件路径> to_share_address=<共享目标> →
+  mode=streaming_relay；自动选择已实际挂载的 Linux 条目 A 作为共享端点。
+任务输出：1 个块、20 MiB；chunk 1/1 ok；file_sha256=sha256:6f608ea1…f9aa；
+  relay done 后半成品重命名为目标真名；status=done。
+目标属主=SSH 登录用户（1000:1000）、大小 20971520；目标 SHA-256 与源一致 ✓；
+  半成品与块清单均不存在。
+```
+
+【第 7 步：停止后同参数重跑（rc8，第 50 条真机取证）】
+```text
+第一次任务（任务号 1）：发起共享源 → Linux 本地目标的 local_copy 后立即 exec_stop →
+  exec_stop 返回 status=running（停止已触发）；随后 exec_output 终态 status=stopped；
+  输出保留「重跑会从文件开头覆盖旧半成品」与固定 cp 命令。
+第二次同参数任务（任务号 2）：同一 MCP 会话内发起 → 第一次轮询 status=running；
+  约 2 秒后第二次轮询 status=done；输出含 cp 与 mv，真名出现、半成品消失。
+最终目标大小 20971520，SHA-256=6f608ea1…f9aa，与共享源逐字节一致 ✓。
+补充对照：另发起一个新目标并立即停止，任务进入 stopped；此刻无 cp 进程（进程检查只匹配到
+  取证 shell 自身，未计入），该目标没有留下半成品或真名。
+```
+
+【第 50 条结论（rc8）】不再复现挂起。rc7 时共享文件在目标 Linux 主机上呈现为 root 所有，
+强杀读取/写入链路后同目标重跑 3 分钟无进展；rc8 已把共享挂载映射到 SSH 登录用户，目标端非提权
+写入与重命名正常，停止后的同参数重跑约 2 秒完成且哈希一致。按 Brief 的「若不再挂起」分支，
+未继续展开不可中断睡眠、内核 CIFS 统计、内核日志、换目标/删半成品/重挂载等逐项取证。
+
+【取证偏离说明】第一轮取证脚本曾在任务仍 running 时过早结束 MCP 进程，导致一个全尺寸半成品未由该次
+任务重命名；该半成品已删除后按正确姿势（保持同一 MCP 会话轮询到终态）重跑，不作为产品判定证据。
+
 ### 客户端273-1 / 客户端273-2 / 客户端274-1 / 客户端274-2 客户端 Web UI
 
 【结论】移交下一轮。原因：客户端 Web UI 需在演练机 2 的一次性客户端实例上启动回环监听并经端口转发
@@ -1025,6 +1154,99 @@ relay_file 同时传 from_share_address 与 to_share_address →
 演练机 1 的浏览器可用（客户端回环为纯 HTTP，不涉及证书问题）。
 册中要求工作机 1 的条目由 Linux 一次性客户端代替的原因：工作机 1 禁止打开浏览器与触碰桌面，
 客户端 Web UI 只监听回环，需经端口转发访问。
+
+【第三轮（rc8）：客户端273-1 回环监听、一次性启动令牌与只读入口】通过（退出即停复核见本节末尾）。
+owner 不在场，按授权由 agent 在演练机 1 的真实 Chromium 中代跑；工作机 1 桌面未触碰。
+```text
+启动输出：网址以 http://127.0.0.1:<随机端口>/ui/start?token= 开头 ✓；仅监听本机回环随机端口 ✓。
+首次打开启动网址：HTTP 303 换会话后落到 /ui/，最终页面 200；
+  页面显示「客户端 · 只读」与「这里只读，修改需到权威端 Web UI 去做。」✓
+  首页无新增、编辑、删除、添加等修改入口。
+/ui/ 响应头：内容安全策略包含 default-src 'none' 与 script/style/connect/img/font 'self'、
+  base-uri 'none'、form-action 'self'、frame-ancestors 'none'；nosniff、same-origin、no-store 均在。
+会话 cookie：名称包含监听端口；HttpOnly=True；SameSite=Strict；Path=/ui/；Secure=False ✓。
+同一启动网址第二次访问：HTTP 403，页面「启动链接无效 / 启动链接无效或已使用…重新运行 sshmgr ui」✓。
+自动化测试：
+go test ./internal/webui -run '^(TestHostValidationRejectsNonLoopbackHosts|TestWriteRouteRequiresMatchingOriginAndCSRFToken|TestCSRFTokenBoundToSession|TestAllWriteMethodsRequireOriginAndCSRFToken|TestSecurityHeadersOnEveryResponse|TestClientRoleShowsReadOnlyNoticeWithoutWriteEntries)$'
+→ ok
+```
+【退出即停（rc8）】四条客户端 Web UI 取证完成后向 UI 进程发送终止信号；进程退出，回环监听消失，
+一次性 SSH 端口转发关闭。Chromium 再访问原回环地址 → `net::ERR_CONNECTION_REFUSED`，截图留档 ✓。
+【取证辅助偏离】演练机 2 无桌面浏览器，`sshmgr ui` 自动调用 `xdg-open` 失败后会按产品语义退出；
+本轮在一次性客户端目录放置一个只睡眠的一次性 `xdg-open` 占位脚本，使 Web UI 进程保持运行。
+该脚本不读取参数、不打开浏览器、不改系统 PATH 持久配置，结束后删除。
+
+【第三轮（rc8）：客户端273-2 本地快照、本机探测视图与命令行等价面】通过。owner 不在场，浏览器与
+命令行由 agent 代跑。
+```text
+页面：/ui/、/ui/secrets/、/ui/ops/client、/ui/ops/client-audit、/ui/topology/ 全部 200；
+  均保留只读/到权威端修改提示，不显示机密项值。
+命令行等价：对 4 个可见服务器条目逐条 servers show --instance、secrets list、cache status、
+  cache instances ls、cache audit --limit 100、sites/networks/devices list 共 12 组命令全部退出码 0；
+  页面可见对象与命令行本地快照一致。（servers ls 为默认实例命令；本条使用命名实例，产品该子命令
+  不带 --instance，故按册中命名实例分支逐条 show。）
+本机探测：devices probe --from self <一次性可达设备> → 物理候选 0ms 可达；另一虚拟候选连接超时；
+  刷新 /ui/topology/ 后能看到本机起点观察摘要，页面仍只读。
+写路由：/ui/access/ 200 且提示 profile、配对、设备码和项目令牌在权威端管理；
+  profiles/delete、secrets/new、服务器 edit/delete、ops/backup 均 404。
+立即同步：成功路径按钮可见、同步成功；cache status 仍为 4 台服务器 / 5 条凭据。
+  失败路径短暂停止演练权威端 serve 后点击同步，页面出现失败信息；返回 /ui/ 时旧快照服务器仍可见；
+  随后重启 serve，状态恢复 HEALTHY。
+权威端审计对照：probe-connectivity 查询前后均 41 行，一次性 Linux 客户端命中 0 → 客户端观察未回传。
+```
+【前置数据偏离】既有 Linux 一次性客户端设备码未关联拓扑设备，导致 `--from self` 首次报「没有记录本机设备」。
+按 owner 授权在演练权威端把该客户端实例临时关联到 Linux 条目 A 对应的设备，并经缓存客户端自动拉取后重试；
+该改动只为本组客户端 Web UI 条目服务，收尾时解除并复核（见第三轮收尾）。
+
+【第三轮（rc8）：客户端274-1 拓扑只读、本机探测与无编辑入口】通过。owner 不在场，真实 Chromium
+桌面/手机视口均由 agent 在演练机 1 代跑；真实手机观感仍移交 owner。
+```text
+只读入口：页面显示「拓扑为只读视图；网络成员的修改请到权威端 Web UI 做。」；
+  未归类托盘无「新增」链接；页面无布局保存/重置入口；data-editable 为 false 或未注入 ✓。
+三视图：物理/虚拟/叠加按钮均点击成功，画布 data-view 依次切换 ✓。
+画布交互：鼠标滚轮缩放后 Cytoscape 画布缩放值变化；拖动画布后平移值变化，交互无错误 ✓。
+节点与合并：本地裁剪快照显示站点、网络、设备与坐标；同设备 Linux 条目 A 与一次性条目 B
+  在拓扑中合并为一个节点，节点角标 ×2 ✓；点节点可打开设备详情，详情内有本机起点探测表单。
+本机探测（UI）：起点固定为本机；对可达目标点击「开始探测」后任务 state=done，
+  汇总「目标：✓2ms·不一致」（物理可达，另一候选与既有观察不一致）✓。
+  对一次性不可达目标触发后汇总为「不通·不一致」，详情行显示共同物理网络候选连接超时 ✓。
+命令行等价：devices list --unassigned 与 devices probe --from self <可达目标> <不可达目标>
+  均退出码 0；输出包含可达与连接超时，同读本地快照/本机观察。
+写路由：携带同一回环会话 cookie、同源 Origin 与页面防跨站请求伪造令牌 POST
+  /ui/api/topology/membership/add → HTTP 404 ✓（未注入写来源，客户端无拓扑写路由）。
+手机视口 390×844：无横向溢出，三视图按钮可见，只读提示保留 ✓。
+权威端审计对照：probe-connectivity 仍为 41 行，一次性 Linux 客户端命中 0 → 客户端观察未回传。
+```
+【274-1 一次性前置】为构造「同设备多条目合并」与「共同网络但不可达」的判据，临时新增：
+同设备第二条目（复用一次性登录私钥与主机密钥锚）、一台仅在共同物理网络中登记不可达测试地址的设备；
+并把既有 Linux 客户端实例临时关联到本机设备。三者仅授权给该一次性 Linux profile，第三轮收尾删除/恢复。
+【274-1 一次性实例清理判据】另用一个全新的一次性命名客户端实例完成配对并拉取 4 台服务器 / 5 条凭据，
+打开其客户端拓扑页确认只读提示；携带该实例回环会话与防跨站请求伪造令牌 POST 拓扑写路由 → 404。
+随后停止其 Web UI，设备码 revoke、pair 项目 revoke+remove，实例 8 个文件逐个删除、8 个空目录逐层 rmdir，
+一次性端口转发与日志删除。这满足册中第 5 步「删除一次性命名实例目录」；上文保留的 e2e278-linux 仍按 Brief
+继续供 #279 使用。
+
+【第三轮（rc8）：客户端274-2 新增入口缺失与反向视图裁剪】通过。owner 不在场，浏览器与命令行由 agent 代跑。
+```text
+服务器列表：条目 A 与同设备条目 B 可见；无「新增服务器」「导入 SSH」，页头无「添加」入口 ✓。
+直接访问 /ui/servers/new 与 /ui/devices/new → 均 HTTP 404 ✓。
+条目 A 详情：机密项组与共享存储组可见；显示「仅显示本客户端可用的部分，修改请到权威端。」；
+  主机密钥/锚信息只读可见；普通机密项显示名字与备注，不显示环境变量名、值、哈希、值长度或值版本号 ✓。
+  无 profile 授权组、下发记录组、同设备下发文件提示、预览/编辑/删除入口 ✓；
+  同设备其他条目带来的共享存储仅作为只读事实提示可见。
+共享列表/详情：只显示本客户端可用共享；按钮与链接控件仅有导航、筛选、详情、返回，没有新增、编辑、删除、
+  挂载、卸载、撤销、重选、残留检查或桌面手动添加引导 ✓；详情显示挂载密码机密项的名字但无值，
+  值长度/哈希/值版本等标记不存在 ✓。
+命令行等价：servers show 条目 A、shares list、shares show <共享名> 三组均退出码 0；
+  与页面同样只读本地裁剪快照，不显示地址原文以外的账号值、密码值或机密项值。
+授权范围外对象：未出现在客户端页面与命令行输出（以既有 profile 外一次性对象名核对）。
+```
+
+【第三轮仍移交】
+```text
+权威端272-2、权威端274-3：仍缺一次性 macOS 受管靶机；生产 macOS 机器按 Brief 禁止使用，未执行。
+人工272-1：需要真实 Windows 桌面交互与目验，继续移交 owner。
+```
 
 ### 客户端275-1 客户端角色的配对指引与退出
 
@@ -1413,4 +1635,210 @@ grep -nE '<第一轮 Brief 中的模式>' 多机运行记录 + 单机运行记�
 唯一命中：欠账清单第 17 条历史存量行（含默认端口数字样，第一轮已登记的既有内容）。
 本轮全部新增内容（多机运行记录、欠账清单 diff）零命中；发现并修正过一处新增内容中的
 一次性用户名后复验为零。
+```
+
+## 第三轮（rc8）安装与版本
+
+【第三轮执行说明】owner 不在场，按调用方授权由 agent 继续代跑；本轮候选版本 0.22.0-rc8（源提交
+`930fd33`），补跑客户端 Web UI 四条并复核第 44–49 条欠账修复、为第 50 条取证。第一、二轮结论与证据全部保留。
+
+【产物哈希核对（本机候选产物目录）】
+```text
+linux_amd64.tar.gz  SHA-256 9889c0851e328fb15326eafd5878ebb0a78c6f8365ae48acded6d1a32d04ea88 = 与 Brief 给定值一致
+darwin_arm64.tar.gz SHA-256 210c452f91e2e76cc6cd388f9b004cc1b394d26ce042ba697a3600543a9e147b = 与 Brief 给定值一致
+windows_amd64.zip   SHA-256 a1a27df9e9210996ca9f1f297200eb1c66a21d35d37222c060a5dcad70e56ecd = 与 Brief 给定值一致
+```
+
+【升级记录（2026-11-15，经本机临时 HTTP 服务分发）】
+```text
+一次性演练权威端：下载 linux_amd64.tar.gz 并核对 SHA-256 OK；旧二进制备份为 sshmgr.rc7；
+  替换为 rc8 后重启 serve 服务；sshmgr version → 0.22.0-rc8；
+  serve status：Running / responding / vault ok / HEALTHY。
+Linux 受管服务器 A：下载并核对同一 Linux 产物 SHA-256 OK；旧二进制备份为 sshmgr.rc7；
+  替换后 sshmgr version → 0.22.0-rc8。既有共享挂载保留。
+工作机 1：下载 windows_amd64.zip，SHA-256 与 Brief 给定值一致，解压到一次性目录 bin-rc8 下；
+  bin-rc8\sshmgr.exe version → 0.22.0-rc8。不进 PATH，不覆盖旧候选目录，不触碰生产 sshmgr。
+```
+
+【第三轮开始前检查】
+```text
+三台代称机器版本：一次性演练权威端 / Linux 受管服务器 A / 工作机 1 一次性实例均为 0.22.0-rc8。
+一次性演练权威端遗留 Web UI / 缓存客户端进程：0（仅保留应运行的 serve 服务）。
+Linux 受管服务器 A 遗留 Web UI / serve / 缓存客户端进程：0；共享挂载仍在。
+Windows 受管服务器 A：无 sshmgr 进程。
+工作机 1 生产目录指纹（文件数=5；逐文件 SHA-256 按路径排序拼接后再取 SHA-256）=
+1be8f02f12488a0c2a440bc62a9265227d440e5a88df8cb2fbd68f5b4319c94d
+```
+
+## 欠账复核（第三轮 rc8）
+
+### 欠账第 44 条：`serve cert-info` 反映服务实际证书
+
+【复核结论】通过（默认证书与自定义证书两处判据均实证）。owner 不在场，证书生成、服务安装与
+指纹比对由 agent 代跑；指纹证据只留前后缀，不写完整值。
+
+【演练权威端默认证书】
+```text
+sshmgr serve cert-info → 证书路径=vault 根目录默认 serve 证书；
+  证书公钥 SHA-256 指纹=sha256:c87e65f0…2c7d。
+openssl s_client 连接本机 serve 服务，取服务端证书公钥并按 DER 编码计算 SHA-256 →
+  c87e65f0…2c7d；两者逐字节一致 ✓。服务证书公钥算法为 ECDSA P-256。
+```
+
+【演练机 2 一次性自定义证书对照】
+```text
+一次性 vault 前置：默认 vault 目录为空、serve 服务未安装、无 sshmgr 进程。
+openssl 生成一次性 ECDSA P-256 自签证书/私钥 → 以 serve install --tls-cert/--tls-key
+  安装一次性 serve 服务；服务 Running / responding / vault ok / HEALTHY。
+自定义证书文件公钥 SHA-256=bde824cf…327c。
+openssl s_client 从服务端取实际证书并计算公钥 SHA-256=bde824cf…327c。
+sshmgr serve cert-info → 证书路径=<一次性自定义证书路径>；
+  fingerprint=sha256:bde824cf…327c；并显示「服务使用自定义证书：<一次性自定义证书路径>」✓。
+```
+
+【一次性对照清理】
+```text
+serve uninstall 成功；sshmgr clear 确认删除成功；一次性证书、私钥、管理员口令文件与 clear 输出
+  已删除；clear 生成的加密安全网备份已删除。复核：默认 vault 目录为空、sshmgr-serve 为 inactive /
+  not-found、无 sshmgr 进程、无服务端口监听。
+```
+
+### 欠账第 45 条：同名非配对生成项目的配对错误回传
+
+【复核结论】通过。owner 不在场，owner 命令行与短认证码比对由 agent 代跑；一次性设备名与项目名
+均以代称记录，项目令牌只落入 root 专属临时文件，未进入证据。
+
+【冲突构造与第一次 finish】
+```text
+命令行允许创建 pair- 前缀的普通项目：projects add pair-<一次性设备名> --profile <既有 Linux profile>
+  → status=active。该项目不是配对功能生成，未带配对生成标记。
+新的一次性客户端实例向演练权威端 pair（带服务证书公钥指纹锚定）；权威端审批面与客户端日志中的
+  六位短认证码由 agent 程序化提取并逐字比对一致后批准。
+finish 阶段客户端不再出现 HTTP 500，退出时显示：
+  「项目 pair-<一次性设备名> 已被占用，且不是配对功能生成的项目，不能自动接管。
+   请 owner 在权威端依次执行 sshmgr projects revoke pair-<一次性设备名> 和
+   sshmgr projects remove pair-<一次性设备名>，处理后重新配对」
+✓ 消息包含项目名；✓ 包含 revoke / remove 两条可执行命令；✓ 为中文可操作错误，不是笼统 500。
+```
+
+【按提示恢复并重新配对】
+```text
+依次执行消息中的 projects revoke pair-<一次性设备名> 与 projects remove pair-<一次性设备名>
+  → revoked / deleted。
+同一一次性客户端实例重新 pair；再次由 agent 比对两侧短认证码并批准 →
+  已授权 profile；pulled 4 servers / 5 credentials；配对完成；
+  role show：角色=client、初始化向导=已完成；cache status 显示快照 4 台服务器 / 5 条凭据。
+权威端新生成的 pair-<一次性设备名> 项目 status=active；cache-tokens 中一次性设备码 active，
+  client_version=0.22.0-rc8。
+```
+
+【一次性对象清理】
+```text
+cache-tokens revoke <一次性设备名> → status=revoked（该命令面无硬删除；revoked 行为终态，不可再拉取）。
+projects revoke + projects remove pair-<一次性设备名> 完成；serve.pairing 恢复 false。
+一次性客户端实例 7 个文件逐个删除后 7 个空目录逐层 rmdir；配对日志与进程号文件删除。
+复核：项目默认列表无该 pair 项目；两个既有已配对客户端仍 active；演练权威端 serve HEALTHY。
+```
+
+【取证方法偏离】第一次客户端进程按交互式姿势启动，因自动化驱动未向「确认两侧 SAS 一致？」发送
+`y` 而按产品语义中止；随后 agent 先程序化比对两侧短认证码，再用 `SSHMGR_PAIR_ASSUME_SAS=1`
+重跑无人值守配对。该环境变量只跳过终端确认，不替代上述比对；第一次中止请求未发放凭据。
+
+### 欠账第 46 条：Linux 非 force 共享地址重选
+
+【复核结论】通过。证据小节：「权威端272-3 / 第三轮（rc8）」。
+```text
+存在更优且仍可达的物理候选地址时，`shares reselect --yes`（不加 --force）成功从仍连通的虚拟地址切换；
+  退出码 0，不再出现「卸载共享存储挂载点失败」。切换后挂载状态可读写，uid/gid 映射保留；
+  第二次重选返回「当前地址已是最优可达地址，未做改动」。临时转发与拓扑登记已恢复。
+```
+
+### 欠账第 47 条：Windows `exec_context` 盘符预览
+
+【复核结论】通过。证据小节：「客户端272-2 / 第三轮（rc8）」。
+```text
+PowerShell 与 cmd 条目均不再下发 POSIX 探测；exec_context 正常返回 structuredContent，
+  planned_network_drives 列出 <NAS 共享名> 与固定盘符 X，address_plan=执行时探测；
+  空数组字段为 [] 而非 null；实际 PowerShell/cmd 命令盘符注入均成功。
+```
+
+### 欠账第 48 条：装有 serve 时 `update --check`
+
+【复核结论】通过。证据小节：「权威端273-4 / 第三轮（rc8）：第 48 条复核」。
+```text
+root 与非 root 均输出干跑结果并以退出码 0 结束；无误导性「重启」确认或「替换已成功」输出；
+  二进制 SHA-256 前后一致，serve 保持 HEALTHY。
+```
+
+### 欠账第 49 条：共享作为目标端的 Linux 属主映射与写入
+
+【复核结论】通过。证据小节：「权威端272-3 / 第三轮（rc8）」与「客户端272-3 / 第三轮（rc8）」。
+```text
+rc7 旧 fstab 行幂等补 uid=1000/gid=1000，真实 NAS 地址不变并提示「已补充文件属主映射」；
+  挂载点与文件属主为 SSH 登录用户。反向本地拷贝与流式回退写入共享均完成，目标 SHA-256 与源一致。
+```
+
+### 欠账第 50 条：停止本地拷贝后同参数重跑
+
+【真机取证结论】不再复现（第 49 条属主映射修复后现象消失）。证据小节：
+「客户端272-3 / 第三轮（rc8）」。
+```text
+停止任务终态 stopped；同参数重跑约 2 秒 done，半成品被覆盖并重命名为真名；
+  最终 20 MiB 文件 SHA-256 与共享源一致。按 Brief 的「若不再挂起」分支，未展开内核 CIFS 级取证。
+```
+
+## 第三轮（rc8）收尾与机密值检索
+
+【工作机 1 生产目录指纹（第三轮结束前）】
+```text
+文件数=5
+整体 SHA-256=1be8f02f12488a0c2a440bc62a9265227d440e5a88df8cb2fbd68f5b4319c94d
+与第三轮开始前完全一致，文件数一致；一次性 rc8 实例未改动生产目录。
+```
+
+【第三轮清理】
+```text
+本机临时 HTTP 服务：已停止，端口无监听。
+一次性透明 TCP 转发：已停止；演练权威端 445 端口无监听；提供方拓扑成员地址与挂载地址已恢复。
+客户端 Web UI：进程已停止，回环监听消失；演练机 1 → 演练机 2 的一次性 SSH 端口转发已关闭；
+  一次性 xdg-open 占位脚本删除。
+一次性自定义 serve 对照（演练机 2）：serve uninstall + clear 完成；证书/私钥/口令文件、clear 输出与
+  加密安全网备份删除；默认 vault 目录为空，服务 inactive/not-found，无端口监听。
+一次性配对冲突实例/项目/设备码：项目已 revoke+remove；设备码已 revoke（产品无硬删除，终态 revoked）；
+  客户端实例文件逐个删除、空目录逐层 rmdir；serve.pairing 恢复 false。
+客户端274-1 专用一次性命名实例：设备码与 pair 项目 revoke 后，实例文件逐个删除、空目录逐层 rmdir；
+  其 Web UI、xdg-open 占位脚本、端口转发与日志均清理。
+客户端274-1 一次性同设备条目与不可达设备：已删除；Linux 客户端实例与本机设备的临时关联已解除；
+  Linux 客户端最后重新拉取快照（4 台服务器 / 5 条凭据）。
+NAS A 本轮一次性子目录与两份 20 MiB 文件：已逐文件删除并移除空目录。
+演练机 2 /tmp 与一次性客户端目录中的本轮中继源/目标/半成品、驱动脚本、调用文件、UI 日志：已删除。
+演练权威端 /tmp 与浏览器目录中的本轮脚本、输出、审计临时拷贝、证据汇总：已删除。
+Windows 受管服务器 A：本轮未写入；无 sshmgr 进程。
+```
+
+【按 Brief 保留（供 #278 收尾轮与 #279 使用）】
+```text
+演练权威端 rc8 serve 服务与恢复出的 vault（HEALTHY；共享前置数据保留，现场版本号 18）。
+两个既有已配对客户端实例（e2e278-linux、e2e278-win；cache-tokens 均 active，client_version=0.22.0-rc8）。
+一次性配对冲突设备码的 revoked 审计行（产品命令面无硬删除；不可再拉取，不影响两个 active 客户端）。
+客户端274-1 专用一次性设备码的 revoked 审计行（同上，不可再拉取）。
+演练机 2 的共享挂载与真实 NAS 地址、uid/gid 映射；两台受管机 authorized_keys 中的一次性公钥行。
+工作机 1 的 C:\sshmgr-e2e-20261114\（含 rc5/rc7/rc8 三份一次性 exe、隔离目录与既有证据文件）。
+```
+
+【第三轮机密值检索（只输出命中计数）】
+```text
+工作机 1 本轮 7 份工具输出汇总：通用测试值命中 0；NAS 挂载密码命中 0。
+演练机 2 本轮中继/客户端证据汇总：通用测试值命中 0；NAS 挂载密码命中 0。
+演练权威端浏览器取证文件（逐份）：通用测试值命中 0；NAS 挂载密码命中 0。
+本多机运行记录与欠账清单当前内容：通用测试值命中 0；NAS 挂载密码命中 0。
+本轮 serve 日志切片：通用测试值命中 0；NAS 挂载密码命中 0。
+非零计数文件数：0。
+```
+
+【第三轮脱敏 grep】
+```text
+grep -nE '<第一轮 Brief 中的模式>' 多机运行记录 + 单机运行记录 + 欠账清单
+唯一命中：欠账清单第 17 条历史存量行（含默认端口数字样，第一轮已登记的既有内容）。
+本轮新增 diff 逐行复检：0 命中。
 ```
