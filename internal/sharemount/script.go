@@ -117,8 +117,14 @@ func linuxFstabOptionParserScript() string {
   IFS=$sshmgr_saved_ifs
   for sshmgr_option in "$@"; do
     case "$sshmgr_option" in
-      sshmgr-share=*) sshmgr_option_share=${sshmgr_option#sshmgr-share=} ;;
-      sshmgr-version=*) sshmgr_option_version=${sshmgr_option#sshmgr-version=} ;;
+      x-sshmgr-share=*|sshmgr-share=*)
+        sshmgr_option_share=${sshmgr_option#x-sshmgr-share=}
+        sshmgr_option_share=${sshmgr_option_share#sshmgr-share=}
+      ;;
+      x-sshmgr-version=*|sshmgr-version=*)
+        sshmgr_option_version=${sshmgr_option#x-sshmgr-version=}
+        sshmgr_option_version=${sshmgr_option_version#sshmgr-version=}
+      ;;
       vers=*) sshmgr_option_vers=${sshmgr_option#vers=} ;;
     esac
   done
@@ -132,8 +138,9 @@ func linuxFstabOptionParserScript() string {
 // sshmgr_mounted（yes/no）。Linux 读 /proc/mounts，确认挂载点那一列等于
 // 挂载点且类型为 cifs（/proc/mounts 把路径里的空格写成 \040；共享名已禁
 // 止空白，无需解码），读不到时退回 mount 输出；macOS 用 mount 输出确认
-// 存在「on <挂载点> (smbfs」的行。挂载工具的最终验证与现场检测共用这一
-// 判断，空目录不再被误判成已挂载。
+// 存在「on <挂载点> (smbfs」的行；macOS 的 /mnt 位于数据卷，mount 输出
+// 可能把同一挂载点写成 /System/Volumes/Data 前缀，因此两种路径都接受。
+// 挂载工具的最终验证与现场检测共用这一判断，空目录不再被误判成已挂载。
 func mountTableCheckScript(system string) string {
 	switch system {
 	case CheckSystemLinux:
@@ -158,7 +165,9 @@ fi
 	case CheckSystemDarwin:
 		return `ls -A "$mount_point" >/dev/null 2>&1 || true
 sshmgr_mounted=no
-if mount | grep -qF " on $mount_point (smbfs"; then
+sshmgr_data_mount_point="/System/Volumes/Data$mount_point"
+if mount | grep -qF " on $mount_point (smbfs" ||
+   mount | grep -qF " on $sshmgr_data_mount_point (smbfs"; then
   sshmgr_mounted=yes
 fi
 `

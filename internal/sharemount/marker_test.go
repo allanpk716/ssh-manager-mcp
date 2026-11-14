@@ -20,6 +20,13 @@ func TestSharedStorageMarkerRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLinuxSharedStorageFstabMarkerUsesUserspaceOptions(t *testing.T) {
+	marker := linuxSharedStorageFstabMarkerOptions("data,set", 7)
+	if marker != "x-sshmgr-share=data%2Cset,x-sshmgr-version=7" {
+		t.Fatalf("Linux fstab 标记 = %q", marker)
+	}
+}
+
 func TestSharedStorageMarkerRejectsInvalidValues(t *testing.T) {
 	tests := []struct {
 		name   string

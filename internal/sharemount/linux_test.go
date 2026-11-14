@@ -32,6 +32,19 @@ func TestLinuxMountCommandPassesPOSIXShellSyntaxCheck(t *testing.T) {
 	}
 }
 
+func TestLinuxMountCommandWritesUserspaceMarkerOptions(t *testing.T) {
+	command := buildLinuxMountCommand(&models.SharedStorage{
+		ID: "share-001", Name: "data,set", Version: 7,
+	}, []*Candidate{{Address: "192.0.2.10"}})
+
+	if !strings.Contains(command, "x-sshmgr-share=data%2Cset,x-sshmgr-version=7") {
+		t.Fatalf("Linux 固定命令应写入 x- 前缀管理标记：\n%s", command)
+	}
+	if strings.Contains(command, ",sshmgr-share=") || strings.Contains(command, ",sshmgr-version=") {
+		t.Fatalf("Linux 固定命令不能写入会被传给 CIFS 内核的旧管理标记：\n%s", command)
+	}
+}
+
 func TestLinuxMountExitCodesHaveExplanationsAndClasses(t *testing.T) {
 	command := buildLinuxMountCommand(&models.SharedStorage{ID: "share-001", Name: "datasets"}, []*Candidate{
 		{Address: "192.0.2.10"},

@@ -164,7 +164,7 @@ func (s *LinuxServer) reselect(command string, input []byte) (string, string, in
 	s.unmount()
 	password := strings.TrimSpace(string(input))
 	s.FstabLines = []string{fmt.Sprintf(
-		"//%s/%s /mnt/sshmgr/%s cifs credentials=/etc/sshmgr/shares/%s.credentials,vers=3.1.1,sshmgr-share=%s,sshmgr-version=%d,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0",
+		"//%s/%s /mnt/sshmgr/%s cifs credentials=/etc/sshmgr/shares/%s.credentials,vers=3.1.1,x-sshmgr-share=%s,x-sshmgr-version=%d,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0",
 		targetAddress, s.ShareName, s.ShareName, s.ShareID, s.ShareName, s.ShareVersion,
 	)}
 	s.Credential = "username=mount-user\npassword=" + password + "\n"
@@ -220,7 +220,7 @@ func (s *LinuxServer) SeedManagedConfiguration(address string, version int64) {
 	defer s.mu.Unlock()
 	s.ShareVersion = version
 	s.FstabLines = append(s.FstabLines, fmt.Sprintf(
-		"//%s/%s /mnt/sshmgr/%s cifs credentials=/etc/sshmgr/shares/%s.credentials,vers=3.1.1,sshmgr-share=%s,sshmgr-version=%d,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0",
+		"//%s/%s /mnt/sshmgr/%s cifs credentials=/etc/sshmgr/shares/%s.credentials,vers=3.1.1,x-sshmgr-share=%s,x-sshmgr-version=%d,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0",
 		address, s.ShareName, s.ShareName, s.ShareID, s.ShareName, version,
 	))
 	s.Credential = "username=mount-user\npassword=mount-password\n"
@@ -229,7 +229,7 @@ func (s *LinuxServer) SeedManagedConfiguration(address string, version int64) {
 
 func (s *LinuxServer) hasManagedFstabEntry() bool {
 	for _, line := range s.FstabLines {
-		if strings.Contains(line, "sshmgr-share="+s.ShareName+";") ||
+		if strings.Contains(line, "x-sshmgr-share="+s.ShareName+",") ||
 			strings.Contains(line, "sshmgr-share="+s.ShareName+",") {
 			return true
 		}

@@ -156,7 +156,8 @@ if [ -f /etc/fstab ]; then
     set -- $sshmgr_line
     set +f
     [ "$#" -eq 6 ] || continue
-    [ "$1" = "//"* ] && [ "$3" = cifs ] || continue
+    case "$1" in //*) ;; *) continue ;; esac
+    [ "$3" = cifs ] || continue
     sshmgr_parse_options "$4"
     [ "$sshmgr_option_share" = %s ] || continue
     sshmgr_managed=yes
@@ -189,7 +190,7 @@ func buildDarwinShareCheckCommand(shares []*models.SharedStorage) string {
 const darwinShareMapScanBlock = `sshmgr_managed=no
 sshmgr_share=''
 sshmgr_version=''
-if [ -f '` + darwinMapFile + `'; then
+if [ -f '` + darwinMapFile + `' ]; then
   while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
     case "$sshmgr_line" in '# sshmgr-share='*) ;; *) continue ;; esac
     sshmgr_marker=${sshmgr_line#"# "}
@@ -208,7 +209,7 @@ fi
 // darwinAutoMasterCheckBlock 检查 /etc/auto_master 是否仍引用 sshmgr 的
 // 间接映射文件；系统升级重置主配置后这里会给出 no。
 const darwinAutoMasterCheckBlock = `sshmgr_auto_master=no
-if [ -f '` + darwinAutoMaster + `'; then
+if [ -f '` + darwinAutoMaster + `' ]; then
   while IFS= read -r sshmgr_line || [ -n "$sshmgr_line" ]; do
     set -f
     set -- $sshmgr_line
