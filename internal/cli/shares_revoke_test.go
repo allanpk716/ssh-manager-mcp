@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sharemounttest"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/testsshd"
 )
 
 func TestSharesRevokeWindowsServerDoesNotConnectAndExplainsInjection(t *testing.T) {
@@ -53,6 +55,91 @@ func TestSharesRevokeWindowsServerDoesNotConnectAndExplainsInjection(t *testing.
 	}
 	if strings.Contains(output, "远端持久配置已删除") {
 		t.Fatalf("Windows 服务器没有远端持久配置，不应输出已删除：%s", output)
+	}
+}
+
+// TestSharesRevokeOutOfScopeServerOnlyCleansRemote 验证命令行对已移出可
+// 挂载范围的服务器不再拒绝：只清理远端持久配置与挂载点，不修改登记。
+func TestSharesRevokeOutOfScopeServerOnlyCleansRemote(t *testing.T) {
+	dbPath, masterKey := withCliStoreEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("NAS", "共享存储提供方", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.AddSecret("NAS_MOUNT_PASSWORD", "共享存储挂载密码",
+		[]byte("mount-password"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	linux := &sharemounttest.LinuxServer{ShareName: "datasets"}
+	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "login-pw", SudoPassword: "sudo-pw", Exec: linux.Handler,
+	})
+	t.Cleanup(cleanup)
+	loginCredential := &models.Credential{Type: models.CredPassword, Secret: []byte("login-pw")}
+	sudoCredential := &models.Credential{Type: models.CredPassword, Secret: []byte("sudo-pw")}
+	server := &models.Server{
+		Name: "linux-web", Host: addr[:strings.LastIndex(addr, ":")], Port: portOfAddr(addr),
+		User: "deploy", ShellType: models.ShellPOSIX,
+	}
+	added, err := st.AddServerWithCredentialsToDevice(server, loginCredential, sudoCredential, "NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.ID = added.ServerID
+	if err := st.SaveEntryPin(server, hostKey.Marshal()); err != nil {
+		t.Fatal(err)
+	}
+	share, err := st.AddSharedStorage(store.SharedStorageInput{
+		Name: "datasets", Device: "NAS", User: "mount-user",
+		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+	}, store.CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// linux-web 从未进入可挂载范围，模拟撤销登记后仍留在服务器上的配置。
+	linux.ShareID = share.ID
+	linux.SeedManagedConfiguration("192.0.2.10", share.Version)
+	st.Close()
+
+	output := runCli(t, "shares", "revoke", "datasets", "linux-web", "--yes", "--unmount")
+	for _, want := range []string{
+		"服务器 linux-web 已不在共享存储 datasets 的可挂载范围内；本次只清理远端，不修改登记。",
+		"服务器 linux-web 已不在共享存储 datasets 的可挂载范围内；本次只清理远端；版本号：1",
+		"远端持久配置已删除，挂载已卸载。",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("输出应包含 %q：\n%s", want, output)
+		}
+	}
+	if strings.Contains(output, "已撤销共享存储 datasets 在服务器 linux-web 上的可挂载范围") ||
+		strings.Contains(output, "mount-password") {
+		t.Fatalf("已移出范围的撤销不得声称修改登记或泄露密码：%s", output)
+	}
+
+	verify, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verify.Close()
+	after, err := verify.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != 1 || after.ChangeNote != "" || len(after.MountableServers) != 0 {
+		t.Fatalf("已移出范围的撤销不应修改登记：%+v", after)
+	}
+	state := linux.State()
+	if state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("已移出范围的远端清理不完整：%+v", state)
+	}
+	rows, err := verify.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil || len(rows) != 1 || rows[0].Status != "ok" {
+		t.Fatalf("已移出范围的远端撤销审计 = %v %+v", err, rows)
 	}
 }
 

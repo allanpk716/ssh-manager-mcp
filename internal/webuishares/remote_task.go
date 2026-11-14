@@ -178,4 +178,27 @@ func (s *shareRemoteTaskStore) runMount(
 			Notices: append([]string(nil), result.Notices...),
 		}
 	})
+	s.recordLatestMount(request.ShareID, result)
+}
+
+// recordLatestMount 把一次成功的单台挂载登记进最近现场状态表。成功挂载
+// 本身就是远端已有 sshmgr 挂载配置并已挂载的登记，让之后移出可挂载范围
+// 的服务器仍能出现在详情页的撤销授权区域。
+func (s *shareRemoteTaskStore) recordLatestMount(shareID string, result *sharemanage.MountResult) {
+	entry := webui.ShareCheckResult{
+		ServerID: result.ServerID, ServerName: result.ServerName,
+		Status: webui.ShareCheckStatusMounted, Managed: true,
+		Version: result.Version, ObservedAt: time.Now().Format(time.RFC3339),
+	}
+	s.checkMu.Lock()
+	defer s.checkMu.Unlock()
+	results := s.latestChecks[shareID]
+	for index := range results {
+		if results[index].ServerID == entry.ServerID {
+			results[index] = entry
+			s.latestChecks[shareID] = results
+			return
+		}
+	}
+	s.latestChecks[shareID] = append(results, entry)
 }

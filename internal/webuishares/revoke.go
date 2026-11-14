@@ -64,6 +64,7 @@ func (r *revokeRunner) StartShareRevoke(
 		ShareID: request.ShareID, ShareName: request.ShareName,
 		ServerID: request.ServerID, ServerName: request.ServerName,
 		ServerShell: request.ServerShell, MountPoint: request.MountPoint,
+		OutOfScope: request.OutOfScope,
 	}
 	r.tasks.register(id, task)
 	r.tasks.launch(task, func(task *webui.ShareRevokeTaskStatus, ctx context.Context) {

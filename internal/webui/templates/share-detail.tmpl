@@ -38,6 +38,8 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="return_to" value="/ui/shares/{{.ShareDetail.ID}}">
 <input type="hidden" name="secret_id" value="{{.ShareAuthorization.SecretID}}">
+<input type="hidden" name="authorization_view" value="share-scope">
+<input type="hidden" name="share_id" value="{{.ShareDetail.ID}}">
 {{range .ShareAuthorization.Servers}}<input type="hidden" name="server_id" value="{{.ID}}">{{end}}
 <fieldset><legend>可挂载范围勾选清单</legend>
 <table class="server-table">
@@ -115,6 +117,22 @@
 <tbody>
 {{range .ShareRevokeEntries}}
 <tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></td></tr>
+{{end}}
+</tbody>
+</table>
+{{else}}<p>（无）</p>{{end}}
+</section>
+{{end}}
+{{if .Caps.CanRevokeShares}}
+<section class="share-out-of-scope-revoke">
+<h2>已移出范围、远端可能仍有配置</h2>
+<p>下列服务器条目不在可挂载范围内，但最近一次现场探测或成功挂载留下的登记显示远端可能仍留有挂载配置或挂载点。「撤销授权」只清理远端持久配置与挂载点，不再修改登记。</p>
+{{if .ShareOutOfScopeRevokeEntries}}
+<table class="server-table">
+<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>登记依据</th><th>操作</th></tr></thead>
+<tbody>
+{{range .ShareOutOfScopeRevokeEntries}}
+<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.Evidence}}</td><td><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></td></tr>
 {{end}}
 </tbody>
 </table>

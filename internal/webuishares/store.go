@@ -79,6 +79,7 @@ func snapshotShareRow(snapshot *store.Snapshot, share *store.SnapshotSharedStora
 	}
 	row.MountableCount = len(row.MountableServers)
 	row.PasswordSecret = "（本地快照未包含该机密项名字）"
+	row.PasswordSecretID = share.PasswordSecretID
 	for _, secret := range snapshot.Secrets {
 		if secret.ID == share.PasswordSecretID {
 			row.PasswordSecret = secret.Name
@@ -296,8 +297,9 @@ func shareRow(share *models.SharedStorage) webui.ShareRow {
 		Drive: share.Drive, Version: share.Version,
 		MountableServers: serverViews(share.MountableServers),
 		MountableCount:   len(share.MountableServers),
-		PasswordSecret:   share.PasswordSecretName, MountUser: share.MountUser,
-		Note: share.Note, ChangeNote: share.ChangeNote,
+		PasswordSecret:   share.PasswordSecretName, PasswordSecretID: share.PasswordSecretID,
+		MountUser: share.MountUser,
+		Note:      share.Note, ChangeNote: share.ChangeNote,
 	}
 	for _, directory := range share.Directories {
 		row.Directories = append(row.Directories, webui.ShareDirectoryView{

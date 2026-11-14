@@ -64,10 +64,12 @@ type pageData struct {
 	SecretDetailEnvironmentName       string
 	SecretMatrix                      *SecretMatrixView
 	SecretAuthorizationPreview        SecretAuthorizationPreview
+	SecretAuthorizationShareImpact    []SecretAuthorizationChange
 	SecretAuthorizationTargets        []SecretAuthorizationCell
 	SecretAuthorizationReturnTo       string
 	SecretAuthorizationView           string
 	SecretAuthorizationServerID       string
+	SecretAuthorizationShareID        string
 	SecretAuthorizationNotice         string
 	SecretAuthorizationShareUnmounts  []SecretAuthorizationShareUnmount
 	Shares                            []ShareRow
@@ -88,6 +90,7 @@ type pageData struct {
 	ShareUnmount                      *ShareUnmountView
 	ShareUnmountBatch                 *ShareUnmountBatchView
 	ShareRevokeEntries                []ShareRevokeEntry
+	ShareOutOfScopeRevokeEntries      []ShareOutOfScopeRevokeEntry
 	ShareRevoke                       *ShareRevokeView
 	ShareReselectEntries              []ShareReselectEntry
 	ShareReselect                     *ShareReselectView

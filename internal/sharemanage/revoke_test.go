@@ -86,6 +86,59 @@ func TestRevokeLinuxWithoutUnmountDeletesConfigurationAndKeepsMount(t *testing.T
 	}
 }
 
+// TestRevokeOutOfScopeServerOnlyCleansRemote 覆盖已移出可挂载范围的服务
+// 器：命令行与 Web UI 共用这段逻辑，只清理远端，不再修改登记，共享存
+// 储版本号与变更说明保持不变。
+func TestRevokeOutOfScopeServerOnlyCleansRemote(t *testing.T) {
+	fixture := newUnmountFixture(t, true)
+	shareBefore, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shareBefore.Version != 2 {
+		t.Fatalf("准备阶段共享存储版本号 = %d，期待 2", shareBefore.Version)
+	}
+
+	result, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+		Share: "datasets", Server: "linux-web", Unmount: true,
+	})
+	if err != nil {
+		t.Fatalf("已移出范围的服务器撤销不应失败：%v", err)
+	}
+	if result.Result != "success" || result.Version != 2 || result.ScopeChanged ||
+		result.MountPreserved || !result.Unmount {
+		t.Fatalf("已移出范围的结构化结果 = %+v", result)
+	}
+	shareAfter, err := fixture.store.GetSharedStorage("datasets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if shareAfter.Version != shareBefore.Version ||
+		shareAfter.ChangeNote != shareBefore.ChangeNote ||
+		len(shareAfter.MountableServers) != 0 {
+		t.Fatalf("已移出范围的撤销不应修改登记：before=%+v after=%+v", shareBefore, shareAfter)
+	}
+	state := fixture.linux.State()
+	if state.Mounted || len(state.FstabLines) != 0 || state.Credential != "" {
+		t.Fatalf("已移出范围的远端清理不完整：%+v", state)
+	}
+	if state.RevokedMarker != "sshmgr-share=datasets;sshmgr-version=2;sshmgr-state=revoked" {
+		t.Fatalf("已移出范围的撤销标记 = %q", state.RevokedMarker)
+	}
+	revokeRows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke"},
+	})
+	if err != nil || len(revokeRows) != 0 {
+		t.Fatalf("已移出范围的撤销不应写登记撤销审计：%v %+v", err, revokeRows)
+	}
+	remoteRows, err := fixture.store.QueryAudit(store.AuditFilter{
+		OwnerOnly: true, Actions: []string{"share-revoke-remote"},
+	})
+	if err != nil || len(remoteRows) != 1 || remoteRows[0].Status != "ok" {
+		t.Fatalf("已移出范围的远端撤销审计 = %v %+v", err, remoteRows)
+	}
+}
+
 func TestRevokeNeverMountedServerWritesMarkerAndBlocksMountShare(t *testing.T) {
 	tests := []struct {
 		name   string

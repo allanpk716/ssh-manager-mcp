@@ -14,6 +14,7 @@ import (
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
+	"ssh-manager-mcp/internal/webui"
 )
 
 func TestShareCheckTaskStartsPollsAndShowsEveryConclusion(t *testing.T) {
@@ -204,6 +205,58 @@ func TestShareMountTaskShowsFailureAndWindowsSubmissionIsRefused(t *testing.T) {
 		if !strings.Contains(failed, want) {
 			t.Fatalf("失败任务应呈现错误与重新发起入口，缺少 %q：\n%s", want, failed)
 		}
+	}
+}
+
+// TestSuccessfulMountBecomesOutOfScopeRevokeEvidence 验证成功挂载任务也会
+// 登记远端状态：服务器之后再被移出可挂载范围，详情页仍能提供撤销授权
+// 入口，不必先跑一次现场探测。
+func TestSuccessfulMountBecomesOutOfScopeRevokeEvidence(t *testing.T) {
+	st := newIntegrationStore(t)
+	fake := &webMountFakeServer{}
+	address, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
+		Password: "login-pw", SudoPassword: "sudo-pw", Exec: fake.handler,
+	})
+	t.Cleanup(cleanup)
+	seedRemoteTaskMountTopology(t, st)
+	serverID := addRemoteTaskServer(t, st, "linux-web", address, hostKey.Marshal(),
+		models.ShellPOSIX, "linux-device", true)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	remoteTasks := RemoteTasksFromStore(openStoreForTest(st))
+	h := startIntegrationHandler(t, st, func(config *webui.Config) {
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(st))
+	})
+	csrf := csrfToken(t, h)
+
+	started := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/mount", url.Values{
+		"csrf_token": {csrf}, "server_id": {serverID},
+	})
+	if started.StatusCode != http.StatusSeeOther {
+		t.Fatalf("挂载任务应立即返回任务页，状态码=%d：%s",
+			started.StatusCode, body(t, started))
+	}
+	waitRemoteTaskDone(t, h, started.Header.Get("Location"))
+	if err := st.DisallowSecrets(
+		[]string{"NAS_MOUNT_PASSWORD"}, []string{"linux-web"}, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	detail := body(t, h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil))
+	for _, want := range []string{
+		"已移出范围、远端可能仍有配置",
+		"linux-web",
+		"最近登记：已挂载，且已有 sshmgr 挂载配置",
+		`href="/ui/shares/` + datasetsID + `/revoke?server=` + serverID + `"`,
+	} {
+		if !strings.Contains(detail, want) {
+			t.Fatalf("成功挂载后的已移出范围区域缺少 %q：\n%s", want, detail)
+		}
+	}
+	if strings.Contains(detail, "NAS_MOUNT_PASSWORD-value-不回显") {
+		t.Fatalf("已移出范围区域不得显示密码：\n%s", detail)
 	}
 }
 
