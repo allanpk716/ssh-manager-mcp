@@ -1900,3 +1900,154 @@ grep -nE '<第一轮 Brief 中的模式>' 多机运行记录 + 单机运行记�
 唯一命中：欠账清单第 17 条历史存量行（含默认端口数字样，第一轮已登记的既有内容）。
 本轮新增 diff 逐行复检：0 命中。
 ```
+
+## 第四轮（rc9）安装与版本
+
+【命令原文】
+```text
+本机核对候选产物 SHA-256；本机临时 HTTP 服务分发 Linux 安装包（演练机经 SSH 会话分块传输，哈希两端核对）；
+  Windows 安装包由工作机 1 经本机临时 HTTP 服务下载。
+两台演练机：备份 /usr/local/bin/sshmgr 为 sshmgr.rc8 → 解压 rc9 → install 替换；
+  演练权威端重启 sshmgr-serve 并查健康。
+工作机 1：下载 rc9 安装包（SHA-256 核对）→ 解压到 C:\sshmgr-e2e-20261114\bin-rc9\，不进 PATH、不碰生产。
+```
+【完整输出】
+```text
+候选产物 SHA-256（与本机 dist 目录一致）：
+  linux_amd64.tar.gz  57041fe4d91b0058b406daca713676705384f46503ea0e1db5eb691d3ad7a64a ✓
+  windows_amd64.zip   71774e2fd51c5f661b98937a3c030d8114eef05a809f7eb413aebbe39aee91f5 ✓
+演练权威端：/usr/local/bin/sshmgr SHA-256 a9da65d3…5dfde39c，sshmgr.rc8 备份 SHA-256 9b64cbea…8f1dd41；
+  0.22.0-rc9，2026-11-15T02:20:41Z 安装；serve status：service Running / process running /
+  http responding (401/200) / vault ok / overall HEALTHY；2026-11-15T02:33:06Z 复核仍 HEALTHY。
+Linux 受管服务器 A：/usr/local/bin/sshmgr SHA-256 a9da65d3…5dfde39c；0.22.0-rc9，2026-11-15T02:21:52Z。
+工作机 1：bin-rc9\sshmgr.exe version=0.22.0-rc9；exe SHA-256 88e0a1d44b4804381faf0a9231c400f52f447564b8bbea4fce5927aa2d8f5660；
+  安装包核对后删除；未写 PATH、未装服务、未触碰生产 sshmgr。
+升级前三台机器版本：演练权威端 0.22.0-rc8（2026-11-15T02:09:13Z，serve active）、
+  Linux 受管服务器 A 0.22.0-rc8（2026-11-15T02:09:13Z）、工作机 1 bin-rc8 0.22.0-rc8（2026-11-15T02:10:55Z）。
+```
+【执行位置】三台代称机器；本机只做产物哈希核对、临时 HTTP 分发与 SSH 会话内传输。
+
+【工作机 1 生产目录指纹（第四轮开始前）】
+```text
+文件数=5
+整体 SHA-256（逐文件 SHA-256 按路径排序后换行拼接再取 SHA-256）=e0ba15ad06c569c698f1ea5a888cff4f69670ec8a4d9ab7b9f31763de6b2ca9c
+```
+
+【遗留一次性进程检查（第四轮开始前）】
+```text
+演练权威端 / Linux 受管服务器 A：无 sshmgr ui、无临时 systemd 单元、无一次性 mcp 进程
+  （pgrep 仅命中查询命令自身）；演练权威端仅保留应保留的 sshmgr-serve 服务。
+工作机 1：全部 sshmgr 进程均来自生产路径（用户目录下生产 exe）；无 e2e 一次性实例进程。
+```
+
+## 欠账复核（第四轮 rc9）
+
+### 欠账第 42 条：版本提示不再销毁超龄缓存；离线超龄隔离文案不再称服务器拒绝
+
+【结论】通过。owner 不在场，按 owner 授权由 agent 在演练机 2 新建一次性客户端实例代跑复核。
+
+【源码口径（复核前读取）】
+```text
+internal/clientops/expiry.go / clientops.go：离线上限来源为环境变量 SSHMGR_CACHE_MAX_OFFLINE，
+  或实例目录内 cache.config.json 的 max_offline（语法一致，>=1h 才合法，环境变量优先）；
+  只读加载 LoadCacheSnapshotReadOnlyFor 只报错不销毁；破坏性加载 LoadCacheSnapshotFor 在
+  超龄且二次复核仍超龄时才隔离；隔离前缀由 quarantine.go 按触发源区分（offline limit / server rejection）。
+```
+
+【前置构造（演练机 2 一次性实例，不动 e2e278-linux）】
+```text
+新实例 e2e279-exp42（独立 vault/config/dek 根），配对到演练权威端：
+  owner 不在场，agent 比对两侧短认证码（实例名、地址、短认证码逐字一致，SAS-MATCH=True，值不入证据），
+  权威端批准一次性 profile（0 台服务器授权）；配对完成后拉取 0 servers / 0 credentials。
+构造超龄：cache.config.json max_offline=1h；cache.meta.json pulled_at 回拨 7200 秒（ServerAnchored 保持 true）；
+  未改系统时间。此时该隔离配置根下只有这一个命名实例（版本提示的实例推导会选中它）。
+```
+
+【命令原文】
+```text
+sshmgr --help
+sshmgr help
+sshmgr serve status
+sshmgr definitely-not-a-subcommand        （必然失败的命令）
+sshmgr cache status --instance e2e279-exp42   （确实加载缓存）
+每条后检查：cache.auth.json、cache.bin、解密钥文件是否仍在；是否出现 quarantine/ 目录。
+```
+
+【完整输出（关键行）】
+```text
+after-setup      device-code=1 cache-bin=1 dek=1 quarantine-dir=0
+--help        exit=0（输出为帮助文本）      → after-help         device-code=1 cache-bin=1 dek=1 quarantine-dir=0
+help          exit=0（输出为帮助文本）      → after-help2        device-code=1 cache-bin=1 dek=1 quarantine-dir=0
+serve status  exit=0：service NOT INSTALLED / process not running / http not responding / vault LOCKED / overall DEGRADED
+                                      → after-serve-status device-code=1 cache-bin=1 dek=1 quarantine-dir=0
+失败命令      exit=1：unknown command "definitely-not-a-subcommand" for "sshmgr"
+                                      → after-failing-cmd  device-code=1 cache-bin=1 dek=1 quarantine-dir=0
+cache status --instance e2e279-exp42  exit=1：
+  cache QUARANTINED because the offline limit was exceeded (snapshot expired (offline beyond SSHMGR_CACHE_MAX_OFFLINE)): snapshot isolated to quarantine/, device code + DEK deleted — re-enroll with a fresh device code
+  Error: cache quarantined because the offline limit was exceeded — cache snapshot expired (offline 2h4m42s > cap 1h0m0s) — snapshot destroyed; run cache pull to re-enroll
+                                      → after-cache-load   device-code=0 cache-bin=0 dek=0 quarantine-dir=1
+quarantine/manifest.json：{"state":"done","reason":"snapshot expired (offline beyond SSHMGR_CACHE_MAX_OFFLINE)",…,"steps":{"auth":"ok","bin":"ok","dek":"ok","meta":"ok"}}
+```
+
+【判据核对】
+```text
+--help、help 子命令、serve status、失败命令：四条之后设备码、缓存、解密钥全部仍在，未隔离 ✓
+真正加载缓存的 cache status：此时才隔离 ✓
+隔离文案含「cache QUARANTINED because the offline limit was exceeded」，全文不含 server rejection 字样 ✓
+隔离执行：设备码与解密钥删除、cache.bin 移入 quarantine/、manifest 原因正确 ✓
+```
+
+【清理】
+```text
+演练机 2：一次性实例全部文件逐个删除（含 quarantine 内两份），空目录逐层移除，临时脚本与输出删除；
+  ls 确认一次性根目录不存在（instance-cleanup-done）。
+演练权威端：cache-tokens revoke e2e279-exp42（status=revoked）、projects revoke pair-e2e279-exp42、
+  profiles remove e2e279_exp42、serve.pairing 恢复 false；profiles ls 中该一次性 profile 计数 0
+  （cache-tokens ls 保留 revoked 终态审计行，为产品既定行为，不可再拉取）。
+两个既有已配对实例与共享前置数据未受影响。
+```
+【执行位置】演练机 2（一次性实例）+ 演练权威端（配对批准与清理）。
+
+### 欠账第 43 条：serve status 进程探测排除自身，服务未安装时显示 process: not running
+
+【结论】通过（工作机 1 字面输出受生产 sshmgr 进程干扰，详见下文，另以无 sshmgr 进程的
+Windows 受管服务器 A 做清洁对照）。owner 不在场，agent 代跑。
+
+【命令原文】
+```text
+工作机 1：tasklist /FI "IMAGENAME eq sshmgr.exe" /FO CSV /NH（对照取证）；
+  隔离环境变量下 C:\sshmgr-e2e-20261114\bin-rc9\sshmgr.exe serve status
+Linux 受管服务器 A（未装 serve）：sshmgr serve status
+演练权威端（装有 serve）：sudo sshmgr serve status
+Windows 受管服务器 A（无任何 sshmgr 进程的清洁对照）：一次性 bin-rc9 exe（隔离环境变量）serve status
+```
+
+【完整输出】
+```text
+工作机 1（服务未安装；取证时已存在 19 个生产 sshmgr.exe 进程，PID 清单略）：
+  service: NOT INSTALLED / process: running / http: not responding / vault: LOCKED / overall: DEGRADED，exit=0
+  serve status 退出后 sshmgr.exe 进程数=19（与其运行前一致；「running」来自真实存在的生产进程，不是把自身算入）
+Linux 受管服务器 A（未装 serve）：
+  service: NOT INSTALLED / process: not running / http: not responding / vault: LOCKED / overall: DEGRADED，exit=0
+演练权威端（装有 serve）：
+  service: Running / process: running / http: responding (401/200 = auth working) / vault: ok / overall: HEALTHY，exit=0
+Windows 受管服务器 A（清洁对照，tasklist 无任何 sshmgr.exe）：
+  service: NOT INSTALLED / process: not running / http: not responding / vault: LOCKED / overall: DEGRADED，exit=0
+```
+
+【判据核对】
+```text
+Linux（/proc）服务未安装 → process: not running ✓（自身进程号被排除）
+Windows（tasklist）在无其他 sshmgr.exe 的机器上服务未安装 → process: not running ✓（自身进程号被排除）
+装有 serve 的演练权威端 → process: running ✓
+工作机 1 输出 process: running 的解释：该机同时运行 19 个生产 sshmgr.exe（MCP 桥），
+  探测按映像名如实报告真实进程；这些进程属于生产，按禁区不得停止。rc6 缺陷场景
+  （机器上无任何 sshmgr 进程却显示 running，即把 serve status 自身算入）已由清洁对照证不复现。
+```
+
+【清理】
+```text
+Windows 受管服务器 A：一次性 bin-rc9\sshmgr.exe 删除；顺带删除该机一次性目录中第一轮遗留的两份
+  路径取证文件，逐层删除空目录，root-exists=False。
+```
+【执行位置】工作机 1、Linux 受管服务器 A、演练权威端、Windows 受管服务器 A。
