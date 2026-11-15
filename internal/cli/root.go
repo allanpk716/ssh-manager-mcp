@@ -63,7 +63,22 @@ func (r *rootCommand) finish(cmd *cobra.Command, err error) {
 	if err != nil && !errors.Is(err, flag.ErrHelp) {
 		fmt.Fprintln(r.Command.ErrOrStderr(), err)
 	}
+	// 帮助与失败命令只负责展示帮助或错误；这时读取客户端版本没有诊断价值，
+	// 也不应让参数错误触碰客户端缓存。
+	if err != nil || commandShowsHelp(cmd) {
+		return
+	}
 	writeClientVersionHint(cmd)
+}
+
+func commandShowsHelp(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	if help := cmd.Flags().Lookup("help"); help != nil && help.Value.String() == "true" {
+		return true
+	}
+	return cmd.Name() == "help"
 }
 
 var versionCmd = &cobra.Command{
@@ -74,8 +89,8 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-// writeClientVersionHint 是根命令收尾时的客户端版本提示。它只读取本地加密
-// 缓存；update 与 doctor 已经展示两边版本，不再重复提示。
+// writeClientVersionHint 是根命令收尾时的客户端版本提示。它只做本地只读
+// 诊断，不销毁过期缓存；update 与 doctor 已经展示两边版本，不再重复提示。
 func writeClientVersionHint(cmd *cobra.Command) {
 	if cmd == nil {
 		return

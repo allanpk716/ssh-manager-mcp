@@ -47,7 +47,7 @@ func readClientVersionState(instance string, errw io.Writer) (clientVersionState
 	if err != nil {
 		return clientVersionState{IsClient: true}, err
 	}
-	snap, err := clientops.LoadCacheSnapshotFor(instance)
+	snap, err := clientops.LoadCacheSnapshotReadOnlyFor(instance)
 	if err != nil {
 		return clientVersionState{IsClient: true}, err
 	}

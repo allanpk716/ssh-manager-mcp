@@ -21,6 +21,23 @@ import (
 // makes "a clock that passed the pull gate can never trip the load gate" hold.
 const cacheSkewTolerance = time.Hour
 
+// offlineCacheQuarantineError keeps the common quarantine sentinel for callers
+// while describing the actual local trigger in its own message.
+type offlineCacheQuarantineError struct {
+	Degraded []string
+}
+
+func (e offlineCacheQuarantineError) Error() string {
+	if len(e.Degraded) == 0 {
+		return "cache quarantined because the offline limit was exceeded"
+	}
+	return fmt.Sprintf("cache quarantined because the offline limit was exceeded [DEGRADED: %v] — the old snapshot may still be decryptable; delete it manually", e.Degraded)
+}
+
+func (e offlineCacheQuarantineError) Is(target error) bool {
+	return target == ErrCacheQuarantined
+}
+
 // The only two quarantine manifest reasons (§4). QuarantineReport dispatches
 // its message on exact equality against expiryReason; every other reason —
 // i.e. the Plan 34 server-rejection one — keeps the legacy texts verbatim.

@@ -346,6 +346,18 @@ func WriteCacheCred(cred *CacheCred) error { return WriteCacheCredFor("", cred) 
 // expiry/rollback. Destruction happens only on the expiry gate, only after a
 // re-check confirms the anchor did not just advance (destructive-race guard).
 func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
+	return loadCacheSnapshotFor(instance, false)
+}
+
+// LoadCacheSnapshotReadOnlyFor reads the same cache through the same offline
+// gates as LoadCacheSnapshotFor, but never destroys cache material. Version
+// diagnostics use this path so help, status, and argument errors cannot
+// quarantine an expired cache as a side effect.
+func LoadCacheSnapshotReadOnlyFor(instance string) (*store.Snapshot, error) {
+	return loadCacheSnapshotFor(instance, true)
+}
+
+func loadCacheSnapshotFor(instance string, readOnly bool) (*store.Snapshot, error) {
 	dir, bin, metaPath, _, err := CachePathsFor(instance)
 	if err != nil {
 		return nil, err
@@ -371,6 +383,10 @@ func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
 			if expiryTestHooks.afterAgeCheck != nil {
 				expiryTestHooks.afterAgeCheck()
 			}
+			if readOnly {
+				return nil, fmt.Errorf("cache snapshot expired (offline %s > cap %s) — run cache pull",
+					now.Sub(anchorT).Round(time.Second), maxOffline)
+			}
 			// §3.4 re-check: destruction requires positive expiry evidence AND
 			// confirmation. Re-read the anchor right before destroying.
 			meta2, rerr := readCacheMeta(metaPath)
@@ -385,12 +401,10 @@ func LoadCacheSnapshotFor(instance string) (*store.Snapshot, error) {
 				// and judge again from the fresh anchor.
 				return LoadCacheSnapshotFor(instance)
 			}
-			_, qerr := QuarantineCacheFor(instance, expiryReason)
-			if qerr == nil {
-				qerr = ErrCacheQuarantined
-			}
+			result, _ := quarantineCacheForOfflineExpiry(instance, expiryReason)
 			return nil, fmt.Errorf("%w — cache snapshot expired (offline %s > cap %s) — snapshot destroyed; run cache pull to re-enroll",
-				qerr, now.Sub(anchorT).Round(time.Second), maxOffline)
+				offlineCacheQuarantineError{Degraded: result.Degraded},
+				now.Sub(anchorT).Round(time.Second), maxOffline)
 		}
 		if now.Before(anchorT.Add(-cacheSkewTolerance)) {
 			// §3.5 rollback gate: refuse (never destroy) — a clock fault and a

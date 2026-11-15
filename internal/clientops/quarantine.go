@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -21,6 +22,10 @@ import (
 // wrapped text carries the DEGRADED step list for display only — the client's
 // decision never depends on the server-supplied reason.
 var ErrCacheQuarantined = errors.New("cache quarantined by server rejection")
+
+// quarantineOutput is the message destination seam used by tests. Production
+// always writes to standard error.
+var quarantineOutput io.Writer = os.Stderr
 
 // QuarantineResult reports per-step outcomes (rev4 §2). Steps maps the four
 // destruction steps (dek/auth/bin/meta) to "ok" / "ok(absent)" / the failure
@@ -69,6 +74,23 @@ type quarantineManifest struct {
 // ErrCacheQuarantined); a clean or idempotent completion returns nil — DoPull
 // (T4) raises the sentinel for the trigger itself.
 func QuarantineCacheFor(instance string, reason string) (QuarantineResult, error) {
+	return quarantineCacheFor(instance, reason, false)
+}
+
+// quarantineCacheForOfflineExpiry destroys the cache with wording that names
+// the local offline-limit trigger instead of a server rejection.
+func quarantineCacheForOfflineExpiry(instance string, reason string) (QuarantineResult, error) {
+	return quarantineCacheFor(instance, reason, true)
+}
+
+func quarantineHeadline(reason string, offlineExpiry bool) string {
+	if offlineExpiry {
+		return fmt.Sprintf("cache QUARANTINED because the offline limit was exceeded (%s)", reason)
+	}
+	return fmt.Sprintf("cache QUARANTINED by server rejection (%s)", reason)
+}
+
+func quarantineCacheFor(instance string, reason string, offlineExpiry bool) (QuarantineResult, error) {
 	res := QuarantineResult{Steps: map[string]string{}}
 	dir, bin, meta, _, err := CachePathsFor(instance)
 	if err != nil {
@@ -114,10 +136,12 @@ func QuarantineCacheFor(instance string, reason string) (QuarantineResult, error
 	}
 
 	if len(res.Degraded) > 0 {
-		fmt.Fprintf(os.Stderr, "cache QUARANTINED by server rejection (%s) [DEGRADED: %v]: steps failed — the old snapshot may still be decryptable, delete it manually; re-enroll with a fresh device code\n", reason, res.Degraded)
+		headline := quarantineHeadline(reason, offlineExpiry)
+		fmt.Fprintf(quarantineOutput, "%s [DEGRADED: %v]: steps failed — the old snapshot may still be decryptable, delete it manually; re-enroll with a fresh device code\n", headline, res.Degraded)
 		return res, fmt.Errorf("%w [DEGRADED: %v] — the old snapshot may still be decryptable; delete it manually", ErrCacheQuarantined, res.Degraded)
 	}
-	fmt.Fprintf(os.Stderr, "cache QUARANTINED by server rejection (%s): snapshot isolated to quarantine/, device code + DEK deleted — re-enroll with a fresh device code\n", reason)
+	headline := quarantineHeadline(reason, offlineExpiry)
+	fmt.Fprintf(quarantineOutput, "%s: snapshot isolated to quarantine/, device code + DEK deleted — re-enroll with a fresh device code\n", headline)
 	return res, nil
 }
 

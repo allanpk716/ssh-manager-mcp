@@ -5,6 +5,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -14,9 +15,10 @@ import (
 // future code path that accidentally calls it surfaces clearly.
 func serveProcessRunningWindows() bool { panic("unreachable on posix") }
 
-// serveProcessRunningPOSIX reports whether a sshmgr process is currently
-// running on Linux/macOS/etc. Scans /proc/<pid>/comm for an exact match on
-// "sshmgr" (Linux) — on macOS /proc does not exist and this returns
+// serveProcessRunningPOSIX reports whether another sshmgr process is currently
+// running on Linux/macOS/etc. Scans /proc/<process number>/comm for an exact
+// match on "sshmgr" (Linux) and ignores this command's own process number —
+// on macOS /proc does not exist and this returns
 // false (best-effort; the other three status signals compensate).
 //
 // Why /proc/comm and not pgrep / ps: keep the dependency surface to the
@@ -31,20 +33,32 @@ func serveProcessRunningPOSIX() bool {
 		// macOS has no /proc — return false (best-effort).
 		return false
 	}
+	return serveProcessRunningFromProcEntries("/proc", os.Getpid(), entries, os.ReadFile)
+}
+
+// serveProcessRunningFromProcEntries is the testable /proc enumeration seam.
+// The caller supplies the directory entries and the file reader; only numeric
+// directories are considered, matching the /proc layout on Linux.
+func serveProcessRunningFromProcEntries(root string, currentProcessID int, entries []os.DirEntry, readComm func(string) ([]byte, error)) bool {
 	target := "sshmgr"
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		// /proc entries are pids; skip non-numeric names (/proc/self, /proc/buddyinfo).
+		// /proc entries are process numbers; skip non-numeric names such as
+		// /proc/self and /proc/buddyinfo.
 		name := e.Name()
-		if name == "" || name[0] < '0' || name[0] > '9' {
+		processID, err := strconv.Atoi(name)
+		if err != nil {
 			continue
 		}
-		// /proc/<pid>/comm is the executable's base name (truncated to 15 chars
+		if processID == currentProcessID {
+			continue
+		}
+		// /proc/<process number>/comm is the executable's base name (truncated to 15 chars
 		// by the kernel — TASK_COMM_LEN). "sshmgr" is 6 chars so it fits
 		// untruncated.
-		comm, err := os.ReadFile(filepath.Join("/proc", name, "comm"))
+		comm, err := readComm(filepath.Join(root, name, "comm"))
 		if err != nil {
 			continue
 		}

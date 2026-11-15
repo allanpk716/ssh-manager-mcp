@@ -145,6 +145,49 @@ func TestQuarantineDestroysFourAndWritesManifest(t *testing.T) {
 	}
 }
 
+// TestQuarantineMessageDistinguishesOfflineExpiryFromServerRejection keeps the
+// server-rejection wording intact for a 401 refusal while naming the local
+// offline limit when expiry itself triggered destruction.
+func TestQuarantineMessageDistinguishesOfflineExpiryFromServerRejection(t *testing.T) {
+	messages := &strings.Builder{}
+	previous := quarantineOutput
+	quarantineOutput = messages
+	t.Cleanup(func() { quarantineOutput = previous })
+
+	t.Run("offline expiry", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("SSHMGR_CACHE_DIR", dir)
+		withDEKFake(t)
+		seedCache(t, dir)
+
+		if _, err := quarantineCacheForOfflineExpiry("", expiryReason); err != nil {
+			t.Fatalf("offline-expiry quarantine: %v", err)
+		}
+		got := messages.String()
+		if !strings.Contains(got, "cache QUARANTINED because the offline limit was exceeded") {
+			t.Fatalf("offline-expiry wording missing: %q", got)
+		}
+		if strings.Contains(got, "by server rejection") {
+			t.Fatalf("offline-expiry wording must not blame the server: %q", got)
+		}
+		messages.Reset()
+	})
+
+	t.Run("server rejection", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("SSHMGR_CACHE_DIR", dir)
+		withDEKFake(t)
+		seedCache(t, dir)
+
+		if _, err := QuarantineCache(serverRejectedReason); err != nil {
+			t.Fatalf("server-rejection quarantine: %v", err)
+		}
+		if !strings.Contains(messages.String(), "cache QUARANTINED by server rejection ("+serverRejectedReason+")") {
+			t.Fatalf("server-rejection wording changed: %q", messages.String())
+		}
+	})
+}
+
 // TestQuarantineDegradedOnDEKFailure: a critical-step failure marks DEGRADED in
 // the result AND the returned error (sentinel-wrapped), still completes the
 // other steps, and reports honestly.

@@ -261,6 +261,9 @@ func TestServeInstallIntegration(t *testing.T) {
 	if !strings.Contains(postUninstallOut, "NOT INSTALLED") && !strings.Contains(postUninstallOut, "not installed") {
 		t.Fatalf("step 5b: post-uninstall status did not report NOT INSTALLED\nstatus:\n%s", postUninstallOut)
 	}
+	if lines := statusLines(postUninstallOut); lines["process"] != "not running" {
+		t.Fatalf("step 5b: post-uninstall status must not count this status process\nstatus:\n%s", postUninstallOut)
+	}
 	t.Log("step 5b: uninstall removed the service cleanly")
 }
 

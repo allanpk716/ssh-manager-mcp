@@ -3,12 +3,14 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/clientops"
@@ -16,6 +18,7 @@ import (
 	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/vaultio"
 )
 
 // seedRootVersionCache 写出真实的本地加密缓存，之后不再联系权威端。命令测试
@@ -77,6 +80,146 @@ func seedRootVersionCache(t *testing.T, recommendedVersion string) []byte {
 	return seedRootVersionCacheForInstance(t, recommendedVersion, "")
 }
 
+// seedAgedNamedClientCache writes one named, server-anchored cache whose pull
+// time is beyond the 24-hour offline limit. The returned count observes the
+// fake authority server, so a test can prove that a command made no request.
+func seedAgedNamedClientCache(t *testing.T, recommendedVersion string) (requests *int) {
+	t.Helper()
+	userDir := t.TempDir()
+	dekDir := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", userDir)
+	t.Setenv("APPDATA", userDir)
+	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
+	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "store.db"))
+	t.Setenv("SSHMGR_CACHE_DIR", "")
+	t.Setenv("SSHMGR_CACHE_DEK", "")
+	t.Setenv("SSHMGR_CACHE_DEK_DIR", dekDir)
+	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "24h")
+
+	requestCount := 0
+	body, err := json.Marshal(&store.Snapshot{
+		Version:            1,
+		RecommendedVersion: recommendedVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authority := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+	}))
+	t.Cleanup(authority.Close)
+
+	instance := "server-local"
+	_, bin, metaPath, _, err := clientops.CachePathsFor(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(bin), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dek, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ciphertext, err := vaultio.EncryptWithKey(dek, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bin, ciphertext, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta := fmt.Sprintf(`{"url":%q,"pulled_at":%d,"server_anchored":true,"device_name":%q}`,
+		authority.URL, time.Now().Add(-25*time.Hour).Unix(), instance)
+	if err := os.WriteFile(metaPath, []byte(meta), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := clientops.WriteCacheCredFor(instance, &clientops.CacheCred{
+		URL:   authority.URL,
+		Token: "device-code",
+		Pin:   "sha256:" + strings.Repeat("00", 32),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	dekPath, err := paths.CacheDekPathFor(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(dekPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dekPath, dek, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := roles.Save(roles.State{Role: roles.RoleClient, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	return &requestCount
+}
+
+func assertAgedNamedClientCacheIntact(t *testing.T, requests *int, stderr string) {
+	t.Helper()
+	instance := "server-local"
+	_, bin, metaPath, _, err := clientops.CachePathsFor(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credPath, err := clientops.CacheCredPathFor(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dekPath, err := paths.CacheDekPathFor(instance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{bin, metaPath, credPath, dekPath} {
+		if _, serr := os.Stat(path); serr != nil {
+			t.Fatalf("%s must remain after the command: %v", filepath.Base(path), serr)
+		}
+	}
+	if _, serr := os.Stat(filepath.Join(filepath.Dir(bin), "quarantine")); !os.IsNotExist(serr) {
+		t.Fatalf("the command must not create quarantine material: %v", serr)
+	}
+	if *requests != 0 {
+		t.Fatalf("the command made %d authority request(s)", *requests)
+	}
+	if strings.Contains(stderr, "QUARANTINED") {
+		t.Fatalf("the command must not quarantine the cache, standard error: %q", stderr)
+	}
+}
+
+func TestReadOnlyCommandsDoNotQuarantineAgedNamedClientCache(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantFail bool
+	}{
+		{name: "serve status", args: []string{"serve", "status", "--addr", "127.0.0.1:1"}},
+		{name: "cache help flag", args: []string{"cache", "--help"}},
+		{name: "root help flag", args: []string{"--help"}},
+		{name: "built-in help command", args: []string{"help", "cache"}},
+		{name: "argument error", args: []string{"cache", "status", "--instance", "../bad"}, wantFail: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := seedAgedNamedClientCache(t, "999.0.0")
+			root := NewRootCmd()
+			stdout := &bytes.Buffer{}
+			stderr := &bytes.Buffer{}
+			root.SetOut(stdout)
+			root.SetErr(stderr)
+			root.SetArgs(test.args)
+			err := root.Execute()
+			if (err != nil) != test.wantFail {
+				t.Fatalf("Execute error = %v, want failure = %t", err, test.wantFail)
+			}
+			assertAgedNamedClientCacheIntact(t, requests, stderr.String())
+		})
+	}
+}
+
 func TestRootCommandWritesVersionHintToStderr(t *testing.T) {
 	saved := buildinfo.Version
 	buildinfo.Version = "1.0.0"
@@ -101,7 +244,7 @@ func TestRootCommandWritesVersionHintToStderr(t *testing.T) {
 	}
 }
 
-func TestRootCommandWritesVersionHintAfterCommandFailure(t *testing.T) {
+func TestRootCommandDoesNotReadCacheAfterCommandFailure(t *testing.T) {
 	saved := buildinfo.Version
 	buildinfo.Version = "1.0.0"
 	t.Cleanup(func() { buildinfo.Version = saved })
@@ -116,9 +259,8 @@ func TestRootCommandWritesVersionHintAfterCommandFailure(t *testing.T) {
 	if err := root.Execute(); err == nil {
 		t.Fatal("未知参数应让命令失败")
 	}
-	want := "客户端 1.0.0 落后于权威端 1.1.0，运行 `sshmgr update` 升级\n"
-	if !strings.HasSuffix(stderr.String(), want) {
-		t.Fatalf("命令失败后的标准错误输出应以版本提示结尾，实际为 %q", stderr.String())
+	if strings.Contains(stderr.String(), "客户端 1.0.0 落后于权威端") {
+		t.Fatalf("命令失败后不应读取缓存并输出版本提示，实际 %q", stderr.String())
 	}
 }
 

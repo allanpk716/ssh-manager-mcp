@@ -135,6 +135,37 @@ func TestLoad_WithinWindow_Loads(t *testing.T) {
 	}
 }
 
+// TestLoadReadOnly_AgedDoesNotDestroy pins the diagnostic contract: reporting
+// that a cache is too old must not delete the key, credential, snapshot, or
+// metadata, and must not create quarantine material.
+func TestLoadReadOnly_AgedDoesNotDestroy(t *testing.T) {
+	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "1h")
+	dir := t.TempDir()
+	withEnv(t, map[string]string{"SSHMGR_CACHE_DIR": dir})
+	mem := writeCacheFixture(t, dir, time.Now().Add(-2*time.Hour).Unix(), true)
+	credPath := filepath.Join(dir, "cache.auth.json")
+	if err := os.WriteFile(credPath, []byte(`{"url":"https://x","token":"code","pin":"sha256:aa"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadCacheSnapshotReadOnlyFor("")
+	if err == nil || !strings.Contains(err.Error(), "cache snapshot expired") {
+		t.Fatalf("want read-only expiry error, got %v", err)
+	}
+	if !intactFor(t, dir) {
+		t.Fatal("read-only expiry must preserve cache.bin and cache.meta.json")
+	}
+	if _, serr := os.Stat(credPath); serr != nil {
+		t.Fatalf("read-only expiry must preserve cache.auth.json: %v", serr)
+	}
+	if _, derr := mem.Get(); derr != nil {
+		t.Fatalf("read-only expiry must preserve the data-encryption key: %v", derr)
+	}
+	if _, qerr := os.Stat(filepath.Join(dir, "quarantine")); !os.IsNotExist(qerr) {
+		t.Fatalf("read-only expiry must not create quarantine material: %v", qerr)
+	}
+}
+
 func TestLoad_Rollback_Refused(t *testing.T) {
 	t.Setenv("SSHMGR_CACHE_MAX_OFFLINE", "24h")
 	dir := t.TempDir()
@@ -169,6 +200,9 @@ func TestLoad_AgedDestroys(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "cache snapshot expired (offline") {
 		t.Fatalf("expiry text missing: %v", err)
+	}
+	if strings.Contains(err.Error(), "server rejection") {
+		t.Fatalf("offline expiry must not be reported as server rejection: %v", err)
 	}
 	qdir := filepath.Join(dir, "quarantine")
 	entries, _ := os.ReadDir(qdir)
