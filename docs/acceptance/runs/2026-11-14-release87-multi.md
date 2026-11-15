@@ -3785,3 +3785,254 @@ owner 2026-11-15 对人工272-1 的处置与验收册检查清单第 2 项
 
 在上述缺证据项补齐或获得 owner 明确处置，并完成 owner 确认的正式产物抽查
 决策前，不得把本册标为发版验收通过。
+
+## 缺证据子判据补证（第八轮 rc12）
+
+执行时间：2026-11-15。对象为演练环境 0.22.0-rc12（源提交 `fb23583`）。本节只补
+发版检查清单标出的缺证据子判据，不修改前文「发版检查清单核对（rc12）」；
+本节也不给出整册放行结论。owner 不在场，允许 agent 代跑的浏览器与命令行动作
+继续由 agent 代跑；本轮明确不做 owner 指纹比对和短认证码双屏人工比对。
+
+### 权威端273-2 重验回跳与敏感写入口扫描
+
+【结论】失败。第 5 步补证通过：超过 5 分零 1 秒后，修改口令页先跳到重新验证页，
+正确口令重验后回到原修改口令页。第 6 步有三处不满足验收册：修改机密项备注或
+环境变量名在未重验时直接写入；Web UI 缺少册面要求的导出或恢复备份写入口；
+撤销一次性设备码在未重验时直接撤销。其余入口均先跳重新验证页且未写入靶子。
+
+【第 5 步：重验成功回跳原页】
+```text
+真实 Chromium 从回环地址登录，等待 5 分零 1 秒后打开 /ui/password：
+  HTTP 303 → /ui/reverify?next=/ui/password
+  最终路径=/ui/reverify?next=/ui/password；页面含「重新验证 / 管理员口令 /
+  验证并继续」。
+输入正确管理员口令后提交 /ui/reverify：
+  HTTP 303 → /ui/password
+  最终路径=/ui/password；页面显示「修改管理员口令 / 新管理员口令 /
+  再输入一次新口令」，未提交修改。
+```
+
+【第 6 步：全部敏感写入口扫描】使用同一个新登录会话，等待 5 分零 1 秒后逐项
+发起真实浏览器表单提交。前两次脚本在选择器与服务器列表路径上出错，未发起对应
+写请求；随后在同一判据下重新登录、重新等待 5 分零 1 秒并完整复跑，以下为最终
+有效结果：
+
+| 册面入口 | 未重验提交结果 | 靶子写入核对 |
+| --- | --- | --- |
+| 新增机密项 | HTTP 303 → `/ui/reverify?next=/ui/secrets/new?...&resume=1` | 新名字未出现 |
+| 机密项换值 | HTTP 303 → `/ui/reverify?next=/ui/secrets/<一次性标识>/value?resume=1` | 值最后更改时间未变 |
+| 修改机密项备注或环境变量名 | HTTP 303 → 机密项详情页，而非重新验证页 | 备注与环境变量名已改成提交值，随后用命令行恢复 |
+| 删除机密项 | HTTP 303 → `/ui/reverify?next=/ui/secrets/<一次性标识>/delete?resume=1` | 机密项仍存在 |
+| 立即备份 | HTTP 303 → `/ui/reverify?next=/ui/ops/backup` | 一次性备份目录文件数 0 → 0 |
+| 删除一次性服务器条目 | HTTP 303 → `/ui/reverify?next=/ui/servers/<一次性标识>/delete` | 条目仍存在 |
+| 导出或恢复备份 | 页面缺失 | 备份页与导航只提供立即备份、校验最新备份、保存备份配置，没有导出、导入或恢复备份入口 |
+| 撤销一次性实例（设备码） | HTTP 303 → 设备码列表页，而非重新验证页 | 一次性设备码 active → revoked |
+
+关键输出摘录：
+```text
+修改机密项元数据：
+  POST /ui/secrets/<一次性标识>/edit → HTTP 303 Location=/ui/secrets/<一次性标识>
+  页面回显新备注与新环境变量名；未进入 /ui/reverify。
+  权威端审计：secret-edit / secret-env，来源 web_ui，状态 ok。
+撤销一次性设备码：
+  POST /ui/access/device-codes/<一次性设备码标识>/revoke
+    → HTTP 303 Location=/ui/access/device-codes
+  未进入 /ui/reverify；列表状态变为已撤销。
+  权威端审计：cache-token.revoke，来源 web_ui，状态 ok。
+扫描结束后正确口令重验：
+  POST /ui/reverify → HTTP 303 Location=/ui/ops/backup；
+  最终路径=/ui/ops/backup。
+```
+
+【判定】修改机密项元数据、导出或恢复备份入口、撤销设备码三处与验收册期望不符，
+分别登记欠账第 58、59、60 条。第 5 步与新增、换值、删除机密项、立即备份、
+删除服务器的重验拦截证据通过。
+
+【清理】一次性机密项、服务器条目与自动生成的设备已删除；一次性备份配置恢复为
+未配置，root 专属口令与值文件已删除；两枚本轮测试设备码均无 active 行，产品
+保留 revoked 终态记录。浏览器脚本、截图与输出已逐文件删除。
+
+### 客户端270-4 登记与替换审计、完整审计与本地日志
+
+【结论】通过（补证）。第一轮同路径两次上传与最新记录已能从权威端和客户端审计
+唯一对应；本轮补齐全量审计留存与两侧本地日志检索结论，不需要重放上写。
+
+【权威端登记与替换审计】`sshmgr audit --action secret-delivery-record
+--action secret-delivery-replace --limit 0` 共 14 行，与本条相关的有效链路：
+```text
+第一次上传：secret-delivery-record / ok / 来源=forward
+  路径=<Linux一次性路径>；机密项=两个一次性名字；设备与实例=<Windows一次性实例>
+同路径覆盖：secret-delivery-replace / ok / 来源=forward
+  previous_path=<同一路径>；previous_secrets、previous_template、
+  previous_sha256、previous_written_at 均进入审计；输出不含值。
+owner 换值后第二次上传：secret-delivery-replace / ok / 来源=forward
+  当前记录只保留新模板、新文件 SHA-256 与新值版本；旧记录进入审计。
+```
+`secrets records <通用机密项>` 显示同路径最新记录；模板只含占位符，文件哈希与
+值版本号可见，机密项值不出现。
+
+【客户端完整审计】Windows 一次性实例执行
+`sshmgr cache audit --instance <Windows一次性实例> --limit 0`，全量 77 行。相关行：
+```text
+upload-content / ok：94 字节 → <Linux一次性路径>；两个机密项名；delivery-record=recorded
+upload-content / ok：94 字节 → 同一路径；delivery-record=recorded
+owner 换值后：
+upload-content / ok：41 字节 → 同一路径；一个机密项名；delivery-record=recorded
+```
+本地审计只镜像 upload-content 结果，没有 `secret-delivery-record` 或
+`secret-delivery-replace` 行，不是第二事实源。
+
+【本地日志检索】把 Windows 客户端完整 `cache-audit.log` 与 Linux 客户端完整
+`cache-audit.log` 传回演练权威端 root 专属临时文件，只与 root 专属值文件做
+固定字符串命中计数，随后逐文件删除临时副本：
+```text
+Linux 客户端完整审计：70 行；通用机密项测试值命中 0；NAS 一次性账号原密码命中 0。
+Windows 客户端完整审计：77 行；通用机密项测试值命中 0；NAS 一次性账号原密码命中 0。
+权威端登记/替换审计 JSON：14 行；两个机密值命中均为 0。
+权威端 serve.log：两个机密值命中均为 0。
+第一轮有效上传返回均为「无 masked 字段」。
+```
+
+### 客户端270-路径-1 正斜杠规范化下发记录
+
+【结论】通过（补证）。历史两条上传、远端长度检查与清理输出已在第一轮留存；
+本轮补齐权威端下发记录详情，两个 Windows 路径均以正斜杠最终绝对路径落库。
+
+【版本与修复线索】候选 0.22.0-rc12，源提交 `fb23583`；#47 修复合并提交
+`05e538e`，实现提交 `eb7c249`。
+
+【权威端记录】`sshmgr secrets records <通用机密项>` 相关详情：
+```text
+反斜杠输入产生的记录：
+  路径=C:/<一次性工作目录>/path-bs.txt
+  模板原文=path-test={{sshmgr-secret:<通用机密项>}}
+  文件 SHA-256 哈希=21a456ec…；值版本号=1
+正斜杠对照输入产生的记录：
+  路径=C:/<一次性工作目录>/path-fs.txt
+  模板原文=path-test={{sshmgr-secret:<通用机密项>}}
+  文件 SHA-256 哈希=21a456ec…；值版本号=1
+```
+权威端审计同样保存 `path=C:/...`，不是 `C:\...`；两台客户端审计与权威端
+serve.log 的机密值命中均为 0。两个远端文件与一次性服务器条目的清理证据沿用
+第一轮收尾记录。
+
+### 客户端271-3 第二次连接物理地址观察摘要
+
+【结论】通过（仅补本子判据；owner 指纹人工比对仍留给 owner，不由 agent 代签）。
+原目标条目、设备、物理与虚拟网络成员、既有转发锚和 Linux 一次性客户端仍在。
+补证前先把客户端设备重新关联到当前 active 设备码，使最新快照重新携带本机设备
+标识；这是恢复客户端自身拓扑状态，不改变目标锚。
+
+【调用与本地观察】
+```text
+调用前时间：2026-11-15T09:42:50.114376297Z
+exec_command(<原一次性目标>, "printf r8-2713-second-physical-after-self-id")
+  → exit_code=0；stdout="r8-2713-second-physical-after-self-id"；
+    stderr_bytes=0；MCP serverInfo.version=0.22.0-rc12
+调用后时间：2026-11-15T09:42:51.835939855Z
+
+probe-results.json 本次观察：
+  虚拟局域网候选：ok=False，category=timeout，耗时 1500ms，
+    observed_at=2026-11-15T09:42:51.723198271Z，source=dial。
+ssh-dial-successes.json 同一目标：
+  物理局域网地址成功，succeeded_at=2026-11-15T09:42:51.7501002Z，
+    duration_ms=26（地址以代称记录）。
+```
+
+【锚未被覆盖】
+```text
+调用前 pin-forward 审计数=1；调用后计数=1。
+锚显示前后逐字一致：source=forward，device=<Linux一次性实例>，
+handshake=<虚拟局域网辅助地址>:22，created=<首次连接时间>。
+```
+因此第二次真实命令执行先尝试登记的虚拟候选，超时后按正常选址使用物理局域网
+地址成功；没有新的锚转发或锚覆盖。
+
+### 单机276-2 第 9 步清理
+
+【结论】通过（在独立最小一次性靶子上补证）。原第 9 步依赖的一次性权威端已被
+后续权威端276-1 的服务切换替换，不能直接清理当前保留的 rc12 权威端。按本轮
+Brief 的重建条款，先新建最小单机升级多机靶子，再执行册面第 9 步清理；保留权威
+端的 vault 目录在切换前整体移到 root 专属路径，最小靶子清理后原样恢复。
+
+【最小靶子】
+```text
+保留权威端切换前：serve Running / HEALTHY。
+serve uninstall → uninstalled service "sshmgr-serve"。
+新建空 vault → init --role server → 已初始化为权威端。
+serve admin set → 管理员口令已设置（口令仅 root 专属文件，不进证据）。
+serve install --addr 0.0.0.0:<服务端口> → 服务已安装；
+  等待后 Running / responding / vault ok / HEALTHY。
+创建一次性 Profile、一个一次性机密项与一个一次性设备码；
+  工作机 1 新一次性客户端实例 cache pull → 0 servers / 0 credentials，
+  scope=<一次性Profile>，device=<一次性设备码>，版本 0.22.0-rc12。
+```
+
+【第 9 步清理】
+```text
+客户端：cache instances rm <新一次性实例> --yes
+  → 已删除实例；槽目录与解密钥均清理。清理后列表仅剩既有保留实例。
+权威端：cache-tokens revoke <新一次性设备码>
+  → status=revoked；last_pull 与 client_version=0.22.0-rc12 留证。
+serve uninstall → uninstalled service "sshmgr-serve"。
+交互确认 sshmgr clear（输入 DELETE，再确认安全网口令已复制）：
+  安全网加密导出已写入 root 专属一次性文件；口令输出已脱敏；
+  → 已清理。下次 sshmgr ui 将重新进入初始化向导。
+清理后：serve NOT INSTALLED / process not running；
+  角色尚未初始化；vault 目录文件数 0；cache-tokens ls 因 vault locked 无法读出。
+```
+
+【保留权威端恢复与现场核对】
+```text
+最小靶子空 vault 目录移走后，原 rc12 vault 目录原样移回；
+serve install --addr 0.0.0.0:<服务端口> → 服务已安装并启动；
+最终：Running / process running / responding / vault ok / HEALTHY；
+version=0.22.0-rc12；serve.pairing=false；待批准配对列表为空。
+Linux 一次性客户端 cache pull → 4 servers / 5 credentials。
+Windows 一次性客户端 cache pull → 12 servers / 14 credentials。
+Linux 受管服务器 A 的共享前置挂载仍为 1 处 CIFS 挂载。
+```
+
+### 第八轮收尾与检查
+
+【本轮清理】
+```text
+新建最小客户端实例：已删除，清理后仅剩两个既有保留实例。
+新建最小权威端 vault、serve 服务、安全网导出、口令/值/设备码输出文件：
+  均已清理；最小空 vault 目录已移除。
+权威端273-2 的一次性机密项、服务器条目、自动设备、备份配置、root 专属值与
+  口令文件、浏览器脚本/截图/输出：均已删除。
+本轮测试设备码 active 行=0；产品保留 2 条 revoked 终态记录。
+Linux 客户端本轮调用脚本与输出：已删除。
+演练权威端、两台演练机与工作机 1 均无本轮临时 sshmgr ui / mcp / 浏览器进程。
+本机无临时 HTTP 服务监听。
+```
+
+【工作机 1 生产目录指纹】本轮使用“排序路径 + 各文件 SHA-256”再整体 SHA-256：
+```text
+开始前：文件数 5，整体 SHA-256 31a448a9a7feb2b1e7d5fbc164a3b8f14431ec72f6ba30d2554a96123a54b4cd
+收尾后：文件数 5，整体 SHA-256 31a448a9a7feb2b1e7d5fbc164a3b8f14431ec72f6ba30d2554a96123a54b4cd
+结论：完全一致；未触碰生产 sshmgr。
+```
+
+【机密值与脱敏检索】本轮追加到运行记录与欠账清单的 git 差异补丁传回演练权威端
+root 专属临时文件，只输出固定字符串命中计数后删除：
+```text
+通用机密项测试值：命中 0。
+NAS 一次性账号原密码：命中 0。
+两枚最小权威端一次性管理员口令：命中均为 0（口令文件已删除）。
+第一轮 Brief 指定脱敏 grep：本运行记录 0；单机运行记录 0；
+docs/backlog.md 仅历史第 17 条既有默认端口号原文 1 处，非本轮新增。
+```
+
+【偏离说明】
+```text
+1. 本会话仍无 mcp__ssh-manager__* 工具；按第一轮 Brief 的既定例外，远程执行走
+   sshmgr ssh，未使用裸 ssh/scp。
+2. 权威端273-2 前两次浏览器脚本分别为表单标签选择器与服务器列表路径出错，
+   未发起对应写请求；修正后重新登录、重新等待 5 分零 1 秒并完整复跑有效。
+3. 单机276-2 第 9 步在独立最小靶子上重建后清理；为满足收尾保留要求，切换期间
+   把当前 rc12 vault 目录整体移到 root 专属路径，清理后原样恢复并复核健康。
+4. 工作机 1 一次性目录中存在本轮开始前已有的 mcp-driver-r8.ps1，时间早于本轮，
+   未识别为本轮新建文件，未删除。
+```
