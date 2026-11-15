@@ -64,6 +64,10 @@
 | 混跑275-3 | 通过 | 第四部分 | 新客户端遇旧权威端降级、快照回退与通用工具全部通过 |
 | 混跑275-4 | 通过 | 第四部分 | 客户端本机 Web UI 两个页面均提示先升权威端，推荐版本显示“—” |
 | 混跑275-5 | 通过 | 第四部分 | cache status、doctor、update check 三个本机出口提示正确，测试通过 |
+| 欠账第 52 条（rc10 复核） | 通过 | 欠账复核（第五轮 rc10） | 桌面手动添加引导注意事项包含 Windows 1219 与 `net use \\<地址> /delete` 处理办法 |
+| 欠账第 53 条（rc10 复核） | 通过 | 欠账复核（第五轮 rc10） | v0.21.1 客户端在登记阶段收到升级/设备码指引，不进入待批准列表；rc10 新客户端配对不受影响 |
+| 欠账第 55 条（rc10 复核） | 通过 | 欠账复核（第五轮 rc10） | rc10 新客户端首连遇旧权威端 400 后自动退回旧格式落锚并连接成功；刷新后走已锚定路径 |
+| serve status（rc10 复核） | 通过 | 欠账复核（第五轮 rc10） | Windows 与 Linux 均不把非 serve 的 sshmgr 进程误报为 serve；真实 serve 显示 running |
 
 ## 安装与版本
 
@@ -2643,4 +2647,298 @@ NAS 一次性账号密码：非零文件 0，总命中 0。
   其中写出了默认服务端口号，为既有历史内容，非本轮新增，未改动。
 两个运行目录为私有输入与执行日志，Brief 本身按要求包含真实访问标识；本轮快照合计命中
   1113 行、15 个文件。这不计入公开运行记录脱敏结论；两个机密测试值在这些文件中命中均为 0。
+```
+
+## 第五轮（rc10）安装与版本
+
+【结论】演练环境升级到 0.22.0-rc10（源提交 `e4c322d`），产物 SHA-256 全部核对一致；演练权威端服务重启后健康，两个保留客户端实例完成一次缓存拉取与只读执行冒烟。
+
+【升级与版本】
+```text
+本机产物核对：
+  linux_amd64.tar.gz  11a3c8b672d21ba83bf874922b00868ed7b22ba82fdaf80d83dde348b84d522b
+  darwin_arm64.tar.gz 9d122ac7408eae0008950c49e5f5916f2f25454f99f696d5ffc9fc3bb09b771d
+  windows_amd64.zip   9671a9fac6b0129be3d4f05c7faedc508bdd95fb87e8e667e38ff0e406c6b90d
+
+演练权威端：
+  升级前 0.22.0-rc9 → 升级后 0.22.0-rc10；
+  /usr/local/bin/sshmgr 先备份为 /usr/local/bin/sshmgr.rc9，再替换；
+  systemctl restart sshmgr-serve 后：
+    service:   Running
+    process:   running
+    http:      responding (401/200 = auth working)
+    vault:     ok
+    overall:   HEALTHY
+
+Linux 受管服务器 A：
+  升级前 0.22.0-rc9 → 升级后 0.22.0-rc10；
+  /usr/local/bin/sshmgr 先备份为 /usr/local/bin/sshmgr.rc9，再替换；该机未安装 serve 服务。
+
+工作机 1：
+  rc10 压缩包下载到 C:\sshmgr-e2e-20261114\，SHA-256 与上表一致；
+  解压到 C:\sshmgr-e2e-20261114\bin-rc10\，未进 PATH，未触碰生产 sshmgr；
+  C:\sshmgr-e2e-20261114\bin-rc10\sshmgr.exe version → 0.22.0-rc10。
+```
+
+【保留实例缓存拉取与冒烟】
+```text
+Linux 一次性客户端实例 e2e278-linux：
+  cache pull --instance e2e278-linux → pulled 4 servers / 5 credentials
+  cache status → age 0s；servers 4；credentials 5；source=<演练权威端地址>
+  MCP serverInfo.version → 0.22.0-rc10
+  exec_command（Linux 受管服务器 A 条目，只读）：
+    exit_code=0；stdout="rc10-linux-cache-smoke\nLinux\n"；stderr_bytes=0
+
+Windows 一次性客户端实例 e2e278-win：
+  cache pull --instance e2e278-win → pulled 12 servers / 14 credentials
+  cache status → age 0s；servers 12；credentials 14；source=<演练权威端转发地址>
+  MCP serverInfo.version → 0.22.0-rc10
+  exec_command（Windows 受管服务器 A PowerShell 条目，只读）：
+    exit_code=0；stdout 首行 "rc10-windows-cache-smoke"；stderr_bytes=0
+```
+
+【安装过程如实记录】Linux 两台第一次下载命令把压缩包落在用户主目录而不是计划临时路径；未解压、未替换二进制。随后对该文件重新核对 SHA-256 后完成安装，并逐个删除压缩包与解出的临时二进制，不留安装残留。
+
+## 欠账复核（第五轮 rc10）
+
+### 欠账第 53 条：旧客户端配对 ECDSA 权威端
+
+【结论】通过。v0.21.1 旧客户端在登记阶段即被 rc10 权威端拒绝，错误不再落到签名验证的 `bad sig`；申请不进入待批准列表；声明版本的 rc10 新客户端对同一权威端可完成完整配对。
+
+【前置与设置】
+```text
+演练权威端：0.22.0-rc10；serve 证书公钥算法 id-ecPublicKey（ECDSA）。
+旧客户端：工作机 1 一次性 v0.21.1 实例 e2e279-old10（独立 APPDATA、store、缓存解密钥目录；
+  安装包 SHA-256 与 v0.21.1 checksums.txt 一致）。
+本轮开始时权威端沿用上一轮清理后的 serve.pairing=false，首次真实 pair 得到 HTTP 404；
+  这不是本欠账的产品结果。为执行配对判据，临时把 serve.pairing 设为 true，空正文探针返回
+  HTTP 400「id must be 32 bytes hex」，证明 /pair/enroll 面已打开；本条结束后已恢复 false。
+```
+
+【旧客户端真实执行】
+```text
+命令：v0.21.1 pair --instance e2e279-old10 --url <演练权威端转发地址> --pin <服务证书指纹>
+exit=1
+Error: pairing enroll refused: HTTP 400 此权威端使用 ECDSA 证书，需要 0.22.0 或更新的客户端才能配对；
+  请升级客户端，或请 owner 在权威端执行 `sshmgr cache-tokens add` 发放设备码后用 `sshmgr cache p…
+（v0.21.1 客户端将响应正文裁剪到 200 字符；未出现 `bad sig`。）
+
+权威端无版本请求头补充探针：
+  HTTP 400
+  此权威端使用 ECDSA 证书，需要 0.22.0 或更新的客户端才能配对；请升级客户端，
+  或请 owner 在权威端执行 `sshmgr cache-tokens add` 发放设备码后用 `sshmgr cache pull` 入网
+
+待批准列表：sudo sshmgr serve pair ls → (no pending pairing requests)
+权威端 serve 日志：
+  sshmgr serve: pairing enroll refused: client did not declare a version and
+  the serve certificate is not ed25519
+```
+
+【新客户端对照与清理】
+```text
+新客户端：Linux 受管服务器 A 上一次性 rc10 实例 e2e279-new10。
+pair 输出：SAS 六位短认证码已生成；owner 面 serve pair approve 绑定既有 Linux profile。
+结果：配对完成；pulled 4 servers / 5 credentials；
+  cache status → device=e2e279-new10，scope=既有 Linux profile，source=<演练权威端地址>；
+  cache-tokens ls → client_version=0.22.0-rc10，status=active。
+只读冒烟：MCP serverInfo.version=0.22.0-rc10；exec_command → exit_code=0，
+  stdout="rc10-new-pair-smoke\nLinux\n"，stderr_bytes=0。
+撤销：cache-tokens revoke e2e279-new10 → status=revoked；待批准列表为空。
+清理：该一次性实例 11 个文件逐个删除，空目录逐层移除，路径不存在；无遗留 pair 进程。
+```
+
+### 欠账第 55 条：新客户端遇旧权威端的未锚定条目首连
+
+【结论】通过。rc10 客户端对 v0.21.1 旧权威端快照中的未锚定条目首次连接成功；新格式锚转发被旧权威端拒绝后自动退回旧格式，锚以 `source=forward` 落库；刷新快照后的再次连接不再发起锚转发。
+
+【一次性旧权威端】
+```text
+放置机器：Linux 受管服务器 A（该机无生产 sshmgr；独立 vault/config/dek/store 与独立端口）。
+版本：v0.21.1；Linux 产物 SHA-256 与正式 release checksums.txt 一致；
+  一次性二进制路径 /usr/local/bin/sshmgr-v0211。
+serve：/usr/local/bin/sshmgr-v0211 serve --addr 0.0.0.0:<旧权威端独立端口>；
+  进程监听该端口；/snapshot 未认证探针 HTTP 401；证书为 ED25519。
+服务器条目：e2e279_oa55_linux，指向演练权威端（本轮作为可连受管靶机），专用一次性私钥；
+  登记后 servers pin-hostkey --list 对该条目无输出 → 未锚定，未带外落锚。
+新客户端：同一台 Linux 受管服务器 A 上的一次性 rc10 实例 e2e279-new55，
+  以旧权威端一次性设备码 cache pull 入网；pulled 1 servers / 1 credentials；
+  cache status → device=e2e279-new55，scope=一次性 profile，source=<旧权威端地址>。
+```
+
+【首次连接与落锚】
+```text
+exec_command（未锚定条目，只读）：
+  MCP serverInfo.version=0.22.0-rc10
+  exit_code=0；stdout="rc10-first-unanchored-ok\nLinux\n"；stderr_bytes=0
+  标准错误只有旧权威端版本提示、快照版本端点缺失提示与软件清单降级提示；
+  无 unparseable key_blob，无连接失败。
+
+旧权威端 serve 输出：
+  sshmgr serve: pin-hostkey "":0 -> 400 (device "-")
+  sshmgr serve: pin-hostkey "<演练权威端地址>":22 -> 201 (device "e2e279-new55")
+解释：第一行是 rc10 新格式请求被 v0.21.1 按旧格式解析失败；第二行是自动退回的
+  host/port/key_blob 旧格式请求落锚成功。
+
+落锚核对：
+  servers pin-hostkey --list →
+  <演练权威端地址>:22 fp=SHA256:<主机密钥指纹> (format=blob, source=forward,
+  device=e2e279-new55, created=<时间>)
+
+客户端一次性实例内检索 unparseable key_blob → 命中 0。
+```
+
+【再次连接】
+```text
+未刷新快照的立即复连：exit_code=0；旧权威端先返回一次 400，再用旧格式返回 409；
+  连接仍成功。这说明旧快照中的锚需刷新后才进入本地已锚定路径。
+重新 cache pull → pulled 1 servers / 1 credentials；age 0s。
+刷新后第三次只读连接：
+  exit_code=0；stdout="rc10-anchored-after-pull-ok\nLinux\n"；stderr_bytes=0。
+旧权威端 pin-hostkey 日志行数保持 4 行，未新增任何锚转发请求 → 已走本地锚定路径。
+```
+
+### serve status 进程探测
+
+【结论】通过。Windows 只按 `sshmgr-serve` 服务进程判断；Linux 只把命令行中真正带有 `serve` 子命令的 sshmgr 进程认作 serve，`mcp` 干扰进程与一次性 `sshmgr-v0211` serve 均不误报。
+
+【工作机 1】
+```text
+只读进程盘点：Win32_Process name=sshmgr.exe → count=18；
+  18 个进程的可执行文件路径均为工作机生产 sshmgr 路径；未停止、未重启、未改动。
+服务查询：sc query sshmgr-serve → 1060 指定的服务未安装。
+因此本机一次性 rc10 客户端路径的期望值为 process: not running。
+
+C:\sshmgr-e2e-20261114\bin-rc10\sshmgr.exe serve status（隔离 vault/config/dek 环境变量）：
+  service:   NOT INSTALLED
+  process:   not running
+  http:      not responding
+  vault:     LOCKED (master.key not found — run `sshmgr unlock`)
+  overall:   DEGRADED (see above)
+  status-exit=0
+判据：18 个生产 sshmgr.exe 进程在场时仍不误报 serve 进程 ✓。
+```
+
+【演练权威端（装有 serve）】
+```text
+systemctl：active / running；MainPID 在场。
+/proc/<MainPID>/cmdline：/usr/local/bin/sshmgr serve --addr 0.0.0.0:<服务端口>
+serve status：
+  service:   Running
+  process:   running
+  http:      responding (401/200 = auth working)
+  vault:     ok
+  overall:   HEALTHY
+```
+
+【Linux 受管服务器 A（未装 serve，带干扰进程）】
+```text
+系统服务 sshmgr-serve：inactive。
+干扰进程 /proc/<进程号>/cmdline：
+  /usr/local/bin/sshmgr mcp --cache --instance e2e279-new55
+第 55 条一次性旧权威端仍在运行：
+  进程名 comm=sshmgr-v0211
+  /proc/<进程号>/cmdline=/usr/local/bin/sshmgr-v0211 serve --addr 0.0.0.0:<旧权威端独立端口>
+
+serve status：
+  service:   NOT INSTALLED
+  process:   not running
+  http:      not responding
+  vault:     LOCKED (open /var/lib/ssh-manager/master.key.plain: permission denied)
+  overall:   DEGRADED (see above)
+判据：mcp 进程不误报 ✓；一次性文件名 sshmgr-v0211 的 serve 未被认作本产品
+  /usr/local/bin/sshmgr serve，按实际命令行不误报 ✓。DEGRADED 来自该机无权威 vault
+  且服务未安装，不影响本条进程探测判据。
+```
+
+### 欠账第 52 条：桌面手动添加引导的 Windows 1219 提示
+
+【结论】通过。演练权威端 rc10 Web UI 的「桌面手动添加共享存储」引导注意事项已包含 Windows 错误 1219 的原因与 `net use \\<地址> /delete` 处理办法；未在工作机 1 桌面做任何实际映射。
+
+【代证方式】
+```text
+owner 不在场，按授权由 agent 代证。未打开工作机 1 桌面浏览器；在演练权威端本机用无界面
+Chromium 打开回环 Web UI，管理员口令只从 root 专属文件读入脚本，不进入证据。
+页面路径：共享存储详情 → 打开桌面手动添加引导 → 选择工作机 1 对应拓扑设备 → 显示引导。
+```
+
+【页面注意事项（脱敏）】
+```text
+注意事项
+笔记本更换网络后，映射可能失效；换回同一网络或重新按引导映射。
+这台电脑已用其他账号连接过该共享存储所在设备时，Windows 会报错 1219
+（不允许同一用户用多个用户名连接同一服务器）。请先执行
+net use \\<地址> /delete 断开那些连接，或改用该设备的其他地址。
+
+1219-present=True
+net-use-delete-present=True
+```
+
+### 第五轮收尾清理、保留状态与指纹
+
+【清理结论】本轮新建的一次性客户端、旧权威端、旧版本二进制、设备码、干扰进程、一次性授权公钥、本机临时 HTTP 服务与临时脚本均已清理；应保留对象仍在。
+
+【设备码与进程】
+```text
+e2e279-new10：cache-tokens revoke → status=revoked；一次性实例已删除。
+e2e279-new55：在旧权威端 cache-tokens revoke → status=revoked；旧权威端随后停止并删除。
+干扰用 mcp 进程与启动壳进程：按记录的进程号停止；清理后无匹配进程。
+旧权威端 serve 进程：按记录的进程号停止；独立端口不再监听。
+演练权威端 pairing 开关：恢复为 false；serve pair ls → (no pending pairing requests)。
+```
+
+【逐文件清理】
+```text
+Linux 受管服务器 A：
+  e2e279-oa55 一次性旧权威端 13 个文件逐个删除：
+    .serve-cert-initialized、id_ed25519、id_ed25519.pub、master.key.plain、serve-cert.pem、
+    serve-key.pem、serve-stdout.log、serve.pid、store.db、work/device-code.txt、
+    work/mcp-interference.log、work/mcp-interference.pid、work/project-token.txt；
+    随后空目录逐层移除。
+  e2e279-new55 一次性 rc10 客户端 7 个文件逐个删除：
+    cache-audit.log、cache.auth.json、cache.bin、cache.meta.json、
+    software-inventory-collect.lock、cache-dek-e2e279-new55.key、work/project-token.txt；
+    随后空目录逐层移除。
+  /usr/local/bin/sshmgr-v0211 删除；v0211/new55/oa55 命名路径与匹配进程均为 0；
+  旧权威端独立端口无监听。
+
+演练权威端：
+  本轮补充探针的 /tmp/p53-body.json 与 /tmp/p53-response.body 删除；
+  受管靶机 authorized_keys 中带本轮一次性注释的公钥行：删除前 1 行、删除后 0 行。
+
+工作机 1：
+  bin-v0211-r10 中 README.md 与 sshmgr.exe 逐个删除；bin-v0211-r10、appdata-v0211-r10、
+  dek-v0211-r10、store-v0211-r10 四个空目录逐个移除；路径均不存在，一次性别进程数 0。
+
+本机：
+  v0.21.1 下载校验目录中 3 个文件删除后移除空目录；13 个临时脚本/请求体文件逐个删除；
+  临时 HTTP 服务停止，分发端口无监听，python3 -m http.server 进程数 0。
+```
+
+【清理后保留状态】
+```text
+演练权威端：0.22.0-rc10 serve 服务 Running / HEALTHY；pairing=false；待批准列表为空。
+Linux 受管服务器 A：0.22.0-rc10；e2e278-linux 保留，cache status 正常；
+  /usr/local/bin/sshmgr.rc9 备份保留。
+工作机 1：C:\sshmgr-e2e-20261114\ 保留，含 bin-rc9 与 bin-rc10、rc10 安装包；
+  e2e278-win 保留，cache.bin 在场；生产 sshmgr 进程未停止、未重启。
+共享前置数据、既有 e2e278 设备码与项目令牌未清理。
+```
+
+【工作机 1 生产目录指纹（第五轮前后）】
+```text
+开始前：文件数=5，整体 SHA-256=0a30ecdfb17b6f4454f0885cc394fd800b251bf8b9a992f3c0841596080165b8。
+收尾后：文件数=5，整体 SHA-256=0a30ecdfb17b6f4454f0885cc394fd800b251bf8b9a992f3c0841596080165b8。
+结论：前后一致；本轮未改动工作机 1 生产目录。
+```
+
+【机密值命中计数与脱敏检索（第五轮新增内容）】
+```text
+机密值检索范围：本轮追加到本运行记录与 docs/backlog.md 的 291 行新增内容；
+  检索值文件始终留在演练权威端机器，仅以 root 管道喂给 grep -c -F -f，只输出计数。
+通用机密项测试值：命中 0。
+NAS 一次性账号密码：命中 0。
+
+第一轮 Brief 指定脱敏 grep：
+  本运行记录命中 0；单机运行记录命中 0；
+  docs/backlog.md 仅保留历史欠账第 17 条的 1 处默认端口号原文，非本轮新增，未改动。
 ```
