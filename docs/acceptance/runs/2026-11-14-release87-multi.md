@@ -25,6 +25,7 @@
 | 权威端272-1 | 通过 | 2.3 | 版本联动与变更提示通过 |
 | 权威端272-2 | 未执行（owner 处置：已知缺口） | 2.3 | 缺一次性 macOS 受管靶机；2026-11-15 owner 明确处置为本版已知缺口，登记欠账第 51 条，带着放行 |
 | 权威端272-2（第六轮 macOS 补跑） | 失败 | 权威端272-2、权威端274-3 macOS 补跑 | macOS 撤销/换密码/清理与 Windows 停止注入通过；residue 只余撤销标记时未按册输出「仅有撤销标记」（第 56 条），且 unmount 无法清理仅剩标记（第 57 条） |
+| 权威端272-2（第七轮 rc12 复跑） | 通过 | 权威端272-2 复跑（第七轮 rc12，一次性 macOS 虚拟机） | macOS 与 Linux 撤销、换密码说明、只余撤销标记识别、标记清理、Windows 停止注入与审计均按册通过；欠账第 56、57 条复核通过 |
 | 权威端272-3 | 失败→第三轮通过 | 2.3 | 第二轮（rc7）：幂等挂载不改写且只以网络名提示 owner；非 force 重选失败登记第 46 条。第三轮（rc8）：旧挂载行幂等补属主映射且地址不变（第 49 条），非 force 重选切换、读写与二次幂等全部通过（第 46 条） |
 | 权威端273-1 | 通过 | 2.4 | 浏览器用 WebKit 代跑 |
 | 权威端273-2 | 通过（两子判据移交） | 2.4 | 重验成功回跳与敏感入口扫描未完成 |
@@ -3335,4 +3336,246 @@ NAS 一次性账号原密码：命中 0。
   未进入任何证据文件。
 第一轮 Brief 指定脱敏 grep：本运行记录 0；单机运行记录 0；
   docs/backlog.md 仅历史欠账第 17 条保留 1 处默认端口号原文，非本轮新增，未改动。
+```
+
+## 第七轮（rc12）安装与版本
+
+【结论】演练环境升级到 0.22.0-rc12（源提交 `fb23583`），三个产物 SHA-256 全部核对一致；演练权威端服务重启后健康，两个保留客户端实例完成一次快照拉取与只读执行冒烟。
+
+【升级与版本】
+```text
+本机产物核对：
+  linux_amd64.tar.gz  dc908e850a41139ce52bbe751cc02df407651b43bec45ccabeb554977a0e5885
+  darwin_arm64.tar.gz 01dafcd24298d50ce0bd113dba85e4d5f2c775dfd1e07875827e3fa603bddb85
+  windows_amd64.zip   174ba40ece66e156f8d47cbaead9a090eae801cee944e1325627c16ddd86cc65
+
+演练权威端：
+  升级前 0.22.0-rc11 → 升级后 0.22.0-rc12；
+  Linux 安装包经 SSH 会话分块传输（138 块 base64），远端重组后 SHA-256 与上表一致；
+  /usr/local/bin/sshmgr 先备份为 /usr/local/bin/sshmgr.rc11，再替换；
+  systemctl restart sshmgr-serve 后：
+    service: Running / process: running / http: responding (401/200) / vault: ok / overall: HEALTHY
+
+Linux 受管服务器 A：
+  升级前 0.22.0-rc11 → 升级后 0.22.0-rc12；
+  同样分块传输并核对 SHA-256 一致；备份 sshmgr.rc11 后替换；
+  该机未安装 serve 服务，升级时既有共享挂载保持在场。
+
+工作机 1：
+  rc12 压缩包经本机临时 HTTP 服务下载，SHA-256 与上表一致；
+  解压到 C:\sshmgr-e2e-20261114\bin-rc12\，目录内 1 个可执行文件；
+  未加入 PATH，未触碰生产 sshmgr；bin-rc12\sshmgr.exe version → 0.22.0-rc12。
+```
+
+【保留实例快照拉取与冒烟】
+```text
+Linux 一次性客户端实例 e2e278-linux：
+  cache pull → pulled 4 servers / 5 credentials；cache status → age 0s；
+  MCP serverInfo.version → 0.22.0-rc12；
+  exec_command（Linux 受管服务器 A 条目，只读）：exit_code=0，输出包含冒烟标记与 Linux 系统名。
+
+Windows 一次性客户端实例：
+  cache pull → pulled 12 servers / 14 credentials；age 0s；
+  MCP serverInfo.version → 0.22.0-rc12；
+  exec_command（Windows 受管服务器 A PowerShell 条目，只读）：
+    exit_code=0；stdout 首行为冒烟标记；结构化结果按当时登记注入固定盘符。
+```
+
+偏离说明：Linux 客户端第一次直接执行 `cache pull` 时未自动带入既有实例的权威端地址与设备码，命令按提示要求显式环境变量；随后从实例自身的认证文件读取这些连接信息（不输出值）并成功拉取。该行为不属于权威端272-2 判据，未登记新欠账。
+
+【本轮开始时工作机 1 生产目录指纹】文件数=5，整体 SHA-256=`99d595b1fecaa08c0e0cca0be938c5905b2934940fb884dd400cd564a0dec442`（逐文件 SHA-256 按完整路径排序拼接后再取整体 SHA-256）。收尾复核见第七轮收尾。
+
+## 权威端272-2 复跑（第七轮 rc12，一次性 macOS 虚拟机）
+
+### 一次性 macOS 虚拟机与前置
+
+【结论】一次性 macOS 虚拟机可用，桥接本机有线网卡并拿到真实局域网地址，能访问 NAS A 的 SMB 端口；演练权威端按产品流程登记服务器条目、锚定主机密钥指纹并完成首次真实挂载。本轮完整复跑权威端272-2，判据以验收册为准，未放宽。
+
+【虚拟机方案与登记】
+```text
+工具：tart 2.41.1（Apple Virtualization.framework 命令行虚拟机工具）。
+基础镜像：本机已缓存的 macOS Tahoe 基础镜像（macOS 26.6.2，arm64，50 GB 标称磁盘）。
+  本轮未重新下载镜像层；仅在克隆瞬间启动只绑定本机回环地址的一次性 OCI 镜像服务，
+  从本机缓存读取清单与层，克隆完成后立即停止该服务。
+克隆：从缓存基础镜像克隆为一次性虚拟机；Apple 文件系统采用写时复制，克隆约 0.05 秒完成。
+运行：8 个虚拟 CPU、8192 MiB 内存、50 GB 磁盘；--no-graphics 后台运行并桥接本机有线网卡。
+网络：虚拟机拿到物理局域网地址；对 NAS A 的 SMB 端口现场探测成功。
+系统事实：虚拟机内置管理员账号可免密提权；/usr/sbin/automount 与 /etc/auto_master 在场。
+
+受管连接：
+  演练权威端生成一次性 ed25519 登录密钥，按服务器条目正常登记；
+  主机 ED25519 指纹以带外方式锚定；首次产品连接输出 Darwin/arm64 并确认提权可用。
+网络现实：本机所在物理网络不能直接路由到演练内网；虚拟机向演练权威端与
+  Linux 一次性客户端实例宿主各保持一条仅转发 SSH 端口的一次性反向隧道。
+  两条隧道只绑定对应机器的回环地址；产品服务器条目经反向隧道连接虚拟机。
+
+共同前置：
+  拓扑：新一次性设备加入 NAS A 所在的物理局域网网络；真实地址在证据中脱敏。
+  授权：挂载密码机密项加入 macOS 一次性条目；Linux 一次性客户端实例的 profile 授权该条目。
+  Linux 一次性客户端实例拉取后看到 5 servers / 7 credentials，
+  经 MCP 对 macOS 一次性条目只读执行成功，MCP 版本 0.22.0-rc12。
+  macOS 首次真实挂载：first-mount-success；版本号 34；挂载点 /mnt/sshmgr/<一次性共享名>；
+  实际网络为与 NAS A 共同的物理局域网（第 1 个地址）；提示系统配置被重置，已重建。
+  远端事实：auto_master 引用数=1；映射条目=1；挂载表 smbfs 数=1；撤销标记数=0。
+```
+
+【与物理 macOS 靶机的差异】本条使用 Apple 芯片虚拟机、桥接物理网卡与真实 NAS SMB 服务；CPU、网络适配器、电源与机型不是物理 Mac 硬件。共享挂载、autofs、提权、网络可达、权威端撤销与清理均为真实系统操作，不是模拟服务器。
+
+### 权威端272-2 撤销、残留检查与换密码说明
+
+【结论】通过。macOS 与 Linux 均先删除持久配置、再写撤销标记并卸载；residue 在只余标记时输出「仅有撤销标记」，`shares unmount` 校验共享名后删除标记并成功退出，复查为无残留。Windows 登记撤销、立即同步与超过本地快照有效期后的停止注入均通过。
+
+【步骤 1：macOS 撤销与换密码说明】
+```text
+第二共享密码只由演练权威端 root 专属临时文件经标准输入提供给产品；
+  未进入命令参数、证据、日志或审计，测试后恢复原机密项值并删除第二值文件。
+
+shares revoke <一次性共享名> <macOS 一次性条目> --unmount --new-password-stdin --yes：
+  版本号 35；远端持久配置已删除，挂载已卸载。
+  输出包含「桌面上手动添加的共享连接也需要更换密码」。
+  输出列出仍可挂载的 Linux 服务器，并提醒按新版本号重新挂载。
+```
+
+【步骤 2：macOS 残留事实与 residue】
+```text
+远端人工复核：
+  auto_master_refs=0
+  map_entry_count=0
+  map_password_or_address_hits=0
+  mount_table_count=0
+  revoked_marker=sshmgr-share=<一次性共享名>;sshmgr-version=35;sshmgr-state=revoked
+
+residue：
+  服务器 <macOS 一次性条目>（macOS）：仅有撤销标记（撤销后的预期状态，不需要清理）
+    <一次性共享名>（无需清理）：仅有撤销标记
+  汇总：0 台有残留，1 台仅有撤销标记。
+判定：欠账第 56 条在 macOS 侧通过。
+```
+
+【步骤 3–4：Linux 对照撤销与 residue】
+```text
+shares revoke <一次性共享名> <Linux 受管服务器 A> --unmount --yes：
+  版本号 36；远端持久配置已删除，挂载已卸载。
+
+远端人工复核：
+  fstab_managed=0
+  credentials_count=0
+  cifs_mount_count=0
+  revoked_marker=sshmgr-share=<一次性共享名>;sshmgr-version=36;sshmgr-state=revoked
+
+residue：
+  服务器 <Linux 受管服务器 A>（Linux）：仅有撤销标记（撤销后的预期状态，不需要清理）
+  服务器 <macOS 一次性条目>（macOS）：仅有撤销标记（撤销后的预期状态，不需要清理）
+  汇总：0 台有残留，2 台仅有撤销标记。
+判定：欠账第 56 条在 Linux 侧同样通过。
+```
+
+【步骤 5：Windows 登记撤销】
+```text
+Windows PowerShell 条目撤销：版本号 37；未连接 Windows 服务器；
+  各客户端同步快照后停止注入。
+Windows cmd 条目撤销：版本号 38；同样未连接 Windows 服务器。
+两条输出均说明：正在执行的命令保留盘符直到结束；长期离线的客户端同步前仍会注入；
+  真正的撤销手段是更换共享密码。
+```
+
+【步骤 6：Windows 停止注入】
+```text
+立即同步后，同一固定盘符引用命令：
+  exit_code=0；stderr_bytes=0；stdout 含 X-ABSENT；
+  结构化结果不再出现该共享的 injected_network_drives 字段。
+说明：第一次执行时输出字符串少了引号导致远端 PowerShell 把 X-ABSENT 当命令名，
+  exit_code=1；该失败是测试脚本拼写错误，未触碰目标配置。修正引号后同参数重跑通过。
+
+等待超过 1 分钟的一次性本地快照有效期后，以 cache-max-age=1m 启动 MCP：
+  同一固定盘符引用命令 exit_code=0；stdout 含 X-ABSENT；结构化结果仍无该共享注入。
+  权威端快照修订号与已同步缓存一致，只刷新联系时间，未恢复盘符注入。
+偏离说明：用 1 分钟一次性有效期代替默认 30 分钟等待；产品过期边界相同，未改客户端持久配置。
+```
+
+【步骤 7：撤销标记清理与复查】
+```text
+macOS shares unmount <一次性共享名> <macOS 一次性条目> --yes：exit_code=0；
+  「撤销标记已清理」；版本号 35；
+  提示目标服务器上只剩撤销标记，已删除这个撤销标记，
+  未发现挂载配置、凭据文件或挂载。
+
+Linux shares unmount <一次性共享名> <Linux 受管服务器 A> --yes：exit_code=0；
+  「撤销标记已清理」；版本号 36；同一提示。
+
+复查 residue：
+  服务器 <Linux 受管服务器 A>（Linux）：无残留
+  服务器 <macOS 一次性条目>（macOS）：无残留
+  汇总：0 台有残留，0 台仅有撤销标记，2 台无残留。
+
+远端最终事实：
+  macOS auto_master_refs=0 / map_entry_count=0 / mount_table_count=0 / revoked_marker_count=0
+  Linux fstab_managed=0 / credentials_count=0 / cifs_mount_count=0 / revoked_marker_count=0
+判定：欠账第 57 条在 Linux 与 macOS 侧均通过。
+```
+
+【审计】
+```text
+share-revoke：macOS 版本 35（password_changed=true）、Linux 版本 36、
+  Windows PowerShell 版本 37、Windows cmd 版本 38 均有权威端审计行。
+share-revoke-remote：Linux/macOS 远端清理成功，均有审计行。
+share-residue-check：macOS 先为 marker-only，Linux 撤销后两台均 marker-only；
+  清理后两台均为 no-residue。
+share-unmount：两台 cleaned_revoked_marker=true、result=success、exit=0。
+审计摘要不含共享地址、挂载账号或密码。
+```
+
+## 第七轮收尾
+
+【共享前置数据恢复】
+```text
+挂载密码机密项值：从演练权威端 root 专属事实源按标准输入恢复；值未输出。
+可写入服务器列表与共享可挂载范围：恢复为原有的 Linux 受管服务器 A、Linux 转发条目、
+  Linux 一次性条目 B、Windows PowerShell 条目与 Windows cmd 条目。
+Linux 受管服务器 A：重新真实挂载；现场探测为已挂载。
+Linux 一次性客户端实例最终拉取：4 servers / 5 credentials。
+Windows 一次性客户端实例最终拉取：12 servers / 14 credentials；
+  最终固定盘符引用命令输出 X-PRESENT，结构化结果包含原共享注入，证明恢复到前置状态。
+```
+
+【一次性虚拟机与 vault 清理】
+```text
+反向隧道：先停止虚拟机内的一次性 macOS launchd 后台任务代理，两个远端回环监听端口均释放；
+  两台演练机器 authorized_keys 中的一次性公钥行计数均 1 → 0。
+虚拟机内一次性隧道密钥、启动脚本、日志与 launchd 配置文件逐文件删除；匹配路径 0、匹配进程 0。
+macOS 一次性服务器条目、登录私钥、sudo 凭据、主机密钥锚、profile 授权、
+  一次性拓扑设备与网络成员已删除；servers show 与 devices show 均不存在。
+root 专属一次性登录密钥、公钥与第二密码文件逐文件删除。
+```
+
+【保留状态与指纹】
+```text
+演练权威端：0.22.0-rc12；serve Running / HEALTHY；serve.pairing=false；
+  待批准配对列表为空。
+Linux 受管服务器 A：0.22.0-rc12；共享前置数据恢复并已挂载；
+  /usr/local/bin/sshmgr.rc11 备份保留。
+Linux 一次性客户端实例与 Windows 一次性客户端实例保留，均完成最终快照拉取。
+工作机 1：C:\sshmgr-e2e-20261114\ 保留，包含 bin-rc12；rc12 压缩包已删除；
+  生产 sshmgr 未停止、未重启、未改动。
+本机：一次性虚拟机已停止并删除；基础镜像缓存保留；本地 OCI 镜像服务与临时 HTTP
+  分发端口均无监听；临时脚本、日志与传输块逐文件删除。
+
+工作机 1 生产目录收尾指纹：
+  文件数=5，整体 SHA-256=99d595b1fecaa08c0e0cca0be938c5905b2934940fb884dd400cd564a0dec442。
+  与本轮开始前完全一致。
+```
+
+### 第七轮机密值命中计数与脱敏检索
+
+```text
+机密值检索范围：本轮追加到本运行记录与 docs/backlog.md 的 git diff 全量补丁；
+  补丁传到演练权威端临时文件后，由 root 只读读取两个值文件并只输出字节命中计数。
+通用机密项测试值：命中 0。
+NAS 一次性账号原密码：命中 0。
+第二共享密码：只存在于演练权威端 root 专属临时文件并经标准输入使用；
+  未进入命令参数、证据或审计；测试后文件已删除。
+
+第一轮 Brief 指定脱敏 grep：
+  本运行记录命中 0；单机运行记录命中 0；
+  docs/backlog.md 仅保留历史欠账第 17 条的 1 处默认端口号原文，非本轮新增，未改动。
 ```
