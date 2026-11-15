@@ -366,6 +366,9 @@ func TestPairEnroll_LegacyClientRejectedBeforePendingRowWhenCertificateIsECDSA(t
 	if res.StatusCode != http.StatusBadRequest {
 		t.Fatalf("旧客户端请求状态码 = %d，正文=%s", res.StatusCode, body)
 	}
+	if n := len(pairLegacyClientUpgradeMessage); n > 200 {
+		t.Fatalf("legacy guidance is %d bytes; v0.21.1 clips enroll errors at 200", n)
+	}
 	for _, want := range []string{"ECDSA 证书", "0.22.0", "sshmgr cache-tokens add", "sshmgr cache pull"} {
 		if !strings.Contains(string(body), want) {
 			t.Fatalf("旧客户端拒绝正文缺少 %q：%s", want, body)

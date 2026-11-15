@@ -84,9 +84,9 @@ type pairKeyEntry struct {
 // " leading space" class display hacks are refused with 400.
 var pairHintPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`)
 
-// pairLegacyClientUpgradeMessage is shown by v0.21.1's enroll error branch.
-// Keep it plain text so that older client can display the complete guidance.
-const pairLegacyClientUpgradeMessage = "此权威端使用 ECDSA 证书，需要 0.22.0 或更新的客户端才能配对；请升级客户端，或请 owner 在权威端执行 `sshmgr cache-tokens add` 发放设备码后用 `sshmgr cache pull` 入网"
+// pairLegacyClientUpgradeMessage is shown by v0.21.1's enroll error branch,
+// which clips the body to its first 200 bytes; keep it within that budget.
+const pairLegacyClientUpgradeMessage = "需要 0.22.0 或更新的客户端（权威端为 ECDSA 证书）。可升级客户端，或让 owner 执行 sshmgr cache-tokens add 发设备码后 sshmgr cache pull 入网"
 
 // pairCredsEnvelope is the AEAD plaintext handed to the client at finish
 // (spec §3.3-6, frozen shape {spki, profile, device_code, project_token,
