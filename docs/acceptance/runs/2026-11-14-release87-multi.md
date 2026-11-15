@@ -53,6 +53,17 @@
 | 客户端274-1 | 第三轮通过 | 3 | 三视图、平移缩放、同设备合并角标、本机可达/不可达探测、写路由 404、手机视口与权威端无回传全部通过 |
 | 客户端274-2 | 第三轮通过 | 3 | 新增入口与写路由缺失、反向视图值裁剪、共享只读、命令行等价全部通过 |
 | 客户端275-1 | 第二轮通过（含欠账第 38 条复核） | 3 | 第二轮（rc7）：向导指引/进程退出/角色不变/配对+SAS/二次只读界面/清理全部通过；pair 自动写 role.json |
+| 混跑270-1 | 通过 | 第四部分 | 旧客户端遇新权威端，占位符字面量原样写出 |
+| 混跑270-2 | 通过 | 第四部分 | 新客户端遇旧权威端，连接前整体拒绝且目标未建文件 |
+| 混跑271-1 | 通过 | 第四部分 | 旧客户端、新权威端的兜底锚与旧格式转发拒绝 |
+| 混跑271-2 | 通过（附欠账第 55 条） | 第四部分 | 新客户端遇旧权威端拓扑入口降级；新格式锚请求旧权威端解析失败如实登记 |
+| 混跑272-1 | 通过（附欠账第 54 条） | 第四部分 | 旧客户端遇新权威端无挂载工具且无盘符注入；多算法主机误报已登记 |
+| 混跑272-2 | 通过 | 第四部分 | 新客户端遇旧权威端共享入口降级且不建任务 |
+| 混跑275-1 | 通过（附欠账第 53 条） | 第四部分 | 旧客户端快照兼容总览通过；旧客户端与新默认证书配对失败已登记 |
+| 混跑275-2 | 通过 | 第四部分 | 权威端 Web UI 对旧客户端显示完整旧版能力标签 |
+| 混跑275-3 | 通过 | 第四部分 | 新客户端遇旧权威端降级、快照回退与通用工具全部通过 |
+| 混跑275-4 | 通过 | 第四部分 | 客户端本机 Web UI 两个页面均提示先升权威端，推荐版本显示“—” |
+| 混跑275-5 | 通过 | 第四部分 | cache status、doctor、update check 三个本机出口提示正确，测试通过 |
 
 ## 安装与版本
 
@@ -1283,7 +1294,7 @@ Windows 手动映射三步（映射网络驱动器 → 盘符 X: 与文件夹 �
 【桌面映射（工作机 1 owner 登录会话）】
 ```text
 映射前：盘符 X 不可见；net use 无 X:；凭据管理器中该 NAS 地址已有 1 条 owner 自己的凭据（本次不改动）。
-映射：按页面推荐地址与专用挂载账号映射 X:（密码经只有 allan716 可读的临时文件传入脚本进程，读取后立即删除，
+映射：按页面推荐地址与专用挂载账号映射 X:（密码经只有 owner 可读的临时文件传入脚本进程，读取后立即删除，
   未出现在任何进程命令行）→ 失败：
   「不允许一个用户使用一个以上用户名与服务器或共享资源的多重连接。中断与此服务器或共享资源的所有连接，然后再试一次。」
   （Windows 错误 1219：owner 桌面会话已用其他账号连接同一 NAS 地址。）
@@ -2051,3 +2062,585 @@ Windows 受管服务器 A：一次性 bin-rc9\sshmgr.exe 删除；顺带删除�
   路径取证文件，逐层删除空目录，root-exists=False。
 ```
 【执行位置】工作机 1、Linux 受管服务器 A、演练权威端、Windows 受管服务器 A。
+
+## 第四部分 新旧版本混跑（rc9 对 v0.21.1）
+
+【两端口径】
+```text
+旧客户端：工作机 1 一次性 v0.21.1 实例 e2e279-old（APPDATA 重定向 + 独立 store/解密钥根，未触碰生产目录）。
+新权威端：演练权威端 0.22.0-rc9。
+新客户端：工作机 1 一次性 rc9 实例（bin-rc9，独立 vault/config/dek 根）。
+旧权威端：一次性 v0.21.1 vault+serve（放置机器与偏离原因见「混跑270-2」小节开头）。
+旧客户端取码方式：演练权威端 cache-tokens add 发放一次性设备码（owner 面，agent 代跑），凭码 cache pull；
+  佐证：cache-tokens ls 显示该码绑定一次性 profile 且客户端版本列为旧版标签。
+```
+
+【混跑发现（配对路径）】
+```text
+旧客户端 v0.21.1 用 SAS 配对（pair --url --pin）向 rc9 权威端注册时，客户端报
+  Error: pairing enroll: bad sig (err=<nil> len=71)。
+原因核对：演练权威端现行 serve 证书为 ECDSA P-256（第一册第 36 条修复后的新默认证书，权威端276-1
+  恢复后的 vault 重新生成了证书）；v0.21.1 客户端源码硬性要求 enroll 响应签名为 ed25519 原文签名
+  （internal/clientops/pairsession.go 校验签名长度 64 与证书公钥类型），收到 ECDSA 签名即失败。
+影响：ECDSA 证书的新装权威端无法用配对面接纳 v0.21.1 客户端；owner 发放设备码路径可用（本轮已实证）。
+已按欠账登记（第 53 条），是否修复由 owner 裁决；不影响本条其余判据（快照拉取与执行均走设备码路径）。
+```
+
+### 混跑270-1 旧客户端遇新权威端：占位符字面量原样写出
+
+【结论】通过。agent 工具面代跑（owner 授权）；真实旧版本二进制 + 真实新权威端 + 真实受管服务器。
+
+【前置数据】
+```text
+演练权威端一次性机密项 e2e279_mix_secret（通用测试值，只经 root 文件管道录入，未打印）；
+  可写入服务器列表=既有一次性 Linux 转发条目（Linux 受管服务器 A 经宿主机转发口）。
+旧客户端 e2e279-old 已凭一次性设备码拉取快照（5 servers / 5 credentials）；
+  工具清单（v0.21.1）：close_port / download_file / exec_background / exec_command / exec_context /
+  exec_output / exec_stop / forward_port / list_servers / relay_file / reload_self /
+  update_server_metadata / upload_content / upload_file（无 list_secrets / list_shares / mount_share /
+  query_topology / probe_connectivity）。
+```
+
+【命令原文】
+```text
+旧客户端经 mcp --cache --instance e2e279-old：
+  upload_content {server_id=<Linux 转发条目标识符>, remote_path=/home/<Linux 受管服务器 A 用户>/e2e279-mix/mix270-1.txt,
+    content="mixed270 A={{sshmgr-secret:e2e279_mix_secret}}\n"}
+  exec_command {同条目, command=cat /home/<Linux 受管服务器 A 用户>/e2e279-mix/mix270-1.txt}
+远端（Linux 受管服务器 A）：sha256sum /home/<Linux 受管服务器 A 用户>/e2e279-mix/mix270-1.txt
+本机：对同一模板文本计算 SHA-256。
+权威端：sshmgr secrets records e2e279_mix_secret；sshmgr cache-tokens ls。
+```
+
+【完整输出（关键行）】
+```text
+upload_content → {"bytes":47}（无 masked 字段，无值版本号，无文件哈希字段）
+cat → exit_code=0，stdout="mixed270 A={{sshmgr-secret:e2e279_mix_secret}}\n"，stdout_bytes=47
+远端 SHA-256 = 00ceb7e66d8fd67a117d178bbfcca10ad378269dcab252e56dddd6cab00b4a49
+本机预期模板 SHA-256 = 00ceb7e66d8fd67a117d178bbfcca10ad378269dcab252e56dddd6cab00b4a49 → 一致 ✓
+权威端 secrets records e2e279_mix_secret →「没有符合条件的下发记录。」（本次字面量写出不产生下发记录）✓
+cache-tokens ls → e2e279-old status=active … client_version=旧版客户端:不支持机密项、网络拓扑、共享存储 ✓
+旧客户端本地 cache-audit.log → upload-content 与 exec 行；命令字段只含原文与路径；无值，无 masked 字段 ✓
+机密值检索（证据汇总拷回演练权威端后 grep -c -F -f）：通用测试值 0；NAS 挂载密码 0 ✓
+```
+【执行位置】工作机 1（旧客户端 v0.21.1 一次性实例）→ Linux 受管服务器 A（经转发条目）；权威端命令在演练权威端。
+
+### 混跑271-1 旧客户端、新权威端的兜底锚与旧格式转发拒绝
+
+【结论】通过。agent 代跑（owner 授权）。真实旧版本二进制、真实新权威端、真实兜底主机路径。
+
+【前置数据】
+```text
+条目 A=e2e279_linux_a（Linux 受管服务器 A 经宿主机转发口，专用一次性私钥）：
+  先由一次性 rc9 实例（e2e279-anch）首次连接，锚以 source=forward 落库
+  （fingerprint=SHA256:D0A1…Jwbk，key-type=ecdsa-sha2-nistp256，handshake=兜底主机:端口）。
+条目 B=e2e279_linux_b：未锚定、兜底主机可达。
+  （前置调整如实记录：条目 B 最初与条目 A 同兜底地址，旧客户端按 host:port 复用了 A 的锚并直连成功；
+  为构造「未锚定的不同目标」，把条目 B 改指向演练权威端 SSH 的转发地址（可达、快照内无该地址锚），
+  并把一次性公钥按册内做法追加到该机 authorized_keys，行尾带一次性注释。）
+旧客户端 e2e279-old 重新 cache pull（5 servers / 5 credentials）。
+```
+
+【命令原文】
+```text
+旧客户端经 mcp --cache --instance e2e279-old：
+  exec_command {条目 A, echo entryA-ok; uname -s}
+  exec_command {条目 B, echo entryB-at-authority-machine}
+旧客户端命令行（册中原文形态）：sshmgr ssh <条目A> "echo via-owner-ssh"
+权威端：journalctl -u sshmgr-serve 中 /pin-hostkey 状态行；servers pin-hostkey <条目B>；sshd 日志 preauth 行。
+源码测试：go test ./internal/mcpserver -run '^TestPinHostkey_OldFormatRejected400$'
+```
+
+【完整输出（关键行）】
+```text
+条目 A → exit_code=0，stdout="entryA-ok\nLinux\n"（只用兜底主机连接，旧格式兜底锚校验通过）✓
+条目 B → isError=true：
+  ssh dial: ssh: handshake failed: pin forward for [REDACTED]: broker returned 400 —
+  old-format pin forwarding request: no server entry id — upgrade the client, then retry ✓
+权威端服务日志：pin-hostkey entry="" handshake="" -> 400 (device "-") ✓（旧格式请求缺少条目标识，未被猜测归属）
+条目 B 锚查询：no pin for e2e279_linux_b (unanchored) ✓（权威端没有为条目 B 落锚）
+演练权威端 sshd 日志：Connection closed by <来源地址已脱敏> port <端口已脱敏> [preauth] ✓（登录凭据未发送）
+源码测试 → ok  ssh-manager-mcp/internal/mcpserver ✓
+旧客户端命令行 sshmgr ssh <条目A> … → exit=1，「vault locked: run `sshmgr unlock`」：
+  v0.21.1 的 `ssh` 子命令属 owner 权威库路径，不读客户端缓存（源码核对 internal/cli/ssh.go 直开 vault）；
+  旧客户端的缓存执行面是 `mcp --cache` 工具面，本条判据以工具面实证，命令行形态如实记录。
+```
+【执行位置】工作机 1（旧客户端）→ Linux 受管服务器 A（条目 A）与演练权威端 SSH 转发地址（条目 B 兜底靶）；
+服务日志与锚查询在演练权威端；源码测试在本仓源码根目录（候选提交）。
+
+### 混跑272-1 旧客户端遇新权威端的无挂载与无盘符注入
+
+【结论】通过。agent 工具面代跑；Windows 相关判据在工作机 1 上取证。
+
+【前置数据与一处如实记录的调整】
+```text
+共享前置的 PowerShell / cmd 两条一次性 Windows 条目授权给旧客户端的一次性 profile；
+  演练权威端另登记一次性共享 e2e279_dl（盘符 Y，挂载密码引用一次性机密项 e2e279_nas_pass，
+  该机密项可写入服务器=这两条 Windows 条目；共享提供方设备与地址沿用既有一次性登记）。
+前置调整：旧客户端 v0.21.1 对多算法主机按默认顺序协商（先 ECDSA），而共享条目锚为 ED25519 指纹，
+  首次试连报 host key mismatch（可能中间人）。为完成本条判据，把两条共享条目的锚以 --force 临时
+  改为同一主机的 ECDSA 指纹（带 key-type，源码带外核对），旧客户端重新拉取后可连；本条完成后
+  已按原指纹恢复 ED25519 锚并留证。该现象是旧客户端不按锚算法收窄协商的已知旧版限制，
+  已一并写入欠账第 54 条。
+```
+
+【命令原文】
+```text
+旧客户端：cache pull；tools/list 枚举；
+  exec_command {PowerShell 条目, Write-Output ps-ok}
+  exec_command {PowerShell 条目, Get-ChildItem Y:\e2e279}
+  exec_command {cmd 条目, dir Y:\e2e279}
+  （list_shares / mount_share：工具清单中不存在，无法调用——如实记录）
+```
+
+【完整输出（关键行）】
+```text
+cache pull → pulled 5 servers / 5 credentials ✓（新权威端快照携带共享段，旧客户端拉取不失败）
+工具清单（v0.21.1，见混跑270-1）：无 list_shares、无 mount_share、无 query_topology ✓
+PowerShell 只读命令 → exit_code=0，stdout="ps-ok" ✓；返回无 injected_network_drives 字段、
+  无共享注入提示、无映射警告 ✓（普通 SSH 命令仍走兜底主机）
+Get-ChildItem Y:\e2e279 → exit_code=1，DriveNotFoundException「找不到驱动器…Y…不存在」✓（盘符未注入，按系统正常报错）
+dir Y:\e2e279（cmd 条目）→ exit_code=1，同样报告驱动器 Y 不存在 ✓
+旧客户端本地审计：只有 exec 行，无共享名、无地址、无账号、无密码 ✓；全程未向命令送入共享存储密码 ✓
+```
+【执行位置】工作机 1（旧客户端 v0.21.1 一次性实例）→ Windows 受管服务器 A（PowerShell 与 cmd 条目）。
+
+### 混跑275-1 旧客户端遇新权威端的快照兼容总览
+
+【结论】通过。agent 工具面代跑；真实旧版本二进制对真实新权威端完成拉取与执行。
+
+【两端版本与功能起始支持版本表核对】
+```text
+旧客户端=0.21.1（工作机 1 一次性实例，安装包 SHA-256 与 v0.21.1 正式发布 checksums.txt 核对一致）；
+新权威端=0.22.0-rc9（源提交 b0ecdc2 构建产物，SHA-256 核对一致）。
+功能起始支持版本表（源码 internal/clientfeatures 集中配置）：机密项 / 网络拓扑 / 共享存储三项的
+  起始支持版本均为 v0.22.0；v0.21.1 低于三项起始版本 → 旧版标签应列全部三项，与实测标签逐字一致 ✓。
+```
+
+【执行与判据（含被引用条目汇总）】
+```text
+旧客户端 cache pull → pulled 5 servers / 5 credentials（重复多次，含共享段与拓扑段在场时均不失败）✓
+普通命令：一次性 Linux 转发条目 exec_command → exit_code=0，stdout="mix2751-ok\n/home/<Linux 用户>\n"（走兜底主机）✓
+权威端 cache-tokens ls：未声明版本设备码显示「旧版客户端:不支持机密项、网络拓扑、共享存储」（完整标签）✓
+快照裁剪：旧客户端快照内无 e2e279_mix_secret / e2e279_nas_pass（list 工具不存在且写入只出字面量，
+  见混跑270-1）；共享存储其余字段照常下发（cache pull 不失败），挂载密码随机密项消失 ✓
+占位符字面量 / 无挂载工具 / Windows 无网络盘符注入 / 旧格式兜底锚与 400 拒绝：
+  分别由 混跑270-1 / 混跑272-1 / 混跑271-1 按册完成 ✓（证据编号见各小节）
+源码测试：
+  go test ./internal/store -run '^(TestExportSnapshotForProfile_ScopesSecrets|TestExportSnapshotForProfileScopesSharedStorages)$' → ok ✓
+  go test ./internal/cli -run '^TestCacheVersionE2E_SnapshotCarriesRecommendedVersion$' → ok ✓
+```
+【执行位置】工作机 1（旧客户端）与演练权威端；源码测试在候选源码根目录（本仓工作树，源提交与候选一致）。
+
+### 混跑275-2 权威端 Web UI 的旧客户端标签
+
+【结论】通过。owner 不在场，agent 以真实浏览器页面文本代证（演练权威端本机无界面浏览器打开权威端 Web UI，
+管理员口令经 root 专属文件直接读入脚本，未进入证据）。
+
+【命令原文】
+```text
+浏览器（agent 代跑）：登录权威端 Web UI → 打开 /ui/access/device-codes → 保存页面文本；
+  用 rc9 对照实例 e2e279-anch 拉取一次 → 刷新；再用 v0.21.1 旧客户端拉取一次 → 刷新。
+对照设备码与旧设备码均绑定一次性 profile（e2e279_old）。
+```
+
+【完整输出（页面相关行）】
+```text
+旧客户端拉取后（初始与最终状态一致）：
+  e2e279-old  <设备码前缀已脱敏>…  活跃  e2e279_old  2026-11-15 03:34:32  旧版客户端:不支持机密项、网络拓扑、共享存储
+  → 不是「未声明」，也不只提示机密项；完整标签 ✓
+rc9 对照实例拉取后：
+  e2e279-anch  <设备码前缀已脱敏>…  活跃  e2e279_old  2026-11-15 03:34:18  0.22.0-rc9
+  → 只显示版本号，不带旧版标签 ✓；旧客户端随后再拉取，其行立即回到未声明状态与完整旧版标签 ✓
+页面不显示完整设备码（列表仅显示前缀 + 省略号）✓
+（过程补充：rc9 对照实例的一次手工 cache pull 误用项目令牌导致设备码被拒并隔离，属操作失误；
+  按 owner 面流程撤销旧码、重新发放设备码并重拉成功，未用作产品判据，如实记录。）
+```
+【执行位置】演练权威端（浏览器与页面）；两次拉取分别由工作机 1 上的 rc9 一次性实例与 v0.21.1 旧客户端执行。
+
+### 混跑270-2 新客户端遇旧权威端：连接前整体拒绝
+
+【结论】通过。agent 工具面代跑。
+
+【旧权威端放置与偏离说明】
+```text
+旧权威端 = 演练权威端所在机器上的一次性 v0.21.1 vault + 前台 serve（独立 store/证书/日志/解密钥根，
+  全部经环境变量重定向到一次性目录；服务端口沿用宿主机既有转发口；v0.21.1 安装包 SHA-256 与
+  正式发布 checksums.txt 核对一致；exe SHA-256 e29a99b7…c047f201）。
+偏离册的原因：册与 Brief 默认把一次性旧权威端放在工作机 1。核对 v0.21.1 源码：Windows 版 vault 根
+  硬编码 C:\ProgramData，完整隔离需要 6 个测试级环境变量接缝（store/主密钥/证书/私钥/日志/解密钥目录），
+  任一路径遗漏都会写入工作机 1 的生产目录；且演练机 2（Brief 给出的备选）除 SSH 转发口外对工作机 1
+  不可达。为不冒生产写入风险、又保持新客户端仍按册在工作机 1 上取证，选择在演练权威端机器上起一次性
+  v0.21.1 serve（期间 rc9 serve 临时停止，结束后恢复并复核健康），复用宿主机既有 HTTP 转发口。
+```
+
+【命令原文】
+```text
+工作机 1 一次性 rc9 实例 e2e279-new（已配对旧权威端并拉取 1 servers / 1 credentials）：
+  list_secrets {}
+  upload_content {server=<旧权威端一次性 Linux 条目>, remote_path=/home/<Linux 受管服务器 A 用户>/e2e279-mix/mix2702.txt,
+    content="A={{sshmgr-secret:e2e279_never}} B={{sshmgr-secret:bad-name}}\n"}（一合法 + 一格式错误占位符）
+Linux 受管服务器 A：检查目标路径是否存在。
+```
+
+【完整输出（关键行）】
+```text
+配对与首拉（rc9 客户端 → v0.21.1 权威端）：SAS 双侧 agent 比对一致（SAS-MATCH=True，值不入证据）；
+  pulled 1 servers / 1 credentials；拉取结束即出现「客户端比权威端新，建议先升级权威端」。
+list_secrets → 「没有可用的机密项」（不报传输错误；结果前附「客户端比权威端新…」提示）✓
+upload_content → isError=true，固定错误「权威端版本过旧，不支持机密项，请先升级权威端」
+  （不是名字不存在，也不是只报格式错误；返回 bytes=0）✓
+目标路径检查 → TARGET-NOT-CREATED（一个字节都没传给目标服务器）✓
+MCP 会话标准错误：snapshot poll: authority has no snapshot version endpoint; stopping background polling
+  （修订号接口 404 → 停止轮询的证据，另见混跑275-3）
+客户端 cache audit --instance e2e279-new --limit 0：
+  upload-content denied … secrets=e2e279_never,bad-name; delivery-record=（空）→ 本地审计有拒绝行、无值 ✓
+本条无机密项值进入任何输出（旧权威端快照本不含机密项）；无 masked 字段 ✓
+```
+【执行位置】工作机 1（rc9 一次性实例）→ Linux 受管服务器 A（经转发条目，未实际连接）；旧权威端在演练权威端机器。
+
+### 混跑271-2 新客户端遇旧权威端的拓扑入口降级
+
+【结论】通过。agent 工具面代跑。
+
+【命令原文】
+```text
+rc9 一次性实例 e2e279-new（快照来自 v0.21.1 旧权威端，1 台授权 Linux 条目）：
+  query_topology {from="self"}
+  probe_connectivity {from="self", targets=[<授权条目标识符>:22]}
+  sshmgr sites list --instance e2e279-new；sshmgr devices list --instance e2e279-new
+  exec_command {授权条目, echo normal-exec-ok; uname -s}
+```
+
+【完整输出（关键行）】
+```text
+query_topology from=self → 「权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端」（固定错误）✓
+probe_connectivity from=self targets=[<授权条目>:22] → 同一固定错误，不误报拓扑缺失 ✓
+sites list / devices list（命令行）→ 同一固定错误，退出码 1 ✓
+exec_command（普通命令）→ exit_code=0，stdout="normal-exec-ok\nLinux\n" ✓（拓扑入口降级不影响普通执行）
+MCP 会话标准错误同步出现：snapshot poll: authority has no snapshot version endpoint; stopping background polling
+前置如实记录：旧权威端一次性条目最初未锚定时，rc9 客户端首连会按新格式转发锚请求，
+  v0.21.1 权威端无法解析（400 unparseable key_blob）。按真实升级场景在旧权威端用 owner 面
+  `servers pin-hostkey --fingerprint` 带外落锚后重拉，普通命令即恢复——该差异是旧权威端
+  不识别新格式转发请求所致，与拓扑入口降级判据无关，已并入欠账第 55 条登记。
+（操作失误补记：一次手工 cache pull 误用项目令牌导致设备码被拒并隔离，属操作失误；按 owner 面
+  流程撤销旧码、重新发放设备码并重拉成功，未用作产品判据。）
+```
+【执行位置】工作机 1（rc9 一次性实例）→ Linux 受管服务器 A（经转发条目）；旧权威端在演练权威端机器。
+
+### 混跑272-2 新客户端遇旧权威端的共享入口降级
+
+【结论】通过。agent 工具面代跑。
+
+【命令原文】
+```text
+list_shares {}；mount_share {server_id=<授权条目>, share=e2e279_dl}（共享地址仅用于入口报错检查）；
+query_topology {from=<授权条目>, to=[smb://e2e279_dl]}；
+relay_file {from_share_address=smb://e2e279_dl/mix2722.txt, to_server_id=<授权条目>, to_path=/home/<Linux 受管服务器 A 用户>/e2e279-mix/mix2722-relay.txt}；
+exec_context {server_id=<授权条目>}；exec_command {同条目, echo exec-without-drive}；
+命令行：sshmgr shares list / shares show e2e279_dl / update --check（均带 --instance e2e279-new）。
+```
+
+【完整输出（关键行）】
+```text
+list_shares → 「权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端」✓
+mount_share → 同一固定错误（isError=true，mount_point 为空）✓
+共享地址翻译的 query_topology → 同一固定错误 ✓
+共享地址端点的 relay_file → 同一固定错误（isError=true，task_id 为空，未建任务）✓
+exec_context → planned_network_drives=[]，network_drive_preview_note=
+  「权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端」✓（盘符预览说明权威端过旧）
+exec_command → exit_code=0，stdout="exec-without-drive\n"，返回无 injected_network_drives 字段 ✓（不注入盘符）
+命令行 shares list / shares show → 同一固定错误，退出码 1，不误报「共享不存在」✓
+update --check → 「检查失败：无法确定推荐版本，请先升级权威端，或用 `--version` 指定」，退出码 1
+  → 不把缺少推荐版本当成正常最新状态，也不默认升级客户端 ✓
+```
+【执行位置】工作机 1（rc9 一次性实例）；目标端点检查在 Linux 受管服务器 A（未实际连接/未建任务）。
+
+### 混跑275-3 新客户端遇旧权威端的降级、快照刷新回退与通用工具
+
+【结论】通过。agent 工具面代跑；通用工具全部经兜底主机工作。
+
+【命令原文】
+```text
+记录两端版本；确认快照无推荐版本字段、修订号查询接口 404。
+同一 MCP 会话（mcp --cache --instance e2e279-new --cache-max-age 1m）：启动后等待 65 秒使快照过期，
+  依次三次 list_servers；保存三次返回与标准错误。
+通用工具（一次性靶子，执行后清理）：exec_command、exec_background、exec_output、exec_stop、
+  upload_file、download_file、forward_port、close_port、relay_file、list_servers。
+命令行补口：networks list / devices show / devices probe（均 --instance e2e279-new）。
+源码测试：TestMaybeLazyPull_Version404FallsBackToFullPull；
+  TestSnapshotPollE2E_OldAuthorityStopsPolling；TestCacheVersionE2E_ToolHintComparesVersions。
+```
+
+【完整输出（关键行）】
+```text
+两端版本：客户端 0.22.0-rc9；旧权威端 0.21.1（快照无 recommended_version 字段——列表输出与提示均证）。
+修订号查询 404：MCP 会话标准错误「snapshot poll: authority has no snapshot version endpoint;
+  stopping background polling」（v0.21.1 服务端本身不记录该查询，如实说明；停止轮询由客户端行与测试代证）。
+快照过期会话：等待 65 秒后三次 list_servers 全部正常返回同一台授权条目；
+  标准错误出现两次「pulled 1 servers / 1 credentials」——到期后回退为全量拉取并继续使用 ✓
+  （404 → 全量拉取回退由 TestMaybeLazyPull_Version404FallsBackToFullPull 代证 → ok）。
+通用工具：
+  exec_command → exit_code=0（stdout=normal-exec-ok）✓
+  upload_file（26 字节一次性文件）→ {"bytes":26,"files":1}；远端 SHA-256=81b2c319…F7F8D7 与本地一致 ✓
+  download_file → {"bytes":26,"content":"generic-tools-payload-2753"} ✓
+  exec_background（sleep 30）→ status=running，返回任务标识 ✓
+  exec_output → status=running，stdout/stderr 计数为 0（任务尚在睡）✓
+  exec_stop → {"status":"running"}（停止已发起，任务按产品语义稍后转 stopped）✓
+  forward_port → listen_host=127.0.0.1，本地端口与隧道标识返回 ✓
+  close_port → 「closed」✓
+  relay_file（同一条目两端常规路径，流式中继）→ task_id 返回；完成后目标
+    /home/<Linux 受管服务器 A 用户>/e2e279-gen/upload-relay.txt SHA-256=81b2c319…F7F8D7 与源一致 ✓
+  list_servers → 正常返回 ✓
+命令行补口：networks list / devices show / devices probe → 均为固定错误
+  「权威端版本过旧，不支持网络拓扑与共享存储，请先升级权威端」，退出码 1 ✓
+源码测试 → 三组全部 ok ✓
+（会话提示：工具返回附「客户端比权威端新，建议先升级权威端」，首次出现后同一会话不重复刷屏。）
+```
+【清理】Linux 受管服务器 A 一次性目录与两份 26 字节文件已删除（gen-files-clean）；
+工作机 1 侧上传源/下载副本文件随收尾删除。
+【执行位置】工作机 1（rc9 一次性实例）→ Linux 受管服务器 A；旧权威端在演练权威端机器；源码测试在候选源码根目录。
+
+
+### 混跑275-4 新客户端本机 Web UI 的先升权威端提示
+
+【结论】通过。owner 不在场，按 owner 授权由 agent 以本机 HTTP 页面文本代证；未打开工作机 1 桌面浏览器。
+
+【现场盘点与本条前置】
+```text
+旧权威端仍在演练权威端机器上运行：一次性 v0.21.1 serve 进程监听原服务端口；rc9 正式服务此时处于停止状态。
+新版一次性客户端实例 e2e279-new 仍在工作机 1，cache status 的 source 指向该旧权威端（真实地址不入证据）。
+本地快照无推荐版本：本条客户端状态页“推荐版本”实际显示“—”。
+客户端二进制输出 0.22.0-rc9；源码版本解析层接受该预发布号，且它不是开发构建默认号 dev，
+  因此不会被“开发构建不提示”分支挡掉。若最终发布认为“正式版本号”只能是去掉 rc 后缀的稳定号，
+  以最终发布产物重跑；本条按候选产物实际版本号如实记录。
+```
+
+【命令原文】
+```text
+C:\sshmgr-e2e-20261114\bin-rc9\sshmgr.exe ui --instance e2e279-new
+```
+
+【代证方式】
+```text
+工作机 1 上由 PowerShell 启动上述一次性 exe，并把子进程 PATH 限制到一次性目录，避免 ui 命令调用系统
+浏览器打开 owner 桌面。随后在同一台机器上用 curl 访问回环启动网址换取会话，再抓取首页与
+/ui/ops/client 页面文本；启动令牌、会话 cookie、真实权威端地址、证书公钥指纹与跨站请求伪造令牌
+均只留在进程内存或临时 cookie 文件中，未写入证据。抓取后关闭 ui 子进程标准输入，让命令自然退出。
+```
+
+【完整输出（脱敏后的页面文本）】
+```text
+ui-started=True
+startup-exchange=303; curl 会话 cookie=1
+home-status=200
+home-version-hint=客户端比权威端新，建议先升级权威端
+home-readonly-notice=这里只读，修改需到权威端 Web UI 去做。
+client-status-page=200
+client-recommended-version=—
+client-status-version-hint=客户端比权威端新，建议先升级权威端
+ui-exit=0
+after-close=connection-refused-or-listener-closed
+```
+
+【判据核对】
+```text
+客户端首页与客户端状态页均显示“客户端比权威端新，建议先升级权威端” ✓
+推荐版本为空时显示“—”，不是正常同版，也不是本地缓存损坏 ✓
+命令关闭后回环页面连接失败，页面不可访问 ✓
+启动令牌、cookie、设备码、项目令牌与真实地址未进入证据 ✓
+```
+【执行位置】工作机 1（rc9 一次性实例）；旧权威端在演练权威端机器。
+
+### 混跑275-5 新客户端命令行与 doctor 的先升权威端提示
+
+【结论】通过。owner 命令行面由 agent 按授权代跑；三个本机出口真实执行，源码测试全部通过。
+
+【命令原文】
+```text
+C:\sshmgr-e2e-20261114\bin-rc9\sshmgr.exe cache status --instance e2e279-new
+C:\sshmgr-e2e-20261114\bin-rc9\sshmgr.exe doctor
+C:\sshmgr-e2e-20261114\bin-rc9\sshmgr.exe update --check --instance e2e279-new
+```
+
+【完整输出（真实地址已替换为代称）】
+```text
+=== cache status ===
+cache:    <一次性客户端根>\config279\ssh-manager\instances\e2e279-new\cache.bin
+age:      11m7s
+servers:  1
+creds:    1
+scope:    e2e279_oa_prof
+device:    e2e279-new
+source:   <旧权威端真实地址>
+exit=0
+标准错误：客户端比权威端新，建议先升级权威端
+
+=== doctor ===
+sshmgr doctor (0.22.0-rc9)
+env:  INFO  SSHMGR_* env overrides in effect: SSHMGR_CACHE_DEK_DIR (values not shown)
+role:  PASS  role=client setup_complete=true
+store:  INFO  store.db absent on a client machine — cache-only is normal
+masterkey:  INFO  master.key absent on a client machine — no local vault to unlock
+vault-open:  INFO  skipped — store.db/master.key not both present
+store-sidecar:  INFO  skipped — no store.db on this machine
+serve-cert:  INFO  serve not in use (no serve cert and no init marker)
+serve-svc:  INFO  serve service not installed (serve not in use)
+client-cache:  INFO  no default-instance cache.bin — 1 named instance(s) hold the offline cache (diagnosed below)
+client-versions:  INFO  客户端版本 0.22.0-rc9；推荐版本 权威端过旧，未提供推荐版本；客户端比权威端新，建议先升级权威端
+client-cache[e2e279-new]:  PASS  instance e2e279-new: cache.bin present (age 11m0s)
+update-gen:  INFO  no on-disk generation signal (no sshmgr update has replaced this binary yet)
+overall: 0 WARN, 0 FAIL
+exit=0
+标准错误：（空）
+
+=== update --check ===
+update base: https://api.github.com
+exit=1
+Error: 检查失败：无法确定推荐版本，请先升级权威端，或用 `--version` 指定
+Usage:
+  sshmgr update [flags]
+
+Flags:
+      --check             dry run: report current/latest/asset/update base, change nothing
+      --file string       install from a local archive (.zip/.tar.gz/.tgz) instead of GitHub discovery
+  -h, --help              help for update
+      --instance string   read the recommended version from this named cache instance (default slot when omitted)
+      --no-verify         skip file integrity check (explicit trust in this file only)
+      --sha256 string     expected sha256 of --file (explicit trust in this file only)
+      --version string    install this release tag (e.g. v0.13.0) instead of latest; downgrade = rollback channel
+      --yes               assume yes at confirmation points (required on non-TTY stdin)
+
+检查失败：无法确定推荐版本，请先升级权威端，或用 `--version` 指定
+```
+
+【doctor 隔离说明】
+```text
+doctor 在同一 PowerShell 进程中沿用一次性 vault/config/dek 环境变量；输出只发现一次性命名实例
+e2e279-new，未读取或改动工作机 1 生产目录。
+```
+
+【源码测试】
+```text
+命令：go test ./internal/cli -run '^(TestRootCommandWritesNewerClientHintForOldAuthority|TestDoctorShowsOldAuthorityRecommendedVersion|TestClientWebUIShowsNewerClientHintForOldAuthority)$'
+Go 工具链：go1.25.8 darwin/arm64（与 Brief 给定版本一致）
+源码口径：本仓库当前提交只比候选源提交 b0ecdc2 多文档提交，源码相同；测试在仓库根目录执行。
+输出：ok  	ssh-manager-mcp/internal/cli	0.598s，退出码 0
+```
+
+【判据核对】
+```text
+cache status 标准错误末尾出现“客户端比权威端新，建议先升级权威端” ✓
+doctor 显示“权威端过旧，未提供推荐版本”并给出同一升级顺序提示 ✓
+update --check 退出码 1，未把缺少推荐版本当作正常最新状态，未下载或升级客户端 ✓
+四个版本提示出口由混跑275-3、本条与混跑275-4共同覆盖 ✓
+```
+【执行位置】工作机 1（rc9 一次性实例）；源码测试在候选源码根目录。
+
+## 第四部分 收尾清理
+
+【结论】全部清理完成；应保留对象仍在，演练权威端 rc9 服务恢复为 HEALTHY，工作机 1 生产目录指纹前后一致。
+
+【旧权威端停止与 rc9 服务恢复】
+```text
+old-authority-stop pid-present
+old-authority-stopped
+rc9-service=active
+service:   Running
+process:   running
+http:      responding (401/200 = auth working)
+vault:     ok
+overall:   HEALTHY
+0.22.0-rc9
+```
+
+【演练权威端机器清理】
+```text
+一次性 v0.21.1 vault 中的 8 个文件逐个删除：
+  .serve-cert-initialized、master.key.plain、serve-cert.pem、serve-key.pem、
+  serve-stdout.log、serve.log、serve.pid、store.db；
+随后逐层移除 config、dek 与一次性 vault 根目录。
+旧版本 Linux 二进制 /usr/local/bin/sshmgr-v0211 删除。
+旧版本下载目录为空，确认不存在。
+root 专属一次性密钥、项目令牌文本与设备码文本 4 个文件删除；/tmp 下 2 个一次性脚本删除。
+清理后：旧权威端根目录不存在；旧版本二进制不存在；一次性泄漏检查目录不存在；rc9 服务 active。
+主 vault 中两个一次性拓扑设备 e2e279_linux_a / e2e279_linux_b 删除，删除预览均为“无关联条目、
+  无共享、无机密项、无网络成员”，产品返回已删除。
+profiles、servers、secrets、shares、networks、devices、projects 列表查询 e2e279 命中 0。
+cache-tokens 仅保留产品不可删除的 revoked 审计行（e2e279-anch、e2e279-exp42、e2e279-old，
+  均无 profile、不可再拉取；旧权威端自己的 e2e279-new 设备码随一次性 vault 删除）。
+```
+
+【工作机 1 清理（每个文件单独删除，不用递归删除）】
+```text
+删除对象：bin-v0211、appdata-v0211、dek-v0211、v0211-store、vault279、config279、dek279、work\r4。
+实际在场：bin-v0211 2 个文件；vault279 0 个文件；config279 6 个文件；
+  dek279 1 个文件；work\r4 57 个文件；其余旧客户端目录在前一轮已清空。
+共删除 66 个文件。清单如下（<一次性根目录>=C:\sshmgr-e2e-20261114）：
+  bin-v0211\README.md、bin-v0211\sshmgr.exe；
+  config279\ssh-manager\instances\e2e279-new\cache.auth.json、cache.bin、cache.meta.json、
+    cache-audit.log、software-inventory-collect.lock，config279\ssh-manager\role.json；
+  dek279\cache-dek-e2e279-new.key；
+  work\r4\anchor-a.lines、anchor-a-out.txt、curl-body.txt、curl-head.txt、fwd-driver.ps1、
+    fwd-seq-out.txt、gen-driver.ps1、gen-seq-out.txt、gen-upload-src.txt、ls-anch-out.txt、
+    mcpdrive.ps1、mcp-driver-r4.ps1、mix2701-cat.txt、mix2701-old.txt、mix2702-new.txt、
+    mix2711-entryb.txt、mix2711-old.txt、mix2712b-new.txt、mix2712c-new.txt、mix2712-new.txt、
+    mix2721-old.txt、mix2721-old2.txt、mix2722-new.txt、mix2722-relay.txt、mix2751-old.txt、
+    mix2753-expire.txt、mix2753-gen1.txt、mix2753-gen2.txt、mix2754-client.html、
+    mix2754-home.html、mix2754-ui-evidence.txt、mix2755-cache.err、mix2755-cache.out、
+    mix2755-cache-clean.err、mix2755-cache-clean.out、mix2755-clean.cmd、mix2755-doctor.err、
+    mix2755-doctor.out、mix2755-doctor-clean.err、mix2755-doctor-clean.out、mix2755-out.txt、
+    mix2755-update.err、mix2755-update.out、mix2755-update-clean.err、mix2755-update-clean.out、
+    mixnew-ls.txt、new-mcp-driver.ps1、new-proj-token.txt、new-tools.txt、old-mcp-driver.ps1、
+    old-tools.txt、pair-anch.err、pair-anch.out、pair-new.err、pair-new.out、
+    pair-old.err、pair-old.out。
+随后按最深目录优先移除 instances\e2e279-new、instances、ssh-manager 与各一次性根目录。
+清理后上述 8 个对象全部不存在；根目录内已无 e2e279 或 v0211 命名路径；
+bin-v0211 / bin-rc9 一次性 sshmgr.exe 进程数 0。
+```
+
+【其他机器与本机清理】
+```text
+Linux 受管服务器 A：e2e279 命名文件/目录 0；一次性 sshmgr ui/serve/mcp 进程 0；
+  e2e279 授权行已在前一轮清理，本轮复核计数 0；e2e278-linux 隔离客户端根目录保留。
+NAS A：既有共享挂载仍可查看，sshmgr-e2e-20261114 一次性目录命中 0。
+Windows 受管服务器 A：一次性根目录不存在；sshmgr 进程数 0。
+本机：v0.21.1 下载校验目录、临时 HTTP 分发目录与 12 个旧版本/辅助文件逐个删除；
+  分发辅助根目录不存在；任务指定的本机临时 HTTP 端口无监听；python3 -m http.server 进程数 0。
+泄漏检查临时副本：演练权威端机器上 68 个文件逐个删除，extract 与检查根目录逐层移除；
+  本机压缩包与 21 个分块文件删除。
+```
+
+【清理后保留状态】
+```text
+演练权威端：rc9 serve 服务 active / HEALTHY，版本 0.22.0-rc9。
+Linux 受管服务器 A：rc9 版本；e2e278-linux 一次性客户端实例与隔离目录保留；无遗留进程。
+工作机 1：C:\sshmgr-e2e-20261114\ 保留（含 bin-rc9）；e2e278-win 实例与 vault/config/dek 保留；
+  该目录中早期轮次保留的 bin、bin-rc7、bin-rc8、manual272、work、三份历史安装包未动。
+演练权威端共享前置数据、NAS 挂载与既有 e2e278 设备码、项目令牌未清理。
+两个应保留客户端实例的最终权威端仍在演练权威端 rc9 服务上。
+```
+
+【工作机 1 生产目录指纹（收尾后）】
+```text
+文件数=5
+整体 SHA-256=ad4edf0d837b734178a1231610f94370fa7d2ed053ebe5db580734834376566c
+与本记录开头指纹一致；本轮所有工作机 1 操作未改动生产目录。
+```
+
+【机密值命中计数（只看计数，值不入证据）】
+```text
+检索范围：本运行记录、docs/backlog.md、#279 上一轮运行目录、#279 本轮收尾运行目录；
+  归档展开后共 46 个文件表示（含 macOS 归档元数据副本）。
+通用机密项测试值：非零文件 0，总命中 0。
+NAS 一次性账号密码：非零文件 0，总命中 0。
+检索命令在演练权威端机器上以 root 只读模式执行；临时归档与分块用后逐文件删除。
+```
+
+【脱敏 grep】
+```text
+仓库证据：本运行记录命中 0。docs/backlog.md 保留 1 条历史欠账第 17 条原文，
+  其中写出了默认服务端口号，为既有历史内容，非本轮新增，未改动。
+两个运行目录为私有输入与执行日志，Brief 本身按要求包含真实访问标识；本轮快照合计命中
+  1113 行、15 个文件。这不计入公开运行记录脱敏结论；两个机密测试值在这些文件中命中均为 0。
+```
