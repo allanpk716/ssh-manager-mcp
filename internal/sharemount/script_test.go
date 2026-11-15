@@ -44,6 +44,8 @@ func TestLinuxFixedScriptsScanSampleFstabUnderPOSIXShell(t *testing.T) {
 	directory := t.TempDir()
 	fstabPath := filepath.Join(directory, "fstab")
 	procMountsPath := filepath.Join(directory, "proc-mounts")
+	revokedMarkerPath := filepath.Join(directory, "datasets.revoked")
+	invalidMarkerPath := filepath.Join(directory, "invalid.revoked")
 	legacyLine := "//192.0.2.10/datasets /mnt/sshmgr/datasets cifs credentials=/etc/sshmgr/shares/share.credentials,vers=3.1.1,sshmgr-share=datasets,sshmgr-version=6,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
 	currentLine := "//192.0.2.10/archive /mnt/sshmgr/archive cifs credentials=/etc/sshmgr/shares/archive.credentials,vers=3.0,x-sshmgr-share=archive,x-sshmgr-version=7,_netdev,nofail,x-systemd.automount,x-systemd.mount-timeout=10 0 0"
 	ordinaryCIFSLine := "//owner.example/other /mnt/other cifs credentials=/etc/owner.credentials,vers=3.1.1 0 0"
@@ -53,6 +55,14 @@ func TestLinuxFixedScriptsScanSampleFstabUnderPOSIXShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(procMountsPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(revokedMarkerPath,
+		[]byte("sshmgr-share=datasets;sshmgr-version=25;sshmgr-state=revoked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalidMarkerPath,
+		[]byte("sshmgr-share=invalid;sshmgr-version=25;sshmgr-state=active\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,13 +91,15 @@ func TestLinuxFixedScriptsScanSampleFstabUnderPOSIXShell(t *testing.T) {
 		for _, want := range []string{
 			"SSHMGR-LINUX-ENUM entry=datasets version=6",
 			"SSHMGR-LINUX-ENUM entry=archive version=7",
+			"SSHMGR-LINUX-ENUM revoked=datasets version=25",
 		} {
 			if !strings.Contains(string(output), want) {
 				t.Fatalf("固定枚举脚本输出缺少 %q：%q\n脚本：\n%s", want, string(output), command)
 			}
 		}
-		if strings.Contains(string(output), "entry=other") {
-			t.Fatalf("固定枚举脚本把 owner 手写 CIFS 行当作 sshmgr 条目：%q", string(output))
+		if strings.Contains(string(output), "entry=other") ||
+			strings.Contains(string(output), "revoked=invalid") {
+			t.Fatalf("固定枚举脚本把非 sshmgr 内容当作管理痕迹：%q", string(output))
 		}
 	})
 }
@@ -165,9 +177,19 @@ func TestDarwinMountTableScriptsAcceptFirmlinkPaths(t *testing.T) {
 	shell := posixShellForTest(t)
 	directory := t.TempDir()
 	mapPath := filepath.Join(directory, "auto_share")
+	revokedMarkerPath := filepath.Join(directory, "datasets.revoked")
+	invalidMarkerPath := filepath.Join(directory, "invalid.revoked")
 	if err := os.WriteFile(mapPath, []byte(
 		"# sshmgr-share=datasets;sshmgr-version=7\ndatasets -fstype=smbfs ://mount-user:password@192.0.2.10/datasets\n",
 	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(revokedMarkerPath,
+		[]byte("sshmgr-share=datasets;sshmgr-version=24;sshmgr-state=revoked\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(invalidMarkerPath,
+		[]byte("sshmgr-share=invalid;sshmgr-version=24;sshmgr-state=active\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	mountFunction := `mount() {
@@ -200,6 +222,12 @@ mount_point='/mnt/sshmgr/datasets'
 		}
 		if !strings.Contains(string(output), "SSHMGR-DARWIN-ENUM mount=datasets") {
 			t.Fatalf("固定枚举脚本应识别 firmlink 挂载点：%q\n脚本：\n%s", string(output), command)
+		}
+		if !strings.Contains(string(output), "SSHMGR-DARWIN-ENUM revoked=datasets version=24") {
+			t.Fatalf("固定枚举脚本应识别撤销标记：%q\n脚本：\n%s", string(output), command)
+		}
+		if strings.Contains(string(output), "revoked=invalid") {
+			t.Fatalf("固定枚举脚本不应把非撤销状态当作撤销标记：%q", string(output))
 		}
 	})
 
@@ -326,6 +354,77 @@ printf 'version=%s\n' "$sshmgr_revoked_version"
 				}
 			})
 		}
+	}
+}
+
+func TestRevokedMarkerCleanupFunctionDeletesOnlyMatchingMarker(t *testing.T) {
+	shell := posixShellForTest(t)
+	tests := []struct {
+		name       string
+		marker     string
+		wantDelete bool
+	}{
+		{
+			name:       "匹配共享名的撤销标记会删除",
+			marker:     "sshmgr-share=datasets;sshmgr-version=25;sshmgr-state=revoked\n",
+			wantDelete: true,
+		},
+		{
+			name:       "共享名不匹配时不删除",
+			marker:     "sshmgr-share=archive;sshmgr-version=25;sshmgr-state=revoked\n",
+			wantDelete: false,
+		},
+		{
+			name:       "状态不是撤销时不删除",
+			marker:     "sshmgr-share=datasets;sshmgr-version=25;sshmgr-state=active\n",
+			wantDelete: false,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			directory := t.TempDir()
+			markerPath := filepath.Join(directory, "datasets.revoked")
+			otherMarkerPath := filepath.Join(directory, "archive.revoked")
+			if err := os.WriteFile(markerPath, []byte(testCase.marker), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(otherMarkerPath,
+				[]byte("sshmgr-share=archive;sshmgr-version=26;sshmgr-state=revoked\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := `set -eu
+sshmgr_expected_share=datasets
+` + revokedMarkerFunctionsScript() + `
+if sshmgr_cleanup_revoked_marker ` + markerPath + ` "$sshmgr_expected_share"; then
+  printf 'cleaned=yes version=%s\n' "$sshmgr_revoked_version"
+else
+  exit 89
+fi
+`
+			output, err := exec.Command(shell, "-c", script).CombinedOutput()
+			if testCase.wantDelete {
+				if err != nil {
+					t.Fatalf("清理匹配撤销标记失败：%v\n%s\n脚本：\n%s", err, output, script)
+				}
+				if !strings.Contains(string(output), "cleaned=yes version=25") {
+					t.Fatalf("清理输出 = %q", string(output))
+				}
+				if _, statErr := os.Stat(markerPath); !os.IsNotExist(statErr) {
+					t.Fatalf("匹配的撤销标记应被删除：%v", statErr)
+				}
+			} else {
+				exitErr, ok := err.(*exec.ExitError)
+				if !ok || exitErr.ExitCode() != 89 {
+					t.Fatalf("不匹配标记应拒绝清理：%v\n%s\n脚本：\n%s", err, output, script)
+				}
+				if _, statErr := os.Stat(markerPath); statErr != nil {
+					t.Fatalf("不匹配的撤销标记不应被删除：%v", statErr)
+				}
+			}
+			if _, statErr := os.Stat(otherMarkerPath); statErr != nil {
+				t.Fatalf("其他共享名的撤销标记不应被删除：%v", statErr)
+			}
+		})
 	}
 }
 

@@ -200,20 +200,14 @@ done
 // revokedMarkerEnumerateScript 生成撤销标记枚举片段。标记内容本身使用百
 // 分号编码的共享名，输出原样保留这一编码，由 Go 侧统一解码。
 func revokedMarkerEnumerateScript(glob, marker string) string {
-	return `for sshmgr_file in ` + glob + `; do
+	return revokedMarkerFunctionsScript() + `for sshmgr_file in ` + glob + `; do
   [ -f "$sshmgr_file" ] || continue
-  sshmgr_marker=$(head -n 1 "$sshmgr_file" 2>/dev/null || true)
-  case "$sshmgr_marker" in
-    'sshmgr-share='*';sshmgr-version='*[0-9]';sshmgr-state=revoked')
-      sshmgr_marker_share=${sshmgr_marker#sshmgr-share=}
-      sshmgr_marker_share=${sshmgr_marker_share%%;*}
-      sshmgr_marker_version=${sshmgr_marker#*';sshmgr-version='}
-      sshmgr_marker_version=${sshmgr_marker_version%%';*'}
-      case "$sshmgr_marker_version" in ''|*[!0-9]*) continue ;; esac
-      printf '%s revoked=%s version=%s\n' '` + marker + `' \
-        "$sshmgr_marker_share" "$sshmgr_marker_version"
-    ;;
-  esac
+  sshmgr_revoked_content=''
+  IFS= read -r sshmgr_revoked_content < "$sshmgr_file" || [ -n "$sshmgr_revoked_content" ] || continue
+  if sshmgr_parse_revoked_marker; then
+    printf '%s revoked=%s version=%s\n' '` + marker + `' \
+      "$sshmgr_revoked_share" "$sshmgr_revoked_version"
+  fi
 done
 `
 }

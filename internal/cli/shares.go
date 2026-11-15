@@ -305,7 +305,8 @@ func sharesUnmountCmd() *cobra.Command {
 		Long: `在一台 Linux 或 macOS 服务器上删除共享存储的持久挂载配置，再卸载挂载点。
 
 服务器仍在可挂载范围内时，agent 之后仍可能重新挂载；彻底撤下授权请使用 shares revoke。
-服务器已移出范围或共享登记已删除时，命令会留下不含机密的撤销标记。`,
+服务器已移出范围或共享登记已删除时，命令会留下不含机密的撤销标记；若目标只剩这个撤销标记，
+命令会清理该标记。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireSharesVault()
 			if err != nil {
@@ -338,8 +339,13 @@ func sharesUnmountCmd() *cobra.Command {
 				return err
 			}
 			if result.Result == "success" {
-				fmt.Fprintf(out, "共享存储 %s 已从服务器 %s 卸载；版本号：%d\n",
-					result.ShareName, result.ServerName, result.Version)
+				if result.CleanedRevokedMarkerOnly {
+					fmt.Fprintf(out, "共享存储 %s 在服务器 %s 上的撤销标记已清理；版本号：%d\n",
+						result.ShareName, result.ServerName, result.Version)
+				} else {
+					fmt.Fprintf(out, "共享存储 %s 已从服务器 %s 卸载；版本号：%d\n",
+						result.ShareName, result.ServerName, result.Version)
+				}
 			} else {
 				fmt.Fprintf(out, "共享存储 %s 的配置已删除，但服务器 %s 上挂载被占用并保留；结果：%s；版本号：%d\n",
 					result.ShareName, result.ServerName, result.Result, result.Version)

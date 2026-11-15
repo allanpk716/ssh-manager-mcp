@@ -36,6 +36,7 @@ type UnmountRequest struct {
 	Version                   int64
 	Force                     bool
 	WriteRevokedMarker        bool
+	CleanupRevokedMarkerOnly  bool
 	AllowMissingConfiguration bool
 	SkipUnmount               bool
 	RejectRemoteVersionNewer  bool
@@ -51,10 +52,11 @@ type BusyProcess struct {
 
 // UnmountResult 是远端固定命令的安全结论，不包含共享地址、账号或密码。
 type UnmountResult struct {
-	System        string
-	Result        string
-	Version       int64
-	BusyProcesses []BusyProcess
+	System                   string
+	Result                   string
+	Version                  int64
+	CleanedRevokedMarkerOnly bool
+	BusyProcesses            []BusyProcess
 }
 
 // Unmount 删除目标服务器上属于指定共享的持久挂载配置，再卸载挂载点。
@@ -180,6 +182,10 @@ func buildLinuxUnmountCommand(request UnmountRequest) string {
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
 	}
+	cleanupRevokedMarkerOnly := "no"
+	if request.CleanupRevokedMarkerOnly {
+		cleanupRevokedMarkerOnly = "yes"
+	}
 	return `set -eu
 ` + sharedStorageDirectoryLockScript(sharedStorageLockPath, 30, 87, linuxUnmountMarker) + `
 share_name=` + shareName + `
@@ -190,6 +196,7 @@ sshmgr_force=` + force + `
 sshmgr_skip_unmount=` + skipUnmount + `
 sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
+sshmgr_cleanup_revoked_marker_only=` + cleanupRevokedMarkerOnly + `
 sshmgr_allow_missing_configuration=` + allowMissingConfiguration + `
 sshmgr_expected_credential=` + sshbroker.POSIXShellQuote(linuxCredentialPath(request.ShareID)) + `
 sshmgr_fstab_candidate=''
@@ -200,6 +207,7 @@ sshmgr_cleanup() {
 trap sshmgr_cleanup EXIT HUP INT TERM
 
 ` + linuxFstabOptionParserScript() + `
+` + revokedMarkerFunctionsScript() + `
 sshmgr_managed_count=0
 sshmgr_remote_version=0
 sshmgr_credential_file=''
@@ -246,6 +254,14 @@ if [ "$sshmgr_managed_count" -eq 0 ] && [ "$sshmgr_credential_file" = '' ]; then
 fi
 if [ "$sshmgr_managed_count" -eq 0 ] &&
    [ "$sshmgr_credential_file" = '' ] && [ "$sshmgr_mounted" = no ]; then
+  if [ "$sshmgr_cleanup_revoked_marker_only" = yes ] && [ -r ` + revokedMarker + ` ]; then
+    if sshmgr_cleanup_revoked_marker ` + revokedMarker + ` "$sshmgr_expected_share"; then
+      echo ` + linuxUnmountMarker + ` result=success cleaned_revoked_marker=yes version=$sshmgr_revoked_version
+      exit 0
+    fi
+    echo ` + linuxUnmountMarker + ` not-managed >&2
+    exit 89
+  fi
   if [ "$sshmgr_write_revoked_marker" = yes ]; then
     sshmgr_write_version=$sshmgr_version
     if [ "$sshmgr_write_version" -eq 0 ]; then
@@ -378,6 +394,10 @@ func buildDarwinUnmountCommand(request UnmountRequest) string {
 	if request.WriteRevokedMarker {
 		writeMarker = "yes"
 	}
+	cleanupRevokedMarkerOnly := "no"
+	if request.CleanupRevokedMarkerOnly {
+		cleanupRevokedMarkerOnly = "yes"
+	}
 	return `set -eu
 ` + sharedStorageDirectoryLockScript(sharedStorageLockPath, 30, 87, darwinUnmountMarker) + `
 share_name=` + shareName + `
@@ -388,6 +408,7 @@ sshmgr_force=` + force + `
 sshmgr_skip_unmount=` + skipUnmount + `
 sshmgr_reject_remote_version_newer=` + rejectRemoteVersionNewer + `
 sshmgr_write_revoked_marker=` + writeMarker + `
+sshmgr_cleanup_revoked_marker_only=` + cleanupRevokedMarkerOnly + `
 sshmgr_allow_missing_configuration=` + allowMissingConfiguration + `
 sshmgr_map_candidate=''
 sshmgr_auto_candidate=''
@@ -398,6 +419,7 @@ sshmgr_cleanup() {
 }
 trap sshmgr_cleanup EXIT HUP INT TERM
 
+` + revokedMarkerFunctionsScript() + `
 if [ ! -f /etc/sshmgr/auto_share ]; then
   install -d -m 700 /etc/sshmgr
   : > /etc/sshmgr/auto_share
@@ -429,6 +451,14 @@ if [ "$sshmgr_managed_count" -eq 0 ]; then
   sshmgr_mounted=no
 fi
 if [ "$sshmgr_managed_count" -eq 0 ] && [ "$sshmgr_mounted" = no ]; then
+  if [ "$sshmgr_cleanup_revoked_marker_only" = yes ] && [ -r ` + revokedMarker + ` ]; then
+    if sshmgr_cleanup_revoked_marker ` + revokedMarker + ` "$sshmgr_expected_share"; then
+      echo ` + darwinUnmountMarker + ` result=success cleaned_revoked_marker=yes version=$sshmgr_revoked_version
+      exit 0
+    fi
+    echo ` + darwinUnmountMarker + ` not-managed >&2
+    exit 89
+  fi
   if [ "$sshmgr_write_revoked_marker" = yes ]; then
     sshmgr_write_version=$sshmgr_version
     if [ "$sshmgr_write_version" -eq 0 ]; then
@@ -559,6 +589,10 @@ func parseUnmountOutput(stdout, marker, system string) (*UnmountResult, error) {
 							ErrUnmountOutputInvalid, value)
 					}
 					result.Version = version
+				case "cleaned_revoked_marker":
+					if value == "yes" {
+						result.CleanedRevokedMarkerOnly = true
+					}
 				}
 			}
 			continue

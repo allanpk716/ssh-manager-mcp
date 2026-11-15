@@ -176,6 +176,30 @@ func TestUnmountCleansResidueAfterRevokeWithoutUnmount(t *testing.T) {
 		t.Fatalf("清理后的残留检查应只剩撤销标记：%+v", row)
 	}
 
+	markerCleanup, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+		Share: "datasets", Server: "linux-web",
+	})
+	if err != nil {
+		t.Fatalf("清理撤销标记: %v", err)
+	}
+	state := fixture.linux.State()
+	if markerCleanup.Result != "success" || !markerCleanup.CleanedRevokedMarkerOnly ||
+		state.RevokedMarker != "" || state.RevokedMarkerPath != "" {
+		t.Fatalf("撤销标记清理结果 = %+v，服务器状态 = %+v", markerCleanup, state)
+	}
+	if !containsText(markerCleanup.Notices, "目标服务器上只剩撤销标记；已删除这个撤销标记") {
+		t.Fatalf("缺少撤销标记清理说明：%+v", markerCleanup)
+	}
+
+	report, err = fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+	if err != nil {
+		t.Fatalf("第三次残留检查: %v", err)
+	}
+	row = residueResultFor(report, "linux-web")
+	if row == nil || row.Status != sharemanage.ResidueStatusNoResidue || len(row.Findings) != 0 {
+		t.Fatalf("清理撤销标记后的残留检查应无残留：%+v", row)
+	}
+
 	_, err = fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
 		Share: "datasets", Server: "linux-web",
 	})
@@ -203,6 +227,121 @@ func TestUnmountCleansLinuxCredentialFileWithoutConfiguration(t *testing.T) {
 	state := fixture.linux.State()
 	if result.Result != "success" || state.Credential != "" || state.Mounted {
 		t.Fatalf("只剩凭据文件时的结果 = %+v，服务器状态 = %+v", result, state)
+	}
+}
+
+func TestUnmountCleansOnlyRevokedMarkerAfterRemoteCleanup(t *testing.T) {
+	tests := []struct {
+		name   string
+		system string
+		server string
+	}{
+		{name: "Linux", system: "linux", server: "linux-web"},
+		{name: "macOS", system: "darwin", server: "darwin-web"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newSystemUnmountFixture(t, testCase.system, false)
+			if _, err := fixture.manager.Revoke(context.Background(), sharemanage.RevokeRequest{
+				Share: "datasets", Server: testCase.server,
+			}); err != nil {
+				t.Fatalf("撤销: %v", err)
+			}
+
+			report, err := fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+			if err != nil {
+				t.Fatalf("清理前残留检查: %v", err)
+			}
+			row := residueResultFor(report, testCase.server)
+			if row == nil || row.Status != sharemanage.ResidueStatusResidue ||
+				len(row.Findings) != 1 || !row.Findings[0].HasMount {
+				t.Fatalf("真实残留仍应报告挂载：%+v", row)
+			}
+
+			firstUnmount, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+				Share: "datasets", Server: testCase.server,
+			})
+			if err != nil {
+				t.Fatalf("清理真实残留: %v", err)
+			}
+			if firstUnmount.Result != "success" || firstUnmount.CleanedRevokedMarkerOnly {
+				t.Fatalf("真实残留清理结果 = %+v", firstUnmount)
+			}
+
+			report, err = fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+			if err != nil {
+				t.Fatalf("只剩标记时残留检查: %v", err)
+			}
+			row = residueResultFor(report, testCase.server)
+			if row == nil || row.Status != sharemanage.ResidueStatusMarkerOnly ||
+				len(row.Findings) != 1 || !row.Findings[0].RevokedMarkerOnly {
+				t.Fatalf("只剩撤销标记时的残留检查 = %+v", row)
+			}
+
+			markerCleanup, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+				Share: "datasets", Server: testCase.server,
+			})
+			if err != nil {
+				t.Fatalf("清理撤销标记: %v", err)
+			}
+			if markerCleanup.Result != "success" || !markerCleanup.CleanedRevokedMarkerOnly ||
+				!containsText(markerCleanup.Notices, "目标服务器上只剩撤销标记；已删除这个撤销标记") {
+				t.Fatalf("撤销标记清理结果 = %+v", markerCleanup)
+			}
+
+			report, err = fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
+			if err != nil {
+				t.Fatalf("清理后残留检查: %v", err)
+			}
+			row = residueResultFor(report, testCase.server)
+			if row == nil || row.Status != sharemanage.ResidueStatusNoResidue || len(row.Findings) != 0 {
+				t.Fatalf("清理撤销标记后应无残留：%+v", row)
+			}
+		})
+	}
+}
+
+func TestUnmountDoesNotDeleteMismatchedRevokedMarker(t *testing.T) {
+	tests := []struct {
+		name   string
+		system string
+		server string
+	}{
+		{name: "Linux", system: "linux", server: "linux-web"},
+		{name: "macOS", system: "darwin", server: "darwin-web"},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			fixture := newSystemUnmountFixture(t, testCase.system, false)
+			mismatch := "sshmgr-share=archive;sshmgr-version=9;sshmgr-state=revoked"
+			if testCase.system == "darwin" {
+				fixture.darwin.MapLines = nil
+				fixture.darwin.AutoMasterLines = nil
+				fixture.darwin.Mounted = false
+				fixture.darwin.RevokedMarker = mismatch
+				fixture.darwin.RevokedMarkerPath = "/etc/sshmgr/datasets.revoked"
+			} else {
+				fixture.linux.FstabLines = nil
+				fixture.linux.Credential = ""
+				fixture.linux.Mounted = false
+				fixture.linux.RevokedMarker = mismatch
+				fixture.linux.RevokedMarkerPath = "/etc/sshmgr/shares/datasets.revoked"
+			}
+
+			_, err := fixture.manager.Unmount(context.Background(), sharemanage.UnmountRequest{
+				Share: "datasets", Server: testCase.server,
+			})
+			if !errors.Is(err, sharemount.ErrUnmountNotManaged) {
+				t.Fatalf("共享名不匹配时的卸载错误 = %v", err)
+			}
+			if testCase.system == "darwin" {
+				if fixture.darwin.State().RevokedMarker != mismatch {
+					t.Fatal("共享名不匹配的撤销标记被删除")
+				}
+			} else if fixture.linux.State().RevokedMarker != mismatch {
+				t.Fatal("共享名不匹配的撤销标记被删除")
+			}
+		})
 	}
 }
 

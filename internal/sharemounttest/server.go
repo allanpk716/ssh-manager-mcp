@@ -18,6 +18,35 @@ func requestedVersion(command string) int64 {
 	return 0
 }
 
+func requestedExpectedShare(command string) string {
+	for _, field := range strings.Fields(command) {
+		if value, found := strings.CutPrefix(field, "sshmgr_expected_share="); found {
+			return strings.Trim(value, "'")
+		}
+	}
+	return ""
+}
+
+func revokedMarkerContent(content string) (share string, version int64, valid bool) {
+	fields := strings.Split(content, ";")
+	if len(fields) != 3 {
+		return "", 0, false
+	}
+	shareValue, found := strings.CutPrefix(fields[0], "sshmgr-share=")
+	if !found || shareValue == "" {
+		return "", 0, false
+	}
+	versionValue, found := strings.CutPrefix(fields[1], "sshmgr-version=")
+	if !found {
+		return "", 0, false
+	}
+	parsedVersion, err := strconv.ParseInt(versionValue, 10, 64)
+	if err != nil || parsedVersion <= 0 || fields[2] != "sshmgr-state=revoked" {
+		return "", 0, false
+	}
+	return shareValue, parsedVersion, true
+}
+
 func revokedMarker(
 	shareName string, currentVersion int64, command, directory string,
 ) (content, path string, version int64) {

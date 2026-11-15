@@ -66,6 +66,64 @@ func parseSharedStorageMarkerOptions(marker string) (SharedStorageMarker, error)
 	return SharedStorageMarker{Share: shareName, Version: version}, nil
 }
 
+// revokedMarkerFunctionsScript 生成撤销标记的 POSIX shell 解析函数。撤销
+// 标记按分号分成三个字段；共享名已按网址路径规则百分号编码，因此分号不
+// 会出现在共享名里。按字段拆分而不用参数展开截取：旧实现写成
+// ${版本%%';*'}，引号让星号成了字面字符，版本号带上「;sshmgr-state=revoked」
+// 后被判为非数字，合法标记因此从不输出。
+func revokedMarkerFunctionsScript() string {
+	return `sshmgr_parse_revoked_marker() {
+  sshmgr_revoked_share=''
+  sshmgr_revoked_version=''
+  sshmgr_saved_ifs=$IFS
+  IFS=';'
+  set -f
+  set -- $sshmgr_revoked_content
+  sshmgr_revoked_field_count=$#
+  IFS=$sshmgr_saved_ifs
+  set +f
+  [ "$sshmgr_revoked_field_count" -eq 3 ] || return 1
+  case "$1" in
+    'sshmgr-share='?*)
+      sshmgr_revoked_share=${1#sshmgr-share=}
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  case "$2" in
+    'sshmgr-version='*)
+      sshmgr_revoked_version=${2#sshmgr-version=}
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  case "$sshmgr_revoked_version" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  [ "$3" = sshmgr-state=revoked ] || return 1
+  return 0
+}
+
+sshmgr_cleanup_revoked_marker() {
+  sshmgr_cleanup_marker_path=$1
+  sshmgr_cleanup_expected_share=$2
+  sshmgr_revoked_content=''
+  [ -r "$sshmgr_cleanup_marker_path" ] || return 1
+  IFS= read -r sshmgr_revoked_content < "$sshmgr_cleanup_marker_path" ||
+    [ -n "$sshmgr_revoked_content" ] || return 1
+  if ! sshmgr_parse_revoked_marker; then
+    sshmgr_revoked_content=''
+    return 1
+  fi
+  [ "$sshmgr_revoked_share" = "$sshmgr_cleanup_expected_share" ] || return 1
+  rm -f "$sshmgr_cleanup_marker_path" || return 1
+  return 0
+}
+`
+}
+
 // revokedMarkerGuardScript 生成撤销标记检查片段。固定挂载命令必须在同一
 // 把服务器级挂载锁内读取标记；标记版本号不低于本次共享存储版本号时拒
 // 绝。标记不合法同样拒绝，避免把无法识别的撤销状态误当成可覆盖。

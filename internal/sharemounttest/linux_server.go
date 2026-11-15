@@ -89,6 +89,13 @@ func (s *LinuxServer) Handler(command string, stdin io.Reader) (string, string, 
 		}
 		hasConfiguration := s.hasManagedFstabEntry()
 		if !hasConfiguration && s.Credential == "" && !s.Mounted {
+			if strings.Contains(command, "sshmgr_cleanup_revoked_marker_only=yes") &&
+				s.RevokedMarker != "" {
+				if output, cleaned := s.cleanupRevokedMarker(command); cleaned {
+					return output, "", 0
+				}
+				return "", LinuxUnmountMarker + " not-managed", 89
+			}
 			if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
 				s.writeRevokedMarker(command)
 				if strings.Contains(command, "sshmgr_allow_missing_configuration=yes") {
@@ -259,6 +266,22 @@ func (s *LinuxServer) writeRevokedMarker(command string) {
 	s.RevokedMarkerPath = path
 	s.ShareVersion = version
 	s.History = append(s.History, "write-revoked-marker")
+}
+
+func (s *LinuxServer) cleanupRevokedMarker(command string) (string, bool) {
+	share, version, valid := revokedMarkerContent(s.RevokedMarker)
+	if !valid || share != requestedExpectedShare(command) {
+		return "", false
+	}
+	output := fmt.Sprintf(
+		"%s result=success cleaned_revoked_marker=yes version=%d\n",
+		LinuxUnmountMarker, version,
+	)
+	s.RevokedMarker = ""
+	s.RevokedMarkerPath = ""
+	s.ShareVersion = version
+	s.History = append(s.History, "cleanup-revoked-marker")
+	return output, true
 }
 
 func (s *LinuxServer) unmount() {

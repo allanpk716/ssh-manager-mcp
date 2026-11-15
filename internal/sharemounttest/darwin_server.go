@@ -79,6 +79,13 @@ func (s *DarwinServer) Handler(command string, stdin io.Reader) (string, string,
 		}
 		hasConfiguration := s.hasManagedMapEntry()
 		if !hasConfiguration && !s.Mounted {
+			if strings.Contains(command, "sshmgr_cleanup_revoked_marker_only=yes") &&
+				s.RevokedMarker != "" {
+				if output, cleaned := s.cleanupRevokedMarker(command); cleaned {
+					return output, "", 0
+				}
+				return "", DarwinUnmountMarker + " not-managed", 89
+			}
 			if strings.Contains(command, "sshmgr_write_revoked_marker=yes") {
 				s.writeRevokedMarker(command)
 				if strings.Contains(command, "sshmgr_allow_missing_configuration=yes") {
@@ -256,6 +263,22 @@ func (s *DarwinServer) writeRevokedMarker(command string) {
 	s.RevokedMarkerPath = path
 	s.ShareVersion = version
 	s.History = append(s.History, "write-revoked-marker")
+}
+
+func (s *DarwinServer) cleanupRevokedMarker(command string) (string, bool) {
+	share, version, valid := revokedMarkerContent(s.RevokedMarker)
+	if !valid || share != requestedExpectedShare(command) {
+		return "", false
+	}
+	output := fmt.Sprintf(
+		"%s result=success cleaned_revoked_marker=yes version=%d\n",
+		DarwinUnmountMarker, version,
+	)
+	s.RevokedMarker = ""
+	s.RevokedMarkerPath = ""
+	s.ShareVersion = version
+	s.History = append(s.History, "cleanup-revoked-marker")
+	return output, true
 }
 
 func (s *DarwinServer) unmount() {

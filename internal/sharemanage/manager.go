@@ -67,14 +67,15 @@ type UnmountRequest struct {
 
 // UnmountResult 是一次卸载的安全结论，不包含共享地址、账号或密码。
 type UnmountResult struct {
-	ShareName     string
-	ServerID      string
-	ServerName    string
-	Result        string
-	Version       int64
-	Force         bool
-	Notices       []string
-	BusyProcesses []sharemount.BusyProcess
+	ShareName                string
+	ServerID                 string
+	ServerName               string
+	Result                   string
+	Version                  int64
+	Force                    bool
+	CleanedRevokedMarkerOnly bool
+	Notices                  []string
+	BusyProcesses            []sharemount.BusyProcess
 }
 
 // Unmount 删除一台 Linux 或 macOS 服务器上的共享存储配置，再卸载挂载
@@ -104,7 +105,7 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 	}
 	if models.NormalizeShellType(string(server.ShellType)).IsWindows() {
 		_ = m.writeUnmountAudit(server.Name, shareName, version, request.Force,
-			"windows-unsupported", true, request.Source)
+			"windows-unsupported", false, true, request.Source)
 		return nil, ErrWindowsUnmountUnsupported
 	}
 	shareID := ""
@@ -115,6 +116,7 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 	remote, remoteErr := m.mounter.Unmount(ctx, sharemount.UnmountRequest{
 		Server: server, ShareName: shareName, ShareID: shareID, Version: version,
 		Force: request.Force, WriteRevokedMarker: share == nil || !inRange,
+		CleanupRevokedMarkerOnly: true,
 	})
 	result := &UnmountResult{
 		ShareName: shareName, ServerID: server.ID, ServerName: server.Name,
@@ -124,6 +126,11 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 		result.Result = remote.Result
 		result.Version = remote.Version
 		result.BusyProcesses = remote.BusyProcesses
+		result.CleanedRevokedMarkerOnly = remote.CleanedRevokedMarkerOnly
+		if remote.CleanedRevokedMarkerOnly {
+			result.Notices = append(result.Notices,
+				"目标服务器上只剩撤销标记；已删除这个撤销标记，未发现挂载配置、凭据文件或挂载")
+		}
 		if inRange && remote.Result == "success" {
 			result.Notices = append(result.Notices,
 				"服务器仍在可挂载范围内，agent 之后仍可能重新挂载；彻底撤下需先取消勾选，命令行等价面是 shares revoke")
@@ -131,11 +138,13 @@ func (m *Manager) Unmount(ctx context.Context, request UnmountRequest) (*Unmount
 	}
 	if remoteErr != nil {
 		_ = m.writeUnmountAudit(server.Name, shareName, version,
-			request.Force, unmountAuditResult(remoteErr, remote), true, request.Source)
+			request.Force, unmountAuditResult(remoteErr, remote),
+			remote != nil && remote.CleanedRevokedMarkerOnly, true, request.Source)
 		return nil, remoteErr
 	}
 	if err := m.writeUnmountAudit(server.Name, shareName, remote.Version,
-		request.Force, remote.Result, false, request.Source); err != nil {
+		request.Force, remote.Result, remote.CleanedRevokedMarkerOnly, false,
+		request.Source); err != nil {
 		return nil, err
 	}
 	return result, nil
@@ -151,7 +160,8 @@ func sharedStorageHasMountableServer(share *models.SharedStorage, serverID strin
 }
 
 func (m *Manager) writeUnmountAudit(
-	serverName, shareName string, version int64, force bool, result string, failed bool,
+	serverName, shareName string, version int64, force bool, result string,
+	cleanedRevokedMarker, failed bool,
 	requestSource Source,
 ) error {
 	source := requestSource
@@ -163,6 +173,9 @@ func (m *Manager) writeUnmountAudit(
 	}
 	if version > 0 {
 		summary["version"] = version
+	}
+	if cleanedRevokedMarker {
+		summary["cleaned_revoked_marker"] = true
 	}
 	row := store.OwnerAuditRow("share-unmount", summary)
 	if failed {

@@ -72,6 +72,7 @@ func residueResultFor(report *sharemanage.ResidueReport, serverName string) *sha
 func TestResidueClassifiesMixedServers(t *testing.T) {
 	fixture := newResidueFixture(t)
 	darwinBefore := fixture.darwin.State()
+	darwinMarkerBefore := fixture.darwinMarker.State()
 	markerBefore := fixture.marker.State()
 
 	report, err := fixture.manager.Residue(context.Background(), sharemanage.ResidueRequest{})
@@ -95,6 +96,18 @@ func TestResidueClassifiesMixedServers(t *testing.T) {
 		markerFinding.HasCredentialFile || markerFinding.HasMount ||
 		markerFinding.CleanupCommand != "" || markerFinding.ShareName != "datasets" {
 		t.Fatalf("仅有撤销标记的发现 = %+v", markerFinding)
+	}
+
+	darwinMarkerOnly := residueResultFor(report, "darwin-marker")
+	if darwinMarkerOnly == nil || darwinMarkerOnly.Status != sharemanage.ResidueStatusMarkerOnly ||
+		darwinMarkerOnly.System != "darwin" || len(darwinMarkerOnly.Findings) != 1 {
+		t.Fatalf("macOS 仅有撤销标记服务器的结论 = %+v", darwinMarkerOnly)
+	}
+	darwinMarkerFinding := darwinMarkerOnly.Findings[0]
+	if !darwinMarkerFinding.RevokedMarkerOnly || darwinMarkerFinding.HasConfigEntry ||
+		darwinMarkerFinding.HasCredentialFile || darwinMarkerFinding.HasMount ||
+		darwinMarkerFinding.ShareName != "datasets" {
+		t.Fatalf("macOS 仅有撤销标记的发现 = %+v", darwinMarkerFinding)
 	}
 
 	deletedShare := residueResultFor(report, "darwin-out")
@@ -133,6 +146,12 @@ func TestResidueClassifiesMixedServers(t *testing.T) {
 	if len(markerAfter.History) != len(markerBefore.History) ||
 		markerAfter.RevokedMarker != markerBefore.RevokedMarker {
 		t.Fatalf("仅有撤销标记的服务器状态不应变化：before=%+v after=%+v", markerBefore, markerAfter)
+	}
+	darwinMarkerAfter := fixture.darwinMarker.State()
+	if len(darwinMarkerAfter.History) != len(darwinMarkerBefore.History) ||
+		darwinMarkerAfter.RevokedMarker != darwinMarkerBefore.RevokedMarker {
+		t.Fatalf("macOS 仅有撤销标记的服务器状态不应变化：before=%+v after=%+v",
+			darwinMarkerBefore, darwinMarkerAfter)
 	}
 }
 
@@ -253,14 +272,15 @@ func TestResidueWritesSafeOwnerAudit(t *testing.T) {
 }
 
 type residueFixture struct {
-	store   *store.Store
-	manager *sharemanage.Manager
-	out     *sharemounttest.LinuxServer
-	in      *sharemounttest.LinuxServer
-	marker  *sharemounttest.LinuxServer
-	darwin  *sharemounttest.DarwinServer
-	media   *sharemounttest.LinuxServer
-	offline *sharemounttest.LinuxServer
+	store        *store.Store
+	manager      *sharemanage.Manager
+	out          *sharemounttest.LinuxServer
+	in           *sharemounttest.LinuxServer
+	marker       *sharemounttest.LinuxServer
+	darwin       *sharemounttest.DarwinServer
+	darwinMarker *sharemounttest.DarwinServer
+	media        *sharemounttest.LinuxServer
+	offline      *sharemounttest.LinuxServer
 }
 
 func newResidueFixture(t *testing.T) residueFixture {
@@ -308,8 +328,10 @@ func newResidueFixture(t *testing.T) residueFixture {
 	media := &sharemounttest.LinuxServer{ShareName: "media"}
 	offline := &sharemounttest.LinuxServer{ShareName: "datasets"}
 	darwin := &sharemounttest.DarwinServer{ShareName: "archive"}
+	darwinMarker := &sharemounttest.DarwinServer{ShareName: "datasets"}
 
 	addServer("darwin-out", darwin.Handler)
+	addServer("darwin-marker", darwinMarker.Handler)
 	addServer("linux-in", in.Handler)
 	addServer("linux-marker", marker.Handler)
 	addServer("linux-media", media.Handler)
@@ -404,6 +426,9 @@ func newResidueFixture(t *testing.T) residueFixture {
 	marker.ShareVersion = 3
 	marker.RevokedMarker = "sshmgr-share=datasets;sshmgr-version=3;sshmgr-state=revoked"
 	marker.RevokedMarkerPath = "/etc/sshmgr/shares/datasets.revoked"
+	darwinMarker.ShareVersion = 24
+	darwinMarker.RevokedMarker = "sshmgr-share=datasets;sshmgr-version=24;sshmgr-state=revoked"
+	darwinMarker.RevokedMarkerPath = "/etc/sshmgr/datasets.revoked"
 
 	if _, err := st.DeleteSharedStorage("archive", store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -411,6 +436,7 @@ func newResidueFixture(t *testing.T) residueFixture {
 
 	return residueFixture{
 		store: st, manager: sharemanage.New(st),
-		out: out, in: in, marker: marker, darwin: darwin, media: media, offline: offline,
+		out: out, in: in, marker: marker, darwin: darwin, darwinMarker: darwinMarker,
+		media: media, offline: offline,
 	}
 }
