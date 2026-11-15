@@ -1154,7 +1154,7 @@ func TestAuthorityShareSensitiveWritesRequireRecentReverify(t *testing.T) {
 		{
 			name:         "单台卸载",
 			target:       "/ui/shares/" + fixture.shareID + "/unmount",
-			reverifyNext: "/ui/shares/" + fixture.shareID + "/unmount",
+			reverifyNext: "/ui/shares/" + fixture.shareID + "/unmount?server=" + url.QueryEscape(fixture.linuxID),
 			form:         url.Values{"server_id": {fixture.linuxID}},
 		},
 		{

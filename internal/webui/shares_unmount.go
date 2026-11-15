@@ -153,7 +153,11 @@ func (h *handler) handleShareUnmount(w http.ResponseWriter, r *http.Request, ide
 	case http.MethodGet, http.MethodHead:
 		h.handleShareUnmountPage(w, r, identifier)
 	case http.MethodPost:
-		if !h.requireRecentReverify(w, r, "/ui/shares/"+identifier+"/unmount") {
+		next := "/ui/shares/" + identifier + "/unmount"
+		if server := strings.TrimSpace(r.PostFormValue("server_id")); server != "" {
+			next += "?server=" + url.QueryEscape(server)
+		}
+		if !h.requireRecentReverify(w, r, next) {
 			return
 		}
 		h.handleShareUnmountPost(w, r, identifier)
