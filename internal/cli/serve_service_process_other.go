@@ -15,18 +15,18 @@ import (
 // future code path that accidentally calls it surfaces clearly.
 func serveProcessRunningWindows() bool { panic("unreachable on posix") }
 
-// serveProcessRunningPOSIX reports whether another sshmgr process is currently
-// running on Linux/macOS/etc. Scans /proc/<process number>/comm for an exact
-// match on "sshmgr" (Linux) and ignores this command's own process number —
-// on macOS /proc does not exist and this returns
-// false (best-effort; the other three status signals compensate).
+// serveProcessRunningPOSIX reports whether another `sshmgr serve` process is
+// currently running on Linux/macOS/etc. Linux scans /proc/<process
+// number>/cmdline and ignores this command's own process number; on macOS
+// /proc does not exist and this returns false (best-effort; the other three
+// status signals compensate).
 //
-// Why /proc/comm and not pgrep / ps: keep the dependency surface to the
-// stdlib + the filesystem. pgrep is not always installed (minimal containers,
-// scratch images); `ps` exists everywhere but spawning it per status call is
-// heavier than walking /proc. /proc is Linux-only; macOS falls through to
-// the not-running answer and the process signal stays blank (the http +
-// service signals still drive the overall verdict correctly).
+// Why /proc/cmdline and not pgrep / ps: command-line arguments distinguish a
+// serve process from an MCP bridge or other sshmgr subcommand. pgrep is not
+// always installed (minimal containers, scratch images); `ps` exists
+// everywhere but spawning it per status call is heavier than walking /proc.
+// /proc is Linux-only; macOS intentionally keeps its historical best-effort
+// behavior.
 func serveProcessRunningPOSIX() bool {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -39,8 +39,7 @@ func serveProcessRunningPOSIX() bool {
 // serveProcessRunningFromProcEntries is the testable /proc enumeration seam.
 // The caller supplies the directory entries and the file reader; only numeric
 // directories are considered, matching the /proc layout on Linux.
-func serveProcessRunningFromProcEntries(root string, currentProcessID int, entries []os.DirEntry, readComm func(string) ([]byte, error)) bool {
-	target := "sshmgr"
+func serveProcessRunningFromProcEntries(root string, currentProcessID int, entries []os.DirEntry, readCmdline func(string) ([]byte, error)) bool {
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
@@ -55,14 +54,12 @@ func serveProcessRunningFromProcEntries(root string, currentProcessID int, entri
 		if processID == currentProcessID {
 			continue
 		}
-		// /proc/<process number>/comm is the executable's base name (truncated to 15 chars
-		// by the kernel — TASK_COMM_LEN). "sshmgr" is 6 chars so it fits
-		// untruncated.
-		comm, err := readComm(filepath.Join(root, name, "comm"))
+		rawCmdline, err := readCmdline(filepath.Join(root, name, "cmdline"))
 		if err != nil {
 			continue
 		}
-		if strings.TrimSpace(string(comm)) == target {
+		commandLine := strings.Split(strings.TrimRight(string(rawCmdline), "\x00"), "\x00")
+		if serveCommandLineHasServeSubcommand(commandLine) {
 			return true
 		}
 	}

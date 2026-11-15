@@ -3,22 +3,63 @@
 package cli
 
 import (
-	"os"
-	"os/exec"
+	"fmt"
+	"syscall"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-// serveProcessRunningWindows reports whether another sshmgr.exe process is
-// currently running on Windows. Uses tasklist's CSV output (opencode #7 fix
-// carried forward from the old serve_install_windows.go): match the process
-// image name exactly and ignore this command's own process number.
+// serveProcessRunningWindows reports whether the registered sshmgr-serve
+// Windows service has a live process. Querying the service avoids tasklist's
+// process-image-only output: an MCP bridge or another sshmgr subcommand must
+// never make `serve status` report serve as running.
 func serveProcessRunningWindows() bool {
-	out, err := exec.Command("tasklist.exe", "/FI", "IMAGENAME eq sshmgr.exe", "/FO", "CSV", "/NH").CombinedOutput()
+	return windowsServeServiceProcessRunning(
+		queryWindowsServeServiceProcessID, windowsProcessIsAlive,
+	)
+}
+
+func queryWindowsServeServiceProcessID() (uint32, error) {
+	scm, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
-		// tasklist prints "INFO: No tasks are running ..." (non-zero exit) when
-		// nothing matches; that is the not-running case, not an error.
+		return 0, fmt.Errorf("open service control manager: %w", err)
+	}
+	defer windows.CloseServiceHandle(scm) //nolint:errcheck // cleanup only
+
+	serviceName, err := syscall.UTF16PtrFromString(serveServiceName)
+	if err != nil {
+		return 0, err
+	}
+	service, err := windows.OpenService(scm, serviceName, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return 0, fmt.Errorf("open service %s: %w", serveServiceName, err)
+	}
+	defer windows.CloseServiceHandle(service) //nolint:errcheck // cleanup only
+
+	var status windows.SERVICE_STATUS_PROCESS
+	needed := uint32(0)
+	if err := windows.QueryServiceStatusEx(
+		service,
+		windows.SC_STATUS_PROCESS_INFO,
+		(*byte)(unsafe.Pointer(&status)),
+		uint32(unsafe.Sizeof(status)),
+		&needed,
+	); err != nil {
+		return 0, fmt.Errorf("query service %s status: %w", serveServiceName, err)
+	}
+	if status.ProcessId == 0 {
+		return 0, fmt.Errorf("service %s has no process number", serveServiceName)
+	}
+	return status.ProcessId, nil
+}
+
+func windowsProcessIsAlive(processID uint32) bool {
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, processID)
+	if err != nil {
 		return false
 	}
-	return windowsTaskListHasServeProcess(out, os.Getpid())
+	return windows.CloseHandle(process) == nil
 }
 
 // serveProcessRunningPOSIX is unreachable on Windows builds; the untagged

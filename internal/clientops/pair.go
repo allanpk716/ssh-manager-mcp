@@ -29,6 +29,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/store"
 )
@@ -359,6 +360,7 @@ func pairPost(ctx context.Context, client *http.Client, base, path string, paylo
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(buildinfo.ClientVersionHeader, buildinfo.Version)
 	return client.Do(req)
 }
 

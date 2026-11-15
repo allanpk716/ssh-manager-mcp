@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"crypto"
 	"crypto/ecdh"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/tls"
@@ -20,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/instname"
 	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/pairing"
@@ -81,6 +83,10 @@ type pairKeyEntry struct {
 // present the FIRST character must be a letter or number (Unicode classes) —
 // " leading space" class display hacks are refused with 400.
 var pairHintPattern = regexp.MustCompile(`^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,31}$`)
+
+// pairLegacyClientUpgradeMessage is shown by v0.21.1's enroll error branch.
+// Keep it plain text so that older client can display the complete guidance.
+const pairLegacyClientUpgradeMessage = "此权威端使用 ECDSA 证书，需要 0.22.0 或更新的客户端才能配对；请升级客户端，或请 owner 在权威端执行 `sshmgr cache-tokens add` 发放设备码后用 `sshmgr cache pull` 入网"
 
 // pairCredsEnvelope is the AEAD plaintext handed to the client at finish
 // (spec §3.3-6, frozen shape {spki, profile, device_code, project_token,
@@ -251,6 +257,11 @@ type pairEnrollRequest struct {
 	ProfileHint string `json:"profile_hint"`
 }
 
+func pairingSignerUsesEd25519(signer crypto.Signer) bool {
+	_, ok := signer.Public().(ed25519.PublicKey)
+	return ok
+}
+
 // handlePairEnroll validates, mints the server's ephemeral X25519 pair,
 // signs the transcript with the serve cert key, derives the 6-digit SAS from
 // its in-memory private key + the request's client_pub (both in hand at this
@@ -296,6 +307,11 @@ func (r *ServeRunner) handlePairEnroll(w http.ResponseWriter, req *http.Request)
 		// Serve cert whose key family cannot sign: pairing is unavailable. 500
 		// (a server-side misconfiguration, not a client input problem).
 		http.Error(w, "pairing unavailable: serve cert cannot sign", http.StatusInternalServerError)
+		return
+	}
+	if req.Header.Get(buildinfo.ClientVersionHeader) == "" && !pairingSignerUsesEd25519(r.pairSigner) {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: pairing enroll refused: client did not declare a version and the serve certificate is not ed25519\n")
+		http.Error(w, pairLegacyClientUpgradeMessage, http.StatusBadRequest)
 		return
 	}
 

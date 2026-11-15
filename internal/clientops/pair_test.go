@@ -19,10 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/dialdevice"
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/roles"
@@ -37,11 +39,13 @@ import (
 
 // pairingServer is the e2e harness for one RunPair flow.
 type pairingServer struct {
-	url  string // https://127.0.0.1:<port>
-	spki string // the TLS cert's SPKI pin (== the serve envelope's spki)
-	st   *store.Store
-	srv  *httptest.Server
-	hits int32 // requests that REACHED the handler (TLS-pin failures never count)
+	url            string // https://127.0.0.1:<port>
+	spki           string // the TLS cert's SPKI pin (== the serve envelope's spki)
+	st             *store.Store
+	srv            *httptest.Server
+	hits           int32 // requests that REACHED the handler (TLS-pin failures never count)
+	mu             sync.Mutex
+	versionHeaders []string
 }
 
 // newPairingServer stands up the full pairing + snapshot surface with an
@@ -112,6 +116,9 @@ func newPairingServerForSigner(t *testing.T, newKey func(*testing.T) (crypto.Sig
 	ps := &pairingServer{st: st, spki: mcpserver.SPKIFingerprint(cert)}
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&ps.hits, 1)
+		ps.mu.Lock()
+		ps.versionHeaders = append(ps.versionHeaders, r.Header.Get(buildinfo.ClientVersionHeader))
+		ps.mu.Unlock()
 		runner.HTTPHandler().ServeHTTP(w, r)
 	})
 	srv := httptest.NewUnstartedServer(handler)
@@ -298,6 +305,16 @@ func TestRunPair_EndToEnd_ECDSAAndEd25519ServeCerts(t *testing.T) {
 			}
 			if _, err := LoadCacheSnapshotFor("it-" + tc.name); err != nil {
 				t.Fatalf("first pull must land a readable cache snapshot: %v", err)
+			}
+			srv.mu.Lock()
+			gotVersion := ""
+			if len(srv.versionHeaders) != 0 {
+				gotVersion = srv.versionHeaders[0]
+			}
+			headers := append([]string(nil), srv.versionHeaders...)
+			srv.mu.Unlock()
+			if gotVersion != buildinfo.Version {
+				t.Fatalf("配对请求版本声明 = %q，应为 %q；全部请求=%q", gotVersion, buildinfo.Version, headers)
 			}
 		})
 	}

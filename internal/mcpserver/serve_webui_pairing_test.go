@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -242,6 +243,7 @@ func pairPostToServe(t *testing.T, client *http.Client, target, body string) *ht
 	if err != nil {
 		t.Fatal(err)
 	}
+	request.Header.Set(buildinfo.ClientVersionHeader, buildinfo.Version)
 	response, err := client.Do(request)
 	if err != nil {
 		t.Fatal(err)

@@ -86,19 +86,159 @@ func assertPinPost(t *testing.T, r *http.Request, blob []byte, host string, port
 		t.Errorf("read body: %v", err)
 		return
 	}
-	var req pinForwardRequest
+	var req struct {
+		ServerID      string `json:"server_id"`
+		HandshakeAddr string `json:"handshake_addr"`
+		Host          string `json:"host"`
+		Port          int    `json:"port"`
+		KeyBlob       string `json:"key_blob"`
+	}
 	if err := json.Unmarshal(raw, &req); err != nil {
 		t.Errorf("body is not the §1.1 JSON shape: %v (%.100s)", err, raw)
 		return
 	}
-	if req.ServerID != "srv-fwd" {
-		t.Errorf("body server_id = %q, want the server entry id", req.ServerID)
-	}
-	if want := fmt.Sprintf("%s:%d", host, port); req.HandshakeAddr != want {
-		t.Errorf("body handshake_addr = %q, want %q", req.HandshakeAddr, want)
+	legacy := req.ServerID == "" && req.HandshakeAddr == "" &&
+		req.Host == host && req.Port == port
+	if !legacy {
+		if req.ServerID != "srv-fwd" {
+			t.Errorf("body server_id = %q, want the server entry id", req.ServerID)
+		}
+		if want := fmt.Sprintf("%s:%d", host, port); req.HandshakeAddr != want {
+			t.Errorf("body handshake_addr = %q, want %q", req.HandshakeAddr, want)
+		}
 	}
 	if req.KeyBlob != base64.StdEncoding.EncodeToString(blob) {
 		t.Error("key_blob is not the base64(std) of the marshaled key")
+	}
+}
+
+// TestPinForwarder_FallsBackToLegacyRequestAfterOldBrokerRejection covers the
+// v0.21.1 transition: the first request is entry-based, the old authority
+// rejects it as unparseable, and the same host key is retried address-based.
+func TestPinForwarder_FallsBackToLegacyRequestAfterOldBrokerRejection(t *testing.T) {
+	blob, _ := newHostKey(t)
+	const host = "192.0.2.10"
+	const port = 2022
+
+	tests := []struct {
+		name       string
+		legacyCode int
+		legacyBody string
+		wantErr    bool
+		wantEqual  bool
+	}{
+		{name: "created", legacyCode: http.StatusCreated, legacyBody: `{}`},
+		{name: "accepted-success-status", legacyCode: http.StatusOK, legacyBody: `{}`},
+		{
+			name: "equal conflict closes", legacyCode: http.StatusConflict,
+			legacyBody: `{"error":"already pinned","equal":true}`, wantErr: true, wantEqual: true,
+		},
+		{
+			name: "different conflict fails", legacyCode: http.StatusConflict,
+			legacyBody: `{"error":"already pinned","equal":false}`, wantErr: true,
+		},
+		{
+			name: "legacy request also rejected", legacyCode: http.StatusBadRequest,
+			legacyBody: `{"error":"key_blob is not a public key"}`, wantErr: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var bodies []map[string]any
+			srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Errorf("decode body: %v", err)
+					return
+				}
+				bodies = append(bodies, body)
+				w.Header().Set("Content-Type", "application/json")
+				if len(bodies) == 1 {
+					if _, ok := body["server_id"]; !ok {
+						t.Error("the first request must use the new server-entry format")
+					}
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":"unparseable key_blob"}`))
+					return
+				}
+				if body["server_id"] != nil || body["handshake_addr"] != nil {
+					t.Errorf("retry request must use the old address format: %#v", body)
+				}
+				if body["host"] != host || body["port"] != float64(port) {
+					t.Errorf("retry address = %v:%v, want %s:%d", body["host"], body["port"], host, port)
+				}
+				if body["key_blob"] != base64.StdEncoding.EncodeToString(blob) {
+					t.Error("retry did not carry the same marshaled host key")
+				}
+				w.WriteHeader(tc.legacyCode)
+				_, _ = w.Write([]byte(tc.legacyBody))
+			}))
+			defer srv.Close()
+
+			err := newTestForwarder(t, srv).Forward(fwdEntry(host, port), host+":2022", blob)
+			if tc.wantEqual != errors.Is(err, ErrPinForwardEqual) {
+				t.Fatalf("errors.Is(equal) = %v, want %v (err=%v)", errors.Is(err, ErrPinForwardEqual), tc.wantEqual, err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("Forward: %v", err)
+			}
+			if tc.wantErr && tc.name != "equal conflict closes" && err == nil {
+				t.Fatal("Forward unexpectedly succeeded")
+			}
+			if tc.name == "legacy request also rejected" &&
+				(err == nil || !strings.Contains(err.Error(), "key_blob is not a public key")) {
+				t.Fatalf("the legacy rejection must surface, got %v", err)
+			}
+			if len(bodies) != 2 {
+				t.Fatalf("requests = %d, want 2: %#v", len(bodies), bodies)
+			}
+		})
+	}
+}
+
+// TestPinForwarder_DoesNotFallbackForCurrentAuthority pins the new protocol:
+// a successful current authority sees exactly one entry-based request.
+func TestPinForwarder_DoesNotFallbackForCurrentAuthority(t *testing.T) {
+	blob, _ := newHostKey(t)
+	var posts int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		assertPinPost(t, r, blob, "192.0.2.10", 22)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"fingerprint":"SHA256:abc","server_name":"target"}`))
+	}))
+	defer srv.Close()
+
+	entry := fwdEntry("192.0.2.10", 22)
+	if err := newTestForwarder(t, srv).Forward(entry, store.EntryFallbackAddr(entry), blob); err != nil {
+		t.Fatalf("Forward: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("posts = %d, want 1", posts)
+	}
+}
+
+// TestPinForwarder_DoesNotFallbackForInvalidPresentedKey keeps the retry
+// condition tied to an otherwise valid new-format request.
+func TestPinForwarder_DoesNotFallbackForInvalidPresentedKey(t *testing.T) {
+	blob := []byte("not-an-ssh-public-key")
+	var posts int
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		posts++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"unparseable key_blob"}`))
+	}))
+	defer srv.Close()
+
+	entry := fwdEntry("192.0.2.10", 22)
+	err := newTestForwarder(t, srv).Forward(entry, store.EntryFallbackAddr(entry), blob)
+	if err == nil || !strings.Contains(err.Error(), "unparseable key_blob") {
+		t.Fatalf("invalid presented key must surface the broker rejection, got %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("posts = %d, want 1 (no old-format retry for a locally invalid key)", posts)
 	}
 }
 

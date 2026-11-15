@@ -27,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/store"
 )
@@ -75,6 +76,20 @@ func pairReq(t *testing.T, srv *httptest.Server, method, path, body string) *htt
 	if err != nil {
 		t.Fatal(err)
 	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func pairReqWithClientVersion(t *testing.T, srv *httptest.Server, path, body, version string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, srv.URL+path, bytes.NewReader([]byte(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set(buildinfo.ClientVersionHeader, version)
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -234,7 +249,7 @@ func findRow(t *testing.T, st *store.Store, id []byte) *store.PendingPairing {
 // enrollOK runs one enroll expected to succeed and returns the derived keys.
 func enrollOK(t *testing.T, srv *httptest.Server, st *store.Store, certPub crypto.PublicKey, c *pairClient) (kAck, kCreds [32]byte) {
 	t.Helper()
-	res := pairReq(t, srv, http.MethodPost, "/pair/enroll", c.enrollBody())
+	res := pairReqWithClientVersion(t, srv, "/pair/enroll", c.enrollBody(), buildinfo.Version)
 	body := readBody(t, res)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("enroll status = %d, want 200; body=%s", res.StatusCode, body)
@@ -334,6 +349,56 @@ func TestPairEnroll_RateLimit429(t *testing.T) {
 		}
 	}
 	wantStatus(t, pairReq(t, srv, http.MethodPost, "/pair/enroll", body), http.StatusTooManyRequests)
+}
+
+func TestPairEnroll_LegacyClientRejectedBeforePendingRowWhenCertificateIsECDSA(t *testing.T) {
+	srv, st, runner, _ := newPairRunner(t)
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.pairSigner = privateKey
+	publicKey := privateKey.Public().(crypto.PublicKey)
+
+	legacy := newPairClient(t, "legacy-client", "https://192.0.2.10:7878")
+	res := pairReq(t, srv, http.MethodPost, "/pair/enroll", legacy.enrollBody())
+	body := readBody(t, res)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Fatalf("旧客户端请求状态码 = %d，正文=%s", res.StatusCode, body)
+	}
+	for _, want := range []string{"ECDSA 证书", "0.22.0", "sshmgr cache-tokens add", "sshmgr cache pull"} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("旧客户端拒绝正文缺少 %q：%s", want, body)
+		}
+	}
+	if findRow(t, st, legacy.id[:]) != nil {
+		t.Fatal("被提前拒绝的旧客户端申请不得进入待批准列表")
+	}
+
+	current := newPairClient(t, "current-client", "https://192.0.2.10:7878")
+	res = pairReqWithClientVersion(t, srv, "/pair/enroll", current.enrollBody(), "v0.22.0")
+	body = readBody(t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("新客户端请求状态码 = %d，正文=%s", res.StatusCode, body)
+	}
+	current.learnServer(t, body, publicKey)
+	if findRow(t, st, current.id[:]) == nil {
+		t.Fatal("声明版本的新客户端申请应进入待批准列表")
+	}
+}
+
+func TestPairEnroll_LegacyClientAllowedWhenCertificateIsEd25519(t *testing.T) {
+	srv, st, _, certPub := newPairRunner(t)
+	legacy := newPairClient(t, "legacy-client", "https://192.0.2.10:7878")
+	res := pairReq(t, srv, http.MethodPost, "/pair/enroll", legacy.enrollBody())
+	body := readBody(t, res)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("旧客户端 + ed25519 证书状态码 = %d，正文=%s", res.StatusCode, body)
+	}
+	legacy.learnServer(t, body, certPub)
+	if findRow(t, st, legacy.id[:]) == nil {
+		t.Fatal("旧客户端 + ed25519 证书申请应进入待批准列表")
+	}
 }
 
 func TestPairEnroll_UnauthenticatedZeroSideEffects(t *testing.T) {

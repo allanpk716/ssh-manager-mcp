@@ -676,7 +676,9 @@ func TestShareDesktopGuideShowsStepsWithoutPassword(t *testing.T) {
 		`\\192.168.1.10\datasets\tmp`,
 		`net use Z: \\192.168.1.10\datasets /user:mount-user * /persistent:yes`,
 		"资源管理器", "映射网络驱动器", "macOS", `smb://192.168.1.10/datasets`, "/Volumes/datasets",
-		"笔记本更换网络后，映射可能失效", "请输入你自己保存在密码管理器里的共享密码",
+		"笔记本更换网络后，映射可能失效", "Windows 会报错 1219",
+		`net use \\&lt;地址> /delete`, "改用该设备的其他地址",
+		"请输入你自己保存在密码管理器里的共享密码",
 	} {
 		if !strings.Contains(pageBody, want) {
 			t.Fatalf("桌面手动添加引导缺少 %q：\n%s", want, pageBody)

@@ -50,6 +50,8 @@ test("共享存储桌面手动添加引导展示步骤且没有密码入口", as
     await expect(page.getByText("smb://192.168.1.30/家NAS共享").first()).toBeVisible();
     await expect(page.getByText("/Volumes/家NAS共享").first()).toBeVisible();
     await expect(page.getByText("笔记本更换网络后，映射可能失效")).toBeVisible();
+    await expect(page.getByText(/Windows 会报错 1219/)).toBeVisible();
+    await expect(page.getByText(/net use \\\\<地址> \/delete/)).toBeVisible();
     await expect(page.getByText("请输入你自己保存在密码管理器里的共享密码")).toBeVisible();
     expect(await page.content()).not.toContain("nas-login-secret");
     await expect(

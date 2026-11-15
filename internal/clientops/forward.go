@@ -109,6 +109,14 @@ type pinForwardRequest struct {
 	KeyBlob       string `json:"key_blob"`
 }
 
+// pinForwardLegacyRequest is the v0.21.1 request body. It identifies the
+// target by host and port rather than by the server entry id.
+type pinForwardLegacyRequest struct {
+	Host    string `json:"host"`
+	Port    int    `json:"port"`
+	KeyBlob string `json:"key_blob"`
+}
+
 // pinForwardConflictBody is the 409 shape: the error text is fixed
 // ("already pinned") and equal is the §1.1 zero-leak boolean. A 409 whose body
 // does not parse as this shape is treated as equal=false (fail closed — a
@@ -208,19 +216,79 @@ func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshal
 	if err != nil {
 		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
 	}
-	req, err := http.NewRequest(http.MethodPost, f.url+"/pin-hostkey", bytes.NewReader(body))
-	if err != nil {
-		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
-	}
-	setAuthorityRequestHeaders(req, f.code)
-	res, err := f.client.Do(req)
+	res, err := f.postPinForward(body)
 	if err != nil {
 		// Unreachable broker or the 10s cap tripped: §4 main message. The cause
 		// rides Unwrap for diagnostics; the text stays exactly the contract.
 		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
 	}
 	defer res.Body.Close()
+	errorText := ""
+	if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusRequestEntityTooLarge {
+		errorText = serverErrorText(res)
+	}
+	if res.StatusCode == http.StatusBadRequest && errorText == "unparseable key_blob" &&
+		legacyPinForwardRetryIsEligible(srv, handshakeAddr, marshaledKey) {
+		// v0.21.1 ignores the new fields and sees only empty host/port/key_blob
+		// fields, for which it returns exactly the body checked above. Retry
+		// once with that release's address-based request. The older authority
+		// pins by host:port, so every server entry sharing the address is also
+		// affected; this is the accepted transition-period semantic.
+		legacyBody, err := json.Marshal(pinForwardLegacyRequest{
+			Host:    host,
+			Port:    port,
+			KeyBlob: base64.StdEncoding.EncodeToString(marshaledKey),
+		})
+		if err != nil {
+			return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+		}
+		legacyRes, err := f.postPinForward(legacyBody)
+		if err != nil {
+			return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+		}
+		defer legacyRes.Body.Close()
+		legacyErrorText := ""
+		if legacyRes.StatusCode == http.StatusBadRequest || legacyRes.StatusCode == http.StatusRequestEntityTooLarge {
+			legacyErrorText = serverErrorText(legacyRes)
+		}
+		// v0.21.1 answers 201, but accept 200 as success as well so a
+		// transition-era authority that used that status keeps working.
+		if legacyRes.StatusCode == http.StatusOK {
+			return nil
+		}
+		return f.forwardResponse(legacyRes, host, port, fp, legacyErrorText)
+	}
 
+	return f.forwardResponse(res, host, port, fp, errorText)
+}
+
+// legacyPinForwardRetryIsEligible keeps the old-format retry narrow: it fires
+// only when this client really sent the complete new-format request and the
+// presented bytes are a valid SSH public key. A local construction defect is
+// reported rather than retried.
+func legacyPinForwardRetryIsEligible(srv *models.Server, handshakeAddr string, marshaledKey []byte) bool {
+	if srv == nil || srv.ID == "" || srv.Host == "" || srv.Port <= 0 ||
+		handshakeAddr == "" || len(marshaledKey) == 0 {
+		return false
+	}
+	if _, err := ssh.ParsePublicKey(marshaledKey); err != nil {
+		return false
+	}
+	return true
+}
+
+// postPinForward sends one already-encoded request body to the authority.
+func (f *PinForwarder) postPinForward(body []byte) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodPost, f.url+"/pin-hostkey", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	setAuthorityRequestHeaders(req, f.code)
+	return f.client.Do(req)
+}
+
+// forwardResponse maps one authority response to the forward branch table.
+func (f *PinForwarder) forwardResponse(res *http.Response, host string, port int, fp, errorText string) error {
 	switch {
 	case res.StatusCode == http.StatusCreated:
 		// 201: the broker landed the anchor (audited server-side); the caller
@@ -248,7 +316,7 @@ func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshal
 		// state, so the server's own text is passed through with the target
 		// attached (§2.1).
 		return &forwardError{text: fmt.Sprintf("pin forward for %s:%d: broker returned %d — %s",
-			host, port, res.StatusCode, serverErrorText(res))}
+			host, port, res.StatusCode, errorText)}
 	default:
 		// 5xx and everything unmapped (3xx surfacing via ErrUseLastResponse,
 		// 405, ...) is fail-closed: the pin could not be forwarded.
