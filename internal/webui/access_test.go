@@ -629,18 +629,58 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 		"csrf_token": {csrfToken}, "name": {"team-a"},
 	}, cookie)
 	addedBody := readResponseBody(t, added)
-	if added.StatusCode != http.StatusSeeOther || store.addName != "team-a" {
-		t.Fatalf("新增 profile 不应要求重新验证，状态码=%d 调用=%q 页面：\n%s", added.StatusCode, store.addName, addedBody)
+	addRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/profiles")
+	if added.StatusCode != http.StatusSeeOther || added.Header.Get("Location") != addRedirect || store.addName != "" {
+		t.Fatalf("新增 profile 应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+			added.StatusCode, added.Header.Get("Location"), store.addName, addedBody)
 	}
 
+	addReverifyPage := authorityGet(t, handler, "127.0.0.1:7879", addRedirect, cookie)
+	addReverifyBody := readResponseBody(t, addReverifyPage)
+	addReverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, addReverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/access/profiles"},
+	}, cookie)
+	if addReverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("新增 profile 重新验证失败，状态码=%d：%s", addReverified.StatusCode, readResponseBody(t, addReverified))
+	}
+	added = authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles", url.Values{
+		"csrf_token": {csrfToken}, "name": {"team-a"},
+	}, cookie)
+	addedBody = readResponseBody(t, added)
+	if added.StatusCode != http.StatusSeeOther || store.addName != "team-a" {
+		t.Fatalf("重新验证后应能新增 profile，状态码=%d 调用=%q 页面：\n%s", added.StatusCode, store.addName, addedBody)
+	}
+
+	auth.now = auth.now.Add(6 * time.Minute)
 	revoked := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
 		"csrf_token": {csrfToken}, "expected": {"server-web", "server-db"}, "server": {"server-web"},
 	}, cookie)
 	revokedBody := readResponseBody(t, revoked)
-	if revoked.StatusCode != http.StatusSeeOther || store.grantProfileID != "profile-1" {
-		t.Fatalf("纯撤销不应要求重新验证，状态码=%d 调用=%q 页面：\n%s", revoked.StatusCode, store.grantProfileID, revokedBody)
+	revokeRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/profiles/profile-1/grants?server=server-web")
+	if revoked.StatusCode != http.StatusSeeOther || revoked.Header.Get("Location") != revokeRedirect || store.grantProfileID != "" {
+		t.Fatalf("纯撤销授权也应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+			revoked.StatusCode, revoked.Header.Get("Location"), store.grantProfileID, revokedBody)
 	}
 
+	grantReverifyPage := authorityGet(t, handler, "127.0.0.1:7879", revokeRedirect, cookie)
+	grantReverifyBody := readResponseBody(t, grantReverifyPage)
+	grantReverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, grantReverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/access/profiles/profile-1/grants?server=server-web"},
+	}, cookie)
+	if grantReverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("撤销授权重新验证失败，状态码=%d：%s", grantReverified.StatusCode, readResponseBody(t, grantReverified))
+	}
+	revoked = authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
+		"csrf_token": {csrfToken}, "expected": {"server-web", "server-db"}, "server": {"server-web"},
+	}, cookie)
+	revokedBody = readResponseBody(t, revoked)
+	if revoked.StatusCode != http.StatusSeeOther || store.grantProfileID != "profile-1" {
+		t.Fatalf("重新验证后应能撤销授权，状态码=%d 调用=%q 页面：\n%s", revoked.StatusCode, store.grantProfileID, revokedBody)
+	}
+
+	auth.now = auth.now.Add(6 * time.Minute)
 	store.deleteID = ""
 	deleteRejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/delete", url.Values{
 		"csrf_token": {csrfToken}, "profile_id": {"profile-1"},
@@ -674,6 +714,50 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 	deletedBody := readResponseBody(t, deleted)
 	if deleted.StatusCode != http.StatusSeeOther || store.deleteID != "profile-1" {
 		t.Fatalf("重新验证后应能删除 profile，状态码=%d 调用=%q 页面：\n%s", deleted.StatusCode, store.deleteID, deletedBody)
+	}
+}
+
+func TestAuthorityServerProfileAuthorizationConfirmRequiresReverify(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
+	store := &stubAccessStore{}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Access: store, Auth: auth,
+		AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+		Now: func() time.Time { return auth.now },
+	})
+	if err != nil {
+		t.Fatalf("构造权威端 Web UI Handler 失败：%v", err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	auth.now = auth.now.Add(6 * time.Minute)
+	csrfToken := hiddenInputMetaOrHiddenValue(t, readResponseBody(t,
+		authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)))
+
+	form := url.Values{
+		"csrf_token": {csrfToken}, "server_id": {"server-web"},
+		"profile": {"profile-1"}, "summary": {"summary"},
+	}
+	rejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/profile-authorization/confirm", form, cookie)
+	wantRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/servers/server-web")
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect || store.serverProfileServerID != "" {
+		t.Fatalf("确认 profile 授权应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+			rejected.StatusCode, rejected.Header.Get("Location"), store.serverProfileServerID, readResponseBody(t, rejected))
+	}
+
+	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", wantRedirect, cookie)
+	reverifyBody := readResponseBody(t, reverifyPage)
+	reverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/servers/server-web"},
+	}, cookie)
+	if reverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证失败，状态码=%d：%s", reverified.StatusCode, readResponseBody(t, reverified))
+	}
+	applied := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/profile-authorization/confirm", form, cookie)
+	appliedBody := readResponseBody(t, applied)
+	if applied.StatusCode != http.StatusOK || store.serverProfileServerID != "server-web" {
+		t.Fatalf("重新验证后应能保存 profile 授权，状态码=%d 调用=%q 页面：\n%s",
+			applied.StatusCode, store.serverProfileServerID, appliedBody)
 	}
 }
 

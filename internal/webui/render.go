@@ -62,6 +62,7 @@ type pageData struct {
 	SecretDetailNotice                string
 	SecretDetailNote                  string
 	SecretDetailEnvironmentName       string
+	SecretDetailMetadataResume        bool
 	SecretMatrix                      *SecretMatrixView
 	SecretAuthorizationPreview        SecretAuthorizationPreview
 	SecretAuthorizationShareImpact    []SecretAuthorizationChange

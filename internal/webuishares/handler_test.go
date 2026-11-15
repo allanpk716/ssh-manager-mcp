@@ -1131,6 +1131,102 @@ func TestAuthorityShareDeleteRequiresRecentReverify(t *testing.T) {
 	}
 }
 
+func TestAuthorityShareSensitiveWritesRequireRecentReverify(t *testing.T) {
+	fixture := newUnmountStoreFixture(t)
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.Local)
+	h := newShareAuthorityHandler(t, fixture.store, &now, func(config *webui.Config) {
+		remoteTasks := RemoteTasksFromStore(openStoreForTest(fixture.store))
+		config.SharesRemoteTasks = remoteTasks
+		config.ShareLatestChecks = remoteTasks
+		config.ShareUnmountRunner = UnmountTasksFromStore(openStoreForTest(fixture.store))
+		config.ShareRevokeRunner = RevokeTasksFromStore(openStoreForTest(fixture.store))
+		config.ShareResidueRunner = ResidueTasksFromStore(openStoreForTest(fixture.store))
+	})
+	now = now.Add(6 * time.Minute)
+	csrf := authorityPageCSRF(t, h, "/ui/shares/"+fixture.shareID)
+
+	routes := []struct {
+		name         string
+		target       string
+		reverifyNext string
+		form         url.Values
+	}{
+		{
+			name:         "单台卸载",
+			target:       "/ui/shares/" + fixture.shareID + "/unmount",
+			reverifyNext: "/ui/shares/" + fixture.shareID + "/unmount",
+			form:         url.Values{"server_id": {fixture.linuxID}},
+		},
+		{
+			name:         "单共享残留清理",
+			target:       "/ui/shares/" + fixture.shareID + "/residue-cleanup",
+			reverifyNext: "/ui/shares/" + fixture.shareID + "/residue",
+			form: url.Values{
+				"share_name": {"datasets"}, "server_id": {fixture.linuxID},
+				"server_name": {"linux-web"},
+			},
+		},
+		{
+			name:         "全部共享残留清理",
+			target:       "/ui/shares/residue-cleanup",
+			reverifyNext: "/ui/shares/residue",
+			form: url.Values{
+				"share_name": {"datasets"}, "server_id": {fixture.linuxID},
+				"server_name": {"linux-web"},
+			},
+		},
+		{
+			name:         "撤销授权",
+			target:       "/ui/shares/" + fixture.shareID + "/revoke",
+			reverifyNext: "/ui/shares/" + fixture.shareID + "/revoke?server=" + url.QueryEscape(fixture.linuxID),
+			form:         url.Values{"server_id": {fixture.linuxID}},
+		},
+	}
+	for _, route := range routes {
+		form := url.Values{"csrf_token": {csrf}}
+		for key, values := range route.form {
+			form[key] = values
+		}
+		rejected := h.do(http.MethodPost, route.target, form)
+		wantRedirect := "/ui/reverify?next=" + url.QueryEscape(route.reverifyNext)
+		if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect {
+			t.Fatalf("%s应先重新验证，状态码=%d 跳转=%q，应为 %q，页面：\n%s",
+				route.name, rejected.StatusCode, rejected.Header.Get("Location"), wantRedirect, body(t, rejected))
+		}
+	}
+	rows, err := fixture.store.QueryAudit(store.AuditFilter{
+		Source:  store.AuditSourceWebUI,
+		Actions: []string{"share-unmount", "share-revoke"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("未重新验证时不应产生共享存储写审计：%+v", rows)
+	}
+
+	reverifyTarget := "/ui/reverify?next=" + url.QueryEscape("/ui/shares/"+fixture.shareID)
+	reverify := h.do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {authorityPageCSRF(t, h, reverifyTarget)},
+		"password":   {"correct-password"},
+		"next":       {"/ui/shares/" + fixture.shareID},
+	})
+	if reverify.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证失败，状态码=%d：%s", reverify.StatusCode, body(t, reverify))
+	}
+	for _, route := range routes {
+		form := url.Values{"csrf_token": {csrf}}
+		for key, values := range route.form {
+			form[key] = values
+		}
+		applied := h.do(http.MethodPost, route.target, form)
+		if applied.StatusCode != http.StatusSeeOther {
+			t.Fatalf("重新验证后%s应正常启动，状态码=%d：%s",
+				route.name, applied.StatusCode, body(t, applied))
+		}
+	}
+}
+
 func TestAuthorityShareMountScopeConfirmRequiresReverifyAndPreservesTarget(t *testing.T) {
 	st := newIntegrationStore(t)
 	linuxWebID := mustServer(t, st, "linux-web", models.ShellPOSIX)

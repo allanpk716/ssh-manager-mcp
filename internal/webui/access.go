@@ -234,6 +234,10 @@ func (h *handler) handleAccessProfileAdd(w http.ResponseWriter, r *http.Request)
 		h.renderError(w, r, http.StatusBadRequest, "新增 profile 失败", "profile 名称不能为空。")
 		return
 	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		http.Redirect(w, r, reverifyPath(accessProfilesPath), http.StatusSeeOther)
+		return
+	}
 	if err := h.cfg.Access.AddProfile(name, AccessWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "新增 profile 失败", "新增 profile 失败，请稍后重试。")
 		return
@@ -326,7 +330,7 @@ func (h *handler) handleAccessProfileGrantPost(w http.ResponseWriter, r *http.Re
 	}
 	expected := r.PostForm["expected"]
 	desired := r.PostForm["server"]
-	if h.cfg.Role == RoleServer && grantAddsServer(expected, desired) && !h.recentlyVerified(h.currentSession(r)) {
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		http.Redirect(w, r, reverifyPath(grantResumePath(profileID, desired)), http.StatusSeeOther)
 		return
 	}

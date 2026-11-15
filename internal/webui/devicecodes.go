@@ -150,6 +150,10 @@ func (h *handler) handleAccessDeviceCodeRevoke(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if r.Method == http.MethodPost {
+		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+			http.Redirect(w, r, reverifyPath(r.URL.Path), http.StatusSeeOther)
+			return
+		}
 		if err := h.cfg.Access.RevokeDeviceCode(id, AccessWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "撤销设备码失败", "撤销设备码失败，请稍后重试。")
 			return

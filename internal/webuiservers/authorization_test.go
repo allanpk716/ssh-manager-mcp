@@ -654,9 +654,9 @@ func TestServerDetailProfileAuthorizationNoChangeAndConflict(t *testing.T) {
 	}
 }
 
-// TestAuthorityServerProfileEditDoesNotRequireRecentPasswordVerification 验证
-// 权威端调整 profile 授权不需要重新输入管理员口令。
-func TestAuthorityServerProfileEditDoesNotRequireRecentPasswordVerification(t *testing.T) {
+// TestAuthorityServerProfileEditRequiresRecentPasswordVerification 验证权威端
+// 调整 profile 授权前必须重新输入管理员口令。
+func TestAuthorityServerProfileEditRequiresRecentPasswordVerification(t *testing.T) {
 	key, err := store.GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
@@ -753,10 +753,35 @@ func TestAuthorityServerProfileEditDoesNotRequireRecentPasswordVerification(t *t
 		"profile": {profileID},
 	}, session)
 	confirmedBody := authorizationBody(t, confirmed)
-	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存 profile 授权") {
-		t.Fatalf("超过重新验证窗口后仍应直接确认 profile 授权，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	reverifyTarget := "/ui/reverify?next=" + url.QueryEscape("/ui/servers/"+server)
+	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != reverifyTarget {
+		t.Fatalf("超过重新验证窗口后确认 profile 授权应先跳转重新验证，状态码=%d 跳转=%q：\n%s",
+			confirmed.StatusCode, confirmed.Header.Get("Location"), confirmedBody)
 	}
 	ids, err := st.ServersForProfile(profileID)
+	if err != nil || len(ids) != 0 {
+		t.Fatalf("未重新验证前不应写入 profile 授权：%v（错误 %v）", ids, err)
+	}
+	reverifyPage := do(http.MethodGet, reverifyTarget, nil, session)
+	reverifyBody := authorizationBody(t, reverifyPage)
+	reverified := do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {authorizationHiddenOne(reverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/servers/" + server},
+	}, session)
+	_ = reverified.Body.Close()
+	if reverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证失败，状态码=%d：%s", reverified.StatusCode, authorizationBody(t, reverified))
+	}
+
+	confirmed = do(http.MethodPost, "/ui/servers/profile-authorization/confirm", url.Values{
+		"csrf_token": {csrf}, "server_id": {server}, "summary": summary,
+		"profile": {profileID},
+	}, session)
+	confirmedBody = authorizationBody(t, confirmed)
+	if confirmed.StatusCode != http.StatusOK || !strings.Contains(confirmedBody, "已保存 profile 授权") {
+		t.Fatalf("重新验证后确认 profile 授权失败，状态码=%d：\n%s", confirmed.StatusCode, confirmedBody)
+	}
+	ids, err = st.ServersForProfile(profileID)
 	if err != nil || len(ids) != 1 || ids[0] != server {
 		t.Fatalf("权威端确认后授权不正确：%v（错误 %v）", ids, err)
 	}

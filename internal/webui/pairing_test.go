@@ -227,8 +227,28 @@ func TestAuthorityPairingApproveRejectThroughAccessStore(t *testing.T) {
 		"csrf_token": {csrfToken}, "profile": {"profile-ops"}, "compared": {"1"}, "override": {"OVERRIDE"},
 	}, cookie)
 	approvedBody := readResponseBody(t, approved)
+	approveRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/pairing/pair-1")
+	if approved.StatusCode != http.StatusSeeOther || approved.Header.Get("Location") != approveRedirect {
+		t.Fatalf("批准配对应先重新验证，状态码=%d 跳转=%q 页面：\n%s",
+			approved.StatusCode, approved.Header.Get("Location"), approvedBody)
+	}
+	approveReverifyPage := authorityGet(t, handler, "192.0.2.50:7879", approveRedirect, cookie)
+	approveReverifyBody := readResponseBody(t, approveReverifyPage)
+	approveReverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, approveReverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/access/pairing/pair-1"},
+	}, cookie)
+	if approveReverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("批准配对重新验证失败，状态码=%d：%s", approveReverified.StatusCode, readResponseBody(t, approveReverified))
+	}
+
+	approved = authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1/approve", url.Values{
+		"csrf_token": {csrfToken}, "profile": {"profile-ops"}, "compared": {"1"}, "override": {"OVERRIDE"},
+	}, cookie)
+	approvedBody = readResponseBody(t, approved)
 	if approved.StatusCode != http.StatusSeeOther || approved.Header.Get("Location") != "/ui/access/pairing" {
-		t.Fatalf("批准应回到配对页，状态码=%d 跳转=%q 页面：\n%s", approved.StatusCode, approved.Header.Get("Location"), approvedBody)
+		t.Fatalf("重新验证后批准应回到配对页，状态码=%d 跳转=%q 页面：\n%s",
+			approved.StatusCode, approved.Header.Get("Location"), approvedBody)
 	}
 	if store.approvePairingID != "pair-1" || store.approveProfile != "profile-ops" || !store.approveCompared ||
 		store.approveOverride != "OVERRIDE" || store.approveSrc.RemoteAddress != "198.51.100.9" {
@@ -236,12 +256,32 @@ func TestAuthorityPairingApproveRejectThroughAccessStore(t *testing.T) {
 			store.approvePairingID, store.approveProfile, store.approveCompared, store.approveOverride, store.approveSrc)
 	}
 
+	auth.now = auth.now.Add(6 * time.Minute)
 	rejected := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-2/reject", url.Values{
 		"csrf_token": {csrfToken},
 	}, cookie)
 	rejectedBody := readResponseBody(t, rejected)
+	rejectRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/pairing/pair-2")
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != rejectRedirect || store.rejectPairingID != "" {
+		t.Fatalf("拒绝配对应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+			rejected.StatusCode, rejected.Header.Get("Location"), store.rejectPairingID, rejectedBody)
+	}
+	rejectReverifyPage := authorityGet(t, handler, "192.0.2.50:7879", rejectRedirect, cookie)
+	rejectReverifyBody := readResponseBody(t, rejectReverifyPage)
+	rejectReverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, rejectReverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {"/ui/access/pairing/pair-2"},
+	}, cookie)
+	if rejectReverified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("拒绝配对重新验证失败，状态码=%d：%s", rejectReverified.StatusCode, readResponseBody(t, rejectReverified))
+	}
+	rejected = authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-2/reject", url.Values{
+		"csrf_token": {csrfToken},
+	}, cookie)
+	rejectedBody = readResponseBody(t, rejected)
 	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != "/ui/access/pairing" {
-		t.Fatalf("拒绝应回到配对页，状态码=%d 跳转=%q 页面：\n%s", rejected.StatusCode, rejected.Header.Get("Location"), rejectedBody)
+		t.Fatalf("重新验证后拒绝应回到配对页，状态码=%d 跳转=%q 页面：\n%s",
+			rejected.StatusCode, rejected.Header.Get("Location"), rejectedBody)
 	}
 	if store.rejectPairingID != "pair-2" || store.rejectSrc.RemoteAddress != "198.51.100.9" {
 		t.Fatalf("拒绝参数不正确：id=%q source=%+v", store.rejectPairingID, store.rejectSrc)

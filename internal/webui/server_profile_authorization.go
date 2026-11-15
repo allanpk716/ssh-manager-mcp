@@ -2,6 +2,7 @@ package webui
 
 import (
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -39,6 +40,10 @@ func (h *handler) handleServerProfileAuthorizationConfirm(w http.ResponseWriter,
 	serverID := r.PostFormValue("server_id")
 	if serverID == "" {
 		h.renderError(w, r, http.StatusBadRequest, "确认 profile 授权失败", "缺少服务器标识符。")
+		return
+	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		http.Redirect(w, r, reverifyPath("/ui/servers/"+url.PathEscape(serverID)), http.StatusSeeOther)
 		return
 	}
 	result, conflict, err := h.cfg.Access.ApplyServerProfileAuthorization(

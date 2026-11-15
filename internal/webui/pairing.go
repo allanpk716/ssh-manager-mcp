@@ -3,6 +3,7 @@ package webui
 import (
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -104,6 +105,14 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 	}
 	if r.Method != http.MethodPost {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "配对裁决只接受 POST 请求。")
+		return
+	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		next := accessPairingPath
+		if id != "" {
+			next = accessPairingPath + "/" + url.PathEscape(id)
+		}
+		http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
 		return
 	}
 

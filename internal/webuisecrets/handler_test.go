@@ -706,6 +706,80 @@ func TestAuthoritySecretWritesRequireReverifyAndPreserveSubmittedState(t *testin
 	}
 }
 
+func TestAuthoritySecretMetadataEditRequiresReverifyAndPreservesSubmittedState(t *testing.T) {
+	st := newIntegrationStore(t)
+	manager := secretmanage.New(st)
+	if err := manager.AddSecret("AUTH_TOKEN", "权威端备注", "AUTH_TOKEN_FILE", []byte("authority-secret-value"), secretmanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	views, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(views) != 1 {
+		t.Fatalf("准备机密项失败：%v %+v", err, views)
+	}
+	secretID := views[0].ID
+	now := time.Now()
+	h := newAuthorityHandler(t, st, &now)
+	now = now.Add(6 * time.Minute)
+	csrf := hiddenValue(t, body(t, h.do(http.MethodGet, "/ui/secrets/", nil)), "csrf_token")
+
+	resume := "/ui/secrets/" + secretID + "?environment_name=AUTH_TOKEN_ENV&note=" +
+		url.QueryEscape("权威端新备注") + "&resume=1"
+	rejected := h.do(http.MethodPost, "/ui/secrets/"+secretID+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"权威端新备注"}, "environment_name": {"AUTH_TOKEN_ENV"},
+	})
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != "/ui/reverify?next="+url.QueryEscape(resume) {
+		t.Fatalf("修改元数据应先重新验证，状态码=%d 跳转=%q", rejected.StatusCode, rejected.Header.Get("Location"))
+	}
+	afterRejected, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(afterRejected) != 1 ||
+		afterRejected[0].Note != "权威端备注" || afterRejected[0].EnvironmentName != "AUTH_TOKEN_FILE" {
+		t.Fatalf("未重新验证前不得修改元数据：%v %+v", err, afterRejected)
+	}
+	rows, err := webUISecretAuditRows(st, "secret-edit", "secret-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("未重新验证前不应写机密项元数据审计：%+v", rows)
+	}
+
+	reverifyPage := h.do(http.MethodGet, "/ui/reverify?next="+url.QueryEscape(resume), nil)
+	reverifyCSRF := hiddenValue(t, body(t, reverifyPage), "csrf_token")
+	reverified := h.do(http.MethodPost, "/ui/reverify", url.Values{
+		"csrf_token": {reverifyCSRF}, "password": {"correct-password"}, "next": {resume},
+	})
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != resume {
+		t.Fatalf("重新验证后应回到机密项详情页，状态码=%d 跳转=%q",
+			reverified.StatusCode, reverified.Header.Get("Location"))
+	}
+	resumedPage := body(t, h.do(http.MethodGet, resume, nil))
+	for _, want := range []string{`value="权威端新备注"`, `value="AUTH_TOKEN_ENV"`} {
+		if !strings.Contains(resumedPage, want) {
+			t.Fatalf("重新验证后的详情页应保留元数据提交值 %q：\n%s", want, resumedPage)
+		}
+	}
+
+	edited := h.do(http.MethodPost, "/ui/secrets/"+secretID+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {"权威端新备注"}, "environment_name": {"AUTH_TOKEN_ENV"},
+	})
+	if edited.StatusCode != http.StatusSeeOther || edited.Header.Get("Location") != "/ui/secrets/"+secretID {
+		t.Fatalf("重新验证后应能修改元数据，状态码=%d 跳转=%q",
+			edited.StatusCode, edited.Header.Get("Location"))
+	}
+	afterEdited, err := manager.List(secretmanage.ListFilter{})
+	if err != nil || len(afterEdited) != 1 ||
+		afterEdited[0].Note != "权威端新备注" || afterEdited[0].EnvironmentName != "AUTH_TOKEN_ENV" {
+		t.Fatalf("重新验证后的元数据修改结果不正确：%v %+v", err, afterEdited)
+	}
+	rows, err = webUISecretAuditRows(st, "secret-edit", "secret-env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("重新验证后的元数据修改应写审计：%+v", rows)
+	}
+}
+
 func TestClientSecretsPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testing.T) {
 	st := newIntegrationStore(t)
 	serverID := mustServer(t, st, "web-1")

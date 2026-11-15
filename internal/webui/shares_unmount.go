@@ -153,6 +153,9 @@ func (h *handler) handleShareUnmount(w http.ResponseWriter, r *http.Request, ide
 	case http.MethodGet, http.MethodHead:
 		h.handleShareUnmountPage(w, r, identifier)
 	case http.MethodPost:
+		if !h.requireRecentReverify(w, r, "/ui/shares/"+identifier+"/unmount") {
+			return
+		}
 		h.handleShareUnmountPost(w, r, identifier)
 	default:
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "单台卸载页只接受 GET 与 POST 请求。")

@@ -328,9 +328,9 @@ func (h *handler) reverifyWindow() time.Duration {
 	return 5 * time.Minute
 }
 
-// requireRecentReverify 是运维写操作的统一重新验证守卫。单机与客户端的
-// 回环界面没有管理员口令，直接放行；权威端 5 分钟内未重新验证时跳到重
-// 新验证页，next 必须指向重新验证后可用 GET 打开的页面。
+// requireRecentReverify 是权威端敏感写操作的统一重新验证守卫。单机与客
+// 户端的回环界面没有管理员口令，直接放行；权威端 5 分钟内未重新验证时跳
+// 到重新验证页，next 必须指向重新验证后可用 GET 打开的页面。
 func (h *handler) requireRecentReverify(w http.ResponseWriter, r *http.Request, next string) bool {
 	if h.cfg.Role != RoleServer {
 		return true

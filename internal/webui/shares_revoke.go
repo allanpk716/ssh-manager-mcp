@@ -155,6 +155,9 @@ func (h *handler) handleShareRevoke(w http.ResponseWriter, r *http.Request, iden
 	case http.MethodGet, http.MethodHead:
 		h.handleShareRevokePage(w, r, identifier)
 	case http.MethodPost:
+		if !h.requireRecentReverify(w, r, shareRevokeReverifyPath(r, identifier)) {
+			return
+		}
 		h.handleShareRevokePost(w, r, identifier)
 	default:
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "撤销授权页只接受 GET 与 POST 请求。")
@@ -555,6 +558,34 @@ func shareServerShellType(servers []ShareServerView, serverID string) string {
 
 func shareRevokeConfirmPath(shareID, serverID string) string {
 	return "/ui/shares/" + shareID + "/revoke?server=" + serverID
+}
+
+// shareRevokeReverifyPath 构造撤销授权的重新验证回跳地址，保留目标服务器
+// 与会改变远端行为的选项。
+func shareRevokeReverifyPath(r *http.Request, identifier string) string {
+	base := "/ui/shares/" + identifier + "/revoke"
+	serverID := strings.TrimSpace(r.PostFormValue("server_id"))
+	if serverID == "" {
+		serverID = strings.TrimSpace(r.URL.Query().Get("server"))
+	}
+	baseWithServer := base
+	if serverID != "" {
+		baseWithServer += "?server=" + url.QueryEscape(serverID)
+	}
+	query := url.Values{}
+	if r.PostFormValue("unmount") == "1" {
+		query.Set("unmount", "1")
+	}
+	if r.PostFormValue("change_password") == "1" {
+		query.Set("change_password", "1")
+	}
+	if len(query) == 0 {
+		return baseWithServer
+	}
+	if serverID == "" {
+		return base + "?" + query.Encode()
+	}
+	return baseWithServer + "&" + query.Encode()
 }
 
 func isShareRevokePasswordUpload(r *http.Request) bool {

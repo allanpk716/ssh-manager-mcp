@@ -143,6 +143,9 @@ func (h *handler) handleShareResidueRootCleanup(w http.ResponseWriter, r *http.R
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "残留清理只接受 POST 请求。")
 		return
 	}
+	if !h.requireRecentReverify(w, r, sharesResiduePath) {
+		return
+	}
 	shareName := strings.TrimSpace(r.PostFormValue("share_name"))
 	serverID := strings.TrimSpace(r.PostFormValue("server_id"))
 	serverName := strings.TrimSpace(r.PostFormValue("server_name"))
@@ -252,6 +255,9 @@ func (h *handler) handleShareResiduePost(w http.ResponseWriter, r *http.Request,
 func (h *handler) handleShareResidueCleanup(w http.ResponseWriter, r *http.Request, identifier string) {
 	if r.Method != http.MethodPost {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "残留清理只接受 POST 请求。")
+		return
+	}
+	if !h.requireRecentReverify(w, r, "/ui/shares/"+identifier+"/residue") {
 		return
 	}
 	view, err := h.shareResidueView(r, identifier)

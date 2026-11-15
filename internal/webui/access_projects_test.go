@@ -477,6 +477,28 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 			enableRejected.StatusCode, enableRejected.Header.Get("Location"), store.statusID, enableRejectedBody)
 	}
 
+	for _, item := range []struct {
+		name   string
+		target string
+		form   url.Values
+		resume string
+	}{
+		{name: "停用", target: "/ui/access/projects/disable", form: url.Values{"project_id": {"project-2"}}, resume: "/ui/access/projects?reverify_disable=project-2"},
+		{name: "吊销", target: "/ui/access/projects/revoke", form: url.Values{"project_id": {"project-3"}, "confirm": {"1"}}, resume: "/ui/access/projects?reverify_revoke=project-3"},
+		{name: "删除", target: "/ui/access/projects/delete", form: url.Values{"project_id": {"project-4"}}, resume: "/ui/access/projects?reverify_delete=project-4"},
+	} {
+		form := url.Values{"csrf_token": {csrfToken}}
+		for key, values := range item.form {
+			form[key] = values
+		}
+		rejected := authorityPostForm(t, handler, "127.0.0.1:7879", item.target, form, cookie)
+		wantRedirect := `/ui/reverify?next=` + url.QueryEscape(item.resume)
+		if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect {
+			t.Fatalf("%s项目应先重新验证，状态码=%d 跳转=%q 页面：\n%s",
+				item.name, rejected.StatusCode, rejected.Header.Get("Location"), readResponseBody(t, rejected))
+		}
+	}
+
 	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", wantAddRedirect, cookie)
 	reverifyBody := readResponseBody(t, reverifyPage)
 	reverifyCSRF := hiddenInputValue(t, reverifyBody, "csrf_token")
@@ -509,7 +531,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	}, cookie)
 	disabledBody := readResponseBody(t, disabled)
 	if disabled.StatusCode != http.StatusSeeOther || store.statusID != "project-2" {
-		t.Fatalf("停用项目不应要求重新验证，状态码=%d 调用=%q 页面：\n%s",
+		t.Fatalf("重新验证后应能停用项目，状态码=%d 调用=%q 页面：\n%s",
 			disabled.StatusCode, store.statusID, disabledBody)
 	}
 	revoked := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/projects/revoke", url.Values{
@@ -517,7 +539,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	}, cookie)
 	revokedBody := readResponseBody(t, revoked)
 	if revoked.StatusCode != http.StatusSeeOther || store.statusID != "project-3" {
-		t.Fatalf("吊销项目不应要求重新验证，状态码=%d 调用=%q 页面：\n%s",
+		t.Fatalf("重新验证后应能吊销项目，状态码=%d 调用=%q 页面：\n%s",
 			revoked.StatusCode, store.statusID, revokedBody)
 	}
 	deleted := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/projects/delete", url.Values{
@@ -525,7 +547,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	}, cookie)
 	deletedBody := readResponseBody(t, deleted)
 	if deleted.StatusCode != http.StatusSeeOther || store.deleteID != "project-4" {
-		t.Fatalf("删除项目不应要求重新验证，状态码=%d 调用=%q 页面：\n%s",
+		t.Fatalf("重新验证后应能删除项目，状态码=%d 调用=%q 页面：\n%s",
 			deleted.StatusCode, store.deleteID, deletedBody)
 	}
 }

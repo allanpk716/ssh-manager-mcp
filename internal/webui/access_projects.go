@@ -120,6 +120,12 @@ func projectReverifyNotice(query url.Values) string {
 		return "轮换项目令牌前需要重新验证管理员口令，验证后请重新提交轮换。"
 	case query.Get("reverify_enable") != "":
 		return "重新启用项目前需要重新验证管理员口令，验证后请重新提交。"
+	case query.Get("reverify_disable") != "":
+		return "停用项目前需要重新验证管理员口令，验证后请重新提交。"
+	case query.Get("reverify_revoke") != "":
+		return "吊销项目前需要重新验证管理员口令，验证后请重新提交。"
+	case query.Get("reverify_delete") != "":
+		return "删除项目前需要重新验证管理员口令，验证后请重新提交。"
 	default:
 		return ""
 	}
@@ -182,7 +188,7 @@ func (h *handler) handleAccessProjectRotate(w http.ResponseWriter, r *http.Reque
 
 // handleAccessProjectDisable 停用一个项目令牌，停用可逆。
 func (h *handler) handleAccessProjectDisable(w http.ResponseWriter, r *http.Request) {
-	h.handleAccessProjectStatus(w, r, "停用项目失败", "停用项目失败，请稍后重试。", false, "",
+	h.handleAccessProjectStatus(w, r, "停用项目失败", "停用项目失败，请稍后重试。", false, "reverify_disable",
 		func(id string, source AccessWriteSource) error {
 			return h.cfg.Access.DisableProject(id, source)
 		})
@@ -198,7 +204,7 @@ func (h *handler) handleAccessProjectEnable(w http.ResponseWriter, r *http.Reque
 
 // handleAccessProjectRevoke 永久吊销项目令牌；表单必须勾选确认，避免误触。
 func (h *handler) handleAccessProjectRevoke(w http.ResponseWriter, r *http.Request) {
-	h.handleAccessProjectStatus(w, r, "吊销项目失败", "吊销项目失败，请稍后重试。", true, "",
+	h.handleAccessProjectStatus(w, r, "吊销项目失败", "吊销项目失败，请稍后重试。", true, "reverify_revoke",
 		func(id string, source AccessWriteSource) error {
 			return h.cfg.Access.RevokeProject(id, source)
 		})
@@ -207,7 +213,7 @@ func (h *handler) handleAccessProjectRevoke(w http.ResponseWriter, r *http.Reque
 // handleAccessProjectDelete 删除一个已吊销的项目行；是否已吊销由访问管理
 // 模块判定，页面只对已吊销项目渲染入口。
 func (h *handler) handleAccessProjectDelete(w http.ResponseWriter, r *http.Request) {
-	h.handleAccessProjectStatus(w, r, "删除项目失败", "删除项目失败，请稍后重试。", false, "",
+	h.handleAccessProjectStatus(w, r, "删除项目失败", "删除项目失败，请稍后重试。", false, "reverify_delete",
 		func(id string, source AccessWriteSource) error {
 			return h.cfg.Access.DeleteProject(id, source)
 		})
@@ -244,10 +250,10 @@ func (h *handler) handleAccessProjectStatus(
 	http.Redirect(w, r, accessProjectsPath, http.StatusSeeOther)
 }
 
-// projectSensitiveActionAllowed 校验权威端敏感项目操作：签发、轮换与重新
-// 启用会签发新令牌或恢复权限，必须最近 5 分钟内验证过管理员口令。未验证
-// 时重定向到重新验证页；resume 保存验证后要回到的项目页查询参数。单机不
-// 要求重新验证。
+// projectSensitiveActionAllowed 校验权威端项目令牌写操作。签发、轮换、启
+// 停、吊销与删除都会改变访问凭据或授权状态，必须最近 5 分钟内验证过管理
+// 员口令。未验证时重定向到重新验证页；resume 保存验证后要回到的项目页查
+// 询参数。单机不要求重新验证。
 func (h *handler) projectSensitiveActionAllowed(w http.ResponseWriter, r *http.Request, resume url.Values) bool {
 	if h.cfg.Role != RoleServer || h.recentlyVerified(h.currentSession(r)) {
 		return true

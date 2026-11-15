@@ -168,7 +168,7 @@ func TestAuthorityDeviceCodeIssueRequiresReverifyAndShowsOnce(t *testing.T) {
 	}
 }
 
-func TestAuthorityDeviceCodeRevokeUsesConfirmationWithoutReverify(t *testing.T) {
+func TestAuthorityDeviceCodeRevokeRequiresReverifyAndUsesConfirmation(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
 	store := deviceCodeTestStore()
 	handler := newAuthorityForDeviceCodeTest(t, auth, store)
@@ -182,12 +182,40 @@ func TestAuthorityDeviceCodeRevokeUsesConfirmationWithoutReverify(t *testing.T) 
 	}
 	csrfToken := hiddenInputValue(t, confirmBody, "csrf_token")
 
-	revoked := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/device-codes/device-1/revoke", url.Values{
+	revokePath := "/ui/access/device-codes/device-1/revoke"
+	wantRedirect := `/ui/reverify?next=` + url.QueryEscape(revokePath)
+	rejected := authorityPostForm(t, handler, "192.0.2.50:7879", revokePath, url.Values{
+		"csrf_token": {csrfToken},
+	}, cookie)
+	rejectedBody := readResponseBody(t, rejected)
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantRedirect {
+		t.Fatalf("撤销设备码应先重新验证，状态码=%d 跳转=%q 页面：\n%s",
+			rejected.StatusCode, rejected.Header.Get("Location"), rejectedBody)
+	}
+	if store.revokeDeviceID != "" {
+		t.Fatalf("未重新验证时不应撤销设备码，实际调用 id=%q", store.revokeDeviceID)
+	}
+
+	reverifyPage := authorityGet(t, handler, "192.0.2.50:7879", wantRedirect, cookie)
+	reverifyBody := readResponseBody(t, reverifyPage)
+	reverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"},
+		"next":       {revokePath},
+	}, cookie)
+	reverifiedBody := readResponseBody(t, reverified)
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != revokePath {
+		t.Fatalf("重新验证后应回到撤销确认页，状态码=%d 跳转=%q 页面：\n%s",
+			reverified.StatusCode, reverified.Header.Get("Location"), reverifiedBody)
+	}
+
+	revoked := authorityPostForm(t, handler, "192.0.2.50:7879", revokePath, url.Values{
 		"csrf_token": {csrfToken},
 	}, cookie)
 	revokedBody := readResponseBody(t, revoked)
 	if revoked.StatusCode != http.StatusSeeOther || revoked.Header.Get("Location") != "/ui/access/device-codes" {
-		t.Fatalf("撤销后应回到设备码页，状态码=%d 跳转=%q 页面：\n%s", revoked.StatusCode, revoked.Header.Get("Location"), revokedBody)
+		t.Fatalf("重新验证后撤销应回到设备码页，状态码=%d 跳转=%q 页面：\n%s",
+			revoked.StatusCode, revoked.Header.Get("Location"), revokedBody)
 	}
 	if store.revokeDeviceID != "device-1" || store.revokeDeviceSrc.RemoteAddress != "198.51.100.9" {
 		t.Fatalf("撤销参数不正确：id=%q source=%+v", store.revokeDeviceID, store.revokeDeviceSrc)

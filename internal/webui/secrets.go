@@ -748,6 +748,10 @@ func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, ide
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "机密项详情只接受 GET 请求。")
 		return
 	}
+	if r.URL.Query().Get("resume") == "1" {
+		h.renderSecretDetailWithMetadataResume(w, r, identifier)
+		return
+	}
 	detail, err := h.secretDetail(identifier)
 	if err != nil {
 		h.renderSecretReadError(w, r, err)
@@ -756,6 +760,28 @@ func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, ide
 	h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", pageData{
 		Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
 	})
+}
+
+// renderSecretDetailWithMetadataResume 渲染保留元数据表单状态的机密项详情
+// 页；重新验证跳转回来后 owner 不必重新填写备注与环境变量名。
+func (h *handler) renderSecretDetailWithMetadataResume(
+	w http.ResponseWriter, r *http.Request, identifier string,
+) {
+	detail, err := h.secretDetail(identifier)
+	if err != nil {
+		h.renderSecretReadError(w, r, err)
+		return
+	}
+	data := pageData{
+		Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+		SecretDetailMetadataResume:  true,
+		SecretDetailNote:            r.URL.Query().Get("note"),
+		SecretDetailEnvironmentName: strings.TrimSpace(r.URL.Query().Get("environment_name")),
+	}
+	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
+		data.SecretDetailNotice = "修改机密项元数据前需要重新验证管理员口令；表单已保留上次提交内容。"
+	}
+	h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", data)
 }
 
 func (h *handler) renderSecretReadError(w http.ResponseWriter, r *http.Request, err error) {
@@ -779,6 +805,9 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 	}
 	note := r.PostFormValue("note")
 	environmentName := strings.TrimSpace(r.PostFormValue("environment_name"))
+	if h.redirectSecretWriteToReverify(w, r, secretMetadataResumePath(target, note, environmentName)) {
+		return
+	}
 	if err := h.cfg.SecretsWriter.EditSecretMetadata(
 		identifier, note, environmentName, SecretWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
@@ -809,6 +838,13 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	http.Redirect(w, r, target, http.StatusSeeOther)
+}
+
+// secretMetadataResumePath 构造修改机密项元数据的重新验证回跳地址，保留
+// 备注与环境变量名提交值。
+func secretMetadataResumePath(target, note, environmentName string) string {
+	values := url.Values{"note": {note}, "environment_name": {environmentName}, "resume": {"1"}}
+	return target + "?" + values.Encode()
 }
 
 func (h *handler) handleSecretValue(w http.ResponseWriter, r *http.Request, identifier string) {
