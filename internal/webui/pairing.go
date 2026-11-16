@@ -87,11 +87,17 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 			h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "配对批准页只接受 GET 与 HEAD 请求。")
 			return
 		}
+		query := r.URL.Query()
+		next := pairingApprovalResumePath(id, query.Get("profile"), query.Get("override"))
+		if !h.requireRecentReverify(w, r, next) {
+			return
+		}
 		data, err := h.pairingDetailData(id)
 		if err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取配对请求失败", "读取配对请求失败，请稍后重试。")
 			return
 		}
+		applyPairingApprovalResumeForm(r, &data)
 		status := http.StatusOK
 		if data.AccessPairing == nil {
 			status = http.StatusConflict
@@ -107,12 +113,11 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "配对裁决只接受 POST 请求。")
 		return
 	}
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		next := accessPairingPath
-		if id != "" {
-			next = accessPairingPath + "/" + url.PathEscape(id)
-		}
-		http.Redirect(w, r, reverifyPath(next), http.StatusSeeOther)
+	next := pairingDetailPath(id)
+	if action == "approve" {
+		next = pairingApprovalResumePath(id, r.PostFormValue("profile"), r.PostFormValue("override"))
+	}
+	if !h.requireRecentReverify(w, r, next) {
 		return
 	}
 
@@ -177,6 +182,54 @@ func (h *handler) accessPairingByID(id string) (*AccessPairingSummary, error) {
 		}
 	}
 	return nil, nil
+}
+
+func pairingDetailPath(id string) string {
+	return accessPairingPath + "/" + url.PathEscape(id)
+}
+
+// pairingApprovalResumePath 保留批准表单里的 profile 与覆盖文字，
+// 重新验证后回到同一张表单。
+func pairingApprovalResumePath(id, profileID, addressOverride string) string {
+	query := url.Values{}
+	if profileID != "" {
+		query.Set("profile", profileID)
+	}
+	if addressOverride != "" {
+		query.Set("override", addressOverride)
+	}
+	if len(query) == 0 {
+		return pairingDetailPath(id)
+	}
+	return pairingDetailPath(id) + "?" + query.Encode()
+}
+
+// applyPairingApprovalResumeForm 只在重新验证回跳后回填表单。「已比对」
+// 是 owner 的人工声明，必须每次重新勾选。
+func applyPairingApprovalResumeForm(r *http.Request, data *pageData) {
+	if data.AccessPairing == nil {
+		return
+	}
+	profileID := r.URL.Query().Get("profile")
+	addressOverride := r.URL.Query().Get("override")
+	if profileID == "" && addressOverride == "" {
+		return
+	}
+	refilled := false
+	for _, profile := range data.AccessProfiles {
+		if profile.ID == profileID {
+			data.AccessPairingForm.ProfileID = profileID
+			refilled = true
+			break
+		}
+	}
+	if addressOverride != "" {
+		data.AccessPairingForm.Override = addressOverride
+		refilled = true
+	}
+	if refilled {
+		data.AccessPairingNotice = "已重新验证管理员口令，请再次核对三项后勾选确认并批准。"
+	}
 }
 
 // pairingPageData 读取配对请求与 profile，并把 profile 提示换算成表单可选

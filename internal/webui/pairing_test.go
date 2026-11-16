@@ -157,6 +157,129 @@ func TestAuthorityPairingApprovalErrorKeepsSubmittedForm(t *testing.T) {
 	}
 }
 
+func TestAuthorityPairingApprovalDetailRequiresReverifyBeforeRendering(t *testing.T) {
+	store := pairingTestStore()
+	handler, auth := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+	auth.now = auth.now.Add(6 * time.Minute)
+
+	detail := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1", cookie)
+	detailBody := readResponseBody(t, detail)
+	detailPath := "/ui/access/pairing/pair-1"
+	wantRedirect := `/ui/reverify?next=` + url.QueryEscape(detailPath)
+	if detail.StatusCode != http.StatusSeeOther || detail.Header.Get("Location") != wantRedirect {
+		t.Fatalf("未重新验证时应先跳转重新验证页，状态码=%d 跳转=%q 页面：\n%s",
+			detail.StatusCode, detail.Header.Get("Location"), detailBody)
+	}
+
+	reverifyPage := authorityGet(t, handler, "192.0.2.50:7879", wantRedirect, cookie)
+	reverifyBody := readResponseBody(t, reverifyPage)
+	reverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {detailPath},
+	}, cookie)
+	reverifiedBody := readResponseBody(t, reverified)
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != detailPath {
+		t.Fatalf("重新验证后应回到批准表单，状态码=%d 跳转=%q 页面：\n%s",
+			reverified.StatusCode, reverified.Header.Get("Location"), reverifiedBody)
+	}
+
+	resumed := authorityGet(t, handler, "192.0.2.50:7879", detailPath, cookie)
+	resumedBody := readResponseBody(t, resumed)
+	if resumed.StatusCode != http.StatusOK || !strings.Contains(resumedBody, `name="compared"`) {
+		t.Fatalf("重新验证后应正常渲染批准表单，状态码=%d 页面：\n%s", resumed.StatusCode, resumedBody)
+	}
+}
+
+func TestAuthorityPairingApprovalReverifyPreservesSubmittedForm(t *testing.T) {
+	store := pairingTestStore()
+	handler, auth := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+	page := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/pairing", cookie)
+	body := readResponseBody(t, page)
+	csrfToken := hiddenInputValue(t, body, "csrf_token")
+
+	auth.now = auth.now.Add(6 * time.Minute)
+	approved := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/access/pairing/pair-1/approve", url.Values{
+		"csrf_token": {csrfToken}, "profile": {"profile-dev"},
+		"compared": {"1"}, "override": {"OVERRIDE"},
+	}, cookie)
+	approvedBody := readResponseBody(t, approved)
+	resumePath := "/ui/access/pairing/pair-1?override=OVERRIDE&profile=profile-dev"
+	approveRedirect := `/ui/reverify?next=` + url.QueryEscape(resumePath)
+	if approved.StatusCode != http.StatusSeeOther || approved.Header.Get("Location") != approveRedirect {
+		t.Fatalf("批准提交过期时应保留填写并先重新验证，状态码=%d 跳转=%q 页面：\n%s",
+			approved.StatusCode, approved.Header.Get("Location"), approvedBody)
+	}
+	if store.approvePairingID != "" {
+		t.Fatalf("未重新验证时不应调用批准，实际 id=%q", store.approvePairingID)
+	}
+
+	reverifyPage := authorityGet(t, handler, "192.0.2.50:7879", approveRedirect, cookie)
+	reverifyBody := readResponseBody(t, reverifyPage)
+	reverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
+		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
+		"password":   {"correct-password"}, "next": {resumePath},
+	}, cookie)
+	reverifiedBody := readResponseBody(t, reverified)
+	if reverified.StatusCode != http.StatusSeeOther || reverified.Header.Get("Location") != resumePath {
+		t.Fatalf("重新验证后应回到保留填写的批准表单，状态码=%d 跳转=%q 页面：\n%s",
+			reverified.StatusCode, reverified.Header.Get("Location"), reverifiedBody)
+	}
+
+	resumed := authorityGet(t, handler, "192.0.2.50:7879", resumePath, cookie)
+	resumedBody := readResponseBody(t, resumed)
+	if resumed.StatusCode != http.StatusOK {
+		t.Fatalf("回跳后的批准表单状态码=%d 页面：\n%s", resumed.StatusCode, resumedBody)
+	}
+	for _, want := range []string{
+		`value="profile-dev" selected`, `value="OVERRIDE"`,
+		`<input type="checkbox" name="compared" value="1" required>`,
+		"已重新验证管理员口令，请再次核对三项后勾选确认并批准。",
+	} {
+		if !strings.Contains(resumedBody, want) {
+			t.Fatalf("回跳后的批准表单应包含 %q：\n%s", want, resumedBody)
+		}
+	}
+}
+
+func TestAuthorityPairingApprovalResumeIgnoresUnknownProfile(t *testing.T) {
+	store := pairingTestStore()
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	response := authorityGet(t, handler, "192.0.2.50:7879",
+		"/ui/access/pairing/pair-1?profile=profile-missing&override=KEEP_ME", cookie)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("带回跳参数的批准表单状态码=%d 页面：\n%s", response.StatusCode, body)
+	}
+	if !strings.Contains(body, `value="profile-ops" selected`) || strings.Contains(body, `value="profile-missing"`) {
+		t.Fatalf("不存在的 profile 不应回填，页面应保留提示 profile：\n%s", body)
+	}
+	if !strings.Contains(body, `value="KEEP_ME"`) {
+		t.Fatalf("覆盖文字应保留：\n%s", body)
+	}
+}
+
+func TestStandalonePairingApprovalDetailDoesNotRequireReverify(t *testing.T) {
+	loopback, _, err := New(Config{
+		Role: RoleStandalone, Servers: &stubServerSource{}, Access: pairingTestStore(), Port: 18080,
+	})
+	if err != nil {
+		t.Fatalf("构造单机 Web UI Handler 失败：%v", err)
+	}
+	pairingHandler := loopback.(*handler)
+	request := httptest.NewRequest(http.MethodGet, "/ui/access/pairing/pair-1", nil)
+	recorder := httptest.NewRecorder()
+	pairingHandler.handleAccessPairingAction(recorder, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || recorder.Header().Get("Location") != "" || !strings.Contains(body, `name="compared"`) {
+		t.Fatalf("单机角色打开配对批准表单不应跳转重新验证，状态码=%d 跳转=%q 页面：\n%s",
+			recorder.Code, recorder.Header().Get("Location"), body)
+	}
+}
+
 func TestAuthorityPairingDetailForMissingRowShowsReturnLink(t *testing.T) {
 	store := pairingTestStore()
 	handler, _ := newAuthorityForPairingTest(t, store)
@@ -227,7 +350,8 @@ func TestAuthorityPairingApproveRejectThroughAccessStore(t *testing.T) {
 		"csrf_token": {csrfToken}, "profile": {"profile-ops"}, "compared": {"1"}, "override": {"OVERRIDE"},
 	}, cookie)
 	approvedBody := readResponseBody(t, approved)
-	approveRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/pairing/pair-1")
+	resumePath := "/ui/access/pairing/pair-1?override=OVERRIDE&profile=profile-ops"
+	approveRedirect := `/ui/reverify?next=` + url.QueryEscape(resumePath)
 	if approved.StatusCode != http.StatusSeeOther || approved.Header.Get("Location") != approveRedirect {
 		t.Fatalf("批准配对应先重新验证，状态码=%d 跳转=%q 页面：\n%s",
 			approved.StatusCode, approved.Header.Get("Location"), approvedBody)
@@ -236,7 +360,7 @@ func TestAuthorityPairingApproveRejectThroughAccessStore(t *testing.T) {
 	approveReverifyBody := readResponseBody(t, approveReverifyPage)
 	approveReverified := authorityPostForm(t, handler, "192.0.2.50:7879", "/ui/reverify", url.Values{
 		"csrf_token": {hiddenInputValue(t, approveReverifyBody, "csrf_token")},
-		"password":   {"correct-password"}, "next": {"/ui/access/pairing/pair-1"},
+		"password":   {"correct-password"}, "next": {resumePath},
 	}, cookie)
 	if approveReverified.StatusCode != http.StatusSeeOther {
 		t.Fatalf("批准配对重新验证失败，状态码=%d：%s", approveReverified.StatusCode, readResponseBody(t, approveReverified))
