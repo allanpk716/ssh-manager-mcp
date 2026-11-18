@@ -267,6 +267,30 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS")) == "1" {
+		if _, err := st.AddNetwork(models.Network{
+			Name: "家A备用局域网", Type: models.NetworkPhysical, SiteName: "家A",
+		}); err != nil {
+			return err
+		}
+		if _, err := st.AddNetwork(models.Network{
+			Name: "家A隔离局域网", Type: models.NetworkPhysical, SiteName: "家A",
+		}); err != nil {
+			return err
+		}
+		if _, err := st.AddNetwork(models.Network{Name: "空虚拟网A", Type: models.NetworkVirtual}); err != nil {
+			return err
+		}
+		if _, err := st.AddNetwork(models.Network{Name: "空虚拟网B", Type: models.NetworkVirtual}); err != nil {
+			return err
+		}
+		if _, err := st.AddSite("空办公室", ""); err != nil {
+			return err
+		}
+		if _, err := st.AddSite("空仓库", ""); err != nil {
+			return err
+		}
+	}
 	if _, err := st.MoveServerToDevice("db-1", "工作站"); err != nil {
 		return err
 	}

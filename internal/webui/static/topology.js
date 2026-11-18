@@ -259,7 +259,6 @@
       classes: "placeholder",
       selectable: false,
       grabbable: false,
-      locked: true,
     };
   }
 
@@ -473,6 +472,9 @@
       var savedSite = savedContainerCoordinate("site", state.data.sites[i].id);
       if (savedSite !== null) {
         positions["site:" + state.data.sites[i].id] = savedSite;
+        if (positions["empty:site:" + state.data.sites[i].id] !== undefined) {
+          positions["empty:site:" + state.data.sites[i].id] = savedSite;
+        }
       }
     }
     for (i = 0; i < state.data.networks.length; i += 1) {
@@ -487,6 +489,9 @@
       if (positions["vnet:" + network.id] !== undefined) {
         positions["vnet:" + network.id] = savedNetwork;
       }
+      if (positions["empty:network:" + network.id] !== undefined) {
+        positions["empty:network:" + network.id] = savedNetwork;
+      }
     }
     return positions;
   }
@@ -494,12 +499,18 @@
 
   function targetPositions(index, elements, view) {
     var positions = {};
+    var placeholderParents = {};
     var perRow = 3;
     var deviceWidth = 190;
     var deviceHeight = 100;
     var i;
     var row;
     var column;
+    elements.forEach(function (element) {
+      if (element.data !== undefined && element.data.placeholder === true && element.data.parent !== undefined) {
+        placeholderParents[element.data.parent] = true;
+      }
+    });
 
     if (view === "virtual") {
       var virtualNetworks = state.data.networks.filter(function (network) {
@@ -538,6 +549,12 @@
             positions["device:" + uniqueDevices[j]] = saved;
           }
         }
+        if (placeholderParents["network:" + virtualNetworks[i].id] === true) {
+          positions["empty:network:" + virtualNetworks[i].id] = {
+            x: baseX + 55,
+            y: baseY + rowCount * deviceHeight,
+          };
+        }
         rowCount += 4;
       }
       var extraDevices = elements
@@ -565,7 +582,16 @@
       var siteX = 80 + i * 760;
       var siteY = 80;
       var physicalNetworks = index.physicalBySite[state.data.sites[i].id] || [];
+      if (placeholderParents["site:" + state.data.sites[i].id] === true) {
+        positions["empty:site:" + state.data.sites[i].id] = { x: siteX + 55, y: siteY };
+      }
       for (var n = 0; n < physicalNetworks.length; n += 1) {
+        if (placeholderParents["network:" + physicalNetworks[n].id] === true) {
+          positions["empty:network:" + physicalNetworks[n].id] = {
+            x: siteX + 55,
+            y: siteY + n * (deviceHeight + 120),
+          };
+        }
         var membersPhysical = index.membershipsByNetwork[physicalNetworks[n].id] || [];
         for (var m = 0; m < membersPhysical.length; m += 1) {
           if (index.devices[membersPhysical[m].device_id] === undefined) {
@@ -653,6 +679,42 @@
     updateLayoutAttribute();
   }
 
+  // restoreSavedEmptyContainers 用已保存的父框中心还原空分组。空分组框
+  // 的标签带让父框中心与占位节点中心有一个固定偏差；先量出当前偏差，再
+  // 把占位节点放到保存中心的对应位置，刷新后就不会向标签带方向偏移。
+  function restoreSavedEmptyContainers() {
+    if (state.cy === null) {
+      return;
+    }
+    state.cy.nodes().forEach(function (parent) {
+      if (!parent.isParent()) {
+        return;
+      }
+      var placeholder = null;
+      parent.children().forEach(function (child) {
+        if (child.data("placeholder") === true) {
+          placeholder = child;
+        }
+      });
+      if (placeholder === null) {
+        return;
+      }
+      var parentData = parent.data();
+      var entityType = parentData.site !== undefined ? "site" : "network";
+      var entityID = entityType === "site" ? parentData.site : parentData.network;
+      var saved = savedContainerCoordinate(entityType, entityID);
+      if (saved === null) {
+        return;
+      }
+      var box = parent.boundingBox();
+      var current = placeholder.position();
+      placeholder.position({
+        x: saved.x + current.x - (box.x1 + box.x2) / 2,
+        y: saved.y + current.y - (box.y1 + box.y2) / 2,
+      });
+    });
+  }
+
   function applyView(view, animateTransition) {
     state.view = view;
     state.transitionSequence += 1;
@@ -681,8 +743,8 @@
     state.transitioning = animate;
     container.setAttribute("data-transition", animate ? "running" : "idle");
     state.cy.nodes().forEach(function (node) {
-      var target = positions[node.id()] || { x: 0, y: 0 };
-      if (node.data("placeholder") || node.isParent()) {
+      var target = positions[node.id()];
+      if (target === undefined || node.isParent()) {
         return;
       }
       node.position(target);
@@ -698,6 +760,7 @@
         }
       }
     });
+    restoreSavedEmptyContainers();
     updateGrabbable();
     if (!animate || animations.length === 0) {
       finishViewTransition(sequence);
@@ -943,8 +1006,9 @@
     state.cy.nodes().forEach(function (node) {
       var target = positions[node.id()];
       // 只还原子节点：复合节点形式的站点区域或网络分组框的框由子节点决定，直接设置父节点会把子
-      // 树再平移一次。先停掉未完成的过渡动画，避免动画把还原结果改掉。
-      if (target !== undefined && !node.data("placeholder") && !node.isParent()) {
+      // 树再平移一次。占位节点也属于子节点，要随整幅画布一起还原。先停
+      // 掉未完成的过渡动画，避免动画把还原结果改掉。
+      if (target !== undefined && !node.isParent()) {
         node.stop();
         node.position({ x: target.x, y: target.y });
       }
@@ -1099,7 +1163,7 @@
     var positions = targetPositions(index, state.cy.elements().jsons(), state.view);
     state.cy.nodes().forEach(function (node) {
       var target = positions[node.id()];
-      if (node.data("placeholder") || target === undefined) {
+      if (target === undefined) {
         return;
       }
       // 复合节点形式的站点区域或网络分组框的框由子节点决定，子节点的保存坐标已经还原了整个子树的
@@ -1108,6 +1172,7 @@
         node.position(target);
       }
     });
+    restoreSavedEmptyContainers();
     updateGrabbable();
     phoneInput.addEventListener === undefined ? null : phoneInput.addEventListener("change", updateGrabbable);
     state.cy.on("tap", "node", function (event) {

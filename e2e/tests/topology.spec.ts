@@ -22,6 +22,23 @@ async function startLocalProbeTarget(): Promise<net.Server> {
   return server;
 }
 
+// startStandaloneUIWithEmptyTopologyGroups 只给空分组用例的种子库开启额
+// 外夹具；进程环境在种子命令结束后立即还原，避免影响后续用例。
+async function startStandaloneUIWithEmptyTopologyGroups() {
+  const environmentName = "SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS";
+  const previous = process.env[environmentName];
+  process.env[environmentName] = "1";
+  try {
+    return await startStandaloneUIWithTopology();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[environmentName];
+    } else {
+      process.env[environmentName] = previous;
+    }
+  }
+}
+
 async function selectTopologyEntity(
   page: import("@playwright/test").Page,
   event: string,
@@ -85,6 +102,50 @@ async function canvasNodeBox(
     },
     { kind, entityName: name },
   );
+}
+
+function canvasBoxesOverlap(left: canvasBox, right: canvasBox): boolean {
+  return left.x1 < right.x2 && left.x2 > right.x1 && left.y1 < right.y2 && left.y2 > right.y1;
+}
+
+function expectCanvasBoxesDisjoint(boxes: canvasBox[]): void {
+  for (let leftIndex = 0; leftIndex < boxes.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < boxes.length; rightIndex += 1) {
+      const left = boxes[leftIndex];
+      const right = boxes[rightIndex];
+      expect(
+        canvasBoxesOverlap(left, right),
+        `分组框 ${leftIndex}（${JSON.stringify(left)}）与 ${rightIndex}（${JSON.stringify(right)}）相交`,
+      ).toBe(false);
+    }
+  }
+}
+
+async function canvasLabels(
+  page: import("@playwright/test").Page,
+  kind: "site" | "network",
+): Promise<Array<{ text: string; visible: boolean }>> {
+  return page.evaluate((entityKind) => {
+    const pageEl = document.querySelector("[data-topology-page]") as any;
+    const cy = pageEl.sshmgrTopology;
+    const labels: Array<{ text: string; visible: boolean }> = [];
+    cy.nodes().forEach((node: any) => {
+      if (node.data(entityKind) !== undefined) {
+        labels.push({ text: String(node.data("label") || ""), visible: node.visible() === true });
+      }
+    });
+    return labels;
+  }, kind);
+}
+
+function expectVisibleCanvasLabel(
+  labels: Array<{ text: string; visible: boolean }>,
+  expected: string,
+): void {
+  expect(
+    labels.some((item) => item.text === expected && item.visible),
+    `画布分组标题不可见：${expected}`,
+  ).toBe(true);
 }
 
 // pointInSiteOutsideNetworks 在站点区域内找一个不在任何物理局域网框里的
@@ -242,6 +303,95 @@ test("桌面端切换三视图并查看托盘、角标与详情", async ({ page,
     // 探测叠加用例给家A局域网补了一台「探测机」，成员数随之增加。
     await expect(detail).toContainText("家A局域网 · 3 台成员设备");
     expect(consoleErrors).toEqual([]);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("同一站点的空局域网与空站点在桌面和手机视口互不重叠", async ({ page, isMobile }) => {
+  if (isMobile) {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ colorScheme: "dark" });
+  }
+  const ui = await startStandaloneUIWithEmptyTopologyGroups();
+  try {
+    await openTopologyPage(page, ui);
+    const canvas = page.locator("#topology-canvas");
+    await waitForCanvasSettled(page);
+
+    const physicalNetworkNames = ["家A备用局域网", "家A局域网", "家A隔离局域网"];
+    const physicalNetworkBoxes: canvasBox[] = [];
+    for (const name of physicalNetworkNames) {
+      physicalNetworkBoxes.push(await canvasNodeBox(page, "network", name));
+    }
+    expectCanvasBoxesDisjoint(physicalNetworkBoxes);
+
+    const homeDeviceBox = await canvasNodeBox(page, "device", "NAS");
+    for (const emptyName of ["家A备用局域网", "家A隔离局域网"]) {
+      const emptyBox = await canvasNodeBox(page, "network", emptyName);
+      expect(canvasBoxesOverlap(emptyBox, homeDeviceBox)).toBe(false);
+    }
+
+    const emptySiteNames = ["空办公室", "空仓库"];
+    const emptySiteBoxes: canvasBox[] = [];
+    for (const name of emptySiteNames) {
+      emptySiteBoxes.push(await canvasNodeBox(page, "site", name));
+    }
+    expectCanvasBoxesDisjoint(emptySiteBoxes);
+
+    const physicalLabels = await canvasLabels(page, "network");
+    expectVisibleCanvasLabel(physicalLabels, "家A备用局域网");
+    expectVisibleCanvasLabel(physicalLabels, "家A隔离局域网");
+    const siteLabels = await canvasLabels(page, "site");
+    expectVisibleCanvasLabel(siteLabels, "空办公室");
+    expectVisibleCanvasLabel(siteLabels, "空仓库");
+
+    const placeholders = await page.evaluate(() => {
+      const pageEl = document.querySelector("[data-topology-page]") as any;
+      return pageEl.sshmgrTopology.nodes(".placeholder").map((node: any) => ({
+        id: String(node.id()),
+        grabbable: node.grabbable(),
+      }));
+    });
+    expect(placeholders).toHaveLength(4);
+    expect(placeholders.every((item: { grabbable: boolean }) => item.grabbable === false)).toBe(true);
+    let layout = await currentCanvasLayout(page);
+    expect(layout.devices.some((item) => item.device_id.startsWith("empty:"))).toBe(false);
+
+    // 手机视口不能编辑布局；保存与刷新恢复只在桌面视口验证。
+    if (!isMobile) {
+      const ids = await topologyIdentifiers(page);
+      const emptyNetworkID = ids.networks["家A备用局域网"];
+      await moveTopologyEntity(page, "network", emptyNetworkID, 4200, 900);
+      await expect(page.locator("[data-topology-status]")).toHaveText("布局已保存。");
+      layout = await currentCanvasLayout(page);
+      const movedEmptyNetwork = layout.containers.find(
+        (item) => item.entity_type === "network" && item.entity_id === emptyNetworkID,
+      );
+      expect(movedEmptyNetwork).toMatchObject({ x: 4200, y: 900 });
+
+      await page.reload();
+      await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
+      await waitForCanvasSettled(page);
+      layout = await currentCanvasLayout(page);
+      const restoredEmptyNetwork = layout.containers.find(
+        (item) => item.entity_type === "network" && item.entity_id === emptyNetworkID,
+      );
+      expect(restoredEmptyNetwork).toMatchObject({ x: 4200, y: 900 });
+    }
+
+    await page.getByRole("button", { name: "虚拟视图" }).click();
+    await expect(canvas).toHaveAttribute("data-view", "virtual");
+    await waitForCanvasSettled(page);
+    const virtualNetworkNames = ["空虚拟网A", "虚拟网", "虚拟网B", "空虚拟网B"];
+    const virtualNetworkBoxes: canvasBox[] = [];
+    for (const name of virtualNetworkNames) {
+      virtualNetworkBoxes.push(await canvasNodeBox(page, "network", name));
+    }
+    expectCanvasBoxesDisjoint(virtualNetworkBoxes);
+    const virtualLabels = await canvasLabels(page, "network");
+    expectVisibleCanvasLabel(virtualLabels, "空虚拟网A");
+    expectVisibleCanvasLabel(virtualLabels, "空虚拟网B");
   } finally {
     await ui.close();
   }
