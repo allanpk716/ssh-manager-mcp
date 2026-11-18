@@ -1,0 +1,1408 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>更多 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.modal-open { overflow: hidden; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 22px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .primary-button, .secondary-button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 16px;
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: #374151;
+      box-shadow: var(--shadow);
+      font-size: 14px;
+    }
+
+    .settings-groups { margin-top: 12px; }
+    .settings-group { margin-top: 20px; }
+    .group-title {
+      margin: 0 0 8px 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 500;
+    }
+    .settings-card, .network-card {
+      overflow: hidden;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .settings-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 58px;
+      padding: 10px 13px;
+      border: 0;
+      border-top: 1px solid #F0F1F3;
+      background: var(--card);
+      text-align: left;
+      cursor: pointer;
+    }
+    .settings-row:first-child { border-top: 0; }
+    .settings-row:active, .network-row:active { background: #F9FAFB; }
+    .setting-icon, .network-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 32px;
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .setting-icon.green, .network-icon.green { background: #ECFDF5; color: var(--success); }
+    .setting-icon.orange { background: var(--warning-soft); color: var(--warning); }
+    .setting-icon.gray { background: #F3F4F6; color: #4B5563; }
+    .setting-icon.purple { background: #F5F3FF; color: #7C3AED; }
+    .setting-icon.red { background: #FEF2F2; color: var(--danger); }
+    .setting-copy { flex: 1; min-width: 0; }
+    .setting-title { display: block; line-height: 21px; font-weight: 500; }
+    .setting-sub {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    .setting-meta {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      max-width: 58%;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+      text-align: right;
+    }
+    .warning-dot {
+      flex: 0 0 7px;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--warning);
+    }
+    .row-chevron { flex: 0 0 auto; color: #9CA3AF; }
+    .danger-row .setting-title { color: var(--danger); }
+
+    .back-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      min-height: 44px;
+      margin: -9px 0 5px -12px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 4px;
+      margin-top: 18px;
+      padding: 4px;
+      border-radius: 12px;
+      background: #E9EDF3;
+    }
+    .segment {
+      min-height: 44px;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .segment[aria-selected="true"] {
+      background: var(--card);
+      color: var(--text);
+      box-shadow: 0 1px 3px rgba(17,24,39,.12);
+      font-weight: 600;
+    }
+    .list-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 42px;
+      padding: 8px 1px 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    .list-meta span:last-child { text-align: right; }
+
+    .tree-card {
+      overflow: hidden;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .tree-node { border-top: 1px solid #F0F1F3; }
+    .tree-card > .tree-node:first-child { border-top: 0; }
+    .location-row {
+      display: flex;
+      align-items: center;
+      min-height: 60px;
+      padding-left: calc(3px + var(--depth) * 14px);
+      padding-right: 4px;
+    }
+    .tree-toggle, .node-more {
+      display: grid;
+      place-items: center;
+      flex: 0 0 auto;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .tree-toggle { width: 31px; }
+    .tree-toggle svg { transition: transform .16s ease; }
+    .tree-toggle[aria-expanded="true"] svg { transform: rotate(90deg); }
+    .tree-spacer { flex: 0 0 31px; width: 31px; }
+    .node-more { width: 44px; }
+    .location-select {
+      display: flex;
+      flex: 1;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-width: 0;
+      min-height: 58px;
+      padding: 6px 3px;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .location-name { flex: 0 0 auto; font-weight: 600; line-height: 21px; }
+    .location-stats {
+      max-width: 68%;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 17px;
+      text-align: right;
+    }
+    .location-select[aria-expanded="true"] .location-name { color: var(--primary); }
+    .machine-panel {
+      margin: 0 12px 11px calc(37px + var(--depth) * 14px);
+      padding: 10px 12px;
+      border-radius: 9px;
+      background: #F7F8FA;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .machine-label { display: block; margin-bottom: 7px; font-weight: 600; }
+    .machine-items { display: flex; flex-wrap: wrap; gap: 7px; }
+    .machine-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 30px;
+      padding: 4px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--card);
+      color: #374151;
+    }
+
+    .network-group { margin-top: 18px; }
+    .network-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 76px;
+      padding: 12px 14px;
+      border: 0;
+      border-top: 1px solid #F0F1F3;
+      background: var(--card);
+      text-align: left;
+      cursor: pointer;
+    }
+    .network-row:first-child { border-top: 0; }
+    .network-copy { flex: 1; min-width: 0; }
+    .network-title { display: block; font-size: 16px; line-height: 23px; font-weight: 600; }
+    .network-meta {
+      display: block;
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 19px;
+    }
+    .network-hint { margin: 12px 2px 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    .drawer-shell {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: rgba(17,24,39,.46);
+      cursor: default;
+      animation: fade-in .18s ease-out;
+    }
+    .drawer {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      max-height: min(88vh, 720px);
+      overflow-y: auto;
+      padding: 9px 20px calc(20px + env(safe-area-inset-bottom));
+      border-radius: 20px 20px 0 0;
+      background: var(--card);
+      box-shadow: 0 -12px 40px rgba(17,24,39,.16);
+      animation: slide-up .22s ease-out;
+    }
+    .drawer-handle {
+      width: 38px;
+      height: 4px;
+      margin: 0 auto 10px;
+      border-radius: 99px;
+      background: #D1D5DB;
+    }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .drawer-header h2 { margin: 0; font-size: 19px; line-height: 28px; }
+    .close-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-right: -9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .step-caption { margin: 3px 0 17px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .action-list {
+      margin-top: 15px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .action-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 48px;
+      padding: 8px 13px;
+      border: 0;
+      border-top: 1px solid #F0F1F3;
+      background: var(--card);
+      text-align: left;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .action-row:first-child { border-top: 0; }
+    .action-row.danger { color: var(--danger); }
+    .action-reason { margin: 10px 2px 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .drawer-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .drawer-actions .primary-button, .drawer-actions .secondary-button { flex: 1; }
+    .drawer-actions .secondary-button { box-shadow: none; }
+    .form-field { margin-top: 16px; }
+    .field-label {
+      display: block;
+      margin: 0 0 7px 2px;
+      color: #374151;
+      font-size: 13px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+    .text-input {
+      width: 100%;
+      min-height: 46px;
+      padding: 0 12px;
+      border: 1px solid #DDE1E7;
+      border-radius: 10px;
+      outline: 0;
+      background: var(--card);
+      color: var(--text);
+    }
+    .text-input:focus { border-color: #93C5FD; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+    .text-input:focus-visible { outline: 0; }
+    .tree-options {
+      max-height: 224px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+    }
+    .tree-option {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 48px;
+      padding: 7px 12px 7px calc(12px + var(--depth) * 16px);
+      border-top: 1px solid #F0F1F3;
+      cursor: pointer;
+    }
+    .tree-option:first-child { border-top: 0; }
+    .tree-option:has(input:checked) { background: var(--primary-soft); }
+    .tree-option:has(input:disabled) { cursor: not-allowed; opacity: .45; }
+    .tree-option input, .type-option input {
+      flex: 0 0 auto;
+      width: 19px;
+      height: 19px;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+    .tree-option-copy { min-width: 0; line-height: 20px; }
+    .tree-option-path { display: block; color: var(--muted); font-size: 12px; line-height: 17px; overflow-wrap: anywhere; }
+    .type-options { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+    .type-option {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 46px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+    }
+    .type-option:has(input:checked) { border-color: #60A5FA; background: var(--primary-soft); }
+    .switch-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 52px;
+      margin-top: 12px;
+    }
+    .switch-copy strong { display: block; font-size: 14px; font-weight: 600; }
+    .switch-copy span { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; }
+    .switch { position: relative; flex: 0 0 48px; width: 48px; height: 30px; }
+    .switch input {
+      position: absolute;
+      z-index: 2;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .switch-track {
+      position: absolute;
+      inset: 0;
+      border-radius: 99px;
+      background: #D1D5DB;
+      transition: background .16s ease;
+    }
+    .switch-track::after {
+      position: absolute;
+      top: 3px;
+      left: 3px;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      box-shadow: 0 1px 3px rgba(17,24,39,.2);
+      content: "";
+      transition: transform .16s ease;
+    }
+    .switch input:checked + .switch-track { background: var(--primary); }
+    .switch input:checked + .switch-track::after { transform: translateX(18px); }
+    .switch input:focus-visible + .switch-track { outline: 3px solid rgba(37,99,235,.25); outline-offset: 2px; }
+    .drawer-note { margin: 13px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFFFFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slide-up { from { transform: translateY(30px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 768px) {
+      .topbar {
+        display: block;
+        border-bottom: 1px solid rgba(229,231,235,.9);
+        background: rgba(255,255,255,.96);
+      }
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        gap: 42px;
+        max-width: 960px;
+        min-height: 64px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      .brand {
+        color: var(--text);
+        text-decoration: none;
+        font-size: 17px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link {
+        flex-direction: row;
+        gap: 7px;
+        min-height: 44px;
+        padding: 0 14px;
+        font-size: 14px;
+      }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 28px; padding-bottom: 48px; }
+      .settings-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 20px; }
+      .subpage-wrap { max-width: 800px; margin: 0 auto; }
+      .drawer { border-radius: 20px 20px 0 0; }
+      .toast { top: 80px; }
+    }
+
+    @media (max-width: 390px) {
+      .settings-row { gap: 9px; padding-right: 10px; padding-left: 10px; }
+      .setting-meta { font-size: 12px; }
+      .location-row { padding-left: calc(0px + var(--depth) * 11px); }
+      .location-select { gap: 5px; }
+      .location-stats { font-size: 11px; }
+      .machine-panel { margin-left: calc(34px + var(--depth) * 11px); }
+      .primary-button { padding-right: 12px; padding-left: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+          主页
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+          服务器
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+          客户端
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          授权
+        </a>
+        <a class="nav-link" href="#" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          更多
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page" id="page">
+    <section id="menuView" aria-labelledby="menuTitle">
+      <div class="title-row"><h1 id="menuTitle">更多</h1></div>
+      <div class="settings-groups">
+        <section class="settings-group" aria-labelledby="assetsGroup">
+          <h2 class="group-title" id="assetsGroup">资产</h2>
+          <div class="settings-card">
+            <button class="settings-row" type="button" data-demo="软件清单">
+              <span class="setting-icon purple">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M14 5l-4 14"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">软件清单</span></span>
+              <span class="setting-meta"><span class="warning-dot" aria-hidden="true"></span>2 项待办</span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" id="openLocations" type="button">
+              <span class="setting-icon">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">地点与网络</span></span>
+              <span class="setting-meta">5 个地点 · 3 个网络</span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="网络拓扑图（仅查看）">
+              <span class="setting-icon green">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="9" y="3" width="6" height="5" rx="1"/><rect x="3" y="16" width="6" height="5" rx="1"/><rect x="15" y="16" width="6" height="5" rx="1"/><path d="M12 8v4M6 16v-2h12v2"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">网络拓扑图</span></span>
+              <span class="setting-meta">仅查看</span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-group" aria-labelledby="operationsGroup">
+          <h2 class="group-title" id="operationsGroup">运维</h2>
+          <div class="settings-card">
+            <button class="settings-row" type="button" data-demo="备份">
+              <span class="setting-icon green">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M6.1 8a7 7 0 0 1 11.8-1L20 12M4 12l2.1 5a7 7 0 0 0 11.8-1"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">备份</span></span>
+              <span class="setting-meta">最近成功：今天 03:00</span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="升级">
+              <span class="setting-icon">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 16V4m0 0L8 8m4-4 4 4M5 14v5h14v-5"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">升级</span></span>
+              <span class="setting-meta">当前 v0.22.0，已是最新</span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="设置">
+              <span class="setting-icon gray">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3A1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">设置</span></span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="审计日志">
+              <span class="setting-icon gray">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h9l4 4v14H6V3Z"/><path d="M14 3v5h5M9 12h7M9 16h7"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">审计日志</span></span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-group" aria-labelledby="advancedGroup">
+          <h2 class="group-title" id="advancedGroup">高级</h2>
+          <div class="settings-card">
+            <button class="settings-row" type="button" data-demo="MCP 访问令牌">
+              <span class="setting-icon orange">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M16 7l2 2M14 9l2 2"/></svg>
+              </span>
+              <span class="setting-copy">
+                <span class="setting-title">MCP 访问令牌</span>
+                <span class="setting-sub">给不经配对、直接调用 sshmgr mcp 的程序用</span>
+              </span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="手动添加客户端">
+              <span class="setting-icon">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M12 7v6M9 10h6"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">手动添加客户端</span></span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-group" aria-labelledby="accountGroup">
+          <h2 class="group-title" id="accountGroup">账号</h2>
+          <div class="settings-card">
+            <button class="settings-row" type="button" data-demo="修改管理员口令">
+              <span class="setting-icon gray">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3M12 14v3"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">修改管理员口令</span></span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row" type="button" data-demo="注销">
+              <span class="setting-icon gray">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">注销</span></span>
+              <svg class="row-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <button class="settings-row danger-row" type="button" data-demo="注销全部会话">
+              <span class="setting-icon red">
+                <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M18 12H9"/><path d="m15 3 6 6M21 3l-6 6"/></svg>
+              </span>
+              <span class="setting-copy"><span class="setting-title">注销全部会话</span></span>
+            </button>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section id="locationsView" aria-labelledby="locationsTitle" hidden>
+      <div class="subpage-wrap">
+        <button class="back-button" id="backToMenu" type="button">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+          更多
+        </button>
+        <div class="title-row">
+          <h1 id="locationsTitle">地点与网络</h1>
+          <button class="primary-button" id="addButton" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            <span id="addButtonText">新建地点</span>
+          </button>
+        </div>
+        <div class="segmented" role="tablist" aria-label="地点与网络分类">
+          <button class="segment" id="locationsTab" type="button" role="tab" aria-selected="true" aria-controls="locationsPanel">地点</button>
+          <button class="segment" id="networksTab" type="button" role="tab" aria-selected="false" aria-controls="networksPanel">网络</button>
+        </div>
+
+        <section id="locationsPanel" role="tabpanel" aria-labelledby="locationsTab">
+          <div class="list-meta"><span>按层级组织物理场所</span><span>点地点查看机器</span></div>
+          <div class="tree-card" id="locationTree" aria-label="地点树"></div>
+        </section>
+
+        <section id="networksPanel" role="tabpanel" aria-labelledby="networksTab" hidden>
+          <div class="list-meta"><span>3 个网络</span><span>点一行可编辑</span></div>
+          <section class="network-group" aria-labelledby="physicalNetworksTitle">
+            <h2 class="group-title" id="physicalNetworksTitle">物理局域网</h2>
+            <div class="network-card" id="physicalNetworks"></div>
+          </section>
+          <section class="network-group" aria-labelledby="virtualNetworksTitle">
+            <h2 class="group-title" id="virtualNetworksTitle">虚拟局域网</h2>
+            <div class="network-card" id="virtualNetworks"></div>
+          </section>
+          <p class="network-hint">一台机器可有多个地址；sshmgr 连接时会自动挑最合适的地址。</p>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+      主页
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+      服务器
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+      客户端
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      授权
+    </a>
+    <a class="nav-link" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      更多
+    </a>
+  </nav>
+
+  <div class="drawer-shell" id="actionDrawer" hidden>
+    <button class="drawer-backdrop" type="button" data-close="actionDrawer" aria-label="关闭地点操作" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="actionTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="actionTitle">地点操作</h2>
+        <button class="close-button" type="button" data-close="actionDrawer" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="step-caption" id="actionPath"></p>
+      <div class="action-list">
+        <button class="action-row" id="newChildAction" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          新建子地点
+        </button>
+        <button class="action-row" id="renameAction" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m4 16-1 5 5-1L19 9l-4-4L4 16ZM13 7l4 4"/></svg>
+          改名
+        </button>
+        <button class="action-row" id="moveAction" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h13m0 0-3-3m3 3-3 3M20 17H7m0 0 3 3m-3-3 3-3"/></svg>
+          移动到…
+        </button>
+        <button class="action-row danger" id="deleteAction" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></svg>
+          删除
+        </button>
+      </div>
+      <p class="action-reason" id="deleteReason"></p>
+    </section>
+  </div>
+
+  <div class="drawer-shell" id="locationFormDrawer" hidden>
+    <button class="drawer-backdrop" type="button" data-close="locationFormDrawer" aria-label="关闭地点表单" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="locationFormTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="locationFormTitle">新建地点</h2>
+        <button class="close-button" type="button" data-close="locationFormDrawer" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="step-caption" id="locationFormCaption">地点可直接选到最细一级。</p>
+      <form id="locationForm">
+        <div class="form-field" id="locationNameField">
+          <label class="field-label" for="locationName">名称</label>
+          <input class="text-input" id="locationName" type="text" maxlength="40" autocomplete="off" placeholder="例如：2 号楼">
+        </div>
+        <div class="form-field" id="parentLocationField">
+          <span class="field-label">上级地点</span>
+          <div class="tree-options" id="parentLocationOptions"></div>
+        </div>
+        <div class="drawer-actions">
+          <button class="secondary-button" type="button" data-close="locationFormDrawer">取消</button>
+          <button class="primary-button" id="saveLocation" type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="drawer-shell" id="networkFormDrawer" hidden>
+    <button class="drawer-backdrop" type="button" data-close="networkFormDrawer" aria-label="关闭网络表单" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="networkFormTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="networkFormTitle">编辑网络</h2>
+        <button class="close-button" type="button" data-close="networkFormDrawer" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="step-caption">设置地址范围、覆盖地点与计费方式。</p>
+      <form id="networkForm">
+        <div class="form-field">
+          <span class="field-label">网络类型</span>
+          <div class="type-options">
+            <label class="type-option"><input type="radio" name="networkType" value="physical" checked>物理局域网</label>
+            <label class="type-option"><input type="radio" name="networkType" value="virtual">虚拟局域网</label>
+          </div>
+        </div>
+        <div class="form-field">
+          <label class="field-label" for="networkName">名称</label>
+          <input class="text-input" id="networkName" type="text" maxlength="40" autocomplete="off" required placeholder="例如：家A-LAN">
+        </div>
+        <div class="form-field">
+          <label class="field-label" for="networkCidr">网段</label>
+          <input class="text-input" id="networkCidr" type="text" maxlength="50" autocomplete="off" required placeholder="例如：192.168.100.0/24">
+        </div>
+        <div class="form-field" id="coverageField">
+          <span class="field-label">覆盖地点</span>
+          <div class="tree-options" id="coverageOptions"></div>
+        </div>
+        <p class="drawer-note" id="virtualNetworkNote" hidden>虚拟局域网（NetBird）不属于地点。</p>
+        <div class="form-field">
+          <label class="field-label" for="networkBandwidth">标称带宽</label>
+          <input class="text-input" id="networkBandwidth" type="text" maxlength="30" autocomplete="off" placeholder="例如：1 Gbps">
+        </div>
+        <div class="switch-row">
+          <div class="switch-copy"><strong>按流量计费</strong><span>用于连接时权衡地址选择</span></div>
+          <label class="switch">
+            <input id="networkMetered" type="checkbox" aria-label="是否按流量计费">
+            <span class="switch-track" aria-hidden="true"></span>
+          </label>
+        </div>
+        <div class="drawer-actions">
+          <button class="secondary-button" type="button" data-close="networkFormDrawer">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span id="toastText"></span>
+  </div>
+
+  <script>
+    const locations = [
+      { id: 'home', name: '家 A', machines: ['mini6', 'NUC10', 'train3060', '软路由', 'NAS'], physical: 1, children: [] },
+      { id: 'company', name: '公司', machines: [], physical: 0, children: [
+        { id: 'factory1', name: '一厂区', machines: [], physical: 1, children: [
+          { id: 'building1', name: '1 号楼', machines: ['gitlab-urit'], physical: 0, children: [] },
+          { id: 'building3', name: '3 号楼', machines: ['4090x2', '3090x2'], physical: 0, children: [] }
+        ] },
+        { id: 'factory2', name: '二厂区', machines: [], physical: 0, children: [] }
+      ] }
+    ];
+
+    const networks = [
+      { id: 'home-lan', type: 'physical', name: '家A-LAN', cidr: '192.168.100.0/24', locationId: 'home', count: 5, bandwidth: '2.5 Gbps', metered: false },
+      { id: 'company-lan', type: 'physical', name: '公司-LAN', cidr: '10.20.0.0/16', locationId: 'factory1', count: 3, bandwidth: '10 Gbps', metered: false },
+      { id: 'netbird', type: 'virtual', name: 'NetBird', cidr: '100.64.0.0/10', locationId: null, count: 4, bandwidth: '', metered: false }
+    ];
+
+    const state = {
+      tab: 'locations',
+      expanded: new Set(['company', 'factory1']),
+      machineOpen: new Set(),
+      currentLocationId: null,
+      locationMode: 'create',
+      editingNetworkId: null
+    };
+
+    const menuView = document.getElementById('menuView');
+    const locationsView = document.getElementById('locationsView');
+    const locationsTab = document.getElementById('locationsTab');
+    const networksTab = document.getElementById('networksTab');
+    const locationsPanel = document.getElementById('locationsPanel');
+    const networksPanel = document.getElementById('networksPanel');
+    const addButtonText = document.getElementById('addButtonText');
+    const locationTree = document.getElementById('locationTree');
+    const actionDrawer = document.getElementById('actionDrawer');
+    const locationFormDrawer = document.getElementById('locationFormDrawer');
+    const networkFormDrawer = document.getElementById('networkFormDrawer');
+    const locationForm = document.getElementById('locationForm');
+    const networkForm = document.getElementById('networkForm');
+    const locationName = document.getElementById('locationName');
+    const networkName = document.getElementById('networkName');
+    const networkCidr = document.getElementById('networkCidr');
+    const networkBandwidth = document.getElementById('networkBandwidth');
+    const networkMetered = document.getElementById('networkMetered');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toastText');
+    const drawerFocus = new WeakMap();
+    let toastTimer;
+    let newId = 0;
+
+    const chevronIcon = '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+    const moreIcon = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>';
+    const machineIcon = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg>';
+    const physicalIcon = '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="8" width="18" height="8" rx="2"/><path d="M7 12h.01M11 12h.01M15 12h2M8 8V5m8 3V5M8 16v3m8-3v3"/></svg>';
+    const virtualIcon = '<svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="18" r="2.5"/><path d="m10.9 7.3-4.8 8.4M13.1 7.3l4.8 8.4M7.5 18h9"/></svg>';
+
+    function escapeHtml(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+    }
+
+    function findLocation(id, nodes = locations, parent = null) {
+      for (const node of nodes) {
+        if (node.id === id) return { node, parent };
+        const found = findLocation(id, node.children, node);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function locationPath(id) {
+      const parts = [];
+      let found = findLocation(id);
+      while (found) {
+        parts.unshift(found.node.name);
+        found = found.parent ? findLocation(found.parent.id) : null;
+      }
+      return parts.join(' / ');
+    }
+
+    function descendantMachineCount(node) {
+      return node.children.reduce((total, child) => total + child.machines.length + descendantMachineCount(child), 0);
+    }
+
+    function collectDescendantIds(node, ids = new Set()) {
+      ids.add(node.id);
+      node.children.forEach(child => collectDescendantIds(child, ids));
+      return ids;
+    }
+
+    function locationStats(node) {
+      const below = descendantMachineCount(node);
+      const direct = node.machines.length;
+      let text = below ? `0 台直接 · 下级共 ${below} 台` : `${direct} 台机器`;
+      if (node.physical) text += ` · ${node.physical} 个物理网`;
+      return text;
+    }
+
+    function locationNode(node, depth) {
+      const hasChildren = node.children.length > 0;
+      const expanded = state.expanded.has(node.id);
+      const machinesExpanded = state.machineOpen.has(node.id);
+      const machines = node.machines.length
+        ? `<span class="machine-label">机器</span><div class="machine-items">${node.machines.map(name => `<span class="machine-chip">${machineIcon}${escapeHtml(name)}</span>`).join('')}</div>`
+        : '没有直接放在此地点的机器';
+      return `
+        <div class="tree-node" style="--depth:${depth}">
+          <div class="location-row">
+            ${hasChildren
+              ? `<button class="tree-toggle" type="button" data-toggle="${node.id}" aria-label="${expanded ? '收起' : '展开'} ${escapeHtml(node.name)} 的下级地点" aria-expanded="${expanded}">${chevronIcon}</button>`
+              : '<span class="tree-spacer" aria-hidden="true"></span>'}
+            <button class="location-select" type="button" data-machines="${node.id}" aria-expanded="${machinesExpanded}" aria-label="查看 ${escapeHtml(locationPath(node.id))} 的机器">
+              <span class="location-name">${escapeHtml(node.name)}</span>
+              <span class="location-stats">${locationStats(node)}</span>
+            </button>
+            <button class="node-more" type="button" data-actions="${node.id}" aria-label="${escapeHtml(node.name)} 的更多操作">${moreIcon}</button>
+          </div>
+          <div class="machine-panel" style="--depth:${depth}" ${machinesExpanded ? '' : 'hidden'}>${machines}</div>
+          ${hasChildren ? `<div class="tree-children" ${expanded ? '' : 'hidden'}>${node.children.map(child => locationNode(child, depth + 1)).join('')}</div>` : ''}
+        </div>`;
+    }
+
+    function renderLocations() {
+      locationTree.innerHTML = locations.map(node => locationNode(node, 0)).join('');
+      renderNetworkOptions();
+    }
+
+    function networkRow(network) {
+      const coverage = network.type === 'physical' ? ` · 覆盖 ${locationPath(network.locationId) || '未选择'}` : '';
+      return `
+        <button class="network-row" type="button" data-network="${network.id}">
+          <span class="network-icon ${network.type === 'virtual' ? 'green' : ''}">${network.type === 'virtual' ? virtualIcon : physicalIcon}</span>
+          <span class="network-copy">
+            <span class="network-title">${escapeHtml(network.name)}</span>
+            <span class="network-meta">${escapeHtml(network.cidr)}${escapeHtml(coverage)} · ${network.count} 台</span>
+          </span>
+          ${chevronIcon}
+        </button>`;
+    }
+
+    function renderNetworks() {
+      document.getElementById('physicalNetworks').innerHTML = networks.filter(network => network.type === 'physical').map(networkRow).join('');
+      document.getElementById('virtualNetworks').innerHTML = networks.filter(network => network.type === 'virtual').map(networkRow).join('');
+    }
+
+    function locationOptions(mode, selectedId) {
+      let disabledIds = new Set();
+      if (mode === 'move') {
+        const current = findLocation(state.currentLocationId);
+        if (current) disabledIds = collectDescendantIds(current.node);
+      }
+      const options = [];
+      if (mode !== 'coverage') {
+        options.push(`<label class="tree-option" style="--depth:0"><input type="radio" name="parentLocation" value="" ${selectedId ? '' : 'checked'}><span class="tree-option-copy">无上级（顶级地点）</span></label>`);
+      }
+      function addNodes(nodes, depth) {
+        nodes.forEach(node => {
+          const disabled = disabledIds.has(node.id);
+          const checked = selectedId === node.id;
+          options.push(`
+            <label class="tree-option" style="--depth:${depth}">
+              <input type="radio" name="${mode === 'coverage' ? 'coverageLocation' : 'parentLocation'}" value="${node.id}" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+              <span class="tree-option-copy">${escapeHtml(node.name)}${depth ? `<span class="tree-option-path">${escapeHtml(locationPath(node.id))}</span>` : ''}</span>
+            </label>`);
+          addNodes(node.children, depth + 1);
+        });
+      }
+      addNodes(locations, 0);
+      return options.join('');
+    }
+
+    function renderNetworkOptions() {
+      const editing = networks.find(network => network.id === state.editingNetworkId);
+      document.getElementById('coverageOptions').innerHTML = locationOptions('coverage', editing ? editing.locationId : 'home');
+    }
+
+    function setTab(tab) {
+      state.tab = tab;
+      const showLocations = tab === 'locations';
+      locationsTab.setAttribute('aria-selected', String(showLocations));
+      networksTab.setAttribute('aria-selected', String(!showLocations));
+      locationsPanel.hidden = !showLocations;
+      networksPanel.hidden = showLocations;
+      addButtonText.textContent = showLocations ? '新建地点' : '新建网络';
+    }
+
+    function openDrawer(drawer) {
+      drawerFocus.set(drawer, document.activeElement);
+      drawer.hidden = false;
+      document.body.classList.add('modal-open');
+      const close = drawer.querySelector('.close-button');
+      if (close) close.focus();
+    }
+
+    function closeDrawer(drawer) {
+      drawer.hidden = true;
+      if (!document.querySelector('.drawer-shell:not([hidden])')) document.body.classList.remove('modal-open');
+      const previous = drawerFocus.get(drawer);
+      if (previous && document.contains(previous)) previous.focus();
+    }
+
+    function openLocationActions(id) {
+      const found = findLocation(id);
+      if (!found) return;
+      state.currentLocationId = id;
+      const node = found.node;
+      document.getElementById('actionTitle').textContent = node.name;
+      document.getElementById('actionPath').textContent = locationPath(id);
+      const deleteButton = document.getElementById('deleteAction');
+      const reason = document.getElementById('deleteReason');
+      const blocked = node.children.length > 0 || node.machines.length > 0;
+      deleteButton.disabled = blocked;
+      if (node.children.length) reason.textContent = '此地点有子地点，请先移动或删除子地点。';
+      else if (node.machines.length) reason.textContent = `此地点有 ${node.machines.length} 台机器，请先移动这些机器。`;
+      else reason.textContent = '此地点为空，可以删除。';
+      openDrawer(actionDrawer);
+    }
+
+    function openLocationForm(mode, id = null) {
+      state.locationMode = mode;
+      state.currentLocationId = id || state.currentLocationId;
+      const found = state.currentLocationId ? findLocation(state.currentLocationId) : null;
+      const isRename = mode === 'rename';
+      const isMove = mode === 'move';
+      document.getElementById('locationFormTitle').textContent = isRename ? '改名' : isMove ? '移动地点' : '新建地点';
+      document.getElementById('locationFormCaption').textContent = isMove && found ? `移动「${locationPath(found.node.id)}」` : '地点可直接选到最细一级。';
+      document.getElementById('locationNameField').hidden = isMove;
+      document.getElementById('parentLocationField').hidden = isRename;
+      locationName.required = !isMove;
+      locationName.value = isRename && found ? found.node.name : '';
+      let selectedParent = '';
+      if (mode === 'create' && id) selectedParent = id;
+      if (isMove && found) selectedParent = found.parent ? found.parent.id : '';
+      document.getElementById('parentLocationOptions').innerHTML = locationOptions(mode, selectedParent);
+      openDrawer(locationFormDrawer);
+      if (!isMove) locationName.focus();
+    }
+
+    function removeLocation(id, nodes = locations) {
+      const index = nodes.findIndex(node => node.id === id);
+      if (index !== -1) return nodes.splice(index, 1)[0];
+      for (const node of nodes) {
+        const removed = removeLocation(id, node.children);
+        if (removed) return removed;
+      }
+      return null;
+    }
+
+    function openNetworkForm(id = null) {
+      state.editingNetworkId = id;
+      const network = networks.find(item => item.id === id);
+      document.getElementById('networkFormTitle').textContent = network ? '编辑网络' : '新建网络';
+      networkName.value = network ? network.name : '';
+      networkCidr.value = network ? network.cidr : '';
+      networkBandwidth.value = network ? network.bandwidth : '';
+      networkMetered.checked = network ? network.metered : false;
+      const type = network ? network.type : 'physical';
+      networkForm.querySelector(`input[name="networkType"][value="${type}"]`).checked = true;
+      networkForm.querySelectorAll('input[name="networkType"]').forEach(input => { input.disabled = Boolean(network); });
+      renderNetworkOptions();
+      updateNetworkTypeFields();
+      openDrawer(networkFormDrawer);
+      networkName.focus();
+    }
+
+    function updateNetworkTypeFields() {
+      const type = networkForm.querySelector('input[name="networkType"]:checked').value;
+      document.getElementById('coverageField').hidden = type === 'virtual';
+      document.getElementById('virtualNetworkNote').hidden = type !== 'virtual';
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toastText.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3000);
+    }
+
+    document.getElementById('openLocations').addEventListener('click', () => {
+      menuView.hidden = true;
+      locationsView.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    document.getElementById('backToMenu').addEventListener('click', () => {
+      locationsView.hidden = true;
+      menuView.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    locationsTab.addEventListener('click', () => setTab('locations'));
+    networksTab.addEventListener('click', () => setTab('networks'));
+
+    document.getElementById('addButton').addEventListener('click', () => {
+      if (state.tab === 'locations') {
+        state.currentLocationId = null;
+        openLocationForm('create');
+      } else openNetworkForm();
+    });
+
+    locationTree.addEventListener('click', event => {
+      const toggle = event.target.closest('[data-toggle]');
+      const machines = event.target.closest('[data-machines]');
+      const actions = event.target.closest('[data-actions]');
+      if (toggle) {
+        const id = toggle.dataset.toggle;
+        if (state.expanded.has(id)) state.expanded.delete(id);
+        else state.expanded.add(id);
+        renderLocations();
+        const replacement = locationTree.querySelector(`[data-toggle="${id}"]`);
+        if (replacement) replacement.focus();
+      } else if (machines) {
+        const id = machines.dataset.machines;
+        if (state.machineOpen.has(id)) state.machineOpen.delete(id);
+        else state.machineOpen.add(id);
+        renderLocations();
+        const replacement = locationTree.querySelector(`[data-machines="${id}"]`);
+        if (replacement) replacement.focus();
+      } else if (actions) openLocationActions(actions.dataset.actions);
+    });
+
+    document.getElementById('newChildAction').addEventListener('click', () => {
+      const id = state.currentLocationId;
+      closeDrawer(actionDrawer);
+      openLocationForm('create', id);
+    });
+    document.getElementById('renameAction').addEventListener('click', () => {
+      closeDrawer(actionDrawer);
+      openLocationForm('rename', state.currentLocationId);
+    });
+    document.getElementById('moveAction').addEventListener('click', () => {
+      closeDrawer(actionDrawer);
+      openLocationForm('move', state.currentLocationId);
+    });
+    document.getElementById('deleteAction').addEventListener('click', () => {
+      const found = findLocation(state.currentLocationId);
+      if (!found || found.node.children.length || found.node.machines.length) return;
+      const name = found.node.name;
+      removeLocation(state.currentLocationId);
+      state.machineOpen.delete(state.currentLocationId);
+      closeDrawer(actionDrawer);
+      renderLocations();
+      renderNetworks();
+      showToast(`已删除地点「${name}」`);
+    });
+
+    locationForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const mode = state.locationMode;
+      const found = findLocation(state.currentLocationId);
+      if (mode === 'rename') {
+        if (!found || !locationName.value.trim()) return;
+        const oldPath = locationPath(found.node.id);
+        found.node.name = locationName.value.trim();
+        closeDrawer(locationFormDrawer);
+        renderLocations();
+        renderNetworks();
+        showToast(`已将「${oldPath}」改名为「${found.node.name}」`);
+        return;
+      }
+      const selected = locationForm.querySelector('input[name="parentLocation"]:checked');
+      const parentId = selected ? selected.value : '';
+      if (mode === 'create') {
+        const name = locationName.value.trim();
+        if (!name) return;
+        const node = { id: `location-${Date.now()}-${newId++}`, name, machines: [], physical: 0, children: [] };
+        if (parentId) {
+          const parent = findLocation(parentId);
+          if (!parent) return;
+          parent.node.children.push(node);
+          state.expanded.add(parentId);
+        } else locations.push(node);
+        closeDrawer(locationFormDrawer);
+        renderLocations();
+        showToast(`已新建地点「${name}」`);
+      } else if (mode === 'move' && found) {
+        if (parentId === found.node.id || (parentId && collectDescendantIds(found.node).has(parentId))) return;
+        const moving = removeLocation(found.node.id);
+        if (parentId) {
+          const parent = findLocation(parentId);
+          if (!parent) return;
+          parent.node.children.push(moving);
+          state.expanded.add(parentId);
+        } else locations.push(moving);
+        closeDrawer(locationFormDrawer);
+        renderLocations();
+        renderNetworks();
+        showToast(`已移动地点「${moving.name}」`);
+      }
+    });
+
+    document.getElementById('physicalNetworks').addEventListener('click', event => {
+      const row = event.target.closest('[data-network]');
+      if (row) openNetworkForm(row.dataset.network);
+    });
+    document.getElementById('virtualNetworks').addEventListener('click', event => {
+      const row = event.target.closest('[data-network]');
+      if (row) openNetworkForm(row.dataset.network);
+    });
+    networkForm.querySelectorAll('input[name="networkType"]').forEach(input => input.addEventListener('change', updateNetworkTypeFields));
+
+    networkForm.addEventListener('submit', event => {
+      event.preventDefault();
+      const type = networkForm.querySelector('input[name="networkType"]:checked').value;
+      const coverage = networkForm.querySelector('input[name="coverageLocation"]:checked');
+      let network = networks.find(item => item.id === state.editingNetworkId);
+      if (!network) {
+        network = { id: `network-${Date.now()}-${newId++}`, count: 0 };
+        networks.push(network);
+      }
+      network.type = type;
+      network.name = networkName.value.trim();
+      network.cidr = networkCidr.value.trim();
+      network.locationId = type === 'physical' && coverage ? coverage.value : null;
+      network.bandwidth = networkBandwidth.value.trim();
+      network.metered = networkMetered.checked;
+      closeDrawer(networkFormDrawer);
+      renderNetworks();
+      showToast(`已保存网络「${network.name}」`);
+    });
+
+    document.querySelectorAll('[data-demo]').forEach(button => {
+      button.addEventListener('click', () => showToast(`${button.dataset.demo}（静态演示）`));
+    });
+
+    document.querySelectorAll('[data-close]').forEach(button => {
+      button.addEventListener('click', () => closeDrawer(document.getElementById(button.dataset.close)));
+    });
+
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const openDrawers = Array.from(document.querySelectorAll('.drawer-shell:not([hidden])'));
+      if (openDrawers.length) closeDrawer(openDrawers[openDrawers.length - 1]);
+    });
+
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      link.addEventListener('click', event => event.preventDefault());
+    });
+
+    renderLocations();
+    renderNetworks();
+  </script>
+</body>
+</html>

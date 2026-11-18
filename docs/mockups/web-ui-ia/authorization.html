@@ -1,0 +1,1459 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>机密项 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.modal-open { overflow: hidden; }
+    button, input, textarea { font: inherit; }
+    button, a, label { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 22px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .title-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 25px;
+      height: 24px;
+      margin-left: 7px;
+      padding: 0 7px;
+      border-radius: 8px;
+      background: #E9EDF3;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      vertical-align: 2px;
+    }
+    .primary-button, .secondary-button, .text-button, .danger-button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 16px;
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: #374151;
+      box-shadow: var(--shadow);
+      font-size: 14px;
+    }
+    .text-button {
+      padding: 0 14px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .danger-button {
+      padding: 0 15px;
+      border: 1px solid #FECACA;
+      background: #FFFFFF;
+      color: var(--danger);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      margin-top: 18px;
+      padding: 4px;
+      border-radius: 12px;
+      background: #E9EDF3;
+    }
+    .segment {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 8px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .segment[aria-current="page"] {
+      background: var(--card);
+      color: var(--primary);
+      box-shadow: var(--shadow);
+      font-weight: 650;
+    }
+    .list-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 48px;
+      padding: 8px 1px 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .attention-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 60px;
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid #FDE68A;
+      border-radius: 12px;
+      background: var(--warning-soft);
+      color: #92400E;
+      box-shadow: var(--shadow);
+      text-align: left;
+      cursor: pointer;
+    }
+    .attention-card svg { color: var(--warning); }
+    .attention-copy {
+      flex: 1;
+      min-width: 0;
+      font-size: 14px;
+      line-height: 21px;
+      font-weight: 600;
+    }
+    .secret-list { display: grid; gap: 12px; }
+    .secret-card, .storage-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      min-width: 0;
+      min-height: 94px;
+      padding: 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      text-align: left;
+      cursor: pointer;
+    }
+    .storage-card { cursor: default; }
+    .secret-card:active { background: #FAFCFF; }
+    .secret-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 40px;
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .secret-copy { flex: 1; min-width: 0; }
+    .secret-name {
+      display: block;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .secret-note {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      overflow: hidden;
+      margin-top: 5px;
+      color: #4B5563;
+      font-size: 15px;
+      line-height: 22px;
+    }
+    .secret-detail {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .chevron { color: #9CA3AF; }
+
+    .back-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 44px;
+      margin: -8px 0 8px -10px;
+      padding: 0 10px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .detail-title { margin-bottom: 18px; }
+    .status-tag, .warning-tag, .success-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 26px;
+      padding: 3px 9px;
+      border-radius: 7px;
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .status-tag { background: var(--primary-soft); color: var(--primary); }
+    .warning-tag { background: var(--warning-soft); color: var(--warning); }
+    .success-tag { background: #ECFDF5; color: var(--success); }
+    .detail-grid { display: grid; gap: 12px; }
+    .section-card {
+      min-width: 0;
+      padding: 16px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .section-heading h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 26px;
+      font-weight: 700;
+    }
+    .section-heading .secondary-button { margin: -6px -4px -6px 0; box-shadow: none; }
+    .basic-identity { padding: 3px 0 13px; border-bottom: 1px solid #F0F1F3; }
+    .basic-name {
+      display: block;
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+    }
+    .basic-note {
+      display: block;
+      margin-top: 3px;
+      color: #4B5563;
+      font-size: 16px;
+      line-height: 24px;
+      overflow-wrap: anywhere;
+    }
+    .info-list { margin: 0; }
+    .info-row {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 12px;
+      padding: 13px 0;
+      border-bottom: 1px solid #F0F1F3;
+    }
+    .info-row:last-child { border-bottom: 0; padding-bottom: 2px; }
+    .info-row dt { color: var(--muted); font-size: 13px; line-height: 22px; }
+    .info-row dd { min-width: 0; margin: 0; line-height: 22px; overflow-wrap: anywhere; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .value-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .masked-value { letter-spacing: 2px; }
+    .inline-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: -8px 0; }
+    .inline-actions .text-button { min-height: 44px; padding: 0 10px; background: transparent; font-size: 13px; }
+    .row-list { display: grid; }
+    .server-row, .client-row, .record-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 64px;
+      padding: 11px 0;
+      border-bottom: 1px solid #F0F1F3;
+    }
+    .row-list > :last-child { border-bottom: 0; padding-bottom: 2px; }
+    .row-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: #F3F4F6;
+      color: #4B5563;
+    }
+    .row-copy { flex: 1; min-width: 0; }
+    .row-name { display: block; font-weight: 650; line-height: 22px; overflow-wrap: anywhere; }
+    .row-subtitle { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; line-height: 19px; overflow-wrap: anywhere; }
+    .section-note { margin: 0 0 8px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .record-row { align-items: flex-start; }
+    .record-row .warning-tag { flex: 0 0 auto; margin-top: 1px; }
+    .empty-inline { margin: 12px 0 2px; color: var(--muted); font-size: 13px; }
+    .danger-zone { border: 1px solid #FECACA; }
+    .danger-zone h2 { margin: 0; color: var(--danger); font-size: 17px; }
+    .danger-zone p { margin: 7px 0 13px; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    .auth-shell { position: fixed; z-index: 100; inset: 0; }
+    .full-drawer {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      animation: fade-in .16s ease-out;
+    }
+    .full-header {
+      flex: 0 0 auto;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255,255,255,.98);
+    }
+    .full-header-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      max-width: 752px;
+      min-height: 70px;
+      margin: 0 auto;
+      padding: 8px 16px;
+    }
+    .drawer-heading { min-width: 0; }
+    .drawer-heading h2 { margin: 0; font-size: 19px; line-height: 27px; }
+    .drawer-heading p { margin: 1px 0 0; color: var(--muted); font-size: 13px; }
+    .close-button {
+      display: grid;
+      place-items: center;
+      flex: 0 0 44px;
+      width: 44px;
+      height: 44px;
+      margin-right: -9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .drawer-body {
+      flex: 1 1 auto;
+      width: 100%;
+      max-width: 752px;
+      margin: 0 auto;
+      padding: 16px 16px 128px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-height: 48px;
+      border: 1px solid #E2E5EA;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .search-box > svg { margin-left: 14px; color: var(--muted); }
+    .search-box input {
+      width: 100%;
+      min-width: 0;
+      height: 46px;
+      padding: 0 44px 0 10px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .search-box input::placeholder { color: #9CA3AF; }
+    .search-box:focus-within { border-color: #93C5FD; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+    .search-box input:focus-visible { outline: 0; }
+    .clear-search {
+      position: absolute;
+      right: 3px;
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .filters {
+      display: flex;
+      gap: 8px;
+      margin: 12px -16px 0;
+      padding: 0 16px 3px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .filters::-webkit-scrollbar { display: none; }
+    .chip {
+      flex: 0 0 auto;
+      min-height: 44px;
+      padding: 0 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: #4B5563;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .chip[aria-pressed="true"] { border-color: var(--primary); background: var(--primary); color: #FFFFFF; font-weight: 600; }
+    .selection-tools {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin: 12px 0;
+    }
+    .select-all {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .select-all-box {
+      display: block;
+      width: 18px;
+      height: 18px;
+      border: 1.5px solid #C3C9D2;
+      border-radius: 5px;
+      background: #FFFFFF;
+    }
+    .select-all-box[data-state="all"] { border-color: var(--primary); background: var(--primary); }
+    .select-all-box[data-state="all"]::after {
+      content: "";
+      display: block;
+      width: 9px;
+      height: 5px;
+      margin: 3px auto 0;
+      border-left: 2px solid #FFFFFF;
+      border-bottom: 2px solid #FFFFFF;
+      transform: rotate(-45deg);
+    }
+    .select-all-box[data-state="some"] { border-color: var(--primary); }
+    .select-all-box[data-state="some"]::after {
+      content: "";
+      display: block;
+      width: 8px;
+      height: 2px;
+      margin: 5px auto 0;
+      border-radius: 1px;
+      background: var(--primary);
+    }
+    .visible-count { color: var(--muted); font-size: 13px; white-space: nowrap; }
+    .server-check-list { display: grid; gap: 8px; }
+    .server-check-row {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 66px;
+      padding: 10px 13px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+    }
+    .server-check-row:has(input:checked) { border-color: #60A5FA; background: #FAFCFF; }
+    .server-check-row input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+    .server-check-row input:focus-visible + .check-circle { outline: 3px solid rgba(37,99,235,.25); outline-offset: 2px; }
+    .check-circle {
+      display: grid;
+      place-items: center;
+      flex: 0 0 24px;
+      width: 24px;
+      height: 24px;
+      border: 1.5px solid #C3C9D2;
+      border-radius: 50%;
+      background: #FFFFFF;
+      color: transparent;
+    }
+    .server-check-row input:checked + .check-circle { border-color: var(--primary); background: var(--primary); color: #FFFFFF; }
+    .empty-state {
+      padding: 38px 20px;
+      border: 1px dashed #D6DAE1;
+      border-radius: 12px;
+      background: rgba(255,255,255,.55);
+      text-align: center;
+    }
+    .empty-state h3 { margin: 0; font-size: 16px; }
+    .empty-state p { margin: 7px 0 14px; color: var(--muted); font-size: 13px; }
+    .auth-summary-bar {
+      position: absolute;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 -6px 24px rgba(17,24,39,.08);
+      backdrop-filter: blur(16px);
+    }
+    .auth-summary-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      max-width: 752px;
+      min-height: 76px;
+      margin: 0 auto;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    }
+    .change-summary { min-width: 0; font-size: 14px; line-height: 21px; font-weight: 650; }
+    .change-summary small { display: block; color: var(--muted); font-size: 12px; font-weight: 400; }
+    .summary-actions { display: flex; gap: 8px; }
+    .summary-actions .secondary-button { box-shadow: none; }
+    .confirm-card {
+      padding: 16px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .confirm-card + .confirm-card { margin-top: 12px; }
+    .confirm-card h3 { margin: 0 0 12px; font-size: 16px; line-height: 24px; }
+    .change-group { padding: 12px 0; border-top: 1px solid #F0F1F3; }
+    .change-group:first-of-type { border-top: 0; padding-top: 0; }
+    .change-label { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--muted); font-size: 13px; }
+    .change-names { margin: 7px 0 0; line-height: 23px; overflow-wrap: anywhere; }
+    .client-impact { border: 1px solid #BFDBFE; background: var(--primary-soft); }
+    .client-impact p { margin: 0; line-height: 24px; }
+    .client-impact .impact-note { margin-top: 9px; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .sheet-shell {
+      position: fixed;
+      z-index: 120;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .sheet-backdrop {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: rgba(17,24,39,.46);
+      cursor: default;
+      animation: fade-in .18s ease-out;
+    }
+    .sheet {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      max-height: 88vh;
+      overflow-y: auto;
+      padding: 9px 20px calc(20px + env(safe-area-inset-bottom));
+      border-radius: 20px 20px 0 0;
+      background: var(--card);
+      box-shadow: 0 -12px 40px rgba(17,24,39,.16);
+      animation: slide-up .22s ease-out;
+    }
+    .sheet-handle { width: 38px; height: 4px; margin: 0 auto 10px; border-radius: 99px; background: #D1D5DB; }
+    .sheet-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+    .sheet-header h2 { margin: 0; font-size: 19px; line-height: 28px; }
+    .form-field { display: grid; gap: 7px; margin-top: 13px; color: #374151; font-size: 13px; font-weight: 600; }
+    .field-label { display: block; }
+    .required-mark { margin-left: 3px; color: var(--danger); }
+    .form-field input, .form-field textarea {
+      width: 100%;
+      min-height: 46px;
+      padding: 11px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #FFFFFF;
+      color: var(--text);
+      font-size: 15px;
+      font-weight: 400;
+      resize: vertical;
+    }
+    .form-field textarea { min-height: 76px; }
+    .sheet-note { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .sheet-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .sheet-actions > * { flex: 1; }
+    .sheet-actions .secondary-button { box-shadow: none; }
+    .delete-copy { margin: 0; color: var(--muted); line-height: 23px; }
+    .delete-copy strong { color: var(--text); }
+
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFFFFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slide-up { from { transform: translateY(30px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 768px) {
+      .topbar { display: block; border-bottom: 1px solid rgba(229,231,235,.9); background: rgba(255,255,255,.96); }
+      .topbar-inner { display: flex; align-items: center; gap: 42px; max-width: 960px; min-height: 64px; margin: 0 auto; padding: 0 16px; }
+      .brand { color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link { flex-direction: row; gap: 7px; min-height: 44px; padding: 0 14px; font-size: 14px; }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 28px; padding-bottom: 48px; }
+      .segmented { max-width: 480px; }
+      .secret-list { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+      .secret-card, .storage-card { align-items: flex-start; min-height: 142px; }
+      .secret-card > .chevron { margin-top: 10px; }
+      .detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .wide-card { grid-column: 1 / -1; }
+      .wide-card .row-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+      .wide-card .server-row { border-bottom: 0; }
+      .toast { top: 80px; }
+      .filters { margin-right: 0; margin-left: 0; padding-right: 0; padding-left: 0; }
+    }
+
+    @media (max-width: 430px) {
+      .info-row { grid-template-columns: 80px minmax(0, 1fr); gap: 8px; }
+      .value-line { align-items: flex-start; }
+      .record-row { flex-wrap: wrap; }
+      .record-row .warning-tag { margin-left: 46px; }
+      .auth-summary-inner { gap: 8px; }
+      .change-summary { font-size: 13px; }
+      .auth-summary-inner .primary-button { padding: 0 13px; }
+      .summary-actions .secondary-button, .summary-actions .primary-button { padding: 0 11px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+          主页
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+          服务器
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+          客户端
+        </a>
+        <a class="nav-link" href="#" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          授权
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          更多
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page" id="page">
+    <section id="listView" aria-labelledby="pageTitle">
+      <div class="title-row">
+        <h1 id="pageTitle">授权<span class="title-count" id="authorizationCount">3</span></h1>
+        <button class="primary-button" id="newSecretButton" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          新建
+        </button>
+      </div>
+      <nav class="segmented" aria-label="授权子页">
+        <a class="segment subpage-link" href="#" data-name="Profile">Profile</a>
+        <a class="segment" href="#" aria-current="page">机密项</a>
+        <a class="segment subpage-link" href="#" data-name="共享存储">共享存储</a>
+      </nav>
+      <div id="secretListPanel">
+        <button class="attention-card" type="button" data-secret="OPENAI_KEY">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 10v5M12 17.5v.01"/></svg>
+          <span class="attention-copy">1 个机密项缺备注，agent 无法判断用途 · 去补充</span>
+        </button>
+        <div class="list-meta"><span>3 个机密项</span><span>点卡片查看授权与下发记录</span></div>
+        <div class="secret-list">
+          <button class="secret-card" type="button" data-secret="HF_TOKEN">
+            <span class="secret-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8m-3 3 3 3m-6 0 2 2"/></svg>
+            </span>
+            <span class="secret-copy">
+              <strong class="secret-name">HF_TOKEN</strong>
+              <span class="secret-note">HuggingFace 下载令牌，训练机拉模型用</span>
+              <span class="secret-detail" id="hfListMeta">环境变量 $HF_TOKEN · 授权 3 台服务器 · 2 个客户端能拿到</span>
+            </span>
+            <svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+          </button>
+          <button class="secret-card" type="button" data-secret="OPENAI_KEY">
+            <span class="secret-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8m-3 3 3 3m-6 0 2 2"/></svg>
+            </span>
+            <span class="secret-copy">
+              <strong class="secret-name">OPENAI_KEY</strong>
+              <span class="secret-note">OpenAI API 密钥，mini6 上的写作脚本调用</span>
+              <span class="secret-detail">授权 2 台 · 1 个客户端</span>
+            </span>
+            <svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+          </button>
+          <button class="secret-card" type="button" data-secret="nas-mount-pass">
+            <span class="secret-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16v12H4z"/><path d="M7 7V5h10v2M8 12h8M8 16h5"/></svg>
+            </span>
+            <span class="secret-copy">
+              <strong class="secret-name">nas-mount-pass</strong>
+              <span class="secret-note">共享存储 nas-data 的挂载账号密码</span>
+              <span class="secret-detail">共享存储 nas-data 的挂载密码 · 授权 3 台</span>
+            </span>
+            <svg class="chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div id="storageListPanel" hidden>
+        <div class="list-meta"><span>1 个共享存储</span><span>授权后，服务器可挂载使用</span></div>
+        <div class="secret-list">
+          <div class="storage-card">
+            <span class="secret-icon">
+              <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v12c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12c0 1.7 3.1 3 7 3s7-1.3 7-3"/></svg>
+            </span>
+            <span class="secret-copy">
+              <strong class="secret-name">nas-data</strong>
+              <span class="secret-note">NAS 上的训练数据与临时文件，训练机共用</span>
+              <span class="secret-detail">由 NAS 提供 · 授权 3 台</span>
+            </span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="detailView" aria-labelledby="detailTitle" hidden>
+      <button class="back-button" id="backToList" type="button">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg>
+        机密项
+      </button>
+      <div class="title-row detail-title">
+        <h1 class="mono" id="detailTitle">HF_TOKEN</h1>
+        <span class="status-tag" id="detailStatus">已授权 3 台</span>
+      </div>
+      <div class="detail-grid">
+        <section class="section-card">
+          <div class="section-heading">
+            <h2>基本</h2>
+            <button class="secondary-button" id="editSecretNote" type="button">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="m14 6 4 4"/></svg>
+              编辑
+            </button>
+          </div>
+          <div class="basic-identity">
+            <h3 class="basic-name mono">HF_TOKEN</h3>
+            <p class="basic-note">HuggingFace 下载令牌，训练机拉模型用</p>
+          </div>
+          <dl class="info-list">
+            <div class="info-row"><dt>环境变量名</dt><dd class="mono">$HF_TOKEN</dd></div>
+            <div class="info-row">
+              <dt>值</dt>
+              <dd class="value-line">
+                <span class="mono masked-value" id="secretValue">●●●●●●●●</span>
+                <span class="inline-actions">
+                  <button class="text-button" id="revealValue" type="button" aria-pressed="false">查看</button>
+                  <button class="text-button" id="replaceValue" type="button">更换值</button>
+                </span>
+              </dd>
+            </div>
+            <div class="info-row"><dt>值版本</dt><dd id="valueVersion">3</dd></div>
+          </dl>
+        </section>
+
+        <section class="section-card wide-card">
+          <div class="section-heading">
+            <h2>授权的服务器</h2>
+            <button class="secondary-button" id="adjustAuthorization" type="button">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/></svg>
+              调整
+            </button>
+          </div>
+          <div class="row-list" id="authorizedServerList"></div>
+          <p class="empty-inline" id="noAuthorizedServers" hidden>尚未授权任何服务器。</p>
+        </section>
+
+        <section class="section-card">
+          <div class="section-heading"><h2>实际能拿到它的客户端</h2></div>
+          <p class="section-note">客户端的 profile 中包含上面任一台服务器，就能拿到这个机密项。</p>
+          <div class="row-list">
+            <div class="client-row">
+              <span class="row-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+              <span class="row-copy"><strong class="row-name">train3060</strong><span class="row-subtitle">经 profile 训练机：train3060、4090x2、3090x2</span></span>
+            </div>
+            <div class="client-row">
+              <span class="row-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+              <span class="row-copy"><strong class="row-name">mini6-claude</strong><span class="row-subtitle">经 profile 全部：3 台</span></span>
+            </div>
+            <div class="client-row">
+              <span class="row-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
+              <span class="row-copy"><strong class="row-name">laptop-work</strong><span class="row-subtitle">经 profile 公司：4090x2、3090x2</span></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section-card">
+          <div class="section-heading"><h2>下发记录</h2></div>
+          <div class="row-list">
+            <div class="record-row">
+              <span class="row-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h5"/></svg></span>
+              <span class="row-copy"><strong class="row-name">train3060 <span class="mono">/etc/app/.env</span></strong><span class="row-subtitle">3 天前 · 值版本 3</span></span>
+            </div>
+            <div class="record-row">
+              <span class="row-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h6M9 17h5"/></svg></span>
+              <span class="row-copy"><strong class="row-name">4090x2 <span class="mono">/srv/train/.env</span></strong><span class="row-subtitle">10 天前 · 值版本 2</span></span>
+              <span class="warning-tag">旧值，需重写</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section-card danger-zone wide-card">
+          <h2>危险区</h2>
+          <p>删除后，这个机密项将从所有服务器和客户端的可用范围中移除。</p>
+          <button class="danger-button" id="deleteSecret" type="button">删除机密项</button>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+      主页
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+      服务器
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+      客户端
+    </a>
+    <a class="nav-link" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      授权
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      更多
+    </a>
+  </nav>
+
+  <div class="auth-shell" id="authDrawer" hidden>
+    <section class="full-drawer" role="dialog" aria-modal="true" aria-labelledby="authDrawerTitle">
+      <header class="full-header">
+        <div class="full-header-inner">
+          <div class="drawer-heading">
+            <h2 id="authDrawerTitle">调整授权</h2>
+            <p id="authDrawerCaption">HF_TOKEN · 第 1 步，共 2 步</p>
+          </div>
+          <button class="close-button" id="closeAuthDrawer" type="button" aria-label="关闭">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <div class="drawer-body" id="authDrawerBody">
+        <div id="serverChoiceStep">
+          <label class="search-box">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="serverSearch" type="search" placeholder="搜索服务器或地点" autocomplete="off" aria-label="搜索服务器或地点">
+            <button class="clear-search" id="clearServerSearch" type="button" aria-label="清空搜索" hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" opacity=".12" stroke="none"/><path d="m9 9 6 6m0-6-6 6"/></svg>
+            </button>
+          </label>
+          <div class="filters" role="group" aria-label="筛选服务器">
+            <button class="chip server-filter" type="button" data-filter="all" aria-pressed="true">全部</button>
+            <button class="chip server-filter" type="button" data-filter="home" aria-pressed="false">家 A</button>
+            <button class="chip server-filter" type="button" data-filter="company" aria-pressed="false">公司</button>
+            <button class="chip server-filter" type="button" data-filter="training" aria-pressed="false">profile：训练机</button>
+            <button class="chip server-filter" type="button" data-filter="work" aria-pressed="false">profile：公司</button>
+          </div>
+          <div class="selection-tools">
+            <button class="select-all" id="selectAllVisible" type="button">
+              <span class="select-all-box" id="selectAllState" data-state="none" aria-hidden="true"></span>
+              全选当前筛选结果
+            </button>
+            <span class="visible-count" id="visibleCount">8 台</span>
+          </div>
+          <div class="server-check-list" id="serverCheckList"></div>
+          <div class="empty-state" id="serverEmptyState" hidden>
+            <h3>没有匹配的服务器</h3>
+            <p>试试其他名称、地点或筛选条件。</p>
+            <button class="text-button" id="resetServerFilters" type="button">清除筛选</button>
+          </div>
+        </div>
+
+        <div id="authorizationConfirmStep" hidden>
+          <section class="confirm-card">
+            <h3>授权变更</h3>
+            <div class="change-group">
+              <div class="change-label"><span>新增</span><span class="success-tag" id="addedCount">0 台</span></div>
+              <p class="change-names" id="addedServers">无</p>
+            </div>
+            <div class="change-group">
+              <div class="change-label"><span>移除</span><span class="warning-tag" id="removedCount">0 台</span></div>
+              <p class="change-names" id="removedServers">无</p>
+            </div>
+          </section>
+          <section class="confirm-card client-impact">
+            <h3>客户端影响</h3>
+            <p>实际能拿到 HF_TOKEN 的客户端将变为：mini6-claude、train3060（新增 mini6-claude）</p>
+            <p class="impact-note">客户端只会通过自身绑定的 profile 获取已授权服务器上的机密项。</p>
+          </section>
+        </div>
+      </div>
+
+      <footer class="auth-summary-bar">
+        <div class="auth-summary-inner">
+          <div class="change-summary" id="changeSummary">新增 0 台 · 移除 0 台<small>勾选服务器以调整授权</small></div>
+          <button class="primary-button" id="authorizationNext" type="button" disabled>下一步</button>
+          <div class="summary-actions" id="confirmActions" hidden>
+            <button class="secondary-button" id="authorizationPrevious" type="button">上一步</button>
+            <button class="primary-button" id="confirmAuthorization" type="button">确认授权</button>
+          </div>
+        </div>
+      </footer>
+    </section>
+  </div>
+
+  <div class="sheet-shell" id="newSecretDrawer" hidden>
+    <button class="sheet-backdrop close-sheet" type="button" aria-label="关闭新建机密项" tabindex="-1"></button>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="newSecretTitle">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-header">
+        <h2 id="newSecretTitle">新建机密项</h2>
+        <button class="close-button close-sheet" type="button" aria-label="关闭"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <form id="newSecretForm">
+        <label class="form-field">名称<input id="newSecretName" name="name" required placeholder="例如 API_TOKEN" autocomplete="off"></label>
+        <label class="form-field">
+          <span class="field-label">备注<span class="required-mark" aria-hidden="true">*</span></span>
+          <textarea id="newSecretNote" name="note" required placeholder="它是什么、给谁用，例如：HuggingFace 下载令牌，训练机拉模型用"></textarea>
+        </label>
+        <p class="sheet-note">agent 只能靠备注判断这个机密项的用途</p>
+        <label class="form-field">值<input name="value" type="password" required placeholder="输入敏感值" autocomplete="new-password"></label>
+        <label class="form-field">环境变量名（可选）<input name="environment" placeholder="例如 $API_TOKEN" autocomplete="off"></label>
+        <div class="sheet-actions"><button class="secondary-button close-sheet" type="button">取消</button><button class="primary-button" id="createSecretButton" type="submit" disabled>创建</button></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="sheet-shell" id="replaceValueDrawer" hidden>
+    <button class="sheet-backdrop close-sheet" type="button" aria-label="关闭更换值" tabindex="-1"></button>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="replaceValueTitle">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-header">
+        <h2 id="replaceValueTitle">更换 HF_TOKEN 的值</h2>
+        <button class="close-button close-sheet" type="button" aria-label="关闭"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <form id="replaceValueForm">
+        <label class="form-field">新值<input id="newSecretValue" type="password" required placeholder="输入新值" autocomplete="new-password"></label>
+        <p class="sheet-note">保存后会生成新的值版本，已下发旧值的服务器需要重写。</p>
+        <div class="sheet-actions"><button class="secondary-button close-sheet" type="button">取消</button><button class="primary-button" type="submit">保存新值</button></div>
+      </form>
+    </section>
+  </div>
+
+  <div class="sheet-shell" id="deleteSecretDrawer" hidden>
+    <button class="sheet-backdrop close-sheet" type="button" aria-label="关闭删除机密项" tabindex="-1"></button>
+    <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="deleteSecretTitle">
+      <div class="sheet-handle" aria-hidden="true"></div>
+      <div class="sheet-header">
+        <h2 id="deleteSecretTitle">删除机密项</h2>
+        <button class="close-button close-sheet" type="button" aria-label="关闭"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+      </div>
+      <p class="delete-copy">确定删除 <strong class="mono">HF_TOKEN</strong> 吗？它的服务器授权与环境变量注入配置也会移除。</p>
+      <div class="sheet-actions"><button class="secondary-button close-sheet" type="button">取消</button><button class="primary-button" id="confirmDelete" type="button" style="background:var(--danger)">确认删除</button></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span id="toastText"></span>
+  </div>
+
+  <script>
+    const servers = [
+      { id: 'mini6', name: 'mini6', location: '家 A', profiles: ['all'] },
+      { id: 'NUC10', name: 'NUC10', location: '家 A', profiles: ['all'] },
+      { id: 'NUC10-docker', name: 'NUC10-docker', location: '家 A', profiles: ['all'] },
+      { id: 'train3060', name: 'train3060', location: '家 A', profiles: ['all', 'training'] },
+      { id: '4090x2', name: '4090x2', location: '公司 / 一厂区 / 3 号楼', profiles: ['all', 'training', 'work'] },
+      { id: '3090x2', name: '3090x2', location: '公司 / 一厂区 / 3 号楼', profiles: ['all', 'training', 'work'] },
+      { id: 'gitlab-urit', name: 'gitlab-urit', location: '公司 / 一厂区 / 1 号楼', profiles: ['all', 'work'] },
+      { id: '软路由', name: '软路由', location: '家 A', profiles: ['all'] }
+    ];
+
+    const checkIcon = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>';
+    const serverIcon = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>';
+    const listView = document.getElementById('listView');
+    const detailView = document.getElementById('detailView');
+    const secretListPanel = document.getElementById('secretListPanel');
+    const storageListPanel = document.getElementById('storageListPanel');
+    const authorizationCount = document.getElementById('authorizationCount');
+    const authDrawer = document.getElementById('authDrawer');
+    const authDrawerBody = document.getElementById('authDrawerBody');
+    const serverChoiceStep = document.getElementById('serverChoiceStep');
+    const authorizationConfirmStep = document.getElementById('authorizationConfirmStep');
+    const serverCheckList = document.getElementById('serverCheckList');
+    const serverEmptyState = document.getElementById('serverEmptyState');
+    const serverSearch = document.getElementById('serverSearch');
+    const clearServerSearch = document.getElementById('clearServerSearch');
+    const selectAllVisible = document.getElementById('selectAllVisible');
+    const selectAllState = document.getElementById('selectAllState');
+    const authorizationNext = document.getElementById('authorizationNext');
+    const confirmActions = document.getElementById('confirmActions');
+    const changeSummary = document.getElementById('changeSummary');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toastText');
+    const newSecretForm = document.getElementById('newSecretForm');
+    const newSecretNote = document.getElementById('newSecretNote');
+    const createSecretButton = document.getElementById('createSecretButton');
+    const newSecretButton = document.getElementById('newSecretButton');
+    let authorized = new Set(['train3060', '4090x2', '3090x2']);
+    let working = new Set(authorized);
+    let currentFilter = 'all';
+    let currentAuthorizationPage = 'secrets';
+    let toastTimer;
+    let valueVisible = false;
+    let currentVersion = 3;
+    let returnFocus = null;
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toastText.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+    }
+
+    function showDetail() {
+      listView.hidden = true;
+      detailView.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      document.getElementById('backToList').focus();
+    }
+
+    function showList() {
+      detailView.hidden = true;
+      listView.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      const focusTarget = currentAuthorizationPage === 'storage'
+        ? document.querySelector('.segment[data-name="共享存储"]')
+        : document.querySelector('[data-secret="HF_TOKEN"]');
+      if (focusTarget) focusTarget.focus();
+    }
+
+    function renderAuthorizedServers() {
+      const selectedServers = servers.filter(server => authorized.has(server.id));
+      document.getElementById('authorizedServerList').innerHTML = selectedServers.map(server => `
+        <div class="server-row">
+          <span class="row-icon">${serverIcon}</span>
+          <span class="row-copy"><strong class="row-name">${server.name}</strong><span class="row-subtitle">${server.location}</span></span>
+          <span class="success-tag">已授权</span>
+        </div>`).join('');
+      document.getElementById('noAuthorizedServers').hidden = selectedServers.length !== 0;
+      document.getElementById('detailStatus').textContent = `已授权 ${selectedServers.length} 台`;
+      document.getElementById('hfListMeta').textContent = `环境变量 $HF_TOKEN · 授权 ${selectedServers.length} 台服务器 · 2 个客户端能拿到`;
+    }
+
+    function filteredServers() {
+      const query = serverSearch.value.trim().toLocaleLowerCase();
+      return servers.filter(server => {
+        const matchesQuery = !query || `${server.name} ${server.location}`.toLocaleLowerCase().includes(query);
+        let matchesFilter = true;
+        if (currentFilter === 'home') matchesFilter = server.location === '家 A';
+        else if (currentFilter === 'company') matchesFilter = server.location.startsWith('公司');
+        else if (currentFilter === 'training') matchesFilter = server.profiles.includes('training');
+        else if (currentFilter === 'work') matchesFilter = server.profiles.includes('work');
+        return matchesQuery && matchesFilter;
+      });
+    }
+
+    function changeCounts() {
+      const added = servers.filter(server => working.has(server.id) && !authorized.has(server.id));
+      const removed = servers.filter(server => authorized.has(server.id) && !working.has(server.id));
+      return { added, removed };
+    }
+
+    function updateChangeSummary() {
+      const { added, removed } = changeCounts();
+      changeSummary.innerHTML = `新增 ${added.length} 台 · 移除 ${removed.length} 台<small>${added.length + removed.length ? '下一步检查客户端影响' : '勾选服务器以调整授权'}</small>`;
+      authorizationNext.disabled = added.length + removed.length === 0;
+    }
+
+    function renderServerChoices() {
+      const visible = filteredServers();
+      const selectedVisibleCount = visible.filter(server => working.has(server.id)).length;
+      const allVisibleSelected = visible.length > 0 && selectedVisibleCount === visible.length;
+      const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
+      serverCheckList.innerHTML = visible.map(server => `
+        <label class="server-check-row">
+          <input type="checkbox" value="${server.id}" ${working.has(server.id) ? 'checked' : ''}>
+          <span class="check-circle">${checkIcon}</span>
+          <span class="row-copy"><strong class="row-name">${server.name}</strong><span class="row-subtitle">${server.location}</span></span>
+        </label>`).join('');
+      serverCheckList.hidden = visible.length === 0;
+      serverEmptyState.hidden = visible.length !== 0;
+      document.getElementById('visibleCount').textContent = `${visible.length} 台`;
+      selectAllState.dataset.state = allVisibleSelected ? 'all' : someVisibleSelected ? 'some' : 'none';
+      selectAllVisible.disabled = visible.length === 0 || allVisibleSelected;
+      clearServerSearch.hidden = !serverSearch.value;
+      updateChangeSummary();
+    }
+
+    function updateCreateButtonState() {
+      createSecretButton.disabled = !newSecretNote.value.trim();
+    }
+
+    function showAuthorizationSubpage(page) {
+      currentAuthorizationPage = page;
+      const isStorage = page === 'storage';
+      secretListPanel.hidden = isStorage;
+      storageListPanel.hidden = !isStorage;
+      authorizationCount.textContent = isStorage ? '1' : '3';
+      newSecretButton.hidden = isStorage;
+      document.querySelectorAll('.segmented .segment').forEach(segment => {
+        if (segment.dataset.name === '共享存储') segment.setAttribute('aria-current', isStorage ? 'page' : 'false');
+        else if (segment.textContent.trim() === '机密项') segment.setAttribute('aria-current', !isStorage ? 'page' : 'false');
+        else segment.removeAttribute('aria-current');
+      });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
+
+    function openAuthorization() {
+      returnFocus = document.activeElement;
+      working = new Set(authorized);
+      currentFilter = 'all';
+      serverSearch.value = '';
+      document.querySelectorAll('.server-filter').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.filter === 'all')));
+      serverChoiceStep.hidden = false;
+      authorizationConfirmStep.hidden = true;
+      authorizationNext.hidden = false;
+      confirmActions.hidden = true;
+      document.getElementById('authDrawerTitle').textContent = '调整授权';
+      document.getElementById('authDrawerCaption').textContent = 'HF_TOKEN · 第 1 步，共 2 步';
+      renderServerChoices();
+      authDrawer.hidden = false;
+      document.body.classList.add('modal-open');
+      serverSearch.focus();
+    }
+
+    function closeAuthorization() {
+      authDrawer.hidden = true;
+      document.body.classList.remove('modal-open');
+      if (returnFocus) returnFocus.focus();
+    }
+
+    function showAuthorizationConfirmation() {
+      const { added, removed } = changeCounts();
+      if (!added.length && !removed.length) return;
+      document.getElementById('addedCount').textContent = `${added.length} 台`;
+      document.getElementById('removedCount').textContent = `${removed.length} 台`;
+      document.getElementById('addedServers').textContent = added.length ? added.map(server => server.name).join('、') : '无';
+      document.getElementById('removedServers').textContent = removed.length ? removed.map(server => server.name).join('、') : '无';
+      serverChoiceStep.hidden = true;
+      authorizationConfirmStep.hidden = false;
+      authorizationNext.hidden = true;
+      confirmActions.hidden = false;
+      changeSummary.innerHTML = `新增 ${added.length} 台 · 移除 ${removed.length} 台<small>请确认授权变更</small>`;
+      document.getElementById('authDrawerTitle').textContent = '确认授权';
+      document.getElementById('authDrawerCaption').textContent = 'HF_TOKEN · 第 2 步，共 2 步';
+      authDrawerBody.scrollTop = 0;
+      document.getElementById('authorizationPrevious').focus();
+    }
+
+    function previousAuthorizationStep() {
+      authorizationConfirmStep.hidden = true;
+      serverChoiceStep.hidden = false;
+      authorizationNext.hidden = false;
+      confirmActions.hidden = true;
+      document.getElementById('authDrawerTitle').textContent = '调整授权';
+      document.getElementById('authDrawerCaption').textContent = 'HF_TOKEN · 第 1 步，共 2 步';
+      updateChangeSummary();
+      authDrawerBody.scrollTop = 0;
+      serverSearch.focus();
+    }
+
+    function confirmAuthorization() {
+      authorized = new Set(working);
+      renderAuthorizedServers();
+      closeAuthorization();
+      showToast('已更新 HF_TOKEN 的服务器授权');
+    }
+
+    function openSheet(id) {
+      returnFocus = document.activeElement;
+      document.getElementById(id).hidden = false;
+      document.body.classList.add('modal-open');
+      const focusTarget = document.getElementById(id).querySelector('input, .close-button');
+      if (focusTarget) focusTarget.focus();
+    }
+
+    function closeSheet(sheet) {
+      sheet.hidden = true;
+      document.body.classList.remove('modal-open');
+      if (returnFocus) returnFocus.focus();
+    }
+
+    document.querySelectorAll('.secret-card[data-secret]').forEach(card => {
+      card.addEventListener('click', () => {
+        if (card.dataset.secret === 'HF_TOKEN') showDetail();
+        else showToast(`${card.dataset.secret} 详情（静态演示）`);
+      });
+    });
+    document.querySelector('.attention-card').addEventListener('click', () => {
+      showToast('OPENAI_KEY：请补充备注（静态演示）');
+    });
+    document.getElementById('editSecretNote').addEventListener('click', () => {
+      showToast('编辑机密项备注（静态演示）');
+    });
+    document.getElementById('backToList').addEventListener('click', showList);
+    document.getElementById('adjustAuthorization').addEventListener('click', openAuthorization);
+    document.getElementById('closeAuthDrawer').addEventListener('click', closeAuthorization);
+
+    document.querySelectorAll('.server-filter').forEach(chip => {
+      chip.addEventListener('click', () => {
+        currentFilter = chip.dataset.filter;
+        document.querySelectorAll('.server-filter').forEach(item => item.setAttribute('aria-pressed', String(item === chip)));
+        renderServerChoices();
+      });
+    });
+
+    serverSearch.addEventListener('input', renderServerChoices);
+    clearServerSearch.addEventListener('click', () => {
+      serverSearch.value = '';
+      serverSearch.focus();
+      renderServerChoices();
+    });
+    document.getElementById('resetServerFilters').addEventListener('click', () => {
+      currentFilter = 'all';
+      serverSearch.value = '';
+      document.querySelectorAll('.server-filter').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.filter === 'all')));
+      renderServerChoices();
+      serverSearch.focus();
+    });
+    serverCheckList.addEventListener('change', event => {
+      if (!event.target.matches('input[type="checkbox"]')) return;
+      if (event.target.checked) working.add(event.target.value);
+      else working.delete(event.target.value);
+      renderServerChoices();
+    });
+    selectAllVisible.addEventListener('click', () => {
+      filteredServers().forEach(server => working.add(server.id));
+      renderServerChoices();
+    });
+    authorizationNext.addEventListener('click', showAuthorizationConfirmation);
+    document.getElementById('authorizationPrevious').addEventListener('click', previousAuthorizationStep);
+    document.getElementById('confirmAuthorization').addEventListener('click', confirmAuthorization);
+
+    document.getElementById('revealValue').addEventListener('click', event => {
+      valueVisible = !valueVisible;
+      document.getElementById('secretValue').textContent = valueVisible ? 'hf_mock_demo_7f3a92' : '●●●●●●●●';
+      document.getElementById('secretValue').classList.toggle('masked-value', !valueVisible);
+      event.currentTarget.textContent = valueVisible ? '隐藏' : '查看';
+      event.currentTarget.setAttribute('aria-pressed', String(valueVisible));
+    });
+
+    newSecretNote.addEventListener('input', updateCreateButtonState);
+    document.getElementById('newSecretButton').addEventListener('click', () => {
+      newSecretForm.reset();
+      updateCreateButtonState();
+      openSheet('newSecretDrawer');
+    });
+    document.getElementById('replaceValue').addEventListener('click', () => openSheet('replaceValueDrawer'));
+    document.getElementById('deleteSecret').addEventListener('click', () => openSheet('deleteSecretDrawer'));
+    document.querySelectorAll('.close-sheet').forEach(button => {
+      button.addEventListener('click', () => closeSheet(button.closest('.sheet-shell')));
+    });
+    document.getElementById('newSecretForm').addEventListener('submit', event => {
+      event.preventDefault();
+      const name = document.getElementById('newSecretName').value.trim();
+      closeSheet(document.getElementById('newSecretDrawer'));
+      event.target.reset();
+      updateCreateButtonState();
+      showToast(`已新建 ${name}（静态演示）`);
+    });
+    document.getElementById('replaceValueForm').addEventListener('submit', event => {
+      event.preventDefault();
+      currentVersion += 1;
+      document.getElementById('valueVersion').textContent = currentVersion;
+      valueVisible = false;
+      document.getElementById('secretValue').textContent = '●●●●●●●●';
+      document.getElementById('secretValue').classList.add('masked-value');
+      document.getElementById('revealValue').textContent = '查看';
+      document.getElementById('revealValue').setAttribute('aria-pressed', 'false');
+      closeSheet(document.getElementById('replaceValueDrawer'));
+      event.target.reset();
+      showToast(`已保存新值，当前为值版本 ${currentVersion}`);
+    });
+    document.getElementById('confirmDelete').addEventListener('click', () => {
+      closeSheet(document.getElementById('deleteSecretDrawer'));
+      showList();
+      showToast('已删除 HF_TOKEN（静态演示）');
+    });
+
+    document.querySelectorAll('.subpage-link').forEach(link => {
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        if (link.dataset.name === '共享存储') {
+          showAuthorizationSubpage('storage');
+          return;
+        }
+        showToast(`${link.dataset.name} 子页（静态演示）`);
+      });
+    });
+    document.querySelector('.segment:not(.subpage-link)').addEventListener('click', event => {
+      event.preventDefault();
+      showAuthorizationSubpage('secrets');
+    });
+    document.querySelectorAll('a[href="#"]:not(.subpage-link)').forEach(link => {
+      link.addEventListener('click', event => event.preventDefault());
+    });
+    document.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      const openSheetElement = document.querySelector('.sheet-shell:not([hidden])');
+      if (openSheetElement) closeSheet(openSheetElement);
+      else if (!authDrawer.hidden) closeAuthorization();
+    });
+
+    renderAuthorizedServers();
+  </script>
+</body>
+</html>

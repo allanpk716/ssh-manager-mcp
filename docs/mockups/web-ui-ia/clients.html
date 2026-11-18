@@ -1,0 +1,1233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>客户端 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.modal-open { overflow: hidden; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 22px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    h1:focus { outline: none; }
+    .page-intro {
+      max-width: 700px;
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 21px;
+    }
+    .primary-button, .secondary-button, .danger-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 44px;
+      padding: 0 16px;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    .primary-button {
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-button {
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: #374151;
+      box-shadow: var(--shadow);
+      font-size: 14px;
+    }
+    .danger-button { background: var(--danger); color: #FFFFFF; }
+
+    .pending-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 14px;
+      margin-top: 18px;
+      padding: 16px;
+      border: 1px solid #F3DEAC;
+      border-radius: 12px;
+      background: var(--warning-soft);
+      box-shadow: var(--shadow);
+    }
+    .pending-copy {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      min-width: 0;
+      color: #92400E;
+      line-height: 23px;
+    }
+    .pending-copy svg { margin-top: 2px; color: var(--warning); }
+    .pending-copy strong { font-weight: 650; }
+    .approval-link { align-self: center; }
+
+    .client-list {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .client-card {
+      position: relative;
+      width: 100%;
+      min-width: 0;
+      min-height: 126px;
+      padding: 16px 45px 16px 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+      text-align: left;
+      transition: border-color .16s ease, background .16s ease;
+    }
+    .client-card:hover { border-color: #BFDBFE; }
+    .client-card:active { background: #FAFCFF; }
+    .client-card.stale-card { border-color: #F3DEAC; }
+    .card-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 7px 9px;
+    }
+    .client-name {
+      overflow-wrap: anywhere;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .upgrade-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: #F3F4F6;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 17px;
+      font-weight: 600;
+    }
+    .profile-line {
+      display: block;
+      margin-top: 6px;
+      color: #374151;
+      font-size: 14px;
+      line-height: 21px;
+    }
+    .sync-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 0;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 21px;
+    }
+    .separator { margin: 0 7px; color: #C3C9D2; }
+    .warning-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+    .card-chevron {
+      position: absolute;
+      top: 50%;
+      right: 14px;
+      color: #9CA3AF;
+      transform: translateY(-50%);
+    }
+    .manual-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .back-button {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin: -8px 0 4px -12px;
+      padding: 0 12px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .back-button span { margin-left: 5px; }
+    .detail-subtitle { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 21px; }
+    .detail-stack { display: grid; gap: 12px; margin-top: 18px; }
+    .detail-card {
+      overflow: hidden;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .card-padded { padding: 16px; }
+    .section-title { margin: 0; font-size: 15px; line-height: 22px; font-weight: 650; }
+    .section-kicker { margin: 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .profile-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-top: 6px;
+    }
+    .profile-name { margin: 0; font-size: 20px; line-height: 29px; font-weight: 700; }
+    .visible-label {
+      margin: 16px 16px 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .server-rows { border-top: 1px solid #F0F1F3; }
+    .server-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 66px;
+      padding: 10px 16px;
+      border: 0;
+      border-bottom: 1px solid #F0F1F3;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .server-row:last-child { border-bottom: 0; }
+    .server-row:hover { background: #FAFCFF; }
+    .server-row-copy { min-width: 0; }
+    .server-row-name { display: block; font-weight: 650; line-height: 22px; }
+    .server-row-address {
+      display: block;
+      margin-top: 2px;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+      line-height: 18px;
+    }
+    .server-row svg { color: #9CA3AF; }
+    .status-list { margin-top: 10px; }
+    .status-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 46px;
+      border-top: 1px solid #F0F1F3;
+      line-height: 21px;
+    }
+    .status-row:first-child { border-top: 0; }
+    .status-label { flex: 0 0 auto; color: var(--muted); font-size: 13px; }
+    .status-value { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; text-align: right; }
+    .success-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 23px;
+      padding: 2px 7px;
+      border-radius: 6px;
+      background: #ECFDF5;
+      color: var(--success);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .asset-list { margin-top: 10px; border-top: 1px solid #F0F1F3; }
+    .asset-row { display: flex; align-items: flex-start; gap: 11px; padding: 13px 0; border-bottom: 1px solid #F0F1F3; }
+    .asset-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .asset-icon {
+      display: grid;
+      place-items: center;
+      flex: 0 0 34px;
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+    .asset-copy { min-width: 0; }
+    .asset-name { display: block; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-weight: 650; line-height: 21px; }
+    .asset-detail { display: block; margin-top: 3px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .machine-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 58px;
+      margin-top: 12px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .machine-row-copy { min-width: 0; }
+    .machine-row-name { display: block; font-size: 16px; line-height: 24px; font-weight: 700; }
+    .machine-row-location { display: block; margin-top: 2px; color: var(--muted); font-size: 13px; line-height: 19px; }
+    .machine-row svg { color: #9CA3AF; }
+    .inventory-summary {
+      margin: 10px 0 0;
+      padding: 10px 0;
+      border-top: 1px solid #F0F1F3;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .inventory-list { border-top: 1px solid #F0F1F3; }
+    .inventory-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 48px;
+      padding: 8px 0;
+      border-bottom: 1px solid #F0F1F3;
+      font-size: 14px;
+      line-height: 21px;
+    }
+    .inventory-row:last-child { border-bottom: 0; }
+    .inventory-name { min-width: 0; overflow-wrap: anywhere; }
+    .inventory-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+    .machine-empty {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 22px;
+    }
+    .machine-empty + .secondary-button { margin-top: 12px; }
+    .inventory-empty {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 10px;
+      padding-top: 12px;
+      border-top: 1px solid #F0F1F3;
+    }
+    .inventory-empty p { margin: 0; color: var(--muted); font-size: 14px; line-height: 21px; }
+    .card-note { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .danger-card { border-color: #FECACA; }
+    .danger-card .section-title { color: var(--danger); }
+    .remove-button {
+      min-height: 44px;
+      margin-top: 12px;
+      padding: 0 15px;
+      border: 1px solid #FECACA;
+      border-radius: 10px;
+      background: #FFFFFF;
+      color: var(--danger);
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    .drawer-shell {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: rgba(17,24,39,.46);
+      cursor: default;
+      animation: fade-in .18s ease-out;
+    }
+    .drawer {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      max-height: min(88vh, 720px);
+      overflow-y: auto;
+      padding: 9px 20px calc(20px + env(safe-area-inset-bottom));
+      border-radius: 20px 20px 0 0;
+      background: var(--card);
+      box-shadow: 0 -12px 40px rgba(17,24,39,.16);
+      animation: slide-up .22s ease-out;
+    }
+    .drawer-handle { width: 38px; height: 4px; margin: 0 auto 10px; border-radius: 99px; background: #D1D5DB; }
+    .drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .drawer-header h2 { margin: 0; font-size: 19px; line-height: 28px; }
+    .close-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-right: -9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .step-caption { margin: 3px 0 17px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .profile-options { display: grid; gap: 10px; }
+    .profile-option {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 68px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      cursor: pointer;
+    }
+    .profile-option:has(input:checked) { border-color: #60A5FA; background: var(--primary-soft); }
+    .profile-option input { width: 20px; height: 20px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+    .profile-option-copy { min-width: 0; }
+    .profile-option-name { display: block; font-size: 15px; font-weight: 650; }
+    .profile-option-detail { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 18px; }
+    .summary-box { margin-top: 14px; padding: 14px; border: 1px solid #BFDBFE; border-radius: 12px; background: var(--primary-soft); }
+    .summary-title { display: block; color: var(--primary); font-size: 13px; font-weight: 650; }
+    .summary-text { margin: 7px 0 0; font-size: 14px; line-height: 23px; }
+    .summary-secret { margin: 5px 0 0; color: var(--text); font-size: 14px; line-height: 23px; }
+    .drawer-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .drawer-actions .primary-button, .drawer-actions .secondary-button, .drawer-actions .danger-button { flex: 1; }
+    .drawer-actions .secondary-button { box-shadow: none; }
+    .remove-copy { margin: 4px 0 0; font-size: 15px; line-height: 25px; }
+    .machine-search {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 46px;
+      margin-top: 16px;
+      padding-right: 8px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #F9FAFB;
+    }
+    .machine-search svg { margin-left: 13px; color: var(--muted); }
+    .machine-search input {
+      min-width: 0;
+      min-height: 44px;
+      flex: 1;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+      outline: 0;
+    }
+    .machine-search input::placeholder { color: #9CA3AF; }
+    .machine-groups { margin-top: 6px; }
+    .machine-group-label {
+      margin: 14px 0 2px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+      font-weight: 600;
+    }
+    .machine-option {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      width: 100%;
+      min-height: 56px;
+      padding: 7px 2px;
+      border: 0;
+      border-bottom: 1px solid #F0F1F3;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .machine-option:hover { background: #FAFCFF; }
+    .machine-option:last-child { border-bottom: 0; }
+    .machine-option svg { color: #9CA3AF; }
+    .drawer-footer { display: flex; margin-top: 18px; }
+    .drawer-footer .secondary-button { width: 100%; box-shadow: none; }
+    .drawer-empty { margin: 20px 0 0; color: var(--muted); font-size: 14px; line-height: 21px; }
+
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFFFFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slide-up { from { transform: translateY(30px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 768px) {
+      .topbar { display: block; border-bottom: 1px solid rgba(229,231,235,.9); background: rgba(255,255,255,.96); }
+      .topbar-inner { display: flex; align-items: center; gap: 42px; max-width: 960px; min-height: 64px; margin: 0 auto; padding: 0 16px; }
+      .brand { color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link { flex-direction: row; gap: 7px; min-height: 44px; padding: 0 14px; font-size: 14px; }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 28px; padding-bottom: 48px; }
+      .client-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .detail-view { max-width: 760px; }
+      .toast { top: 80px; }
+    }
+
+    @media (max-width: 480px) {
+      .pending-card { grid-template-columns: 1fr; gap: 12px; }
+      .approval-link { width: 100%; }
+    }
+
+    @media (max-width: 370px) {
+      .client-card { padding-left: 14px; }
+      .status-row { align-items: flex-start; flex-direction: column; gap: 3px; padding: 10px 0; }
+      .status-value { justify-content: flex-start; text-align: left; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+          主页
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+          服务器
+        </a>
+        <a class="nav-link" href="#" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+          客户端
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          授权
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          更多
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page" id="page">
+    <section id="listView" aria-labelledby="listTitle">
+      <h1 id="listTitle">客户端</h1>
+      <p class="page-intro">已配对的 sshmgr 实例。每个客户端绑定一个 profile，只能看到并使用 profile 里的服务器。</p>
+
+      <section class="pending-card" aria-label="配对请求待审批">
+        <div class="pending-copy">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/></svg>
+          <strong>1 个配对请求待审批 · macbook-air · 剩余 4:32</strong>
+        </div>
+        <a class="primary-button approval-link" id="approvalLink" href="#">去审批</a>
+      </section>
+
+      <section class="client-list" id="clientList" aria-label="客户端列表"></section>
+      <a class="manual-link" id="manualLink" href="#">不经配对手动添加客户端（高级）</a>
+    </section>
+
+    <section class="detail-view" id="detailView" aria-labelledby="detailTitle" hidden>
+      <button class="back-button" id="backButton" type="button" aria-label="返回客户端列表">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>
+        <span>客户端</span>
+      </button>
+      <h1 id="detailTitle" tabindex="-1">train3060</h1>
+      <p class="detail-subtitle" id="detailSubtitle">经配对接入 · 2026-11-02</p>
+
+      <div class="detail-stack">
+        <section class="detail-card" aria-labelledby="profileCardTitle">
+          <div class="card-padded">
+            <h2 class="section-kicker" id="profileCardTitle">profile</h2>
+            <div class="profile-heading">
+              <p class="profile-name" id="detailProfileName">训练机</p>
+              <button class="secondary-button" id="changeProfileButton" type="button">更换</button>
+            </div>
+          </div>
+          <p class="visible-label" id="visibleLabel">它能看到的 3 台服务器</p>
+          <div class="server-rows" id="detailServers"></div>
+        </section>
+
+        <section class="detail-card card-padded" aria-labelledby="statusCardTitle">
+          <h2 class="section-title" id="statusCardTitle">状态</h2>
+          <div class="status-list">
+            <div class="status-row">
+              <span class="status-label">最后同步</span>
+              <span class="status-value" id="detailSync">1 小时前</span>
+            </div>
+            <div class="status-row">
+              <span class="status-label">客户端版本</span>
+              <span class="status-value" id="detailVersion"></span>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-card card-padded" aria-labelledby="machineCardTitle">
+          <h2 class="section-title" id="machineCardTitle">所在机器</h2>
+          <div id="machineCardBody">
+            <button class="machine-row" type="button" data-action="machine-detail">
+              <span class="machine-row-copy">
+                <strong class="machine-row-name">机器 train3060 · 家 A</strong>
+                <span class="machine-row-location">查看机器信息</span>
+              </span>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+            </button>
+            <p class="inventory-summary">最近采集 2 小时前 · 32 个软件 · 1 个待确认暴露</p>
+            <div class="inventory-list">
+              <div class="inventory-row"><span class="inventory-name">Ubuntu 24.04.3 LTS</span></div>
+              <div class="inventory-row"><span class="inventory-name">NVIDIA 驱动 580.95</span></div>
+              <div class="inventory-row"><span class="inventory-name">nginx 1.24 监听所有地址 :80</span><span class="warning-tag">待确认暴露</span></div>
+            </div>
+            <div class="inventory-actions">
+              <button class="secondary-button" type="button" data-action="view-inventory">查看全部</button>
+              <button class="secondary-button" type="button" data-action="collect">立即采集</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="detail-card card-padded" aria-labelledby="assetCardTitle">
+          <h2 class="section-title" id="assetCardTitle">它能用到的机密项与共享存储</h2>
+          <div class="asset-list" id="detailAssets"></div>
+          <p class="card-note">由 profile 中的服务器与各机密项、共享存储的授权共同决定</p>
+        </section>
+
+        <section class="detail-card danger-card card-padded" aria-labelledby="dangerCardTitle">
+          <h2 class="section-title" id="dangerCardTitle">危险区</h2>
+          <button class="remove-button" id="removeClientButton" type="button">移除客户端</button>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+      主页
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+      服务器
+    </a>
+    <a class="nav-link" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+      客户端
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      授权
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      更多
+    </a>
+  </nav>
+
+  <div class="drawer-shell" id="profileDrawer" hidden>
+    <button class="drawer-backdrop" id="profileBackdrop" type="button" aria-label="关闭更换 profile 抽屉" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="profileDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="profileDrawerTitle">更换 profile</h2>
+        <button class="close-button" id="closeProfileDrawer" type="button" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="step-caption">选择此客户端绑定的 profile</p>
+      <div class="profile-options" id="profileOptions"></div>
+      <div class="summary-box" id="changeSummary" hidden>
+        <strong class="summary-title">变更摘要</strong>
+        <p class="summary-text" id="serverChangeSummary"></p>
+        <p class="summary-secret" id="secretChangeSummary" hidden></p>
+      </div>
+      <div class="drawer-actions">
+        <button class="secondary-button" id="cancelProfileChange" type="button">取消</button>
+        <button class="primary-button" id="confirmProfileChange" type="button" disabled>确认更换</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="drawer-shell" id="machineDrawer" hidden>
+    <button class="drawer-backdrop" id="machineBackdrop" type="button" aria-label="关闭选择机器抽屉" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="machineDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="machineDrawerTitle">选择机器</h2>
+        <button class="close-button" id="closeMachineDrawer" type="button" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="step-caption">选择这个客户端运行所在的物理机</p>
+      <label class="machine-search">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m16.5 16.5 4 4"/></svg>
+        <input id="machineSearchInput" type="search" placeholder="搜索机器或地点" autocomplete="off" aria-label="按机器或地点搜索">
+      </label>
+      <div class="machine-groups" id="machineGroups"></div>
+      <div class="drawer-footer">
+        <button class="secondary-button" id="createMachineButton" type="button">＋ 新建一台机器</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="drawer-shell" id="removeDrawer" hidden>
+    <button class="drawer-backdrop" id="removeBackdrop" type="button" aria-label="关闭移除客户端确认" tabindex="-1"></button>
+    <section class="drawer" role="alertdialog" aria-modal="true" aria-labelledby="removeDrawerTitle" aria-describedby="removeDescription">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="removeDrawerTitle">移除客户端</h2>
+        <button class="close-button" id="closeRemoveDrawer" type="button" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <p class="remove-copy" id="removeDescription"></p>
+      <div class="drawer-actions">
+        <button class="secondary-button" id="cancelRemove" type="button">取消</button>
+        <button class="danger-button" id="confirmRemove" type="button">确认移除</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span id="toastText"></span>
+  </div>
+
+  <script>
+    const servers = [
+      { id: 'mini6', name: 'mini6', address: 'allan@192.168.100.6:22' },
+      { id: 'NUC10', name: 'NUC10', address: 'root@192.168.100.235:22' },
+      { id: 'NUC10-docker', name: 'NUC10-docker', address: 'app@192.168.100.235:2222' },
+      { id: 'train3060', name: 'train3060', address: 'ubuntu@192.168.100.30:22' },
+      { id: '4090x2', name: '4090x2', address: 'ai@10.20.3.41:22' },
+      { id: '3090x2', name: '3090x2', address: 'ai@10.20.3.42:22' },
+      { id: 'gitlab-urit', name: 'gitlab-urit', address: 'git@10.20.1.10:22' },
+      { id: '软路由', name: '软路由', address: 'root@192.168.100.1:22' }
+    ];
+
+    const profiles = {
+      all: { name: '全部', serverIds: ['mini6', 'NUC10', 'NUC10-docker', 'train3060', '4090x2', '3090x2', 'gitlab-urit', '软路由'] },
+      training: { name: '训练机', serverIds: ['train3060', '4090x2', '3090x2'] },
+      company: { name: '公司', serverIds: ['4090x2', '3090x2', 'gitlab-urit'] }
+    };
+
+    const clients = [
+      { id: 'mini6-claude', name: 'mini6-claude', profileId: 'all', sync: '2 分钟', version: 'v0.22.0', machine: 'mini6', location: '家 A', paired: '2026-10-18' },
+      { id: 'train3060', name: 'train3060', profileId: 'training', sync: '1 小时', version: 'v0.22.0', machine: 'train3060', location: '家 A', paired: '2026-11-02' },
+      { id: 'laptop-work', name: 'laptop-work', profileId: 'company', sync: '3 天', stale: true, version: 'v0.21.4', machine: null, location: '', paired: '2026-10-20' }
+    ];
+
+    const secretDefinitions = [
+      { name: 'HF_TOKEN', serverIds: ['train3060', '4090x2', '3090x2'], note: 'HuggingFace 下载令牌，训练机拉模型用' },
+      { name: 'OPENAI_KEY', serverIds: ['mini6', 'NUC10'] }
+    ];
+    const sharedStorage = { name: 'nas-data', serverIds: ['train3060', '4090x2', '3090x2'], note: 'NAS 上的训练数据与临时文件，训练机共用' };
+
+    const machines = [
+      { name: 'mini6', location: '家 A' },
+      { name: 'NUC10', location: '家 A' },
+      { name: 'train3060', location: '家 A' },
+      { name: '软路由', location: '家 A' },
+      { name: 'NAS', location: '家 A' },
+      { name: '4090x2', location: '公司 / 一厂区 / 3 号楼' },
+      { name: '3090x2', location: '公司 / 一厂区 / 3 号楼' },
+      { name: 'gitlab-urit', location: '公司 / 一厂区 / 1 号楼' }
+    ];
+
+    const inventories = {
+      train3060: {
+        collected: '2 小时前',
+        count: 32,
+        warningCount: 1,
+        items: [
+          { name: 'Ubuntu 24.04.3 LTS' },
+          { name: 'NVIDIA 驱动 580.95' },
+          { name: 'nginx 1.24 监听所有地址 :80', warning: '待确认暴露' }
+        ]
+      }
+    };
+
+    const listView = document.getElementById('listView');
+    const detailView = document.getElementById('detailView');
+    const clientList = document.getElementById('clientList');
+    const detailTitle = document.getElementById('detailTitle');
+    const profileDrawer = document.getElementById('profileDrawer');
+    const machineDrawer = document.getElementById('machineDrawer');
+    const removeDrawer = document.getElementById('removeDrawer');
+    const profileOptions = document.getElementById('profileOptions');
+    const changeSummary = document.getElementById('changeSummary');
+    const serverChangeSummary = document.getElementById('serverChangeSummary');
+    const secretChangeSummary = document.getElementById('secretChangeSummary');
+    const confirmProfileChange = document.getElementById('confirmProfileChange');
+    const machineGroups = document.getElementById('machineGroups');
+    const machineSearchInput = document.getElementById('machineSearchInput');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toastText');
+    const chevron = '<svg class="card-chevron" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+    const rowChevron = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>';
+    let selectedClientId = null;
+    let chosenProfileId = null;
+    let activeDrawer = null;
+    let lastFocusedElement = null;
+    let toastTimer;
+
+    function currentClient() {
+      return clients.find(client => client.id === selectedClientId);
+    }
+
+    function profileServers(profileId) {
+      const ids = profiles[profileId].serverIds;
+      return servers.filter(server => ids.includes(server.id));
+    }
+
+    function usableSecrets(profileId) {
+      const visible = profiles[profileId].serverIds;
+      return secretDefinitions
+        .map(secret => ({ ...secret, via: secret.serverIds.filter(id => visible.includes(id)) }))
+        .filter(secret => secret.via.length > 0);
+    }
+
+    function hasSharedStorage(profileId) {
+      return profiles[profileId].serverIds.some(id => sharedStorage.serverIds.includes(id));
+    }
+
+    function renderClients() {
+      clientList.innerHTML = clients.map(client => {
+        const profile = profiles[client.profileId];
+        const syncText = client.stale ? '<span class="warning-tag">3 天未同步</span>' : `<span>${client.sync}同步</span>`;
+        return `
+          <button class="client-card${client.stale ? ' stale-card' : ''}" type="button" data-client-id="${client.id}" aria-label="查看 ${client.name} 详情">
+            <span class="card-heading">
+              <span class="client-name">${client.name}</span>
+              ${client.version !== 'v0.22.0' ? '<span class="upgrade-tag">可升级</span>' : ''}
+            </span>
+            <span class="profile-line">profile：${profile.name} · ${profile.serverIds.length} 台服务器</span>
+            <span class="sync-line">${syncText}<span class="separator" aria-hidden="true">·</span><span>${client.version}</span><span class="separator" aria-hidden="true">·</span><span>${client.machine ? `机器 ${client.machine}` : '机器未关联'}</span></span>
+            ${chevron}
+          </button>`;
+      }).join('');
+    }
+
+    function renderDetail() {
+      const client = currentClient();
+      if (!client) return;
+      const profile = profiles[client.profileId];
+      const visibleServers = profileServers(client.profileId);
+      const secrets = usableSecrets(client.profileId);
+      const assets = secrets.map(secret => `
+        <div class="asset-row">
+          <span class="asset-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="15" r="4"/><path d="m11 12 8-8M15 8l3 3M17 6l2 2"/></svg></span>
+          <span class="asset-copy"><strong class="asset-name">${secret.name}</strong><span class="asset-detail">机密项 · 经 ${secret.via.join('、')}</span>${secret.note ? `<span class="asset-detail">${secret.note}</span>` : ''}</span>
+        </div>`);
+      if (hasSharedStorage(client.profileId)) {
+        assets.push(`
+          <div class="asset-row">
+            <span class="asset-icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></svg></span>
+            <span class="asset-copy"><strong class="asset-name">nas-data</strong><span class="asset-detail">共享存储 · Linux 挂载点 /mnt/nas-data</span><span class="asset-detail">${sharedStorage.note}</span></span>
+          </div>`);
+      }
+
+      detailTitle.textContent = client.name;
+      document.getElementById('detailSubtitle').textContent = `经配对接入 · ${client.paired}`;
+      document.getElementById('detailProfileName').textContent = profile.name;
+      document.getElementById('visibleLabel').textContent = `它能看到的 ${visibleServers.length} 台服务器`;
+      document.getElementById('detailServers').innerHTML = visibleServers.map(server => `
+        <button class="server-row" type="button" data-server-name="${server.name}">
+          <span class="server-row-copy"><strong class="server-row-name">${server.name}</strong><span class="server-row-address">${server.address}</span></span>
+          ${rowChevron}
+        </button>`).join('');
+      document.getElementById('detailSync').textContent = client.stale ? '3 天未同步' : `${client.sync}前`;
+      document.getElementById('detailVersion').innerHTML = client.version === 'v0.22.0'
+        ? `<span>${client.version}</span><span class="success-tag">与推荐版本一致</span>`
+        : `<span>${client.version}</span><span class="upgrade-tag">可升级</span>`;
+      document.getElementById('detailAssets').innerHTML = assets.join('');
+      renderMachineCard(client);
+    }
+
+    function renderMachineCard(client) {
+      const body = document.getElementById('machineCardBody');
+      if (!client.machine) {
+        body.innerHTML = `
+          <p class="machine-empty">还不知道这个客户端运行在哪台机器上</p>
+          <button class="secondary-button" type="button" data-action="choose-machine">选择机器</button>`;
+        return;
+      }
+
+      const inventory = inventories[client.machine];
+      const inventoryMarkup = inventory ? `
+        <p class="inventory-summary">最近采集 ${inventory.collected} · ${inventory.count} 个软件 · ${inventory.warningCount} 个待确认暴露</p>
+        <div class="inventory-list">
+          ${inventory.items.map(item => `
+            <div class="inventory-row">
+              <span class="inventory-name">${item.name}</span>
+              ${item.warning ? `<span class="warning-tag">${item.warning}</span>` : ''}
+            </div>`).join('')}
+        </div>
+        <div class="inventory-actions">
+          <button class="secondary-button" type="button" data-action="view-inventory">查看全部</button>
+          <button class="secondary-button" type="button" data-action="collect">立即采集</button>
+        </div>` : `
+        <div class="inventory-empty">
+          <p>暂无软件清单</p>
+          <button class="secondary-button" type="button" data-action="collect">立即采集</button>
+        </div>`;
+
+      body.innerHTML = `
+        <button class="machine-row" type="button" data-action="machine-detail">
+          <span class="machine-row-copy">
+            <strong class="machine-row-name">机器 ${client.machine} · ${client.location || '地点未登记'}</strong>
+            <span class="machine-row-location">查看机器信息</span>
+          </span>
+          ${rowChevron}
+        </button>
+        ${inventoryMarkup}`;
+    }
+
+    function showDetail(clientId) {
+      selectedClientId = clientId;
+      renderDetail();
+      listView.hidden = true;
+      detailView.hidden = false;
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      detailTitle.focus({ preventScroll: true });
+    }
+
+    function showList() {
+      detailView.hidden = true;
+      listView.hidden = false;
+      selectedClientId = null;
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      document.getElementById('listTitle').setAttribute('tabindex', '-1');
+      document.getElementById('listTitle').focus({ preventScroll: true });
+    }
+
+    function renderProfileOptions() {
+      const client = currentClient();
+      profileOptions.innerHTML = Object.entries(profiles).map(([id, profile]) => `
+        <label class="profile-option">
+          <input type="radio" name="profile" value="${id}" ${id === client.profileId ? 'checked' : ''}>
+          <span class="profile-option-copy">
+            <strong class="profile-option-name">${profile.name}</strong>
+            <span class="profile-option-detail">${profile.serverIds.length} 台服务器</span>
+          </span>
+        </label>`).join('');
+      chosenProfileId = client.profileId;
+      changeSummary.hidden = true;
+      secretChangeSummary.hidden = true;
+      confirmProfileChange.disabled = true;
+    }
+
+    function renderMachineOptions(query = '') {
+      const keyword = query.trim().toLowerCase();
+      const matched = machines.filter(machine => {
+        const haystack = `${machine.name} ${machine.location}`.toLowerCase();
+        return !keyword || haystack.includes(keyword);
+      });
+      const groups = new Map();
+      matched.forEach(machine => {
+        if (!groups.has(machine.location)) groups.set(machine.location, []);
+        groups.get(machine.location).push(machine);
+      });
+
+      if (!matched.length) {
+        machineGroups.innerHTML = '<p class="drawer-empty">没有匹配的机器</p>';
+        return;
+      }
+
+      machineGroups.innerHTML = Array.from(groups).map(([location, items]) => `
+        <p class="machine-group-label">${location}</p>
+        <div>
+          ${items.map(machine => `
+            <button class="machine-option" type="button" data-machine-name="${machine.name}" data-machine-location="${machine.location}">
+              <span class="machine-row-copy">
+                <strong class="machine-row-name">${machine.name}</strong>
+                <span class="machine-row-location">${machine.location}</span>
+              </span>
+              ${rowChevron}
+            </button>`).join('')}
+        </div>`).join('');
+    }
+
+    function openMachineDrawer() {
+      machineSearchInput.value = '';
+      renderMachineOptions();
+      openDrawer(machineDrawer, 'closeMachineDrawer');
+    }
+
+    function updateChangeSummary() {
+      const client = currentClient();
+      const oldServerIds = profiles[client.profileId].serverIds;
+      const newServerIds = profiles[chosenProfileId].serverIds;
+      const added = servers.filter(server => newServerIds.includes(server.id) && !oldServerIds.includes(server.id)).map(server => server.name);
+      const lost = servers.filter(server => oldServerIds.includes(server.id) && !newServerIds.includes(server.id)).map(server => server.name);
+      const oldSecrets = usableSecrets(client.profileId).map(secret => secret.name);
+      const addedSecrets = usableSecrets(chosenProfileId).map(secret => secret.name).filter(name => !oldSecrets.includes(name));
+      const changed = chosenProfileId !== client.profileId;
+
+      changeSummary.hidden = !changed;
+      confirmProfileChange.disabled = !changed;
+      if (!changed) return;
+      serverChangeSummary.textContent = `将新增可见 ${added.length} 台${added.length ? `：${added.join('、')}` : ''}；失去 ${lost.length} 台${lost.length ? `：${lost.join('、')}` : ''}`;
+      secretChangeSummary.hidden = addedSecrets.length === 0;
+      secretChangeSummary.textContent = addedSecrets.length ? `将新增可用机密项：${addedSecrets.join('、')}` : '';
+    }
+
+    function openDrawer(drawer, focusTarget) {
+      lastFocusedElement = document.activeElement;
+      activeDrawer = drawer;
+      drawer.hidden = false;
+      document.body.classList.add('modal-open');
+      document.getElementById(focusTarget).focus();
+    }
+
+    function closeActiveDrawer() {
+      if (!activeDrawer) return;
+      activeDrawer.hidden = true;
+      activeDrawer = null;
+      document.body.classList.remove('modal-open');
+      if (lastFocusedElement && document.contains(lastFocusedElement)) lastFocusedElement.focus();
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toastText.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+    }
+
+    clientList.addEventListener('click', event => {
+      const card = event.target.closest('[data-client-id]');
+      if (card) showDetail(card.dataset.clientId);
+    });
+
+    document.getElementById('backButton').addEventListener('click', showList);
+
+    document.getElementById('detailServers').addEventListener('click', event => {
+      const row = event.target.closest('[data-server-name]');
+      if (row) showToast(`${row.dataset.serverName} 服务器详情（静态演示）`);
+    });
+
+    document.getElementById('changeProfileButton').addEventListener('click', () => {
+      renderProfileOptions();
+      openDrawer(profileDrawer, 'closeProfileDrawer');
+    });
+
+    document.getElementById('machineCardBody').addEventListener('click', event => {
+      const button = event.target.closest('[data-action]');
+      if (!button) return;
+      if (button.dataset.action === 'choose-machine') {
+        openMachineDrawer();
+      } else if (button.dataset.action === 'machine-detail') {
+        const client = currentClient();
+        showToast(`${client.machine} 机器详情（静态演示）`);
+      } else if (button.dataset.action === 'view-inventory') {
+        showToast(`${currentClient().machine} 的软件清单（静态演示）`);
+      } else if (button.dataset.action === 'collect') {
+        showToast(`已请求采集 ${currentClient().machine} 的软件清单（静态演示）`);
+      }
+    });
+
+    profileOptions.addEventListener('change', event => {
+      if (event.target.name === 'profile') {
+        chosenProfileId = event.target.value;
+        updateChangeSummary();
+      }
+    });
+
+    confirmProfileChange.addEventListener('click', () => {
+      const client = currentClient();
+      if (!client || chosenProfileId === client.profileId) return;
+      client.profileId = chosenProfileId;
+      closeActiveDrawer();
+      renderClients();
+      renderDetail();
+      showToast(`已将 ${client.name} 的 profile 更换为 ${profiles[client.profileId].name}`);
+    });
+
+    machineSearchInput.addEventListener('input', () => renderMachineOptions(machineSearchInput.value));
+
+    machineGroups.addEventListener('click', event => {
+      const option = event.target.closest('[data-machine-name]');
+      if (!option) return;
+      const client = currentClient();
+      client.machine = option.dataset.machineName;
+      client.location = option.dataset.machineLocation;
+      closeActiveDrawer();
+      renderClients();
+      renderDetail();
+      showToast(`已关联到机器 ${client.machine}`);
+    });
+
+    document.getElementById('createMachineButton').addEventListener('click', () => {
+      closeActiveDrawer();
+      showToast('新建机器（静态演示）');
+    });
+
+    document.getElementById('removeClientButton').addEventListener('click', () => {
+      const client = currentClient();
+      document.getElementById('removeDescription').textContent = `移除后 ${client.name} 将无法再同步，本地已有的副本会在下次同步时失效。`;
+      openDrawer(removeDrawer, 'cancelRemove');
+    });
+
+    document.getElementById('confirmRemove').addEventListener('click', () => {
+      const client = currentClient();
+      const index = clients.findIndex(item => item.id === client.id);
+      if (index !== -1) clients.splice(index, 1);
+      closeActiveDrawer();
+      renderClients();
+      showList();
+      showToast(`已移除 ${client.name}`);
+    });
+
+    ['closeProfileDrawer', 'cancelProfileChange', 'profileBackdrop'].forEach(id => {
+      document.getElementById(id).addEventListener('click', closeActiveDrawer);
+    });
+    ['closeMachineDrawer', 'machineBackdrop'].forEach(id => {
+      document.getElementById(id).addEventListener('click', closeActiveDrawer);
+    });
+    ['closeRemoveDrawer', 'cancelRemove', 'removeBackdrop'].forEach(id => {
+      document.getElementById(id).addEventListener('click', closeActiveDrawer);
+    });
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && activeDrawer) closeActiveDrawer();
+    });
+
+    document.getElementById('approvalLink').addEventListener('click', () => showToast('配对审批（静态演示）'));
+    document.getElementById('manualLink').addEventListener('click', () => showToast('手动添加客户端（静态演示）'));
+
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      link.addEventListener('click', event => event.preventDefault());
+    });
+
+    renderClients();
+  </script>
+</body>
+</html>
