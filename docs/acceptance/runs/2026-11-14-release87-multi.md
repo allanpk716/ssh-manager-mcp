@@ -4695,3 +4695,116 @@ authorized_keys 文件已精确移除一次性公钥行并回到追加前 SHA-25
 HTTP 服务已停止，端口 18999 与 28791 监听数均为 0；无打开的端口转发。
 演练权威端最终仍为 0.22.0-rc17、健康，`serve.pairing=false`，待批准列表为
 空，`serve.public_addresses=172.18.200.47:18178` 保留。
+
+## 第十五轮（rc18）安装与软件清单缺陷复验
+
+【时间与候选】2026-11-18，候选版本 0.22.0-rc18，源提交
+`46db26069a77fac2828a24ebc78cbae16bda9bf5`。构建前使用 Go 1.25.8 执行
+`go vet ./...` 与 `go test ./...`，均通过；`go vet` 无输出。Darwin ARM64
+可执行文件读回版本 0.22.0-rc18。本机只用临时网页分发服务传输产物与
+一次性采集私钥，未使用裸 SSH 文件复制。
+
+【产物校验】三个压缩包内均只有对应平台的可执行文件：
+```text
+linux_amd64.tar.gz SHA-256=cddb59e543bf0d14d5e248650360da2f5e32f4f46a770b8e5acfce614814eb3b
+windows_amd64.zip SHA-256=548f8222a24bf8427d9990efa46b2aead5f18c1415ab0f659488d1b9d19b3159
+darwin_arm64.tar.gz SHA-256=2592030504039efb0954eab46667397e6620e0723283cbe2c20c088159a80365
+```
+
+可执行文件 SHA-256：
+```text
+Linux AMD64    3681bc7bc4446b07d9cfea2dcc3aaf063f0c952eb9c6cde4d1dee79e96c1caf3
+Windows AMD64  4a8d237d004cb929571f428670a4c5c71adff0ed069f1898c73522cb495fb651
+Darwin ARM64   cc4ec5278f1616f57528f9a2812e4f7e3e1c1da54c88dea60e94dbab657d37c9
+```
+
+【演练机 1 与演练机 2】两台先备份 `/usr/local/bin/sshmgr.rc17`，再用校验
+通过的 Linux 产物替换当前二进制；两台均读回版本 0.22.0-rc18：
+```text
+sshmgr.rc17 SHA-256=87fe4ca90fe1b802d0d86af941a712e5c761a8c731357b7b11af4f800cb6068d
+sshmgr      SHA-256=3681bc7bc4446b07d9cfea2dcc3aaf063f0c952eb9c6cde4d1dee79e96c1caf3
+```
+演练权威端重启后与最终收尾读回均为：`service=Running`、
+`process=running`、`http=responding`、`vault=ok`、`overall=HEALTHY`。
+配对入口保持关闭，`serve.pairing=false`，待批准配对列表为空；
+`serve.public_addresses=172.18.200.47:18178` 保留。
+
+【工作机 1】压缩包 SHA-256 核对通过后解压到一次性目录
+`C:\sshmgr-e2e-20261114\bin-rc18\`，没有进入系统路径、没有安装服务、没有
+触碰生产进程；一次性可执行文件版本为 0.22.0-rc18，SHA-256 为
+`4a8d237d004cb929571f428670a4c5c71adff0ed069f1898c73522cb495fb651`。
+bin-rc17 保留且仍为 0.22.0-rc17；既有配对客户端控制器脚本四个文件
+SHA-256 均未变化。生产目录 `C:\ProgramData\ssh-manager` 采用“各文件
+SHA-256 排序后拼接，再整体 SHA-256”，开工与收尾均为 5 个文件、
+`fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f`。
+
+【macOS 软件清单采集复验】本轮复验的旧问题是：macOS 固定命令集此前交给
+zsh 登录 shell 时，`/Applications/Utilities/*.app` 无匹配会让遍历提前中断。
+rc18 把 POSIX 固定命令集改为由 `/bin/sh -c` 执行，并把两个应用程序目录的
+遍历分别放入 `/bin/sh`。mini6 使用一次性服务器条目 `inv-drill-mac` 与
+一次性 ed25519 SSH 私钥采集；主机密钥为首次连接时记录。采集报告读回
+`sudo=false`、`incomplete=false`，说明未提权且结果完整。
+
+协议标记读回包含 `SECTION apps`、`STATUS apps 0`、`SECTION brew`、
+`STATUS brew 0`、`SECTION container-images`、`STATUS container-images 0`、
+`SECTION containers`、`STATUS containers 0` 与 `END`。软件清单共有 180 个
+条目：应用程序 14 个、Homebrew 软件包 122 个、Docker 容器镜像 14 个、
+正在运行的 Docker 容器 0 个、未识别进程 28 个、操作系统 1 个、驱动与
+固件 1 个。上一轮 mini6 只有 39 个条目且结果不完整；本轮多出的条目来自
+修复后终于执行到的应用程序、Homebrew 与 Docker 节。
+
+三个 `/Applications` 应用程序版本与 Info.plist 读回一致：
+
+| 应用程序 | 软件清单版本 | Info.plist 读回 | 结论 |
+|---|---|---|---|
+| BetterDisplay | 5.2.1 | 5.2.1 | 一致 |
+| Bitwarden | 2026.10.4 | 2026.10.4 | 一致 |
+| RustDesk | 1.5.0 | 1.5.0 | 一致 |
+
+mini6 的 CycloneDX 1.6 导出通过 `python3 -I -m json.tool` 校验；
+`bomFormat=CycloneDX`，设备组件内嵌软件组件 180 个，与
+`inventory view --all-system-packages` 的条目总数一致。导出文件 SHA-256 为
+`8fcb21d19445dcb4a1266e2d033d87b28edea4cf508056806cf9e95746901fd4`。
+其中 28 个未识别进程仍没有 version 字段；这是上一轮已经记录的已知问题，
+不属于本轮要复验的两个修复。
+
+【软件清单回归采集】
+
+| 设备 | 目标 | 本轮组件数 | 上一轮组件数 | 采集结论 | 差异说明 |
+|---|---|---:|---:|---|---|
+| e2e278_authority | 演练机 1 | 980 | 980 | 完整、未用 sudo | 无差异 |
+| inv-drill-win | 工作机 1 | 817 | 817 | 完整、未用 sudo | 无差异 |
+
+工作机 1 采集前后均查询应用程序日志中的 MsiInstaller 1035 Windows
+Installer 重新配置事件：4 条、4 条，新增 0 条。固定命令集仍不包含
+`Win32_Product`，本轮没有触发 Windows 安装包修复。
+
+【软件清单并发命令复验】本轮复验的旧问题是：多个命令行进程并发打开
+权威端数据库时，此前可能在延迟事务升级写锁时立即报 `SQLITE_BUSY`，即
+SQLite 数据库锁定错误。rc18 把事务改为开始时立即申请写锁，并让跨进程
+冲突按忙碌超时等待。三轮测试均先同时启动演练机 1 与演练机 2 的两条
+`inventory collect`，再同时启动 4 条
+`inventory view --all-system-packages --json`：
+
+| 轮次 | 采集命令退出码 | 查询命令退出码 | `SQLITE_BUSY` 出现次数 | 结论 |
+|---|---|---|---:|---|
+| 1 | 0,0 | 0,0,0,0 | 0 | 通过 |
+| 2 | 0,0 | 0,0,0,0 | 0 | 通过 |
+| 3 | 0,0 | 0,0,0,0 | 0 | 通过 |
+
+【收尾与清理】一次性服务器条目 `inv-drill-win`、`inv-drill-mac` 与同名
+设备均已删除；两个设备的软件清单采集执行者登记随设备级联删除，既有两台
+演练设备的采集执行者恢复为默认规则选择。两个 authorized_keys 文件均精确
+移除一次性公钥行并回到追加前状态：
+```text
+工作机 1：2B1AF36B574402EAE4C325CE0E56D34CF53FB2425F3BE3DB7EDB269235305B5F，105 字节
+mini6：3919dc7be9b96ef5ec496b7557c7cd8e1de56bbfd00e2a211746b4a7298e7660，293 字节，权限 0600
+```
+一次性 ed25519 SSH 私钥的本机文件、临时网页分发副本与演练权威端临时文件
+均不存在；本机临时网页分发服务已停止，端口 18999 监听数为 0；没有打开的
+端口转发。演练权威端最终仍为 0.22.0-rc18、健康，`serve.pairing=false`，
+待批准列表为空，`serve.public_addresses=172.18.200.47:18178` 保留。
+
+【新发现的问题】本轮没有新发现问题。上一轮已记录的 CycloneDX 软件组件
+version 字段缺失问题仍能在未识别进程条目上观察到，rc18 提交本身没有承诺
+修复该问题。
