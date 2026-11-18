@@ -174,6 +174,40 @@
     return "⬡ ";
   }
 
+  // clipText 把单行文字截到固定字数，超出部分用省略号表示。设备节点的宽度
+  // 固定，长名称与长地址必须先截断，文字才不会画出节点外框。
+  function clipText(value, maxLength) {
+    var text = String(value === null || value === undefined ? "" : value).trim();
+    var chars = Array.from(text);
+    if (chars.length <= maxLength) {
+      return text;
+    }
+    return chars.slice(0, maxLength).join("") + "…";
+  }
+
+  // deviceDisplayName 优先用服务器条目的显示名称：owner 在服务器列表里辨认
+  // 的就是它；没有服务器条目或不止一条时退回设备名。
+  function deviceDisplayName(device) {
+    if (device.servers.length === 1 && String(device.servers[0].name || "").trim() !== "") {
+      return device.servers[0].name;
+    }
+    return device.name;
+  }
+
+  // deviceHostLine 取节点第二行的主机地址：单条服务器条目直接显示其主机
+  // 地址；其余设备显示网络成员地址，帮助区分同名的机器。
+  function deviceHostLine(index, device) {
+    if (device.servers.length === 1 && String(device.servers[0].host || "").trim() !== "") {
+      return device.servers[0].host;
+    }
+    return addressText(index, device);
+  }
+
+  // nodeHeightFor 按标签行数计算设备节点高度，换行后的文字仍留在节点框内。
+  function nodeHeightFor(lineCount) {
+    return Math.max(56, 26 + lineCount * 17);
+  }
+
   function deviceNode(index, device, parentID, extraClasses) {
     var classes = ["device", "device-" + device.kind];
     if (state.data.local_device.known && state.data.local_device.device_id === device.id) {
@@ -182,7 +216,7 @@
     if (extraClasses !== undefined) {
       classes = classes.concat(extraClasses);
     }
-    var label = kindGlyph(device.kind) + device.name;
+    var label = kindGlyph(device.kind) + clipText(deviceDisplayName(device), 11);
     var probeSummary = probeSummaryFor(device.id);
     if (probeSummary !== null) {
       classes.push(probeStatusClass(probeSummary.status));
@@ -190,19 +224,30 @@
         classes.push("probe-inconsistent");
       }
     }
-    var addresses = addressText(index, device);
-    if (addresses !== "") {
-      label += "\n" + addresses;
+    var hostLine = clipText(deviceHostLine(index, device), 18);
+    var lineCount = 1;
+    if (hostLine !== "") {
+      label += "\n" + hostLine;
+      lineCount += 1;
     }
     if (device.servers.length > 1) {
       label += "\n×" + device.servers.length;
+      lineCount += 1;
     }
     if (probeSummary !== null) {
       label += "\n" + probeBadgeText(probeSummary);
+      lineCount += 1;
     }
     return {
       group: "nodes",
-      data: { id: "device:" + device.id, label: label, parent: parentID, kind: device.kind, device: device.id },
+      data: {
+        id: "device:" + device.id,
+        label: label,
+        nodeHeight: nodeHeightFor(lineCount),
+        parent: parentID,
+        kind: device.kind,
+        device: device.id,
+      },
       classes: classes.join(" "),
     };
   }
@@ -221,7 +266,7 @@
   function siteNode(site, virtualStyle) {
     return {
       group: "nodes",
-      data: { id: "site:" + site.id, label: site.name, site: site.id },
+      data: { id: "site:" + site.id, label: site.name || "未命名站点", site: site.id },
       classes: virtualStyle ? "site site-label" : "site",
     };
   }
@@ -231,7 +276,7 @@
       group: "nodes",
       data: {
         id: "network:" + network.id,
-        label: network.name,
+        label: network.name || "未命名局域网",
         parent: parentID === undefined ? undefined : parentID,
         network: network.id,
         networkType: network.type,
@@ -277,7 +322,12 @@
               group: "nodes",
               data: {
                 id: "clone:" + network.id + ":" + device.id,
-                label: kindGlyph(device.kind) + device.name + "\n" + members[j].address,
+                label:
+                  kindGlyph(device.kind) +
+                  clipText(deviceDisplayName(device), 11) +
+                  "\n" +
+                  clipText(members[j].address, 18),
+                nodeHeight: nodeHeightFor(2),
                 parent: "network:" + network.id,
                 kind: device.kind,
                 device: device.id,
@@ -371,7 +421,7 @@
           group: "nodes",
           data: {
             id: "vnet:" + overlayNetwork.id,
-            label: overlayNetwork.name,
+            label: overlayNetwork.name || "未命名局域网",
             network: overlayNetwork.id,
             networkType: "virtual",
           },
@@ -550,28 +600,30 @@
 
   function styleForView() {
     return [
-      { selector: "node", style: { "label": "data(label)", "text-valign": "center", "text-halign": "center", "font-size": 12, color: "#1f2937" } },
-      { selector: ".site", style: { shape: "round-rectangle", "background-color": "#e8edf5", "border-color": "#98a2b3", "border-width": 2, "font-size": 15, "font-weight": "bold", padding: 28 } },
-      { selector: ".site-label", style: { "background-color": "#f1f3f7", "border-color": "#d0d5dd", "border-style": "dashed", "font-size": 13, padding: 10 } },
-      { selector: ".network", style: { shape: "round-rectangle", "background-color": "#f4f7fb", "border-color": "#84a6e0", "border-width": 2, padding: 22 } },
-      { selector: ".network-virtual", style: { "background-color": "#f6f0fb", "border-color": "#a685e8", "border-style": "dashed" } },
-      { selector: ".virtual-hub", style: { shape: "ellipse", width: 130, height: 58, "background-color": "#f1e7fb" } },
-      { selector: ".device", style: { shape: "round-rectangle", width: 150, height: 64, "background-color": "#ffffff", "border-color": "#667085", "border-width": 1.5 } },
-      { selector: ".device-server", style: { shape: "round-rectangle", "border-color": "#2f6fed", "border-width": 2 } },
-      { selector: ".device-client", style: { shape: "ellipse", "border-color": "#129985", "border-width": 2 } },
-      { selector: ".device-unmanaged", style: { shape: "hexagon", "border-color": "#7a5af8" } },
+      // 画布配色与页面深色主题一致：文字浅色、底色深色，分组框顶部留出
+      // 标签带，避免子节点盖住站点与网络名称。
+      { selector: "node", style: { "label": "data(label)", "text-valign": "center", "text-halign": "center", "font-size": 12, color: "#e8edf7", "text-wrap": "wrap", "text-max-width": 140 } },
+      { selector: ".site", style: { shape: "round-rectangle", "background-color": "#1c2740", "border-color": "#5b6f9e", "border-width": 2, "font-size": 15, "font-weight": "bold", color: "#e8edf7", "text-valign": "top", padding: 24, "padding-top": 30 } },
+      { selector: ".site-label", style: { "background-color": "#182031", "border-color": "#4a5b82", "border-style": "dashed", "font-size": 13, padding: 10, "text-valign": "center", "font-weight": "normal", color: "#c9d4ea" } },
+      { selector: ".network", style: { shape: "round-rectangle", "background-color": "#232f4a", "border-color": "#6ea8fe", "border-width": 2, "text-valign": "top", "font-weight": "bold", color: "#dbe6fb", padding: 18, "padding-top": 26 } },
+      { selector: ".network-virtual", style: { "background-color": "#2a2545", "border-color": "#a685e8", "border-style": "dashed" } },
+      { selector: ".virtual-hub", style: { shape: "ellipse", width: 130, height: 58, "background-color": "#2f2850", "text-valign": "center", padding: 8 } },
+      { selector: ".device", style: { shape: "round-rectangle", width: 160, height: "data(nodeHeight)", "background-color": "#182031", "border-color": "#8a97b5", "border-width": 1.5 } },
+      { selector: ".device-server", style: { shape: "round-rectangle", "border-color": "#6ea8fe", "border-width": 2 } },
+      { selector: ".device-client", style: { shape: "ellipse", "border-color": "#35c0b0", "border-width": 2 } },
+      { selector: ".device-unmanaged", style: { shape: "hexagon", "border-color": "#a78bfa" } },
       { selector: ".local", style: { "border-color": "#f79009", "border-width": 4 } },
       { selector: ".clone", style: { "border-style": "dashed", opacity: 0.9 } },
-      { selector: ".probe-ok", style: { "border-color": "#12b76a", "border-width": 3 } },
-      { selector: ".probe-fail", style: { "border-color": "#d92d20", "border-width": 3, "background-color": "#fff1f0" } },
+      { selector: ".probe-ok", style: { "border-color": "#3ddc97", "border-width": 3 } },
+      { selector: ".probe-fail", style: { "border-color": "#ff6b64", "border-width": 3, "background-color": "#3a1d20" } },
       { selector: ".probe-unprobed", style: { "border-style": "dashed" } },
-      { selector: ".probe-none", style: { "border-style": "dotted", "border-color": "#98a2b3" } },
-      { selector: ".probe-inconsistent", style: { "border-color": "#d92d20", "border-width": 4 } },
-      { selector: ".placeholder", style: { shape: "round-rectangle", "background-color": "#f9fafb", "border-color": "#d0d5dd", "border-style": "dashed", color: "#667085", width: 110, height: 40 } },
-      { selector: "edge", style: { width: 2, "line-color": "#98a2b3" } },
+      { selector: ".probe-none", style: { "border-style": "dotted", "border-color": "#7c8aa8" } },
+      { selector: ".probe-inconsistent", style: { "border-color": "#ff6b64", "border-width": 4 } },
+      { selector: ".placeholder", style: { shape: "round-rectangle", "background-color": "#1a2233", "border-color": "#3a4664", "border-style": "dashed", color: "#98a5bd", width: 110, height: 40 } },
+      { selector: "edge", style: { width: 2, "line-color": "#55617d" } },
       { selector: ".clone-edge", style: { "line-style": "dashed", "line-color": "#a685e8" } },
       { selector: ".virtual-edge", style: { "line-color": "#a685e8", "target-arrow-shape": "none" } },
-      { selector: ".member-edge", style: { "line-style": "dotted", "line-color": "#84a6e0" } },
+      { selector: ".member-edge", style: { "line-style": "dotted", "line-color": "#6ea8fe" } },
     ];
   }
 
@@ -1359,6 +1411,7 @@
             base.push(probeBadgeText(summary));
           }
           node.data("label", base.join("\n"));
+          node.data("nodeHeight", nodeHeightFor(base.length));
         }
         if (summary === null) {
           return;

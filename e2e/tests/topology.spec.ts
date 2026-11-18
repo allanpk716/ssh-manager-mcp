@@ -426,6 +426,122 @@ test("手机视口整幅查看并可从底部打开详情", async ({ page, isMob
   }
 });
 
+// contrastRatio 在浏览器里按 WCAG 的相对亮度公式计算文字与有效背景的
+// 对比度；半透明背景先与页面背景混合。
+async function contrastRatio(
+  page: import("@playwright/test").Page,
+  selector: string,
+): Promise<number> {
+  return page.evaluate((target) => {
+    type rgba = [number, number, number, number];
+    const parse = (value: string): rgba => {
+      const match = value.match(/rgba?\(([^)]+)\)/);
+      if (match === null) {
+        throw new Error(`无法解析颜色：${value}`);
+      }
+      const parts = match[1].split(",").map((item) => Number(item.trim()));
+      return [parts[0], parts[1], parts[2], parts[3] === undefined ? 1 : parts[3]];
+    };
+    const luminance = (color: rgba) => {
+      const channel = (raw: number) => {
+        const scaled = raw / 255;
+        return scaled <= 0.03928 ? scaled / 12.92 : Math.pow((scaled + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * channel(color[0]) + 0.7152 * channel(color[1]) + 0.0722 * channel(color[2]);
+    };
+    const element = document.querySelector(target)! as HTMLElement;
+    let walker: HTMLElement | null = element;
+    let background = "rgba(0, 0, 0, 0)";
+    while (walker !== null) {
+      const value = getComputedStyle(walker).backgroundColor;
+      if (parse(value)[3] > 0) {
+        background = value;
+        break;
+      }
+      walker = walker.parentElement;
+    }
+    let backgroundColor = parse(background);
+    if (backgroundColor[3] < 1) {
+      const base = parse(getComputedStyle(document.body).backgroundColor);
+      backgroundColor = backgroundColor.map((channelValue, index) =>
+        index < 3
+          ? channelValue * backgroundColor[3] + base[index] * (1 - backgroundColor[3])
+          : 1,
+      ) as rgba;
+    }
+    const foreground = luminance(parse(getComputedStyle(element).color));
+    const backgroundLuminance = luminance(backgroundColor);
+    const lighter = Math.max(foreground, backgroundLuminance);
+    const darker = Math.min(foreground, backgroundLuminance);
+    return (lighter + 0.05) / (darker + 0.05);
+  }, selector);
+}
+
+test("手机深色视口下信息块可读且节点与分组标签能认出机器", async ({ page, isMobile }) => {
+  test.skip(!isMobile, "手机视口用例只在手机视口运行");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ colorScheme: "dark" });
+  const ui = await startClientUIWithTopology();
+  try {
+    await openClientUI(page, ui);
+    await page.getByRole("link", { name: "网络拓扑" }).click();
+    await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
+    const canvas = page.locator("#topology-canvas");
+    await expect(canvas).not.toHaveAttribute("data-node-count", "0");
+
+    expect(await contrastRatio(page, ".topology-probe")).toBeGreaterThanOrEqual(4.5);
+    expect(await contrastRatio(page, ".topology-hint")).toBeGreaterThanOrEqual(4.5);
+
+    const labels = await page.evaluate(() => {
+      const pageEl = document.querySelector("[data-topology-page]") as any;
+      const cy = pageEl.sshmgrTopology;
+      const result = {
+        deviceLabels: [] as string[],
+        siteLabels: [] as string[],
+        networkLabels: [] as string[],
+        overflow: [] as string[],
+      };
+      cy.nodes().forEach((node: any) => {
+        const label = String(node.data("label") || "");
+        if (node.data("device") !== undefined) {
+          result.deviceLabels.push(label);
+          if (!node.hasClass("clone")) {
+            const withLabels = node.renderedBoundingBox({ includeLabels: true, includeOverlays: false });
+            const body = node.renderedBoundingBox({ includeLabels: false, includeOverlays: false });
+            if (
+              withLabels.x1 < body.x1 - 1 ||
+              withLabels.x2 > body.x2 + 1 ||
+              withLabels.y1 < body.y1 - 1 ||
+              withLabels.y2 > body.y2 + 1
+            ) {
+              result.overflow.push(label.split("\n")[0]);
+            }
+          }
+        } else if (node.data("site") !== undefined) {
+          result.siteLabels.push(label);
+        } else if (node.data("network") !== undefined) {
+          result.networkLabels.push(label);
+        }
+      });
+      return result;
+    });
+
+    // 节点第一行优先显示服务器条目的显示名称，第二行是主机地址；夹具的内
+    // 部标识不得出现在画布上。
+    expect(labels.deviceLabels.some((label) => label.split("\n")[0].includes("客户端服务器"))).toBe(true);
+    expect(labels.deviceLabels.some((label) => label.includes("192.0.2.30"))).toBe(true);
+    expect(labels.deviceLabels.join("\n")).not.toContain("device-server");
+    expect(labels.deviceLabels.join("\n")).not.toContain("client-server");
+    // 物理视图的站点与网络分组框显示夹具里的地域名称。
+    expect(labels.siteLabels).toContain("家A");
+    expect(labels.networkLabels).toContain("家A局域网");
+    // 节点文字（含换行后的多行标签）不得画出节点外框。
+    expect(labels.overflow).toEqual([]);
+  } finally {
+    await ui.close();
+  }
+});
+
 test("客户端只读查看本地快照拓扑", async ({ page }) => {
   const ui = await startClientUIWithTopology();
   try {
@@ -439,7 +555,8 @@ test("客户端只读查看本地快照拓扑", async ({ page }) => {
     await expect(canvas).toHaveAttribute("data-grabbable", "false");
     await expect(page.getByRole("complementary", { name: "未归类设备" })).toHaveAttribute("data-draggable", "false");
     const summary = await canvas.getAttribute("data-node-summary");
-    expect(summary).toContain("客户端服务器设备");
+    expect(summary).toContain("客户端服务器");
+    expect(summary).not.toContain("客户端服务器设备");
     expect(summary).not.toContain("×2");
 
     const tray = page.getByRole("complementary", { name: "未归类设备" });
