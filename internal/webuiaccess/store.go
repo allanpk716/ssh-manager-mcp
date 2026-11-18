@@ -197,9 +197,9 @@ func (s openerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error)
 	return rows, err
 }
 
-func (s openerStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source webui.AccessWriteSource) error {
+func (s openerStore) ApprovePairing(id, profile string, compared bool, allowForeignTarget bool, source webui.AccessWriteSource) error {
 	return s.withManager(func(manager *access.Manager) error {
-		return managerStore{manager: manager}.ApprovePairing(id, profile, compared, addressOverride, source)
+		return managerStore{manager: manager}.ApprovePairing(id, profile, compared, allowForeignTarget, source)
 	})
 }
 
@@ -401,8 +401,8 @@ func (s managerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error
 	return out, nil
 }
 
-func (s managerStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source webui.AccessWriteSource) error {
-	return s.manager.ApprovePairing(id, profile, compared, addressOverride, access.WebUISource(source.RemoteAddress))
+func (s managerStore) ApprovePairing(id, profile string, compared bool, allowForeignTarget bool, source webui.AccessWriteSource) error {
+	return s.manager.ApprovePairing(id, profile, compared, allowForeignTarget, access.WebUISource(source.RemoteAddress))
 }
 
 func (s managerStore) RejectPairing(id string, source webui.AccessWriteSource) error {

@@ -36,6 +36,10 @@
 {{else if eq .Type "port"}}
 <label for="setting-{{.Key}}">设置存储值</label>
 <input type="number" min="1" max="65535" id="setting-{{.Key}}" name="value" value="{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}{{$.OpsSettingForm.Value}}{{else}}{{.InputValue}}{{end}}">
+{{else if eq .Type "public_addresses"}}
+<label for="setting-{{.Key}}">设置存储值</label>
+<input type="text" id="setting-{{.Key}}" name="value" placeholder="主机,主机:端口,[IPv6 地址]:端口" value="{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}{{$.OpsSettingForm.Value}}{{else}}{{.InputValue}}{{end}}">
+<p class="form-help">多个本机对外地址用英文逗号分隔；只写主机时任意端口都算本机，写端口时端口必须一致。</p>
 {{else}}
 <label for="setting-{{.Key}}">设置存储值</label>
 <input type="text" id="setting-{{.Key}}" name="value" value="{{if and $.OpsSettingForm.Key (eq $.OpsSettingForm.Key .Key)}}{{$.OpsSettingForm.Value}}{{else}}{{.InputValue}}{{end}}">

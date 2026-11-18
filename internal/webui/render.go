@@ -139,6 +139,7 @@ type pageData struct {
 	AccessPairing                     *AccessPairingSummary
 	AccessPairingForm                 AccessPairingForm
 	AccessPairingNotice               string
+	AccessPairingSuccess              bool
 	OpsAuditRows                      []OpsAuditRow
 	OpsAuditFilter                    OpsAuditFilterView
 	OpsAuditHasMore                   bool

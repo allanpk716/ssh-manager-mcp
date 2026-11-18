@@ -28,9 +28,23 @@ type AccessPairingSummary struct {
 // AccessPairingForm 保存批准表单提交过的内容。批准失败重新渲染时用它保
 // 留 owner 已经选择或输入的值，避免表单被清空。
 type AccessPairingForm struct {
+	PairingID string
 	ProfileID string
-	Override  string
 	Compared  bool
+}
+
+// ProfileSelected 判断一个 profile 选项是否应被选中。表单失败回填时优先保
+// 留 owner 刚选择的那一项。
+func (s AccessPairingSummary) ProfileSelected(profileID string, form AccessPairingForm) bool {
+	if form.PairingID == s.ID && form.ProfileID != "" {
+		return form.ProfileID == profileID
+	}
+	return s.SuggestedProfileID == profileID
+}
+
+// KeepCompared 只回填对应配对请求的比对勾选。
+func (s AccessPairingSummary) KeepCompared(form AccessPairingForm) bool {
+	return form.PairingID == s.ID && form.Compared
 }
 
 // registerPairingRoutes 只在权威端注册配对路由：配对请求由客户端经主监听
@@ -39,6 +53,19 @@ func (h *handler) registerPairingRoutes() {
 	h.mux.HandleFunc(accessPairingPath, h.requireSession(h.handleAccessPairing))
 	h.mux.HandleFunc(accessPairingListPath, h.requireSession(h.handleAccessPairingList))
 	h.mux.HandleFunc(accessPairingPrefix, h.requireSession(h.handleAccessPairingAction))
+}
+
+func applyPairingDoneNotice(data *pageData, r *http.Request) {
+	done := r.URL.Query().Get("done")
+	if done != "approve" && done != "reject" {
+		return
+	}
+	data.AccessPairingSuccess = true
+	if done == "approve" {
+		data.AccessPairingNotice = "已批准配对请求。请让客户端在完成窗口内继续操作。"
+		return
+	}
+	data.AccessPairingNotice = "已拒绝配对请求。"
 }
 
 func (h *handler) handleAccessPairing(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +82,7 @@ func (h *handler) handleAccessPairing(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "读取配对请求失败", "读取配对请求失败，请稍后重试。")
 		return
 	}
+	applyPairingDoneNotice(&data, r)
 	h.renderPage(w, r, http.StatusOK, "pairing.tmpl", data)
 }
 
@@ -72,6 +100,7 @@ func (h *handler) handleAccessPairingList(w http.ResponseWriter, r *http.Request
 		h.renderError(w, r, http.StatusInternalServerError, "读取配对请求失败", "读取配对请求失败，请稍后重试。")
 		return
 	}
+	applyPairingDoneNotice(&data, r)
 	h.renderPage(w, r, http.StatusOK, "pairing-list.tmpl", data)
 }
 
@@ -87,17 +116,11 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 			h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "配对批准页只接受 GET 与 HEAD 请求。")
 			return
 		}
-		query := r.URL.Query()
-		next := pairingApprovalResumePath(id, query.Get("profile"), query.Get("override"))
-		if !h.requireRecentReverify(w, r, next) {
-			return
-		}
 		data, err := h.pairingDetailData(id)
 		if err != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取配对请求失败", "读取配对请求失败，请稍后重试。")
 			return
 		}
-		applyPairingApprovalResumeForm(r, &data)
 		status := http.StatusOK
 		if data.AccessPairing == nil {
 			status = http.StatusConflict
@@ -113,13 +136,6 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "配对裁决只接受 POST 请求。")
 		return
 	}
-	next := pairingDetailPath(id)
-	if action == "approve" {
-		next = pairingApprovalResumePath(id, r.PostFormValue("profile"), r.PostFormValue("override"))
-	}
-	if !h.requireRecentReverify(w, r, next) {
-		return
-	}
 
 	var actionErr error
 	if action == "approve" {
@@ -133,41 +149,37 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 		} else {
 			profile := r.PostFormValue("profile")
 			compared := r.PostFormValue("compared") != ""
-			override := r.PostFormValue("override")
+			// Web UI 永远不带命令行显式放行；异常地址由访问层重
+			// 新判定并写失败审计。
 			actionErr = h.cfg.Access.ApprovePairing(
-				id, profile, compared, override, AccessWriteSource{RemoteAddress: remoteIP(r)},
+				id, profile, compared, false, AccessWriteSource{RemoteAddress: remoteIP(r)},
 			)
 		}
 	} else {
 		actionErr = h.cfg.Access.RejectPairing(id, AccessWriteSource{RemoteAddress: remoteIP(r)})
 	}
 	if actionErr != nil {
-		var data pageData
-		var detailErr error
-		if action == "approve" {
-			data, detailErr = h.pairingDetailData(id)
-			data.AccessPairingForm = AccessPairingForm{
-				ProfileID: r.PostFormValue("profile"),
-				Override:  r.PostFormValue("override"),
-				Compared:  r.PostFormValue("compared") != "",
-			}
-		} else {
-			data, detailErr = h.pairingPageData()
-		}
+		data, detailErr := h.pairingPageData()
 		if detailErr != nil {
 			h.renderError(w, r, http.StatusInternalServerError, "读取配对请求失败", "配对裁决失败后读取配对请求失败，请稍后重试。")
 			return
 		}
+		if action == "approve" {
+			data.AccessPairingForm = AccessPairingForm{
+				PairingID: id, ProfileID: r.PostFormValue("profile"),
+				Compared: r.PostFormValue("compared") != "",
+			}
+		}
 		data.Title = "配对"
 		data.AccessPairingNotice = actionErr.Error()
-		page := "pairing.tmpl"
-		if action == "approve" {
-			page = "pairing-detail.tmpl"
-		}
-		h.renderPage(w, r, http.StatusConflict, page, data)
+		h.renderPage(w, r, http.StatusConflict, "pairing.tmpl", data)
 		return
 	}
-	http.Redirect(w, r, accessPairingPath, http.StatusSeeOther)
+	done := "reject"
+	if action == "approve" {
+		done = "approve"
+	}
+	http.Redirect(w, r, accessPairingPath+"?done="+done, http.StatusSeeOther)
 }
 
 // accessPairingByID 在配对列表里按标识符查找一行。
@@ -188,50 +200,6 @@ func pairingDetailPath(id string) string {
 	return accessPairingPath + "/" + url.PathEscape(id)
 }
 
-// pairingApprovalResumePath 保留批准表单里的 profile 与覆盖文字，
-// 重新验证后回到同一张表单。
-func pairingApprovalResumePath(id, profileID, addressOverride string) string {
-	query := url.Values{}
-	if profileID != "" {
-		query.Set("profile", profileID)
-	}
-	if addressOverride != "" {
-		query.Set("override", addressOverride)
-	}
-	if len(query) == 0 {
-		return pairingDetailPath(id)
-	}
-	return pairingDetailPath(id) + "?" + query.Encode()
-}
-
-// applyPairingApprovalResumeForm 只在重新验证回跳后回填表单。「已比对」
-// 是 owner 的人工声明，必须每次重新勾选。
-func applyPairingApprovalResumeForm(r *http.Request, data *pageData) {
-	if data.AccessPairing == nil {
-		return
-	}
-	profileID := r.URL.Query().Get("profile")
-	addressOverride := r.URL.Query().Get("override")
-	if profileID == "" && addressOverride == "" {
-		return
-	}
-	refilled := false
-	for _, profile := range data.AccessProfiles {
-		if profile.ID == profileID {
-			data.AccessPairingForm.ProfileID = profileID
-			refilled = true
-			break
-		}
-	}
-	if addressOverride != "" {
-		data.AccessPairingForm.Override = addressOverride
-		refilled = true
-	}
-	if refilled {
-		data.AccessPairingNotice = "已重新验证管理员口令，请再次核对三项后勾选确认并批准。"
-	}
-}
-
 // pairingPageData 读取配对请求与 profile，并把 profile 提示换算成表单可选
 // profile 的标识符，能对应时用于预选。
 func (h *handler) pairingPageData() (pageData, error) {
@@ -244,17 +212,24 @@ func (h *handler) pairingPageData() (pageData, error) {
 		return pageData{}, err
 	}
 	for i := range pairings {
-		hint := strings.TrimSpace(pairings[i].ProfileHint)
-		for _, profile := range profiles {
-			if hint == profile.ID || hint == profile.Name {
-				pairings[i].SuggestedProfileID = profile.ID
-				break
-			}
-		}
+		pairings[i].SuggestedProfileID = suggestedPairingProfile(pairings[i], profiles)
 	}
 	return pageData{
 		Title: "配对", AccessPairings: pairings, AccessProfiles: profiles,
 	}, nil
+}
+
+func suggestedPairingProfile(pairing AccessPairingSummary, profiles []AccessProfileSummary) string {
+	hint := strings.TrimSpace(pairing.ProfileHint)
+	for _, profile := range profiles {
+		if hint == profile.ID || hint == profile.Name {
+			return profile.ID
+		}
+	}
+	if len(profiles) == 1 {
+		return profiles[0].ID
+	}
+	return ""
 }
 
 // pairingDetailData 读取一个配对请求的批准页数据。请求已过期或已处理时可
@@ -273,15 +248,8 @@ func (h *handler) pairingDetailData(id string) (pageData, error) {
 		if pairings[i].ID != id {
 			continue
 		}
-		hint := strings.TrimSpace(pairings[i].ProfileHint)
-		for _, profile := range profiles {
-			if hint == profile.ID || hint == profile.Name {
-				pairings[i].SuggestedProfileID = profile.ID
-				break
-			}
-		}
+		pairings[i].SuggestedProfileID = suggestedPairingProfile(pairings[i], profiles)
 		data.AccessPairing = &pairings[i]
-		data.AccessPairingForm = AccessPairingForm{ProfileID: pairings[i].SuggestedProfileID}
 		return data, nil
 	}
 	return data, nil

@@ -65,6 +65,10 @@ func testSettingsRows() []OpsSetting {
 			CurrentValue: "", Source: OpsSettingSourceDefault, Effect: "下次配对时生效",
 			Choices: []OpsSettingChoice{{Value: "ops", Label: "ops"}},
 		},
+		{
+			Key: "serve.public_addresses", Type: OpsSettingTypePublicAddresses,
+			DefaultValue: "", CurrentValue: "", Source: OpsSettingSourceDefault, Effect: "立即生效",
+		},
 	}
 }
 
@@ -109,6 +113,7 @@ func TestOpsSettingsPageRendersTableAndRole(t *testing.T) {
 	for _, want := range []string{
 		"serve.pairing", "约 5 秒内生效", "当前被覆盖，修改设置存储不会立即生效",
 		"serve.ui_port", "重启服务后生效", "pair.default_profile", "下次配对时生效",
+		"serve.public_addresses", "多个本机对外地址用英文逗号分隔",
 		"standalone", "已完成", "/tmp/vault/role.json",
 	} {
 		if !strings.Contains(body, want) {

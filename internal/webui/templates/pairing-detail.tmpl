@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="pairing-page">
 <h1>批准配对</h1>
-{{if .AccessPairingNotice}}<div class="operation-refusal">{{.AccessPairingNotice}}</div>{{end}}
+{{if .AccessPairingNotice}}<div class="{{if .AccessPairingSuccess}}operation-result{{else}}operation-refusal{{end}}" role="alert">{{.AccessPairingNotice}}</div>{{end}}
 {{with .AccessPairing}}
 {{if ne .State "pending"}}
 <div class="operation-refusal">
@@ -9,34 +9,41 @@
 <a href="/ui/access/pairing">返回配对列表</a>
 </div>
 {{end}}
-<article class="pairing-request{{if not .HasShortCode}} pairing-missing-code{{end}}">
-<h2>{{.Name}}</h2>
+<article class="pairing-request{{if not .HasShortCode}} pairing-missing-code{{end}}{{if .ForeignTarget}} pairing-foreign{{end}}">
+<div class="pairing-comparison">
+<h2 class="pairing-instance">{{.Name}}</h2>
+<p><span>客户端连接的权威端地址</span><span class="pairing-target">{{.TargetURL}}</span></p>
+<p><span>6 位短认证码</span>{{if .HasShortCode}}<code class="pairing-short-code">{{.ShortCode}}</code>{{else}}<strong>行缺少短认证码，只能拒绝</strong>{{end}}</p>
+</div>
 <dl class="pairing-fields">
-<div><dt>客户端声明的目标地址</dt><dd>{{if .ForeignTarget}}<span class="attention-badge">目标地址异常</span>{{end}}{{.TargetURL}}</dd></div>
-<div><dt>短认证码</dt><dd>{{if .HasShortCode}}<code>{{.ShortCode}}</code>{{else}}行缺少短认证码，只能拒绝{{end}}</dd></div>
 <div><dt>来源地址</dt><dd>{{.SourceAddress}}</dd></div>
 <div><dt>profile 提示</dt><dd>{{if .ProfileHint}}{{.ProfileHint}}{{else}}未声明{{end}}</dd></div>
 <div><dt>替换同名设备</dt><dd>{{if .ReplaceInactive}}替换同名设备的未激活设备码{{else}}不替换{{end}}</dd></div>
 <div><dt>状态</dt><dd>{{if eq .State "pending"}}剩余 {{.RemainingSeconds}} 秒{{else if eq .State "approved"}}已批准，等待客户端完成（剩余 {{.RemainingSeconds}} 秒）{{else}}已完成{{end}}</dd></div>
 </dl>
-{{if and (eq .State "pending") .HasShortCode}}
+{{if and (eq .State "pending") .ForeignTarget}}
+<div class="operation-refusal pairing-foreign-warning" role="alert">
+这条请求连接的地址不是本机，也不在已登记的对外地址里，可能有人在中间转发。建议拒绝。若确认是你自己的网络，请先把该地址登记为本机对外地址（serve.public_addresses），或用命令行批准。
+</div>
+{{end}}
+{{if eq .State "pending"}}
+<div class="pairing-actions">
+{{if and .HasShortCode (not .ForeignTarget)}}
 <form method="post" action="/ui/access/pairing/{{.ID}}/approve" class="pairing-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <label for="pairing-profile">批准到 profile</label>
 <select id="pairing-profile" name="profile" required>
-{{range $.AccessProfiles}}<option value="{{.ID}}"{{if eq .ID $.AccessPairingForm.ProfileID}} selected{{end}}>{{.Name}}</option>{{end}}
+{{range $profile := $.AccessProfiles}}<option value="{{$profile.ID}}"{{if $.AccessPairing.ProfileSelected $profile.ID $.AccessPairingForm}} selected{{end}}>{{$profile.Name}}</option>{{end}}
 </select>
-<label class="pairing-compare"><input type="checkbox" name="compared" value="1"{{if $.AccessPairingForm.Compared}} checked{{end}} required>已与客户端屏幕上的短认证码逐位比对一致</label>
-<label for="pairing-override">目标地址异常时的覆盖文字</label>
-{{/* 覆盖文字与 internal/access.PairingOverrideText 是同一份业务规则。 */}}<input type="text" id="pairing-override" name="override" value="{{$.AccessPairingForm.Override}}" placeholder="OVERRIDE">
+<label class="pairing-compare"><input type="checkbox" name="compared" value="1"{{if $.AccessPairing.KeepCompared $.AccessPairingForm}} checked{{end}} required>我已逐位比对三项一致</label>
 <button type="submit">批准</button>
 </form>
 {{end}}
-{{if eq .State "pending"}}
 <form method="post" action="/ui/access/pairing/{{.ID}}/reject" class="inline-form pairing-reject-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <button type="submit">拒绝</button>
 </form>
+</div>
 {{end}}
 </article>
 {{else}}

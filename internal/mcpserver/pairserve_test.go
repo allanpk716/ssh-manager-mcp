@@ -646,40 +646,6 @@ func TestPairFinish_ReplayReturnsCachedSealed(t *testing.T) {
 	}
 }
 
-func TestForeignTarget(t *testing.T) {
-	// 本机环回不在集合内(诚实验证 LocalNonLoopbackIPs 不含环回)。
-	if !ForeignTarget("https://127.0.0.1:7878") {
-		t.Fatal("127.0.0.1 must be FOREIGN (loopback is not in LocalNonLoopbackIPs)")
-	}
-	if !ForeignTarget("http://[::1]:7878") {
-		t.Fatal("::1 must be FOREIGN")
-	}
-	// 第一个本机非环回 IP → 本机。
-	ips := LocalNonLoopbackIPs()
-	if len(ips) > 0 {
-		if ForeignTarget(fmt.Sprintf("https://%s:7878", ips[0])) {
-			t.Fatalf("local IP %s must NOT be foreign", ips[0])
-		}
-	} else {
-		t.Log("no non-loopback IPs on this host; local-IP case vacuously skipped")
-	}
-	// hostname 形态(带 port 与不带 port 两形态)→ 本机。
-	if host, err := os.Hostname(); err == nil && host != "" {
-		if ForeignTarget(fmt.Sprintf("https://%s:7878", host)) {
-			t.Fatalf("hostname %s must NOT be foreign", host)
-		}
-		if ForeignTarget(fmt.Sprintf("https://%s", host)) {
-			t.Fatalf("hostname without port %s must NOT be foreign", host)
-		}
-	}
-	// 垃圾串/外部地址 → true(fail-closed)。
-	for _, s := range []string{"", "not a url", "https://[bad", "https://203.0.113.9:7878"} {
-		if !ForeignTarget(s) {
-			t.Fatalf("%q must be foreign", s)
-		}
-	}
-}
-
 func TestPairDisabled_404(t *testing.T) {
 	srv, st, r, _ := newPairRunner(t)
 	if err := st.SetSetting("serve.pairing", "false"); err != nil {

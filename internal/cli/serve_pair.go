@@ -142,16 +142,12 @@ func servePairApproveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			override := ""
-			if allowForeign {
-				override = access.PairingOverrideText
-			}
 			// 命令行 owner 先用 `serve pair ls` 查看短认证码并逐位比对，再
 			// 显式执行 approve；这次显式执行就是比对确认，与 Web UI 的勾选
 			// 框等价，因此这里传入「已比对」。
 			// 目标地址异常的错误在这里翻回命令行原有提示；目标地址来自客
 			// 户端请求，输出前必须剥掉 C0/C1 控制字符。
-			if err := manager.ApprovePairing(row.ID, profile, true, override, access.CLISource()); err != nil {
+			if err := manager.ApprovePairing(row.ID, profile, true, allowForeign, access.CLISource()); err != nil {
 				var foreignTarget *access.PairingForeignTargetError
 				if errors.As(err, &foreignTarget) {
 					return fmt.Errorf(

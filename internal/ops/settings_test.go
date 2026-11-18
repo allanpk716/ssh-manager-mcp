@@ -54,8 +54,8 @@ func TestListSettingsBuildsKnownTableAndReadsRole(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings) != 8 {
-		t.Fatalf("已知设置项数量 = %d，应为 8：%+v", len(settings), settings)
+	if len(settings) != 9 {
+		t.Fatalf("已知设置项数量 = %d，应为 9：%+v", len(settings), settings)
 	}
 	byKey := make(map[string]Setting, len(settings))
 	for _, setting := range settings {
@@ -105,6 +105,11 @@ func TestListSettingsBuildsKnownTableAndReadsRole(t *testing.T) {
 	if offline.Type != SettingTypeDuration || offline.DefaultValue != "0" ||
 		offline.Effect != "下次配对时生效" || offline.Source != SettingSourceDefault {
 		t.Fatalf("默认离线时长设置项不符：%+v", offline)
+	}
+	publicAddresses := byKey["serve.public_addresses"]
+	if publicAddresses.Type != SettingTypePublicAddresses || publicAddresses.DefaultValue != "" ||
+		publicAddresses.Effect != "立即生效" || publicAddresses.Source != SettingSourceDefault {
+		t.Fatalf("本机对外地址设置项不符：%+v", publicAddresses)
 	}
 
 	role, err := ReadRole()

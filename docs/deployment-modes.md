@@ -97,7 +97,7 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 
 一台权威机器常驻 `sshmgr serve`（**权威 vault + `/snapshot` 拉取 + `/pair` 配对 + 独立 Web UI**——serve 收窄为这四件事，不再承载任何 agent 会话）。每台工作机装 `sshmgr` 二进制，以**零距离 client** 接入：
 
-1. **配对（一条龙）**：`sshmgr pair --instance <名>`——LAN 广播发现 broker（或 `--url` 直指）→ SAS 三件套人闸比对 → owner 在权威端 Web UI 的配对页（或 `serve pair approve`）批准 → 凭据自动加密下发 → 首拉落盘 → 产物 `pair.<名>.mcp.json` 抄进 agent 配置（或 `--write-mcp` 直落）。工作机的初始化向导（`sshmgr ui` 选「客户端」）只显示这条配对命令的写法，配对仍在终端执行；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅命令行有。
+1. **配对（一条龙）**：`sshmgr pair --instance <名>`——LAN 广播发现 broker（或 `--url` 直指）→ SAS 三件套人闸比对 → owner 在权威端 Web UI 的配对列表页一屏核对并批准（或 `serve pair approve`）→ 凭据自动加密下发 → 首拉落盘 → 产物 `pair.<名>.mcp.json` 抄进 agent 配置（或 `--write-mcp` 直落）。工作机的初始化向导（`sshmgr ui` 选「客户端」）只显示这条配对命令的写法，配对仍在终端执行；`SSHMGR_PAIR_ASSUME_SAS` 自动化跳比对仅命令行有。
 2. **干活**：`.mcp.json` 用 `args: ["mcp", "--cache"]` + `env SSHMGR_TOKEN`——agent 的本地子进程用本地只读缓存干活，**命令从工作机直拨目标服务器**；缓存自动保鲜（≤30min），断网照常用（只读）。
 
 - 需要**两样凭据**：设备码（管拉取，pair 批准时自动铸发；手工路径用 `cache-tokens add --name <机> --profile <profile>` 签发）+ project token（管 spawn，pair 一并下发；手工路径 `projects add` 签发）。
@@ -109,7 +109,10 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 | 面 | 谁用 | 能做什么 | 状态 |
 |---|---|---|---|
 | **权威端 Web UI**（serve 进程独立监听的 `/ui`，go:embed 单二进制，管理员口令登录） | owner，任意浏览器（虚拟局域网地址或本机回环地址） | 完整管理 + 配对批准 + 设备码 + 吊销 + 审计 + 备份/升级 | ✅ |
-| **`serve pair` 命令行**（`ls` / `approve` / `reject`） | owner，权威端主机上（配对批准的命令行等价面） | 批准（`--allow-foreign-url` 显式覆盖机械地址校验）/拒绝/列队 | ✅ |
+| **`serve pair` 命令行**（`ls` / `approve` / `reject`） | owner，权威端主机上（配对批准的命令行等价面） | 批准（`--allow-foreign-url` 显式放行异常地址）/拒绝/列队 | ✅ |
+
+权威端部署在端口映射、反向代理或容器网络后时，把客户端实际连接的地址登记到
+`serve.public_addresses`（示例命令：`sshmgr settings set serve.public_addresses 172.18.200.47:18178`）；登记地址会被配对地址检查视同本机。
 
 > 吊销也在管理面做——生效路径见下表「设备失窃处置」与 [agent-tools.md](./agent-tools.md) 的「吊销三路径」。
 
@@ -154,7 +157,7 @@ vault、master key、agent 全在**同一台机**：`.mcp.json` 里 `command: ss
 
 - **一台机、自己用、不要集中管理** → ①。多机形态对你是多余开销（常驻服务 + 缓存层）。
 - **桌面多机共用清单 / 凭据必须集中** → **② + `sshmgr pair` 一条龙**（默认路径）：新机从「装好二进制」到「agent 可用」= 一条命令 + owner 在权威端 Web UI 批一次。
-- **手机 / 平板** → agent 不跑在非桌面设备上（②需要本地 spawn 二进制进程）。手机的角色是**权威端 Web 管理面**：在 serve 独立监听的 `/ui` 上批准配对、吊销、管服务器（桌面优先设计，查看类页面与配对批准适配手机）。
+- **手机 / 平板** → agent 不跑在非桌面设备上（②需要本地 spawn 二进制进程）。手机的角色是**权威端 Web 管理面**：在 serve 独立监听的 `/ui` 上一屏批准配对、吊销、管服务器（桌面优先设计，配对批准也适配手机宽度）。
 - ②c 只留应急（serve 彻底没起时）；②a 已移除，不要再用 `"type": "http"` 配置——那是 404。
 
 一句话记忆：**①是"凭据跟人走"，②是"凭据留在 broker、agent 只拿只读快照"；多机入网 = pair 一条龙，写操作 = 管理面（权威端 Web UI / `serve pair` 命令行）。**

@@ -11,10 +11,6 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// PairingOverrideText 是批准目标地址异常的配对请求时必须输入的精确覆盖
-// 文字。命令行与 Web UI 都以这个常量作为同一份业务规则。
-const PairingOverrideText = "OVERRIDE"
-
 // PairingRequest 是配对页的一行展示数据。短认证码只有在存在时返回；设备
 // 名、目标地址、来源地址与 profile 提示都来自客户端请求，调用方展示前需
 // 保持超文本转义。临时配对私钥绝不进入这个结构。
@@ -40,14 +36,14 @@ func (e *PairingComparisonRequiredError) Error() string {
 	return "必须先与客户端屏幕上的短认证码逐位比对一致，才能批准配对"
 }
 
-// PairingForeignTargetError 表示客户端声明的目标地址不属于本机，且没有带
-// 精确的覆盖文字。
+// PairingForeignTargetError 表示客户端声明的目标地址不属于本机，也不在
+// 已登记的本机对外地址里。
 type PairingForeignTargetError struct {
 	TargetURL string
 }
 
 func (e *PairingForeignTargetError) Error() string {
-	return fmt.Sprintf("⚠ 配对声明目标 ≠ 本机地址（%s），必须输入精确文本 %s 才能批准", e.TargetURL, PairingOverrideText)
+	return fmt.Sprintf("⚠ 配对声明目标不属于本机地址（%s），也不在已登记的本机对外地址里，建议拒绝；Web UI 不能放行，命令行可用 --allow-foreign-url 显式放行", e.TargetURL)
 }
 
 // PairingNotPendingError 表示请求已超时、已被批准或已被拒绝，不再是待批准
@@ -64,6 +60,10 @@ func (e *PairingNotPendingError) Error() string {
 // 户端完成、已完成等待按现有规则清理。列表带服务端计算的剩余时间与目标
 // 地址是否属于本机的判断。
 func (m *Manager) ListPairingRequests() ([]PairingRequest, error) {
+	publicAddresses, err := m.registeredPublicAddresses()
+	if err != nil {
+		return nil, err
+	}
 	rows, err := m.st.ListVisiblePairing()
 	if err != nil {
 		return nil, err
@@ -92,7 +92,7 @@ func (m *Manager) ListPairingRequests() ([]PairingRequest, error) {
 			ID: hex.EncodeToString(row.ID), Name: row.Name, TargetURL: row.TargetURL,
 			ShortCode: shortCode, SourceAddress: row.SourceIP, ProfileHint: row.ProfileHint,
 			ProfileName: names[row.Profile], ReplaceInactive: row.ReplaceInactive, State: row.State,
-			ForeignTarget: foreignPairingTarget(row.TargetURL), RemainingSeconds: remaining,
+			ForeignTarget: foreignPairingTarget(row.TargetURL, publicAddresses), RemainingSeconds: remaining,
 			HasShortCode: shortCode != "",
 		})
 	}
@@ -100,9 +100,9 @@ func (m *Manager) ListPairingRequests() ([]PairingRequest, error) {
 }
 
 // ApprovePairing 批准一条待批准配对请求。请求必须已确认逐位比对短认证
-// 码；目标地址不属于本机时必须带精确文本 OVERRIDE。成功审计行与状态变化
-// 在同一个存储事务里提交，失败请求由模块写失败审计行。
-func (m *Manager) ApprovePairing(identifier, profile string, compared bool, addressOverride string, src Source) error {
+// 码；目标地址不属于本机时只有命令行显式放行可以继续。成功审计行与状态
+// 变化在同一个存储事务里提交，失败请求由模块写失败审计行。
+func (m *Manager) ApprovePairing(identifier, profile string, compared bool, allowForeignTarget bool, src Source) error {
 	row, err := m.resolvePairing(identifier)
 	if err != nil {
 		return err
@@ -115,7 +115,11 @@ func (m *Manager) ApprovePairing(identifier, profile string, compared bool, addr
 		if !compared {
 			return &PairingComparisonRequiredError{}
 		}
-		if foreignPairingTarget(row.TargetURL) && addressOverride != PairingOverrideText {
+		publicAddresses, addressErr := m.registeredPublicAddresses()
+		if addressErr != nil {
+			return addressErr
+		}
+		if foreignPairingTarget(row.TargetURL, publicAddresses) && !allowForeignTarget {
 			return &PairingForeignTargetError{TargetURL: row.TargetURL}
 		}
 		resolved, resolveErr := m.resolveProfile(profile)
@@ -213,7 +217,21 @@ func (m *Manager) clockNow() time.Time {
 }
 
 // foreignPairingTarget 与配对接口使用的机械地址检查保持同一规则：目标主
-// 机不是本机非环回地址或本机主机名时判定为异常，解析失败也按异常处理。
-func foreignPairingTarget(targetURL string) bool {
-	return localaddr.ForeignTarget(targetURL)
+// 机不是本机非环回地址、本机主机名或已登记对外地址时判定为异常，解析失
+// 败也按异常处理。
+func foreignPairingTarget(targetURL string, publicAddresses []localaddr.RegisteredAddress) bool {
+	return localaddr.ForeignTarget(targetURL, publicAddresses...)
+}
+
+// registeredPublicAddresses 读取并解析已登记的本机对外地址。设置值非法时
+// 返回错误并按异常地址处理，避免被绕过。
+func (m *Manager) registeredPublicAddresses() ([]localaddr.RegisteredAddress, error) {
+	value, stored, err := m.st.GetSetting(localaddr.PublicAddressesSettingKey)
+	if err != nil {
+		return nil, err
+	}
+	if !stored {
+		return nil, nil
+	}
+	return localaddr.ParseRegisteredAddresses(value)
 }

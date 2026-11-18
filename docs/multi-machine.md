@@ -174,8 +174,8 @@ service 默认账户：
 ```bash
 sshmgr pair --instance laptop
 # → 发现（或已提示用 --url 直指）→ 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
-# → owner 在权威端 Web UI 配对页（或 serve pair approve laptop --profile team-a）
-#   对照屏上「name @ url」与 client 屏 SAS 一致后批准
+# → owner 在权威端 Web UI 配对页一屏对照实例名、目标地址与 client 屏 SAS，
+#   选 profile 后批准（或用 serve pair approve laptop --profile team-a）
 # → 批准后 120 秒内 client 完成 finish → 凭据加密下发 → 首拉落盘
 # → 产物 pair.laptop.mcp.json（含真值 project token，0600）
 ```
@@ -322,7 +322,7 @@ sshmgr pair --instance laptop
 1. **发现**（可跳过）：client 对本机所有非环回 IPv4 接口广播 UDP 7878 probe；serve **只单播回请求源**一条 offer（`name` + SPKI 指纹 + TCP 端口——零敏感字段）。多台 serve 同时在网时列清单供选（含 name@addr:port 与指纹前 16 字符）。拿不到 offer（防火墙挡 UDP/跨网段）就走 `--url` 直指。
 2. **连接（pin 分级）**：pin 已知（discovery offer 自带 / `--pin` 显式）→ 全程 TLS 层 SPKI 硬校验（不匹配即中止，主防线）；`--url` 直连且无 `--pin` → **默认拒绝**，显式 `--allow-tofu` 才接受无锚通道（TOFU 逃生门，见 [threat-model.md](./threat-model.md) R12）。
 3. **enroll → SAS 三件套**：client 生成临时密钥对 + 随机 id，`POST /pair/enroll`；serve 应答后 client **立即算出并在本屏显示**同一行三件套：`<name> @ <target_url> SAS <6位数字>`。**SAS 绑定整条 transcript 与密钥材料**——pin 已知通道（discovery / `--pin`）下，换钥型 MITM 在 TLS 握手期即被指纹校验拒断；TOFU 逃生通道（`--allow-tofu`）无此防护，仅受三件套人核与机械地址校验约束——受控环境专用（[threat-model.md](./threat-model.md) R12）。pending 队列存 store 表（跨进程共享，serve 重启即作废 in-flight）。
-4. **批准（人闸 + 机械校验）**：owner 在**权威端 Web UI 的配对页**（或用 **`serve pair ls / approve / reject`** 命令行）看到待批准行。**批准面同屏显示三件套 `<name> @ <target_url> SAS <6位>`**——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），批准面直读真值；owner 将批准行的 SAS 与 **client 屏的 SAS** **逐位比对一致后才批准**。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对 MITM 无感的 name/url 两件对照——name/url 是未认证的 enroll 输入，MITM 转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否为本机地址（非环回 IP 集 + hostname）——不符（疑似中继/假 discovery/错误网络）→ 大字 ⚠ 且拒绝常规批准，仅显式覆盖可用（命令行 `serve pair approve --allow-foreign-url`；Web UI 批准表单输入 `OVERRIDE` 覆盖文字）。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
+4. **批准（人闸 + 机械校验）**：owner 在**权威端 Web UI 的配对列表页**（或用 **`serve pair ls / approve / reject`** 命令行）一屏完成裁决。列表直接显示三件套 `<name> @ <target_url> SAS <6位>` 与剩余时间——serve 在 enroll 时就算好 SAS 落入行内（`pairing_pending.sas`，跨进程共享），列表直读真值；owner 将列表三项与 **client 屏的三项**逐位比对一致，勾选确认、选 profile 后批准或拒绝。只有一个 profile 时默认选中；配对批准与拒绝不要求近期重新输入管理员口令，但 Web UI 登录会话、防跨站请求伪造校验与审计仍在。行缺 SAS（serve 版本错配/旧行）→ ⚠ 警示并建议拒绝（绝不静默回退到对中间人无感的两件对照——name/url 是未认证的 enroll 输入，中间人转发时天然一致）。**机械地址校验**：serve 核对 client 声明的 `target_url` 是否属于本机地址集合（本机非环回地址 + 主机名 + `serve.public_addresses` 登记的对外地址）——不在集合内（疑似中继/假发现/错误网络）→ Web UI 大字警告且只给拒绝按钮，后端也拒绝批准；显式放行仅在命令行 `serve pair approve --allow-foreign-url`。owner 选 profile（`pair.default_profile` 预选）→ CAS 批准，开 **120 秒** finish 窗口（enroll 后 **10 分钟**内不批准即过期作废）。
 5. **finish（凭据自动下发）**：client 2s 轮询到 approved 后确认 finish（120s 内）；serve 在**单个事务**里铸设备码 + 建/复用 project（`pair-<名>`）+ 签 token + 落审计行，以 AES-256-GCM 信封返回 `{spki, profile, device_code, project_token, max_offline}`。
 6. **先落盘，后首拉**：client 把 `cache.auth.json`（url+设备码+pin）+ `cache.config.json`（`max_offline`，缺省 24h）+ **`pair.<名>.mcp.json`**（完整 `.mcp.json` 片段，env.SSHMGR_TOKEN = 真值，0600）全部落盘**之后**才首拉——落盘走临时文件+rename **原子写**（Plan 46：pair 产物与 `--write-mcp` 副本同改，失败不留半文件）。**首拉失败零丢失**：凭据已在盘，修复后重跑 `cache pull --instance <名>` 即补缓存；终端报错统一尾缀**双路径恢复指引**（Plan 46，如实——client 无法可靠分辨 serve 端状态）：直接重跑 `sshmgr pair --force`；若重跑报设备名占用（419），owner 在权威端执行 `sshmgr cache-tokens revoke <实例名>` 后再重跑。`.mcp.json` 从产物文件抄（或当初用 `--write-mcp <path>` 已直落）。终端**零完整凭据**（打印片段用 `<project-token>` 占位符，真值只在产物文件里）。
 7. **收尾**：产物片段抄进 agent 的 `.mcp.json`（形态 = 下面「手工 enroll」Step 2 的 cache 形态；`--write-mcp` 则已就位），重启 Claude Code 即用。
@@ -341,7 +341,10 @@ serve pair ls                                   # 待批准队列（name/@url/�
 serve pair approve laptop --profile team-a      # 批准（输出三件套 '<name> @ <url> SAS <6位>'）
 serve pair approve laptop --profile team-a --allow-foreign-url   # 机械校验 ⚠ 时的显式覆盖
 serve pair reject laptop                        # 拒绝（终态，该请求永远无法再 enroll）
+sshmgr settings set serve.public_addresses 172.18.200.47:18178  # 登记端口映射等对外地址
 ```
+
+`serve.public_addresses` 可写多个条目，用英文逗号分隔；条目格式为「主机」「主机:端口」「[IPv6 地址]」或「[IPv6 地址]:端口」。只写主机时任意端口都算本机；写了端口时目标端口必须相同。
 
 - **`--instance` 必填** = 设备名 = 本地实例槽（Plan 40 三位一体：设备码 name = 实例名 = profile 授权单元）；命名纪律建议 `机器-实例`。
 - **自动化免比对**：env `SSHMGR_PAIR_ASSUME_SAS=1` 跳过终端 SAS 确认（**STUB 大字警告**——无人值守 CI 专用，放弃人闸；机械地址校验与 TLS pin 仍在；**命令行专属**——Web UI 的配对指引页不读该 env，人工配对永远逐位比对短认证码）。

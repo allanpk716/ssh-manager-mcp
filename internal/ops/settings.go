@@ -9,6 +9,7 @@ import (
 
 	"ssh-manager-mcp/internal/discoveryname"
 	"ssh-manager-mcp/internal/listenplan"
+	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/offlinelimit"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/switchstate"
@@ -34,6 +35,7 @@ const (
 	SettingTypeDiscoveryName   SettingType = "discovery_name"
 	SettingTypeProfile         SettingType = "profile"
 	SettingTypeDuration        SettingType = "duration"
+	SettingTypePublicAddresses SettingType = "public_addresses"
 )
 
 // SettingInputs 是 serve 进程显式注入的环境变量与启动旗标。指针为空表示
@@ -86,6 +88,7 @@ var settingDefinitions = []settingDefinition{
 	{key: "serve.ui_listen", settingType: SettingTypeListenAddresses, defaultValue: "", effect: "约 5 秒内生效"},
 	{key: "serve.ui_port", settingType: SettingTypePort, defaultValue: "7879", effect: "重启服务后生效"},
 	{key: "serve.discovery_name", settingType: SettingTypeDiscoveryName, defaultValue: "", effect: "重启服务后生效"},
+	{key: localaddr.PublicAddressesSettingKey, settingType: SettingTypePublicAddresses, defaultValue: "", effect: "立即生效"},
 	{key: "pair.default_profile", settingType: SettingTypeProfile, defaultValue: "", effect: "下次配对时生效"},
 	{key: "pair.default_max_offline", settingType: SettingTypeDuration, defaultValue: "0", effect: "下次配对时生效"},
 }
@@ -329,6 +332,12 @@ func (m *Manager) validateSettingValue(definition settingDefinition, value strin
 		if _, err := offlinelimit.Parse(normalized, definition.key); err != nil {
 			return "", fmt.Errorf("设置项 %s 必须是 0 或不小于 1 小时的时长（例如 168h），当前输入 %q", definition.key, value)
 		}
+	case SettingTypePublicAddresses:
+		addresses, err := localaddr.ParseRegisteredAddresses(normalized)
+		if err != nil {
+			return "", err
+		}
+		normalized = localaddr.FormatRegisteredAddresses(addresses)
 	}
 	return normalized, nil
 }

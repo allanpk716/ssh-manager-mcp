@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/buildinfo"
+	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
@@ -49,6 +50,10 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	mainAddress := mainListener.Addr().String()
+	// 客户端声明的目标地址用登记过的对外主机名；环回地址不能登记。
+	if err := st.SetSetting(localaddr.PublicAddressesSettingKey, "authority.example.test"); err != nil {
+		t.Fatal(err)
+	}
 	go func() {
 		done <- RunServe(ctx, st, mainAddress, "", "", serveOptionsForTest(mainListener, webUIListener))
 	}()
@@ -73,7 +78,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	webURL := "https://" + webUIListener.Addr().String()
 	csrfToken := loginThroughAuthorityWebUI(t, client, webURL, "correct-password")
 
-	pairClient := newPairClient(t, "integration-laptop", mainURL)
+	pairClient := newPairClient(t, "integration-laptop", "https://authority.example.test:7878")
 	pairClient.hint = "integration-ops"
 	enrollResponse := pairPostToServe(t, client, mainURL+"/pair/enroll", pairClient.enrollBody())
 	enrollBody := integrationBody(t, enrollResponse)
@@ -89,7 +94,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	}
 	csrfToken = hiddenCSRFValue(string(pairingBody))
 	approveForm := url.Values{
-		"csrf_token": {csrfToken}, "profile": {profileID}, "compared": {"1"}, "override": {"OVERRIDE"},
+		"csrf_token": {csrfToken}, "profile": {profileID}, "compared": {"1"},
 	}
 	approveResponse, err := postAuthorityForm(client, webURL+"/ui/access/pairing/"+hex.EncodeToString(pairClient.id[:])+"/approve", approveForm)
 	if err != nil {
@@ -155,6 +160,40 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	revokedSnapshotBody := integrationBody(t, revokedSnapshot)
 	if revokedSnapshot.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("撤销后的设备码再次拉取应返回 401，状态码=%d 正文：\n%s", revokedSnapshot.StatusCode, revokedSnapshotBody)
+	}
+
+	foreignClient := newPairClient(t, "integration-foreign-laptop", "https://203.0.113.9:7878")
+	foreignClient.hint = "integration-ops"
+	foreignEnroll := pairPostToServe(t, client, mainURL+"/pair/enroll", foreignClient.enrollBody())
+	foreignEnrollBody := integrationBody(t, foreignEnroll)
+	if foreignEnroll.StatusCode != http.StatusOK {
+		t.Fatalf("异常地址配对登记状态码=%d 正文：\n%s", foreignEnroll.StatusCode, foreignEnrollBody)
+	}
+	foreignPage := integrationGet(t, client, webURL+"/ui/access/pairing")
+	foreignPageBody := string(integrationBody(t, foreignPage))
+	if !strings.Contains(foreignPageBody, "integration-foreign-laptop") ||
+		!strings.Contains(foreignPageBody, "这条请求连接的地址不是本机") ||
+		strings.Contains(foreignPageBody, `name="override"`) {
+		t.Fatalf("异常地址配对列表应只给拒绝且不要求覆盖文字：\n%s", foreignPageBody)
+	}
+	foreignCSRF := hiddenCSRFValue(foreignPageBody)
+	foreignApprove := url.Values{
+		"csrf_token": {foreignCSRF}, "profile": {profileID}, "compared": {"1"},
+	}
+	foreignResponse, err := postAuthorityForm(client, webURL+"/ui/access/pairing/"+hex.EncodeToString(foreignClient.id[:])+"/approve", foreignApprove)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignApproveBody := integrationBody(t, foreignResponse)
+	if foreignResponse.StatusCode != http.StatusConflict {
+		t.Fatalf("异常地址经 Web UI 批准应被后端拒绝，状态码=%d 页面：\n%s", foreignResponse.StatusCode, foreignApproveBody)
+	}
+	foreignAudit, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"pair.approve"}, Statuses: []string{"error"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(foreignAudit) != 1 || !strings.Contains(foreignAudit[0].Command, `"name":"integration-foreign-laptop"`) {
+		t.Fatalf("异常地址 Web UI 批准应有失败审计：%+v", foreignAudit)
 	}
 
 	cancel()

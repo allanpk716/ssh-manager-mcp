@@ -692,6 +692,53 @@ h1 {
   margin-top: 0;
 }
 
+.pairing-comparison {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-medium);
+  margin-bottom: var(--space-medium);
+  background: var(--color-background);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+}
+
+.pairing-instance,
+.pairing-target,
+.pairing-short-code {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pairing-instance {
+  color: var(--color-text);
+  font-size: 1.5rem;
+  font-weight: 750;
+}
+
+.pairing-comparison p {
+  display: grid;
+  gap: var(--space-small);
+  margin: 0;
+}
+
+.pairing-comparison span:first-child {
+  color: var(--color-muted);
+}
+
+.pairing-target {
+  color: var(--color-text);
+  font-size: 1.25rem;
+  font-weight: 700;
+}
+
+.pairing-short-code {
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.35em;
+}
+
 .pairing-fields {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -737,6 +784,16 @@ h1 {
   border-color: var(--color-danger-border);
 }
 
+.pairing-foreign {
+  border-color: var(--color-warning-border);
+}
+
+.pairing-foreign-warning {
+  margin-top: var(--space-medium);
+  font-size: 1rem;
+  line-height: 1.6;
+}
+
 .pairing-form,
 .pairing-reject-form {
   align-items: flex-start;
@@ -771,6 +828,61 @@ h1 {
 .pairing-reject-form button {
   color: var(--color-warning-text);
   border-color: var(--color-warning-border);
+}
+
+.pairing-list-actions {
+  margin-bottom: var(--space-medium);
+}
+
+.pairing-detail-link {
+  color: var(--color-accent);
+}
+
+@media (max-width: 720px) {
+  .pairing-request {
+    padding: var(--space-medium);
+  }
+
+  .pairing-comparison {
+    padding: var(--space-small);
+  }
+
+  .pairing-instance {
+    font-size: 1.3rem;
+  }
+
+  .pairing-target {
+    font-size: 1.1rem;
+  }
+
+  .pairing-short-code {
+    font-size: 1.7rem;
+    letter-spacing: 0.25em;
+  }
+
+  .pairing-actions,
+  .pairing-form,
+  .pairing-reject-form {
+    width: 100%;
+  }
+
+  .pairing-form,
+  .pairing-reject-form {
+    display: grid;
+    align-items: stretch;
+  }
+
+  .pairing-form select,
+  .pairing-form button,
+  .pairing-reject-form button {
+    width: 100%;
+    min-height: 44px;
+  }
+
+  .pairing-compare {
+    align-items: flex-start;
+    line-height: 1.5;
+  }
 }
 
 /* 服务器页：操作链接、长表单与详情在窄屏保持可用。 */

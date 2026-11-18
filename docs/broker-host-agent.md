@@ -26,8 +26,8 @@ broker 主机上的 agent 就是**一台零距离的 client**——和任何工�
 
 全流程与 [multi-machine.md 的 pair 节](./multi-machine.md#配对入网sshmgr-pairplan-42)一模一样，只有两个零距离差异：
 
-1. **连接地址用本机 hostname 或 VLAN IP**（不是 `127.0.0.1`/`localhost`）——pair 的机械地址校验核对的是 `target_url` 是否属于本机**非环回**地址集合 + hostname（环回不在集合内，用 `https://127.0.0.1:7878` 配对会吃 ⚠ 并要求显式覆盖）。LAN 发现路径天然给你的是 VLAN IP，直接用即可。
-2. **批准就在本机**：本机打开权威端 Web UI（配对页）或随手 `serve pair ls / approve`——对照 client 屏 SAS 与批准行 name@url 一致后批准，不用切机器。
+1. **连接地址用本机 hostname 或 VLAN IP**（不是 `127.0.0.1`/`localhost`）——pair 的机械地址校验核对的是 `target_url` 是否属于本机非环回地址、主机名或 `serve.public_addresses` 登记的对外地址（环回默认不在集合内）。LAN 发现路径天然给你的是 VLAN IP，直接用即可。
+2. **批准就在本机**：本机打开权威端 Web UI 配对列表页或随手 `serve pair ls / approve`——对照实例名、目标地址与 client 屏短认证码三项一致后，在同一卡片选 profile 并批准，不用切机器，也不用重新输入管理员口令。
 
 ```bash
 sshmgr pair --instance server-local          # 发现会找到自己（VLAN IP）
@@ -54,7 +54,7 @@ sshmgr pair --instance server-local          # 发现会找到自己（VLAN IP�
 ### 走桥的语义
 
 - **TLS 零配置**：自家客户端纯 SPKI 指纹钉死（pair 自动交付 pin）——`127.0.0.1` 都不需要，更不需要信任库/证书分发。
-- **只读快照**：新 grant / 新加的 server，要等缓存保鲜（默认 ≤30min 自动，或手动 `cache pull`）才对 agent 可见。**写操作**（加改删服务器、发码、批准配对）走本机的权威端 Web UI / owner 命令行——这正是管理面所在。
+- **只读快照**：新 grant / 新加的 server，要等缓存保鲜（默认 ≤30min 自动，或手动 `cache pull`）才对 agent 可见。**写操作**（加改删服务器、发码、批准配对）走本机的权威端 Web UI / owner 命令行——这正是管理面所在；批准与拒绝配对只要求已登录 Web UI 会话，不要求近期重新输入管理员口令。
 - **吊销是两道闸**：`cache-tokens revoke` → 该机下次拉取收到 pinned 401，本地 cache 四件销毁（回连即生效）；project token 吊销 → 下次保鲜的新快照已无该 project，spawn 拒。**断干净要两样都处理**（吊销三路径见 [agent-tools.md](./agent-tools.md)）。
 - **后台任务表在 agent 子进程内存**：会话 / MCP 子进程重启即全死（agent 侧把在跑的活当全死重新安排）；serve 重启无影响。
 - broker 机上多一份 cache 副本（`cache.bin` + DEK）——同机威胁模型下无增量（vault 的 master key 文件本来就在这台机）。
@@ -101,7 +101,7 @@ broker 机上全**自洽**——不像远程工作机那样有"文件在笔记�
 
 | 现象 | 处理 |
 |---|---|
-| pair 吃 ⚠「配对声明目标 ≠ 本机地址」 | 你用了 `127.0.0.1`/`localhost` 作连接地址——机械校验只认**非环回**地址集 + hostname。换本机 hostname 或 VLAN IP 重新 pair（确属故意中继场景才用 `--allow-foreign-url` 覆盖）。 |
+| pair 吃 ⚠「配对声明目标不属于本机地址」 | 目标地址不在权威端本机非环回地址、主机名或 `serve.public_addresses` 登记地址里。核对后换本机 hostname 或 VLAN IP 重新 pair；端口映射地址先登记；确属受控中继才在权威端主机上用 `--allow-foreign-url`。 |
 | pair / `cache pull` 连不上 | serve 没起 / 防火墙挡 TCP+UDP 7878。`sshmgr serve status` 查四项信号。 |
 | 报 401 | 设备码/项目 token 错 / 已 rotate / project 被 disable/revoke。`projects ls` / `cache-tokens ls` 核对。 |
 | agent 看不到新加的 server | 缓存还没保鲜——手动 `cache pull`，或等 ≤30min 自动。 |

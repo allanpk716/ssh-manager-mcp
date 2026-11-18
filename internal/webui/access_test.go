@@ -48,16 +48,16 @@ type stubAccessStore struct {
 	revokeDeviceSrc  AccessWriteSource
 	revokeDeviceErr  error
 
-	pairings         []AccessPairingSummary
-	approvePairingID string
-	approveProfile   string
-	approveCompared  bool
-	approveOverride  string
-	approveSrc       AccessWriteSource
-	approveErr       error
-	rejectPairingID  string
-	rejectSrc        AccessWriteSource
-	rejectErr        error
+	pairings            []AccessPairingSummary
+	approvePairingID    string
+	approveProfile      string
+	approveCompared     bool
+	approveAllowForeign bool
+	approveSrc          AccessWriteSource
+	approveErr          error
+	rejectPairingID     string
+	rejectSrc           AccessWriteSource
+	rejectErr           error
 }
 
 func (s *stubAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
@@ -127,11 +127,11 @@ func (s *stubAccessStore) ListPairingRequests() ([]AccessPairingSummary, error) 
 	return s.pairings, nil
 }
 
-func (s *stubAccessStore) ApprovePairing(id, profile string, compared bool, addressOverride string, source AccessWriteSource) error {
+func (s *stubAccessStore) ApprovePairing(id, profile string, compared bool, allowForeignTarget bool, source AccessWriteSource) error {
 	s.approvePairingID = id
 	s.approveProfile = profile
 	s.approveCompared = compared
-	s.approveOverride = addressOverride
+	s.approveAllowForeign = allowForeignTarget
 	s.approveSrc = source
 	return s.approveErr
 }

@@ -23,7 +23,6 @@ import (
 
 	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/instname"
-	"ssh-manager-mcp/internal/localaddr"
 	"ssh-manager-mcp/internal/pairing"
 	"ssh-manager-mcp/internal/store"
 )
@@ -681,17 +680,4 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
-}
-
-// ForeignTarget reports whether targetURL is NOT one of this host's own
-// addresses — the mechanical address check the approval surface renders as a
-// hard ⚠ (spec §3.3-3): a pairing whose declared target is not this machine
-// smells of a relay/fake-discovery/wrong-network setup and requires explicit
-// OVERRIDE to approve. host[:port] must be in LocalNonLoopbackIPs() ∪
-// {os.Hostname()} (both bare and :port forms). Parse failure or empty host →
-// foreign (fail closed). Loopback addresses are deliberately NOT in the
-// local set (LocalNonLoopbackIPs excludes them) — a "pair with myself on
-// 127.0.0.1" target is exactly the shape the check should flag.
-func ForeignTarget(targetURL string) bool {
-	return localaddr.ForeignTarget(targetURL)
 }

@@ -32,6 +32,7 @@ const (
 	OpsSettingTypeDiscoveryName   OpsSettingType = "discovery_name"
 	OpsSettingTypeProfile         OpsSettingType = "profile"
 	OpsSettingTypeDuration        OpsSettingType = "duration"
+	OpsSettingTypePublicAddresses OpsSettingType = "public_addresses"
 )
 
 // OpsSettingChoice 是有限候选值的值与显示文字。

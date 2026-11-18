@@ -142,7 +142,7 @@ type AccessStore interface {
 	AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error)
 	RevokeDeviceCode(id string, source AccessWriteSource) error
 	ListPairingRequests() ([]AccessPairingSummary, error)
-	ApprovePairing(id, profile string, compared bool, addressOverride string, source AccessWriteSource) error
+	ApprovePairing(id, profile string, compared bool, allowForeignTarget bool, source AccessWriteSource) error
 	RejectPairing(id string, source AccessWriteSource) error
 }
 

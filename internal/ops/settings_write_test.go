@@ -21,6 +21,7 @@ func TestSettingValidationAndWrites(t *testing.T) {
 		"serve.ui_listen":          "127.0.0.1, 192.0.2.10",
 		"serve.ui_port":            "65535",
 		"serve.discovery_name":     "家 A",
+		"serve.public_addresses":   "Example.com, [2001:db8::1]:18178",
 		"pair.default_profile":     "ops",
 		"pair.default_max_offline": "24h",
 	}
@@ -29,8 +30,12 @@ func TestSettingValidationAndWrites(t *testing.T) {
 			t.Fatalf("写入合法设置 %s=%q 失败：%v", key, value, err)
 		}
 		got, ok, err := st.GetSetting(key)
-		if err != nil || !ok || got != value {
-			t.Fatalf("设置 %s 写入后 = (%q,%v,%v)，应为 (%q,true,nil)", key, got, ok, err, value)
+		want := value
+		if key == "serve.public_addresses" {
+			want = "example.com,[2001:db8::1]:18178"
+		}
+		if err != nil || !ok || got != want {
+			t.Fatalf("设置 %s 写入后 = (%q,%v,%v)，应为 (%q,true,nil)", key, got, ok, err, want)
 		}
 	}
 
@@ -41,6 +46,7 @@ func TestSettingValidationAndWrites(t *testing.T) {
 		"serve.ui_listen":          "127.0.0.1,not-an-ip",
 		"serve.ui_port":            "65536",
 		"serve.discovery_name":     "-name",
+		"serve.public_addresses":   "[2001:db8::1",
 		"pair.default_profile":     "ghost",
 		"pair.default_max_offline": "30m",
 	}
@@ -76,6 +82,24 @@ func TestSettingValidationAndWrites(t *testing.T) {
 	if err := manager.UnsetSetting("unknown.key", CLISource()); err == nil ||
 		!strings.Contains(err.Error(), "未知设置项") {
 		t.Fatalf("删除未知设置项应被拒绝，错误=%v", err)
+	}
+}
+
+func TestPublicAddressSettingWritesAreAudited(t *testing.T) {
+	st, _ := newSettingsTestStore(t)
+	manager := New(st)
+	if err := manager.SetSetting("serve.public_addresses", "Example.com, [2001:db8::1]:18178", WebUISource("192.0.2.24")); err != nil {
+		t.Fatalf("合法对外地址应能保存：%v", err)
+	}
+	rows, err := st.AuditRows(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].Action != "setting.set" || rows[0].Status != "ok" ||
+		!strings.Contains(rows[0].Command, `"old":""`) ||
+		!strings.Contains(rows[0].Command, `"new":"example.com,[2001:db8::1]:18178"`) ||
+		rows[0].Source != store.AuditSourceWebUI || rows[0].SourceIP != "192.0.2.24" {
+		t.Fatalf("serve.public_addresses 写入审计不正确：%+v", rows)
 	}
 }
 

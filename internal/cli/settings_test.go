@@ -26,7 +26,7 @@ func TestSettingsCommandsListGetSetUnset(t *testing.T) {
 	for _, want := range []string{
 		"serve.pairing", "serve.discovery", "serve.metadata_edit", "serve.ui_listen",
 		"serve.ui_port", "serve.discovery_name", "pair.default_profile",
-		"pair.default_max_offline", "默认值", "取值来源", "生效时机",
+		"pair.default_max_offline", "serve.public_addresses", "默认值", "取值来源", "生效时机",
 	} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("settings ls 缺少 %q：\n%s", want, list)
@@ -53,6 +53,19 @@ func TestSettingsCommandsListGetSetUnset(t *testing.T) {
 	}
 	if err := st.Close(); err != nil {
 		t.Fatal(err)
+	}
+
+	publicSet := runCli(t, "settings", "set", "serve.public_addresses", "Example.com, [2001:db8::1]:18178")
+	if !strings.Contains(publicSet, "已保存") {
+		t.Fatalf("settings set 对外地址应保存：%s", publicSet)
+	}
+	publicGet := runCli(t, "settings", "get", "serve.public_addresses")
+	if !strings.Contains(publicGet, "example.com,[2001:db8::1]:18178") {
+		t.Fatalf("settings get 应显示规范化后的对外地址：%s", publicGet)
+	}
+	publicProblem := runCliErr(t, "settings", "set", "serve.public_addresses", "example.com/path")
+	if !strings.Contains(publicProblem, "serve.public_addresses") {
+		t.Fatalf("非法对外地址应被拒绝：%s", publicProblem)
 	}
 
 	unset := runCli(t, "settings", "unset", "serve.pairing")

@@ -71,24 +71,21 @@ func TestPairingApprovalChecksComparisonAndAddressThenChangesState(t *testing.T)
 	}
 
 	var compareErr *PairingComparisonRequiredError
-	err = m.ApprovePairing(approveID, "ops", false, "", WebUISource("198.51.100.7"))
+	err = m.ApprovePairing(approveID, "ops", false, false, WebUISource("198.51.100.7"))
 	if !errors.As(err, &compareErr) {
 		t.Fatalf("未勾选短认证码比对时应返回专用错误，实际 %v", err)
 	}
 	var foreignErr *PairingForeignTargetError
-	err = m.ApprovePairing(approveID, "ops", true, "", WebUISource("198.51.100.7"))
+	err = m.ApprovePairing(approveID, "ops", true, false, WebUISource("198.51.100.7"))
 	if !errors.As(err, &foreignErr) || foreignErr.TargetURL != "https://127.0.0.1:7878" {
-		t.Fatalf("异常地址未输入精确 OVERRIDE 时应返回专用错误，实际 %#v", err)
-	}
-	if err := m.ApprovePairing(approveID, "ops", true, "override", WebUISource("198.51.100.7")); !errors.As(err, &foreignErr) {
-		t.Fatalf("覆盖文字不精确时应返回地址异常错误，实际 %v", err)
+		t.Fatalf("异常地址未经命令行显式放行时应返回专用错误，实际 %#v", err)
 	}
 	if rows, _ = m.ListPairingRequests(); rows[0].State != "pending" {
 		t.Fatalf("被拒绝的批准提交不应改变请求状态：%+v", rows[0])
 	}
 
-	if err := m.ApprovePairing(approveID, "ops", true, "OVERRIDE", WebUISource("198.51.100.7")); err != nil {
-		t.Fatalf("勾选比对并精确覆盖后应批准：%v", err)
+	if err := m.ApprovePairing(approveID, "ops", true, true, WebUISource("198.51.100.7")); err != nil {
+		t.Fatalf("勾选比对并由命令行显式放行后应批准：%v", err)
 	}
 	rows, err = m.ListPairingRequests()
 	if err != nil {
@@ -98,7 +95,7 @@ func TestPairingApprovalChecksComparisonAndAddressThenChangesState(t *testing.T)
 		t.Fatalf("批准后的列表形状不正确：%+v", rows[0])
 	}
 	var notPending *PairingNotPendingError
-	if err := m.ApprovePairing(approveID, "ops", true, "OVERRIDE", WebUISource("198.51.100.7")); !errors.As(err, &notPending) {
+	if err := m.ApprovePairing(approveID, "ops", true, true, WebUISource("198.51.100.7")); !errors.As(err, &notPending) {
 		t.Fatalf("重复批准应返回非待批准错误，实际 %v", err)
 	}
 
@@ -113,8 +110,8 @@ func TestPairingApprovalChecksComparisonAndAddressThenChangesState(t *testing.T)
 		}
 	}
 	approveFailures := ownerAuditRowsWithStatus(t, st, "error", "pair.approve")
-	if len(approveFailures) != 4 {
-		t.Fatalf("pair.approve 失败审计行数量 = %d，应为 4：%+v", len(approveFailures), approveFailures)
+	if len(approveFailures) != 3 {
+		t.Fatalf("pair.approve 失败审计行数量 = %d，应为 3：%+v", len(approveFailures), approveFailures)
 	}
 	for _, audit := range approveFailures {
 		if audit.Source != store.AuditSourceWebUI || audit.SourceIP != "198.51.100.7" || strings.Contains(audit.Command, "314159") {
@@ -159,7 +156,7 @@ func TestPairingRequestTimeoutAndCompletedRows(t *testing.T) {
 		t.Fatalf("超时请求不应继续显示：%+v", rows)
 	}
 	var notPending *PairingNotPendingError
-	if err := m.ApprovePairing(expiredID, "ops", true, "OVERRIDE", CLISource()); !errors.As(err, &notPending) {
+	if err := m.ApprovePairing(expiredID, "ops", true, true, CLISource()); !errors.As(err, &notPending) {
 		t.Fatalf("超时后批准应返回非待批准错误，实际 %v", err)
 	}
 	if err := m.RejectPairing(expiredID, CLISource()); !errors.As(err, &notPending) {
@@ -200,7 +197,7 @@ END`)
 		t.Fatal(err)
 	}
 
-	approveErr := m.ApprovePairing(approveID, "ops", false, "", WebUISource("198.51.100.7"))
+	approveErr := m.ApprovePairing(approveID, "ops", false, false, WebUISource("198.51.100.7"))
 	if !strings.Contains(approveErr.Error(), "必须先与客户端屏幕上的短认证码逐位比对一致") ||
 		!strings.Contains(approveErr.Error(), "pairing audit unavailable") {
 		t.Fatalf("批准失败与审计失败都应可见，实际 %v", approveErr)
@@ -213,5 +210,59 @@ END`)
 	if !strings.Contains(rejectErr.Error(), "该请求已不是待批准状态") ||
 		!strings.Contains(rejectErr.Error(), "pairing audit unavailable") {
 		t.Fatalf("重复拒绝失败与审计失败都应可见，实际 %v", rejectErr)
+	}
+}
+
+func TestPairingRegisteredPublicAddressesAreLocalAndWebUIRefusalIsAudited(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	m, st := newTestManager(t)
+	st.NowFn = func() time.Time { return now }
+	if _, err := st.AddProfile("ops"); err != nil {
+		t.Fatal(err)
+	}
+	registeredID := seedPairingRequest(t, st, now, "port-forward-laptop")
+	if err := st.ExecForTest(`UPDATE pairing_pending SET target_url='https://203.0.113.9:7878' WHERE id=x'` + registeredID + `'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSetting("serve.public_addresses", "203.0.113.9:7878,[2001:DB8::1],Example.COM"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := m.ListPairingRequests()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].ForeignTarget {
+		t.Fatalf("登记地址应视同本机：%+v", rows)
+	}
+	if err := m.ApprovePairing(registeredID, "ops", true, false, WebUISource("198.51.100.7")); err != nil {
+		t.Fatalf("登记地址在 Web UI 批准时不应要求显式放行：%v", err)
+	}
+
+	secondID := seedPairingRequestState(t, st, now, "foreign-laptop", "pending", time.Time{})
+	if err := st.ExecForTest(`UPDATE pairing_pending SET target_url='https://[2001:db8::9]:18178' WHERE id=x'` + secondID + `'`); err != nil {
+		t.Fatal(err)
+	}
+	webErr := m.ApprovePairing(secondID, "ops", true, false, WebUISource("198.51.100.7"))
+	var foreignErr *PairingForeignTargetError
+	if !errors.As(webErr, &foreignErr) {
+		t.Fatalf("Web UI 提交异常地址批准应失败，实际 %v", webErr)
+	}
+	failed := ownerAuditRowsWithStatus(t, st, "error", "pair.approve")
+	if len(failed) != 1 || failed[0].Source != store.AuditSourceWebUI || !strings.Contains(failed[0].Command, `"name":"foreign-laptop"`) {
+		t.Fatalf("Web UI 异常地址批准应有失败审计：%+v", failed)
+	}
+
+	if err := st.SetSetting("serve.public_addresses", "[2001:db8::9]:18179"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApprovePairing(secondID, "ops", true, false, WebUISource("198.51.100.7")); !errors.As(err, &foreignErr) {
+		t.Fatalf("登记地址端口不同时不应视同本机，实际 %v", err)
+	}
+	if err := st.SetSetting("serve.public_addresses", "[2001:db8::9]"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.ApprovePairing(secondID, "ops", true, false, WebUISource("198.51.100.7")); err != nil {
+		t.Fatalf("IPv6 登记地址不带端口时应允许任意端口：%v", err)
 	}
 }

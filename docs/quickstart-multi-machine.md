@@ -83,8 +83,9 @@ sshmgr pair --instance laptop
 # → 同网段自动发现 broker（拿不到 offer 就 --url https://192.0.2.5:7878 直指，
 #   跨网段/防火墙挡 UDP 时的兜底；--url 不带 --pin 默认拒连，属预期——见下方安全策略）
 # → 屏显三件套：laptop @ https://192.0.2.5:7878 SAS 482913
-# → 去权威端批准：Web UI 配对页选 profile（或 serve pair approve laptop --profile team-a）
-#   批准面同屏显示三件套（含真 SAS）——与本机屏上的 SAS 逐位比对一致再批
+# → 去权威端批准：Web UI 配对列表页一屏对照三项并选 profile
+#   （或 serve pair approve laptop --profile team-a）
+#   列表同屏显示实例名、目标地址与真 SAS——与本机屏幕三项逐位一致再批
 # → 批准后 120 秒内自动完成：凭据加密下发 → 首拉落盘 → 产物 pair.laptop.mcp.json
 ```
 
@@ -137,7 +138,7 @@ sshmgr pair --instance laptop
 
 - **指纹钉死**：工作机连 serve 时校验证书公钥 == 钉死的指纹，不等即拒。pair 场景指纹自动交付（**首次连接即校验，零 MITM 窗口**）。
 - **无锚默认拒连**：`pair --url` 直连又不带 `--pin` → **默认拒绝**（显式 `--allow-tofu` 才接受无锚通道，仅限受控环境——它没有完整 MITM 防护，见 [threat-model.md](./threat-model.md) R12）；`cache pull` 没拿到指纹同样 **hard-fail**。防的是打错别字静默降级。
-- **SAS 人闸 + 机械地址校验**：批准前 owner 将批准行 name@url+SAS 与 client 屏三件套逐位对照；serve 同时机械核对 client 声明的连接地址是否本机地址（不符 → ⚠ + 强制显式覆盖）——假 discovery / 中继/研磨型 MITM 过不了这两道。
+- **SAS 人闸 + 机械地址校验**：批准前 owner 在权威端 Web UI 配对列表页，把列表中的实例名、目标地址与短认证码和 client 屏三项逐位对照；serve 同时机械核对 client 声明的连接地址是否属于本机非环回地址、主机名或 `serve.public_addresses` 登记地址（不在集合内 → Web UI 只给拒绝，显式放行仅命令行）——假 discovery / 中继/研磨型中间人过不了这两道。
 - 详见 [`threat-model.md`](./threat-model.md) 的 pairing 节。
 
 ---

@@ -336,7 +336,7 @@ function reserveLocalPort(): Promise<number> {
 
 // startAuthorityUI 生成角色为权威端的临时加密库，设置管理员口令与随机
 // Web UI 端口，再启动 serve。发现服务显式关闭，测试不占用本机的 UDP 7878。
-async function startAuthorityUI(password: string): Promise<authorityUI> {
+async function startAuthorityUI(password: string, pairingMode = ""): Promise<authorityUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-authority-"));
   const servePort = await reserveLocalPort();
   const webPort = await reserveLocalPort();
@@ -401,6 +401,16 @@ async function startAuthorityUI(password: string): Promise<authorityUI> {
     });
     tryConnect();
   });
+  if (pairingMode !== "") {
+    const seedPairing = spawnSync("go", ["run", "./e2e/tools/seedpairing", runDir], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, SSHMGR_E2E_PAIRING: pairingMode },
+    });
+    if (seedPairing.status !== 0) {
+      throw new Error(`准备配对请求失败：${seedPairing.stdout}\n${seedPairing.stderr}`);
+    }
+  }
   return {
     loginURL,
     password,
@@ -455,7 +465,7 @@ export const test = base.extend<
   },
 });
 
-export { expect, startClientUI, startStandaloneUI, startEmptyMachineUI };
+export { expect, startAuthorityUI, startClientUI, startStandaloneUI, startEmptyMachineUI };
 
 // openStandaloneUI 用一次性启动链接进入 Web UI，并等待服务器列表出现。
 export async function openStandaloneUI(
