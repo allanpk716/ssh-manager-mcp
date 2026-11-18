@@ -4545,3 +4545,153 @@ sshmgr      SHA-256=310ca46a5f0bce92185269a283583a522b47d9b6ed5377172e2152efb820
 收尾后：5 个文件，整体 SHA-256=fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f
 结论：完全一致。
 ```
+
+## 第十四轮（rc17）安装、对外地址登记与软件清单真机采集
+
+【时间与候选】2026-11-18，候选版本 0.22.0-rc17，源提交
+`3508fa411e48bbd337c4815684875a5b026e6d61`。构建前使用 Go 1.25.8 执行
+`go vet ./...` 与 `go test ./...`，均通过；`go vet` 无输出。本机仅用临时
+HTTP 服务分发产物与一次性采集私钥，结束前均已停止或删除；未使用裸 SSH 文件
+复制。
+
+【产物校验】
+```text
+linux_amd64.tar.gz SHA-256=490a08d8979e27f0a15be7bbdbeb8e0d96c488c59da39aef61163d862e325c1b
+windows_amd64.zip SHA-256=5cd7e3d61279033d4887d8dc3a2ff111eb401928cc9d511ee82a99fcc2885dc5
+darwin_arm64.tar.gz SHA-256=a7bed32b13ed213d03ca24a194c397d7aff0b97380e6e6e340bb0aef058a0bac
+```
+
+【演练机 1 与演练机 2】两台先备份 `/usr/local/bin/sshmgr.rc16`，再用校验通过的
+Linux 产物替换当前二进制；两台均读回版本 0.22.0-rc17：
+```text
+sshmgr.rc16 SHA-256=310ca46a5f0bce92185269a283583a522b47d9b6ed5377172e2152ef820bf77
+sshmgr      SHA-256=87fe4ca90fe1b802d0d86af941a712e5c761a8c731357b7b11af4f800cb6068d
+```
+演练权威端重启后与最终收尾读回均为：`service=Running`、`process=running`、
+`http=responding`、`vault=ok`、`overall=HEALTHY`。本轮没有打开配对，
+`serve.pairing=false`，待批准配对列表为空。
+
+【演练权威端地址登记】在演练权威端执行：
+```text
+sudo sshmgr settings set serve.public_addresses 172.18.200.47:18178
+```
+读回当前值为 `172.18.200.47:18178`，来源为设置存储，生效时机为立即。这是
+保留设置，收尾没有撤销。
+
+【工作机 1】压缩包哈希核对通过后解压到一次性目录
+`C:\sshmgr-e2e-20261114\bin-rc17\`，没有进入系统路径、没有安装服务、没有触碰
+生产进程；一次性可执行文件版本为 0.22.0-rc17，SHA-256 为
+`d9572235d1fc0ddbe46079e1a9c261f990d7bc626b0c05fdc9f60fbc960c4fe3`。bin-rc16
+保留且仍读回 0.22.0-rc16；既有配对客户端控制器脚本四个文件 SHA-256 均未变化。
+生产目录采用“各文件 SHA-256 排序后拼接，再整体 SHA-256”：
+```text
+开始前：5 个文件，整体 SHA-256=fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f
+收尾后：5 个文件，整体 SHA-256=fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f
+结论：完全一致。
+```
+
+【软件清单采集前提】三台目标均由演练权威端担任采集执行者，采集报告均读回
+`sudo=false`；本轮没有执行 `inventory sudo --enable`。演练机 1 复用已有设备
+`e2e278_authority` 与服务器条目 `e2e278_anchor_target`；演练机 2 复用已有设备
+`e2e278_linux_a` 与服务器条目 `e2e278_2701_linux`。工作机 1 与 mini6 新建
+一次性服务器条目 `inv-drill-win`、`inv-drill-mac` 并自动生成同名设备，导入
+一次性 ed25519 私钥；两个条目与设备在收尾时已删除。
+
+演练权威端没有到 192.168.100.0/24 局域网的路由，初次使用 mini6 局域网地址
+192.168.100.137 与工作机 1 局域网地址 192.168.100.102 采集均连接超时。只读
+TCP 探测确认权威端可达 mini6 的 100.121.176.28 与工作机 1 的
+100.121.249.122，因此把两个一次性服务器条目的主机分别改为这两个可路由地址。
+一次性公钥分别追加到工作机 1 的
+`C:\ProgramData\ssh\administrators_authorized_keys` 与 mini6 的
+`/Users/allan716/.ssh/authorized_keys`。收尾精确删除这一行后，两个文件
+SHA-256、大小与权限均回到追加前：
+```text
+工作机 1：2B1AF36B574402EAE4C325CE0E56D34CF53FB2425F3BE3DB7EDB269235305B5F，105 字节
+mini6：3919dc7be9b96ef5ec496b7557c7cd8e1de56bbfd00e2a211746b4a7298e7660，293 字节，权限 0600
+```
+一次性私钥的本机文件、临时 HTTP 副本与演练权威端临时文件均已删除。
+
+【软件清单采集结果】这里的组件数是 CycloneDX 导出文件里设备组件内嵌的软件
+组件数量，并与 `inventory view --all-system-packages` 的软件条目总数核对：
+
+| 设备 | 目标 | 采集结论 | 组件数 | 状态 |
+|---|---|---|---:|---|
+| e2e278_authority | 演练机 1 | 成功、结果完整、未用 sudo | 980 | 未过期 |
+| e2e278_linux_a | 演练机 2 | 成功、结果完整、未用 sudo | 680 | 未过期 |
+| inv-drill-win | 工作机 1 | 成功、结果完整、未用 sudo | 817 | 未过期 |
+| inv-drill-mac | mini6 | 采集命令成功但结果不完整、未用 sudo | 39 | 保留不完整标记 |
+
+mini6 的不完整原因是固定命令集在 zsh 登录 shell 下因
+`/Applications/Utilities/*.app` 无匹配而中断，应用程序、Homebrew 软件包与
+Docker 镜像节没有进入结果。详细缺陷记录在本轮运行目录
+`live/INVENTORY-FINDINGS.md`。
+
+【各平台实际执行命令】以下清单来自源码阅读，实际采集不拼接任何调用方自由
+文本。Ubuntu 的 `posix-v2` 命令集会执行：`uname -s/-r/-m`、读取
+`/etc/os-release` 等系统版本文件、`dpkg-query -W`、`ss -H -tulnp`（无 ss 时
+`netstat -tulnp`）、对监听进程执行 `/proc/<进程号>/exe` 的 `readlink`、
+`dpkg -S` 反查包归属；存在 Docker 时执行 `docker images` 与 `docker ps`，
+存在固件文件时读取 `/sys/class/dmi/id` 下的厂商与版本文件，存在 NVIDIA
+驱动时读取 `/proc/driver/nvidia/version` 与 `nvidia-smi` 查询。以上均为
+读取或状态查询。
+
+macOS 的 `posix-v2` 命令集会执行：`uname`、`sw_vers`、`lsof` 查询监听端口、
+`ps -o comm=` 反查进程名、遍历 `/Applications/*.app` 与
+`/Applications/Utilities/*.app` 后用 `defaults read` 读取应用程序
+Info.plist 的版本与标识、`brew list --versions --formula/--cask`、存在
+Docker 时执行 `docker images` 与 `docker ps`。这些命令本身均为只读；本轮
+实际在应用程序遍历处被 zsh 的无匹配通配符行为中断。
+
+Windows 的 `windows-v1` 命令集会执行：读取
+`HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion`；读取 64 位与 32 位
+两个注册表卸载项路径；`Get-NetTCPConnection -State Listen` 与
+`Get-NetUDPEndpoint`；对监听进程执行 `Get-Process -Id`；`Get-CimInstance`
+查询 `Win32_Service`、`Win32_BIOS`、`Win32_BaseBoard`、
+`Win32_ComputerSystem`、`Win32_VideoController`。没有写入注册表、修改服务、
+安装或重新配置软件的命令。
+
+【Windows Win32_Product 核查】源码精确检索只在 ADR 与排除性测试中命中
+`Win32_Product`，`windows-v1.ps1` 与命令生成代码没有命中；专门测试也断言
+PowerShell 与 cmd 两种服务器条目的固定命令集都不包含它。事件日志方面，
+采集前后均查询应用程序日志中 MsiInstaller 1035 重新配置事件：采集前 4 条、
+采集后 4 条，新增 0 条。结论是本轮没有触发 Windows 安装包修复。
+
+【CycloneDX 导出校验】四份导出均用 `python3 -I -m json.tool` 校验通过，
+`bomFormat=CycloneDX`、`specVersion=1.6`，组件数与 `inventory view` 一致：
+```text
+演练机 1：980 个软件组件，970 个软件包统一地址（package URL，purl），格式核对全部通过
+演练机 2：680 个软件组件，674 个软件包统一地址，格式核对全部通过
+工作机 1：817 个软件组件，无软件包统一地址
+mini6：39 个软件组件，无软件包统一地址
+```
+本机没有安装 CycloneDX 官方校验工具，未安装新工具。按“每个组件必须有
+name/version”核对时发现 version 缺失：演练机 1 缺 7 个、演练机 2 缺 3 个、
+工作机 1 缺 65 个、mini6 缺 37 个，主要来自未识别进程与 Windows 服务条目。
+这是本轮验收未通过项，详细证据在 `live/INVENTORY-FINDINGS.md`。
+
+【组件抽查】五个有版本的组件在目标机上复核一致：
+
+| 设备 | 软件名称 | 清单版本 | 目标机复核 | 结论 |
+|---|---|---|---|---|
+| 演练机 1 | bash | 5.2.21-2ubuntu4 | dpkg-query 读回同版本 | 一致 |
+| 演练机 1 | curl | 8.5.0-2ubuntu10.16 | dpkg-query 读回同版本 | 一致 |
+| 演练机 2 | openssh-server | 1:9.6p1-3ubuntu13.20 | dpkg-query 读回同版本 | 一致 |
+| 工作机 1 | Bitwarden | 2025.11.2 | 注册表卸载项读回同版本 | 一致 |
+| 工作机 1 | Bandizip | 7.44 | 注册表卸载项读回同版本 | 一致 |
+
+另查 mini6 的 `/Applications/RustDesk.app/Contents/Info.plist` 读到版本
+1.5.0，但清单中 RustDesk 只是未识别进程且没有版本；这佐证 macOS 采集中断
+导致应用程序版本缺失。
+
+【缺陷】共记录三项，均未修改源码：macOS 固定命令集在 zsh 下提前中断；
+CycloneDX 软件组件不是都有 version 字段；多个 inventory 命令并发打开同一
+权威端数据库时会出现 SQLite 数据库锁定错误。复现命令与怀疑代码位置见本轮
+运行目录 `live/INVENTORY-FINDINGS.md`。
+
+【收尾与清理】一次性服务器条目 `inv-drill-win`、`inv-drill-mac` 与同名设备
+已删除；两个设备的采集执行者登记随设备级联删除。既有两台演练设备的采集
+执行者读回仍为权威端，显式采集条目已恢复为默认规则选择。两个
+authorized_keys 文件已精确移除一次性公钥行并回到追加前 SHA-256。本机
+HTTP 服务已停止，端口 18999 与 28791 监听数均为 0；无打开的端口转发。
+演练权威端最终仍为 0.22.0-rc17、健康，`serve.pairing=false`，待批准列表为
+空，`serve.public_addresses=172.18.200.47:18178` 保留。
