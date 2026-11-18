@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,6 +44,9 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 // shell 为 bash、zsh 或 fish：远端命令仍必须先进入 /bin/sh，并且安全引
 // 用不能改变脚本内容。
 func TestPOSIXInventoryCommandWrapperRunsUnderLoginShells(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("目标登录 shell 包装只在 POSIX 系统上测试")
+	}
 	script := `printf '%s\n' "SSHMGR-INVENTORY END"`
 	remoteCommand := "/bin/sh -c " + sshbroker.POSIXShellQuote(script)
 	shells := []string{"/bin/bash"}

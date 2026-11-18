@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -469,6 +470,11 @@ echo 'SSHMGR-DARWIN-MOUNT reload-accepted'
 
 func posixShellForTest(t *testing.T) string {
 	t.Helper()
+	// Windows 上的 Git 自带 sh 没有 Linux 与 macOS 的挂载环境，固定脚本在
+	// 那里执行没有意义。
+	if runtime.GOOS == "windows" {
+		t.Skip("固定挂载脚本只在 Linux 与 macOS 的 POSIX shell 下测试")
+	}
 	if path, err := exec.LookPath("dash"); err == nil {
 		return path
 	}
