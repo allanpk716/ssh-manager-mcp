@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/sshbroker"
 )
 
 // InventoryMarker 是软件清单固定命令集输出协议的行首标记。连通探测使用
@@ -27,7 +28,10 @@ var posixCommandSetV2 string
 func BuildInventoryCommand(shell models.ShellType) (string, error) {
 	switch models.NormalizeShellType(string(shell)) {
 	case models.ShellPOSIX:
-		return posixCommandSetV2, nil
+		// SSH exec 请求会先交给目标账户的登录 shell。这里显式进入
+		// /bin/sh，避免 zsh、fish 等登录 shell 的专属语法改变固定脚本行
+		// 为；安全引用保证脚本仍是一个完整参数，不引入命令注入。
+		return "/bin/sh -c " + sshbroker.POSIXShellQuote(posixCommandSetV2), nil
 	case models.ShellPowerShell, models.ShellWindowsCmd:
 		return buildWindowsInventoryCommand(shell), nil
 	default:

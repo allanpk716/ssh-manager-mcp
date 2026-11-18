@@ -48,9 +48,12 @@ if [ ! -r /etc.defaults/VERSION ] && command -v dpkg-query >/dev/null 2>&1; then
 else echo "$M ABSENT exe-owner"; fi
 echo "$M SECTION apps"
 if [ "$(uname -s)" = Darwin ]; then
-  for a in /Applications/*.app /Applications/Utilities/*.app; do
-    [ -d "$a" ] || continue
-    printf '%s\t%s\t%s\n' "$a" "$(defaults read "$a/Contents/Info" CFBundleShortVersionString 2>/dev/null)" "$(defaults read "$a/Contents/Info" CFBundleIdentifier 2>/dev/null)"
+  for app_directory in /Applications /Applications/Utilities; do
+    [ -d "$app_directory" ] || continue
+    /bin/sh -c 'for a in "$1"/*.app; do
+      [ -d "$a" ] || continue
+      printf "%s\t%s\t%s\n" "$a" "$(defaults read "$a/Contents/Info" CFBundleShortVersionString 2>/dev/null)" "$(defaults read "$a/Contents/Info" CFBundleIdentifier 2>/dev/null)"
+    done' sh "$app_directory"
   done
   echo "$M STATUS apps 0"
 else echo "$M ABSENT apps"; fi

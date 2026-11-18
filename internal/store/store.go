@@ -165,10 +165,13 @@ func Open(path string, masterKey []byte) (*Store, error) {
 	_, statErr := os.Stat(path)
 	isNew := errors.Is(statErr, fs.ErrNotExist)
 	// Enable foreign_keys (OFF by default in SQLite — otherwise ON DELETE CASCADE
-	// and FK constraints are dead code) and a 5s busy_timeout to wait on locks.
-	// WAL mode improves concurrency; MaxOpenConns(1) serializes access so the
-	// single SQLite writer never hits "database is locked" under parallel requests.
-	db, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	// and FK constraints are dead code). busy_timeout is deliberately the first
+	// connection parameter so it covers every later statement. Transactions use
+	// BEGIN IMMEDIATE: SQLite does not invoke the busy handler when a deferred
+	// read transaction tries to upgrade to a write transaction, so separate CLI
+	// processes could otherwise fail immediately with SQLITE_BUSY. WAL mode
+	// still lets readers proceed while one writer commits.
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, err
 	}
