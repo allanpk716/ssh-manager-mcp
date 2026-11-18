@@ -4508,3 +4508,40 @@ Profile（服务器授权分组）与目标地址覆盖文字 `OVERRIDE`；重�
 HTTP 分发服务、脚本分发服务与 Web UI 回环入口均已停止，三个监听计数为 0；
 管理员口令临时文件、浏览器 Cookie、登录测试响应与含跨站请求伪造令牌的临时
 状态文件已删除。
+
+## 第十三轮（rc16）安装与版本
+
+【时间与候选】2026-11-18，候选版本 0.22.0-rc16，源提交
+`4d5f1a6a5a65008f8e183affe67b4053ac560297`。构建前使用 Go 1.25.8 执行
+`go vet ./...` 与 `go test ./...`，均通过；`go vet` 无输出。本机仅用临时
+HTTP 服务分发产物，结束前已停止；未使用裸 SSH 文件复制。
+
+【产物校验】
+```text
+linux_amd64.tar.gz SHA-256=a55e1cb8daca8c1053bb620cf82d7a522ac575378da3cbc6e6a5b83ed6af3e5f
+windows_amd64.zip SHA-256=28371b401e1f79f06858e32802559b5bbc59600995b9ad6aa96602bef63ab095
+darwin_arm64.tar.gz SHA-256=506e6ec14433003500e188e35491a4fbbff8bcdf9525168bde48ce190b8534bc
+```
+
+【演练机 1 与演练机 2】两台先备份 `/usr/local/bin/sshmgr.rc15`，再用校验通过的
+Linux 产物替换当前二进制；备份与升级后哈希一致：
+```text
+sshmgr.rc15 SHA-256=6e535a1572cd2d79538b39728560b995a23642b90a4b52a950c339e1d2fd93ae
+sshmgr      SHA-256=310ca46a5f0bce92185269a283583a522b47d9b6ed5377172e2152efb820bf77
+两台 sshmgr version 均为 0.22.0-rc16。
+```
+演练权威端重启后：`service=Running`、`process=running`、`http=responding`、
+`vault=ok`、`overall=HEALTHY`。收尾仍为 rc16、健康，`serve.pairing=false`，
+待批准配对列表为空。
+
+【工作机 1】压缩包哈希核对通过后解压到一次性目录
+`C:\sshmgr-e2e-20261114\bin-rc16\`，没有进入系统路径、没有安装服务、没有触碰
+生产进程；一次性可执行文件版本为 0.22.0-rc16，SHA-256 为
+`8653d71cc81ffc440d741f695c7c89bf3ffda9aa9fd62d5eef0b776fcac4bf5e`。bin-rc15
+保留且仍读回 0.22.0-rc15；本轮压缩包已删除；既有配对客户端控制器脚本未改动。
+生产目录采用“各文件 SHA-256 排序后拼接，再整体 SHA-256”：
+```text
+开始前：5 个文件，整体 SHA-256=fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f
+收尾后：5 个文件，整体 SHA-256=fb6646dbd3f3df2e82830167918c43d9703d38229f1a99eb9aaded5446deb17f
+结论：完全一致。
+```
