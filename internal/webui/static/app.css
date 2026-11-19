@@ -2860,3 +2860,292 @@ button.danger {
   flex-wrap: wrap;
   gap: var(--space-small);
 }
+
+/* 服务器详情页：吸顶四分段、卡片行、授权开关行与网络 + 地址行。 */
+.server-detail-page {
+  display: grid;
+  gap: 12px;
+}
+
+.server-detail-page .sticky-tabs {
+  position: sticky;
+  z-index: 30;
+  top: 0;
+  margin: 0 calc(var(--space-medium) * -1);
+  padding: 8px var(--space-medium);
+  background: rgba(245, 246, 248, 0.96);
+  backdrop-filter: blur(12px);
+}
+
+.segmented.server-detail-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 4px;
+  border-radius: 12px;
+  background: #e9edf3;
+}
+
+.segmented.server-detail-tabs .segment {
+  min-height: 44px;
+  padding: 8px 4px;
+  border-radius: 9px;
+  font-size: 14px;
+}
+
+.detail-subtitle {
+  margin: 2px 0 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.detail-section {
+  display: grid;
+  gap: 12px;
+}
+
+.card-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  margin-bottom: 8px;
+}
+
+.small-button {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 9px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: 14px;
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.primary-button,
+.secondary-button,
+.danger-button {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+.primary-button {
+  border: 0;
+  background: var(--color-accent);
+  color: #ffffff;
+}
+
+.secondary-button {
+  border: 1px solid var(--color-panel-border);
+  background: var(--color-panel);
+  color: var(--color-text);
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.06);
+}
+
+.danger-button {
+  border: 0;
+  background: #dc2626;
+  color: #ffffff;
+}
+
+.button-link.danger-button {
+  display: inline-flex;
+}
+
+.danger-card {
+  border: 1px solid #fecaca;
+}
+
+.danger-card h2 {
+  color: #b42318;
+}
+
+.location-value {
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.location-tree-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.location-tree {
+  max-height: 320px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 12px;
+}
+
+.card-help {
+  margin: 0 0 10px;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.address-list {
+  display: grid;
+  gap: 8px;
+}
+
+.address-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 10px;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f7f8fa;
+}
+
+.address-network {
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.type-tag {
+  justify-self: start;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.address-value {
+  grid-column: 1 / -1;
+  overflow-wrap: anywhere;
+}
+
+.address-edit-form {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.address-edit-form input[type="text"] {
+  flex: 1 1 12em;
+  min-height: 40px;
+  padding: 0 10px;
+}
+
+.fallback-address .address-network {
+  color: var(--color-muted);
+}
+
+.auth-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-panel-border);
+}
+
+.auth-row:last-of-type {
+  border-bottom: 0;
+}
+
+.auth-copy {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.resource-name {
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.resource-note,
+.resource-detail {
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.switch-label {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.hostkey-actions,
+.address-add {
+  margin-top: 12px;
+}
+
+.hostkey-actions form,
+.address-add form,
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+
+.server-edit-inline {
+  display: grid;
+  gap: 12px;
+}
+
+.server-edit-inline h3 {
+  margin: 0;
+  font-size: 17px;
+}
+
+@media (max-width: 420px) {
+  .auth-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .auth-row .switch-control {
+    justify-content: space-between;
+  }
+}
+
+.back-link {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  margin-left: -8px;
+  padding: 0 8px;
+  border-radius: 9px;
+  color: var(--color-muted);
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.back-link span {
+  margin-right: 4px;
+  color: var(--color-accent);
+  font-size: 24px;
+  line-height: 1;
+}

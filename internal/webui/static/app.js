@@ -203,6 +203,10 @@
     window.prompt("请手动复制：", text);
   });
   document.body.addEventListener("change", function (event) {
+    var autoSubmitForm = event.target.closest("[data-auto-submit]");
+    if (autoSubmitForm !== null && event.target.matches("input[type=checkbox], input[type=radio]")) {
+      autoSubmitForm.submit();
+    }
     var form = event.target.closest("[data-share-scope-form]");
     if (form !== null) {
       updateShareScopeWarnings(form);

@@ -606,7 +606,68 @@ func (h *handler) renderSecretPreviewPage(
 	data.SecretAuthorizationShareUnmounts = h.shareUnmountChoicesForAuthorization(
 		r, returnTo, display.Preview, selectedUnmount,
 	)
+	if view == "" && strings.HasPrefix(returnTo, "/ui/servers/") {
+		if confirm := h.serverDetailSecretClientImpact(r, target); confirm != nil {
+			data.Authorization = &authorizationPage{Confirm: confirm}
+		}
+	}
 	h.renderPage(w, r, status, "secret-authorization-preview.tmpl", data)
+}
+
+// serverDetailSecretClientImpact 为服务器详情页发起的单机密项授权预览计算
+// 实际能拿到它的客户端如何变化；目标包含多个机密项时无法归因，不显示。
+func (h *handler) serverDetailSecretClientImpact(
+	r *http.Request, target []SecretAuthorizationCell,
+) *ServerSelectionConfirm {
+	secretID := ""
+	for _, cell := range target {
+		if secretID == "" {
+			secretID = cell.SecretID
+		}
+		if cell.SecretID != secretID {
+			return nil
+		}
+	}
+	if secretID == "" {
+		return nil
+	}
+	resource, servers, profiles, _, err := h.serverSelectionSources(
+		r, authorizationResourceKindSecret, secretID,
+	)
+	if err != nil {
+		return nil
+	}
+	current := resourceRefs(resource.CurrentServerIDs, servers)
+	desired := append([]AccessServerRef(nil), current...)
+	for index, ref := range desired {
+		if ref.ID == target[0].ServerID {
+			if !target[0].Allow {
+				desired = append(desired[:index:index], desired[index+1:]...)
+			}
+			break
+		}
+	}
+	if target[0].Allow {
+		allowed := false
+		for _, ref := range desired {
+			if ref.ID == target[0].ServerID {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			for _, server := range servers {
+				if server.ID == target[0].ServerID {
+					desired = append(desired, AccessServerRef{ID: server.ID, Name: server.Name})
+					break
+				}
+			}
+		}
+	}
+	return &ServerSelectionConfirm{
+		KindLabel: resource.KindLabel(), ResourceID: resource.ID, ResourceName: resource.Name,
+		Clients: h.clientAccessChanges(current, desired, profiles),
+	}
 }
 
 // stringSet 把表单里的多个值整理成集合，便于保留勾选状态。

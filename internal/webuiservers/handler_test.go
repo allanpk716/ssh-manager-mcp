@@ -127,7 +127,7 @@ func TestHandlerEditDetectsConcurrentChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page := h.do(http.MethodGet, "/ui/servers/"+id+"/edit", nil)
+	page := h.do(http.MethodGet, "/ui/servers/"+id+"?tab=connection&edit=1", nil)
 	pageBody := integrationBody(t, page)
 	revision := regexp.MustCompile(`name="revision" value="(\d+)"`).FindStringSubmatch(pageBody)
 	if len(revision) != 2 {

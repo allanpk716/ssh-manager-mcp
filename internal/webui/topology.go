@@ -177,6 +177,15 @@ type TopologyData struct {
 	LocalDevice                TopologyLocalDevice                 `json:"local_device"`
 }
 
+// TopologyServerMoveResult 是服务器条目改挂到另一台机器后的结果摘要；
+// AnchorCopyNotice 描述同机同端口兄弟条目主机密钥锚的复制事实。
+type TopologyServerMoveResult struct {
+	ServerName   string
+	FromDevice   string
+	ToDevice     string
+	AnchorNotice string
+}
+
 // TopologySource 是 Web UI 读取拓扑数据的唯一入口。instance 是客户端缓存
 // 实例名，空串表示默认实例；单机与权威端来源忽略它。
 type TopologySource interface {
@@ -259,6 +268,12 @@ type TopologyWriter interface {
 	DeleteLocation(ref string, source TopologyWriteSource) (string, error)
 	AddManagedNetwork(input TopologyNetworkInput, source TopologyWriteSource) (string, error)
 	EditManagedNetwork(name string, changes TopologyNetworkChanges, source TopologyWriteSource) (string, error)
+	// EditDeviceSite 修改一台机器直接登记的地点；实现必须复用存储层的设
+	// 备编辑函数，保证地点引用解析、审计与快照修订号一致。
+	EditDeviceSite(device, siteRef string, source TopologyWriteSource) (string, error)
+	// MoveServerToDevice 把服务器条目改挂到另一台机器，与命令行
+	// devices move-server 走同一个存储函数。
+	MoveServerToDevice(serverIdentifier, device string, source TopologyWriteSource) (TopologyServerMoveResult, error)
 }
 
 // registerTopologyRoutes 注册拓扑图页面与只读数据接口。没有拓扑来源的构

@@ -44,6 +44,7 @@ type pageData struct {
 	ServerDetail                      *ServerDetailView
 	ServerDetailNotice                string
 	ServerDetailNoticeKind            string
+	ServerDetailPage                  *serverDetailPageView
 	ServerEdit                        *serverEditView
 	ServerDeletePreview               *ServerDeletePreviewView
 	ServerDeleteNotice                string
@@ -322,6 +323,7 @@ var pageFuncs = template.FuncMap{
 	// 格式固定在 Go 端一处，模板只负责展示。
 	"secretCellName":     secretCellName,
 	"secretTargetValue":  encodeSecretTarget,
+	"locationOptions":    locationOptions,
 	"serverProfileNames": serverProfileNames,
 	// defaultConfigPath 是导入路径表单的默认值：运行 Web UI 进程那台机器上
 	// 当前用户的 ~/.ssh/config。

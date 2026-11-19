@@ -66,6 +66,7 @@ type locationFormView struct {
 	Site         *TopologySite
 	Name         string
 	Parent       string
+	ReturnTo     string
 	Options      []locationOptionView
 	DeleteReason string
 	Error        string
@@ -304,7 +305,8 @@ func (h *handler) handleLocationCreate(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "读取地点失败", "读取地点失败，请稍后重试。")
 		return
 	}
-	view := &locationFormView{Mode: "create", Options: locationTreeOptions(data, true, nil)}
+	returnTo := safeServerDetailReturnPath(formOrQuery(r, "return_to"))
+	view := &locationFormView{Mode: "create", Options: locationTreeOptions(data, true, nil), ReturnTo: returnTo}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		view.Parent = strings.TrimSpace(r.URL.Query().Get("parent"))
 		h.renderLocationForm(w, r, http.StatusOK, view, "新建地点")
@@ -328,7 +330,20 @@ func (h *handler) handleLocationCreate(w http.ResponseWriter, r *http.Request) {
 		h.renderLocationForm(w, r, http.StatusOK, view, "新建地点")
 		return
 	}
+	if returnTo != "" {
+		http.Redirect(w, r, returnTo, http.StatusSeeOther)
+		return
+	}
 	h.redirectLocationsNetworksWithNotice(w, r, "location-created", message)
+}
+
+// safeServerDetailReturnPath 只接受服务器详情地址，供地点新建后回到详情页
+// 的地点选择器。
+func safeServerDetailReturnPath(path string) string {
+	if strings.HasPrefix(path, "/ui/servers/") && !strings.Contains(path, "//") {
+		return path
+	}
+	return ""
 }
 
 // handleLocationRename 渲染与处理地点改名表单。
