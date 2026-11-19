@@ -26,9 +26,9 @@ type ExecResult struct {
 // runSession is the writer-seam kernel behind Exec (and the background engine):
 // it runs cmd in a fresh SSH session wired to the CALLER-SUPPLIED stdout/stderr
 // writers. ctx is honored as in Exec (cancel → (0, false, ctx.Err()); timeout > 0
-// bounds execution via a deadline derived from ctx, on timeout → (0, true, nil));
-// a non-zero remote exit folds into (code, false, nil); anything else is
-// (0, false, err).
+// 时，同一段期限在开会话之前派生，覆盖「开会话 + 执行」全程——开会话完
+// 成后不重新计时；on timeout → (0, true, nil)); a non-zero remote exit folds
+// into (code, false, nil); anything else is (0, false, err).
 //
 // Timeout/cancel teardown is three-stage (killWatchdog below): ① signal the
 // session (SIGKILL) and close the session channel; ② wait the client's kill
@@ -46,20 +46,23 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 	if err != nil {
 		return 0, false, err
 	}
-	sess, err := c.c.NewSession()
-	if err != nil {
-		return 0, false, err
-	}
-	defer sess.Close()
-
-	sess.Stdout = stdout
-	sess.Stderr = stderr
 
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	sess, openTimedOut, openErr := c.openSessionBounded(ctx)
+	if openTimedOut {
+		return 0, true, nil
+	}
+	if openErr != nil {
+		return 0, false, openErr
+	}
+	defer sess.Close()
+
+	sess.Stdout = stdout
+	sess.Stderr = stderr
 
 	// killWatchdog aborts the session on EITHER the (possibly deadline-bearing)
 	// ctx OR a caller cancellation. `done` lets it exit cleanly when Run returns
@@ -97,6 +100,62 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 		return exitErr.ExitStatus(), false, nil // non-zero exit is a result, not an error
 	}
 	return 0, false, err
+}
+
+// openSessionBounded 是两条执行内核共用的受限开会话辅助：在 ctx 已带
+// 的完整预算内等待一条新 SSH 会话。返回分类沿用执行内核的上下文结束原
+// 因习惯：
+//   - 开会话成功 → (会话, false, nil)；
+//   - 期限到期（DeadlineExceeded，含超时参数派生的期限与调用方上下文自
+//     带的期限）→ 关闭整条 SSH 连接并返回 (nil, true, nil)。此刻还没有
+//     会话可发终止信号，不进入三段式强制收尾；半死连接直接关闭，开会话
+//     协程随后因连接死亡自行退出（结果走带缓冲通道，不会泄漏）；
+//   - 显式取消（Canceled）→ (nil, false, context.Canceled)，不关连接。
+func (c *Client) openSessionBounded(ctx context.Context) (sess *ssh.Session, timedOut bool, err error) {
+	opened := make(chan *ssh.Session, 1)
+	failed := make(chan error, 1)
+	go func() {
+		session, openErr := c.c.NewSession()
+		if openErr != nil {
+			failed <- openErr
+			return
+		}
+		opened <- session
+	}()
+	select {
+	case sess = <-opened:
+		// 与执行结束后的分类同序：上下文已结束时，期限与取消先于刚开出的会话。
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			_ = sess.Close()
+			_ = c.Close()
+			return nil, true, nil
+		case context.Canceled:
+			_ = sess.Close()
+			return nil, false, context.Canceled
+		}
+		return sess, false, nil
+	case err = <-failed:
+		return nil, false, err
+	case <-ctx.Done():
+		if ctx.Err() == context.DeadlineExceeded {
+			// 关整条连接是唯一能立即解阻「等待开通道应答」的手段。
+			_ = c.Close()
+			return nil, true, nil
+		}
+		// 显式取消：只放弃本次等待，不关连接（同一连接上的其他会话不受
+		// 牵连）。后台协程等开会话最终返回后关闭迟到的会话；开会话最终
+		// 失败时无事可关。两个结果通道都带缓冲，即使后台协程尚未取走结
+		// 果，开会话协程也能完成发送并退出。
+		go func() {
+			select {
+			case late := <-opened:
+				_ = late.Close()
+			case <-failed:
+			}
+		}()
+		return nil, false, ctx.Err()
+	}
 }
 
 // killWatchdog is the three-stage teardown shared by the two execution kernels
