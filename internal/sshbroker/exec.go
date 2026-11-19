@@ -25,10 +25,10 @@ type ExecResult struct {
 
 // runSession is the writer-seam kernel behind Exec (and the background engine):
 // it runs cmd in a fresh SSH session wired to the CALLER-SUPPLIED stdout/stderr
-// writers. ctx is honored as in Exec (cancel → (0, false, ctx.Err()); timeout > 0
-// 时，同一段期限在开会话之前派生，覆盖「开会话 + 执行」全程——开会话完
-// 成后不重新计时；on timeout → (0, true, nil)); a non-zero remote exit folds
-// into (code, false, nil); anything else is (0, false, err).
+// writers. ctx 的处理与 Exec 一致：取消返回 (0, false, ctx.Err())，超时返回
+// (0, true, nil)，远端非零退出码折叠为 (code, false, nil)，其余失败返回
+// (0, false, err)。timeout > 0 时，期限在开会话之前派生，覆盖「开会话 +
+// 执行」全程，开会话完成后不重新计时。
 //
 // Timeout/cancel teardown is three-stage (killWatchdog below): ① signal the
 // session (SIGKILL) and close the session channel; ② wait the client's kill
@@ -108,10 +108,25 @@ func (c *Client) runSession(ctx context.Context, cmd string, timeout time.Durati
 //   - 开会话成功 → (会话, false, nil)；
 //   - 期限到期（DeadlineExceeded，含超时参数派生的期限与调用方上下文自
 //     带的期限）→ 关闭整条 SSH 连接并返回 (nil, true, nil)。此刻还没有
-//     会话可发终止信号，不进入三段式强制收尾；半死连接直接关闭，开会话
-//     协程随后因连接死亡自行退出（结果走带缓冲通道，不会泄漏）；
+//     会话可发终止信号，不调用 killWatchdog；半死连接直接关闭，开会话协
+//     程随后因连接死亡自行退出（结果走带缓冲通道，不会阻塞泄漏）；
 //   - 显式取消（Canceled）→ (nil, false, context.Canceled)，不关连接。
+//
+// 取消路径不会泄漏协程的前提：取消时不关连接，开会话协程与回收协程会一
+// 直等到开通道应答到达或连接关闭才退出；执行内核的调用方在一次执行后关
+// 闭专用连接（见 killWatchdog 注释中的前提），所以这两个协程最终会退出。
 func (c *Client) openSessionBounded(ctx context.Context) (sess *ssh.Session, timedOut bool, err error) {
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		// 入口处上下文已结束：按同一分类直接返回，不再发起开会话。期限
+		// 到期时连接可能已被上一次受限开会话关闭（提权执行先用一条会话
+		// 探测 sudo 能否免密执行，探测超时就是这个形状），再发开通道请求
+		// 只会制造连接死亡错误。
+		if ctxErr == context.DeadlineExceeded {
+			_ = c.Close()
+			return nil, true, nil
+		}
+		return nil, false, context.Canceled
+	}
 	opened := make(chan *ssh.Session, 1)
 	failed := make(chan error, 1)
 	go func() {
@@ -136,6 +151,16 @@ func (c *Client) openSessionBounded(ctx context.Context) (sess *ssh.Session, tim
 		}
 		return sess, false, nil
 	case err = <-failed:
+		// 开会话失败与开会话成功同序：先分类上下文结束原因。期限到期时
+		// 连接可能正是因此死亡（超时路径刚关掉它），连接死亡错误不得泄
+		// 漏为报错；显式取消同理返回取消。
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			_ = c.Close()
+			return nil, true, nil
+		case context.Canceled:
+			return nil, false, context.Canceled
+		}
 		return nil, false, err
 	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {

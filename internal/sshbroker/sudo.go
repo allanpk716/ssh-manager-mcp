@@ -376,13 +376,14 @@ func ctxErrOr(ctx context.Context, err error) error {
 	return err
 }
 
-// sudoRunsWithoutPassword 在已建立的 SSH 连接上先用 `sudo -n true` 探测。
-// 探测命令不携带 sudo 凭据；任何失败都按“不能确认免密”处理，让实际命令
-// 回到 `sudo -S` 包装。这里复用普通执行内核，因此取消与看门狗语义与其他
-// 远端命令一致。
-func (c *Client) sudoRunsWithoutPassword(ctx context.Context) bool {
+// sudoRunsWithoutPassword 在已建立的 SSH 连接上先用 `sudo -n true` 探测，
+// 并同时告诉调用方探测是否因期限到期而失败。探测命令不携带 sudo 凭据；
+// 非超时的失败都按“不能确认免密”处理，让实际命令回到 `sudo -S` 包装；
+// timedOut 为真时执行内核已关闭整条连接，调用方不得再在这条连接上继续
+// 执行。这里复用普通执行内核，因此取消与看门狗语义与其他远端命令一致。
+func (c *Client) sudoRunsWithoutPassword(ctx context.Context) (withoutPassword, timedOut bool) {
 	result, err := c.Exec(ctx, sudoNoPasswordProbeCommand, sudoProbeTimeout, 0)
-	return err == nil && !result.TimedOut && result.ExitCode == 0
+	return err == nil && !result.TimedOut && result.ExitCode == 0, result.TimedOut
 }
 
 // SudoRunsWithoutPassword 返回这条 SSH 连接上的 sudo 是否能完全不读密
@@ -393,19 +394,19 @@ func (c *Client) SudoRunsWithoutPassword(ctx context.Context, sudoPassword []byt
 	if len(sudoPassword) == 0 {
 		return false
 	}
-	return c.sudoRunsWithoutPassword(ctx)
+	withoutPassword, _ := c.sudoRunsWithoutPassword(ctx)
+	return withoutPassword
 }
 
 // runSessionRaw is the transport kernel under every elevated exec: starts
 // `wrapped` as one SSH exec, feeds pass (a single line, then close) to the
 // session's stdin when non-empty — the password feed for password-reading sudo
-// — then writes each standard input frame, and honors timeout and cancellation
-// exactly like runSession：timeout > 0 时，同一段期限在开会话之前派生，覆
-// 盖「开会话 + 执行」全程——开会话完成后不重新计时；开会话阶段复用
-// openSessionBounded，同样受超时与调用方取消约束。It imposes NO wrapper and
-// NO stderr processing: callers compose (runSudoSession adds the marker wrapper
-// and the stderr processor; ExecSudoWrapped passes a caller-prebuilt command
-// through).
+// — then writes each standard input frame. 超时与取消的处理与 runSession 一
+// 致。timeout > 0 时，期限在开会话之前派生，覆盖「开会话 + 执行」全程，
+// 开会话完成后不重新计时。开会话阶段复用 openSessionBounded，同样受超时
+// 与调用方取消约束。It imposes NO wrapper and NO stderr processing: callers
+// compose (runSudoSession adds the marker wrapper and the stderr processor;
+// ExecSudoWrapped passes a caller-prebuilt command through).
 func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeout time.Duration, stdout, stderr io.Writer, frames ...[]byte) (exitCode int, timedOut bool, err error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -497,7 +498,21 @@ func (c *Client) runSudoSession(ctx context.Context, cmd, pass string, timeout t
 	}
 	nonce := newSudoNonce()
 	proc := newSudoStderrProcessor(stderr, nonce)
-	withoutPassword := pass != "" && c.sudoRunsWithoutPassword(ctx)
+	withoutPassword := false
+	if pass != "" {
+		var probeTimedOut bool
+		withoutPassword, probeTimedOut = c.sudoRunsWithoutPassword(ctx)
+		if probeTimedOut {
+			// 探测阶段期限到期已经关闭整条连接：直接按超时返回，不再在
+			// 已关闭的连接上为实际命令开会话。sudoMeta 沿用既有超时返回
+			// 习惯（未见到标记行，按未验证分类）。
+			return 0, true, nil, proc.classify()
+		}
+		if ctx.Err() == context.Canceled {
+			// 调用方在探测期间显式取消：就此停止，不再为实际命令开会话。
+			return 0, false, context.Canceled, proc.classify()
+		}
+	}
 	wrapped := buildSudoWrapperWithMarker(prepared.command, nonce, withoutPassword)
 	if withoutPassword {
 		pass = ""

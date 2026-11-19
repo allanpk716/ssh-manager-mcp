@@ -53,6 +53,11 @@ type Options struct {
 	// 应答」的阶段挂住，并自行决定何时释放；只挂住第一次调用是测试自己
 	// 用 sync.Once 之类实现的约定，这里不加隐藏状态。
 	SessionOpenHold func()
+	// SessionClosed 非空时，服务器在一条会话通道的处理结束（通道被客户
+	// 端或服务器关闭、或连接断开）后调用一次。纯观测钩子：测试用它证明
+	// 某条会话通道确实被关闭（例如客户端放弃等待后回收迟到开出的会话）；
+	// 哪一条会话对应哪次调用由测试按打开顺序自行对应。
+	SessionClosed func()
 	// SudoStartFailure, when non-empty, makes the simulated sudo fail AFTER a
 	// correct password with this diagnostic (exit 1) — for exercising the
 	// sudo-start-failed classification (command-specific sudoers / NOEXEC-ish
@@ -157,7 +162,7 @@ func Start(t *testing.T, opts Options) (string, ssh.PublicKey, func()) {
 			if opts.Connections != nil {
 				opts.Connections.Add(1)
 			}
-			go serve(conn, cfg, opts.SudoPassword, opts.SudoDoesNotReadPassword, opts.SudoStartFailure, execFn, opts.ExecStream, opts.SessionOpenHold, opts.SFTPHandlers, opts.VirtualFilesystemRoot, opts.VirtualFilesystemStatVFS)
+			go serve(conn, cfg, opts.SudoPassword, opts.SudoDoesNotReadPassword, opts.SudoStartFailure, execFn, opts.ExecStream, opts.SessionOpenHold, opts.SessionClosed, opts.SFTPHandlers, opts.VirtualFilesystemRoot, opts.VirtualFilesystemStatVFS)
 		}
 	}()
 	cleanup := func() {
@@ -181,7 +186,7 @@ func bytesEqual(a, b []byte) bool {
 	return d == 0
 }
 
-func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sessionOpenHold func(), sftpHandlers sftp.Handlers, virtualFilesystemRoot string, virtualFilesystemStatVFS func(*sftp.Request) (*sftp.StatVFS, error)) {
+func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sessionOpenHold func(), sessionClosed func(), sftpHandlers sftp.Handlers, virtualFilesystemRoot string, virtualFilesystemStatVFS func(*sftp.Request) (*sftp.StatVFS, error)) {
 	defer c.Close()
 	sc, chans, reqs, err := ssh.NewServerConn(c, cfg)
 	if err != nil {
@@ -192,7 +197,7 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPass
 	for newChan := range chans {
 		switch newChan.ChannelType() {
 		case "session":
-			go handleSession(newChan, sudoPw, sudoDoesNotReadPassword, sudoStartFailure, execFn, execStreamFn, sessionOpenHold, sftpHandlers, virtualFilesystemRoot, virtualFilesystemStatVFS)
+			go handleSession(newChan, sudoPw, sudoDoesNotReadPassword, sudoStartFailure, execFn, execStreamFn, sessionOpenHold, sessionClosed, sftpHandlers, virtualFilesystemRoot, virtualFilesystemStatVFS)
 		case "direct-tcpip":
 			// Direct TCP/IP forwarding (RFC 4254 §7.2) — the server-side of `ssh -L`.
 			// The broker's ForwardLocal opens this channel via (*ssh.Client).Dial; the
@@ -208,13 +213,16 @@ func serve(c net.Conn, cfg *ssh.ServerConfig, sudoPw string, sudoDoesNotReadPass
 	}
 }
 
-func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sessionOpenHold func(), sftpHandlers sftp.Handlers, virtualFilesystemRoot string, virtualFilesystemStatVFS func(*sftp.Request) (*sftp.StatVFS, error)) {
+func handleSession(newChan ssh.NewChannel, sudoPw string, sudoDoesNotReadPassword bool, sudoStartFailure string, execFn func(string, io.Reader) (string, string, int), execStreamFn func(string, io.Reader, io.Writer, io.Writer) int, sessionOpenHold func(), sessionClosed func(), sftpHandlers sftp.Handlers, virtualFilesystemRoot string, virtualFilesystemStatVFS func(*sftp.Request) (*sftp.StatVFS, error)) {
 	if sessionOpenHold != nil {
 		sessionOpenHold()
 	}
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		return
+	}
+	if sessionClosed != nil {
+		defer sessionClosed()
 	}
 	defer ch.Close()
 	for req := range reqs {
