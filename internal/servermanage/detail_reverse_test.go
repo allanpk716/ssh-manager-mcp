@@ -227,6 +227,7 @@ func TestDetailReverseViewComparesSiblingSharesByDeviceID(t *testing.T) {
 			name TEXT NOT NULL,
 			name_lower TEXT NOT NULL,
 			note TEXT NOT NULL DEFAULT '',
+			site_id TEXT,
 			client_token_id TEXT UNIQUE,
 			client_name TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,
