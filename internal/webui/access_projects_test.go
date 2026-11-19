@@ -380,12 +380,12 @@ func TestProjectRoutesFollowRole(t *testing.T) {
 
 func TestProjectNavigationFollowsRoleCapabilities(t *testing.T) {
 	standalonePage := loginAndGetList(t, RoleStandalone, []ServerRow{{Name: "web-1"}}, "")
-	if !strings.Contains(standalonePage, `<a href="/ui/access/projects">项目令牌</a>`) {
-		t.Fatalf("单机导航应显示项目令牌入口：\n%s", standalonePage)
+	if !strings.Contains(standalonePage, `href="/ui/access/profiles"`) || !strings.Contains(standalonePage, ">授权<") {
+		t.Fatalf("单机一级导航应显示授权标签：\n%s", standalonePage)
 	}
 	clientPage := loginAndGetList(t, RoleClient, []ServerRow{{Name: "web-1"}}, "")
 	if strings.Contains(clientPage, `<a href="/ui/access/projects">项目令牌</a>`) {
-		t.Fatalf("客户端导航不应显示项目令牌数据入口：\n%s", clientPage)
+		t.Fatalf("客户端一级导航不应显示项目令牌数据入口：\n%s", clientPage)
 	}
 }
 

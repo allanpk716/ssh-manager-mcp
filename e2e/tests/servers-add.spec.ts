@@ -1,14 +1,14 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import { expect, openStandaloneUI, startStandaloneUIWithTopology, test } from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, startStandaloneUIWithTopology, test } from "../helpers";
 
 test("从页头新增服务器并复用已有设备的网络成员", async ({ page }) => {
   const ui = await startStandaloneUIWithTopology();
   try {
     await openStandaloneUI(page, ui);
 
-    await page.getByRole("link", { name: "添加", exact: true }).click();
-    await page.getByRole("link", { name: /服务器/ }).click();
+    await gotoUIPath(page, "/ui/add");
+    await page.locator("main").getByRole("link", { name: /服务器/ }).click();
     await expect(page.getByRole("heading", { name: "新增服务器" })).toBeVisible();
 
     await page.getByLabel("名称", { exact: true }).fill("same-device");

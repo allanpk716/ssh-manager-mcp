@@ -1,9 +1,9 @@
-import { expect, openStandaloneUI, openAuthorityUI, test } from "../helpers";
+import { expect, gotoUIPath, openAuthorityUI, openStandaloneUI, test } from "../helpers";
 
 test("从待办认领未识别进程后它从待办消失", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "待办" }).click();
   await expect(page.getByRole("heading", { name: "未识别进程" })).toBeVisible();
   const processRow = page.locator("tr", { hasText: "/opt/gateway/gateway" });
@@ -28,14 +28,14 @@ test("从待办认领未识别进程后它从待办消失", async ({ page, stand
 test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "草稿审阅" }).click();
   await expect(page.getByRole("heading", { name: "声明草稿审阅" })).toBeVisible();
   await expect(page.getByText("业务网关")).toBeVisible();
   await page.getByRole("button", { name: "按草稿确认" }).click();
 
   await expect(page.getByText("草稿已确认并进入生效清单。")).toBeVisible();
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "工作站" }).click();
   await expect(page.getByRole("heading", { name: "工作站 · 软件清单" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "业务网关" }).first()).toBeVisible();
@@ -44,7 +44,7 @@ test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) =
 test("声明草稿驳回后消失", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "草稿审阅" }).click();
   await expect(page.getByText("业务网关")).toBeVisible();
   await page.getByRole("button", { name: "驳回草稿" }).click();
@@ -58,7 +58,7 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   test.setTimeout(30_000);
   await openAuthorityUI(page, authorityUI, "browser-test-password");
 
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "采集设置" }).click();
   await page.getByLabel("服务器条目", { exact: true }).selectOption("web-1");
   await page.getByLabel("允许用 sudo 采集").check();

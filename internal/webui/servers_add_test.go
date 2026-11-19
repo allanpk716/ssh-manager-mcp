@@ -367,8 +367,8 @@ func TestServerAddEntryRoleMatrixAndCSRF(t *testing.T) {
 	writer := &stubServerWriter{}
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
 
-	list := serversGet(t, h, cookie, "/ui/")
-	for _, want := range []string{"新增服务器", `href="/ui/add"`, "添加"} {
+	list := serversGet(t, h, cookie, "/ui/servers/")
+	for _, want := range []string{"新增服务器", `href="/ui/servers/new"`} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("可写角色的列表与页头应提供新增入口，缺少 %q：\n%s", want, list)
 		}

@@ -47,8 +47,8 @@ func TestUICommandStandaloneProvidesUpgradeServerPage(t *testing.T) {
 	}
 	homeBody, _ := io.ReadAll(homeResponse.Body)
 	homeResponse.Body.Close()
-	if !strings.Contains(string(homeBody), `href="/ui/ops/upgrade-server"`) {
-		t.Fatalf("单机首页导航应提供升级为权威端入口：\n%s", homeBody)
+	if !strings.Contains(string(homeBody), `>更多<`) {
+		t.Fatalf("单机一级导航应提供更多标签，升级入口由更多页收纳：\n%s", homeBody)
 	}
 
 	upgradeRequest, err := http.NewRequest(http.MethodGet, "http://"+startupURL.Host+"/ui/ops/upgrade-server", nil)

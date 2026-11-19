@@ -120,8 +120,8 @@ func TestTopologyNavigationAndPageAvailableForEveryRole(t *testing.T) {
 			home := authorityGet(t, handler, host, "/ui/", cookie)
 			homeBody, _ := io.ReadAll(home.Body)
 			home.Body.Close()
-			if !strings.Contains(string(homeBody), `<a href="/ui/topology/">网络拓扑</a>`) {
-				t.Fatalf("首页导航应出现网络拓扑入口：\n%s", homeBody)
+			if !strings.Contains(string(homeBody), `aria-label="一级导航"`) || !strings.Contains(string(homeBody), `>更多<`) {
+				t.Fatalf("首页一级导航应出现更多标签：\n%s", homeBody)
 			}
 
 			page := authorityGet(t, handler, host, "/ui/topology/", cookie)

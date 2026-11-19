@@ -9,7 +9,7 @@
 </div>
 <div class="inline-form">
 {{if .ServerCompleteQueue}}<a class="button-link" href="/ui/servers/complete?queue={{.ServerCompleteQueue}}&amp;position=0&amp;imported={{.ServerImportRun.Imported}}&amp;skipped={{.ServerImportRun.Skipped}}&amp;failed={{.ServerImportRun.Failed}}">开始逐台补全</a>{{end}}
-<a class="button-link" href="/ui/?attention=1">查看需要注意的服务器</a>
+<a class="button-link" href="/ui/servers/?attention=1">查看需要注意的服务器</a>
 </div>
 </section>
 {{end}}

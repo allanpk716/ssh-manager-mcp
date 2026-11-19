@@ -48,8 +48,8 @@ func TestOpsClientAuditPageReadsStartupInstance(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "<h1>本机审计</h1>") {
 		t.Fatalf("客户端应打开本机审计页，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
-	if !strings.Contains(body, `aria-label="运维区域"`) || !strings.Contains(body, `href="/ui/ops/client-audit"`) {
-		t.Fatalf("客户端导航应显示运维区域与本机审计入口：\n%s", body)
+	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/ops/"`) {
+		t.Fatalf("客户端导航应显示更多标签：\n%s", body)
 	}
 	if !strings.Contains(body, "laptop") {
 		t.Fatalf("本机审计页应显示当前实例名：\n%s", body)

@@ -1,14 +1,9 @@
-import {
-  expect,
-  openStandaloneUI,
-  startStandaloneUIWithTopology,
-  test,
-} from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, startStandaloneUIWithTopology, test } from "../helpers";
 
 test("共享存储可挂载范围勾选后预览并确认", async ({ page, sharesStandaloneUI }) => {
   await openStandaloneUI(page, sharesStandaloneUI);
 
-  await page.getByRole("link", { name: "共享存储" }).click();
+  await gotoUIPath(page, "/ui/shares/");
   await page.getByRole("link", { name: "datasets" }).click();
   const webCheckbox = page.getByRole("checkbox", { name: /web-1/ });
   const shareDBCheckbox = page.getByRole("checkbox", { name: /share-db/ });
@@ -33,7 +28,7 @@ test("共享存储桌面手动添加引导展示步骤且没有密码入口", as
   try {
     await openStandaloneUI(page, ui);
 
-    await page.getByRole("link", { name: "共享存储" }).click();
+    await gotoUIPath(page, "/ui/shares/");
     await page.getByRole("link", { name: "家NAS共享" }).click();
     await page.getByRole("link", { name: "打开桌面手动添加引导" }).click();
     await page.getByLabel("这台电脑是拓扑里哪台设备").selectOption({ label: "工作站" });

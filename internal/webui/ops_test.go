@@ -192,8 +192,8 @@ func TestOpsAuditPageFiltersAndOlderLink(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "<h1>审计</h1>") {
 		t.Fatalf("单机应打开审计页，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
-	if !strings.Contains(body, `aria-label="运维区域"`) || !strings.Contains(body, `href="/ui/ops/audit"`) {
-		t.Fatalf("导航应显示运维区域与审计入口：\n%s", body)
+	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/ops/"`) {
+		t.Fatalf("导航应显示更多标签：\n%s", body)
 	}
 
 	wantTime, _ := time.ParseInLocation("2006-01-02T15:04", "2027-01-02T03:04", time.Local)
@@ -266,8 +266,8 @@ func TestOpsAuditRoutesFollowRole(t *testing.T) {
 	if authorityPage.StatusCode != http.StatusOK || !strings.Contains(authorityBody, "<h1>审计</h1>") {
 		t.Fatalf("权威端应打开审计页，状态码=%d 页面：\n%s", authorityPage.StatusCode, authorityBody)
 	}
-	if !strings.Contains(authorityBody, `aria-label="运维区域"`) {
-		t.Fatalf("权威端导航应显示运维区域：\n%s", authorityBody)
+	if !strings.Contains(authorityBody, `aria-label="一级导航"`) || !strings.Contains(authorityBody, `>更多<`) {
+		t.Fatalf("权威端导航应显示更多标签：\n%s", authorityBody)
 	}
 	for _, action := range []string{"admin.login", "admin.login_fail", "admin.lockout"} {
 		if !strings.Contains(authorityBody, action) || !strings.Contains(authorityBody, "198.51.100.9") {

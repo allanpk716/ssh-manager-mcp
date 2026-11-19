@@ -365,7 +365,7 @@ func TestListPageRequiresSession(t *testing.T) {
 	}
 	loginWithStartup(t, client, server.URL, startup)
 
-	resp := doClientGet(t, client, server.URL, "/ui/")
+	resp := doClientGet(t, client, server.URL, "/ui/servers/")
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("有效会话访问列表页状态码 = %d，应为 200", resp.StatusCode)
@@ -494,7 +494,7 @@ func TestSecurityHeadersOnEveryResponse(t *testing.T) {
 		t.Fatalf("整页 Cache-Control = %q，应为 no-store", got)
 	}
 
-	fragReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	fragReq := httptest.NewRequest(http.MethodGet, "/ui/servers/", nil)
 	fragReq.Host = "127.0.0.1:18080"
 	fragReq.Header.Set("HX-Request", "true")
 	fragRec := httptest.NewRecorder()
@@ -538,7 +538,7 @@ func TestFragmentVersusFullPage(t *testing.T) {
 		t.Fatalf("普通请求应返回整页：\n%s", fullRec.Body.String())
 	}
 
-	fragReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	fragReq := httptest.NewRequest(http.MethodGet, "/ui/servers/", nil)
 	fragReq.Host = "127.0.0.1:18080"
 	fragReq.AddCookie(cookie)
 	fragReq.Header.Set("HX-Request", "true")
@@ -553,7 +553,7 @@ func TestFragmentVersusFullPage(t *testing.T) {
 	}
 }
 
-// loginAndGetList 换会话后取列表页全文。
+// loginAndGetList 换会话后取服务器列表页全文。
 func loginAndGetList(t *testing.T, role Role, rows []ServerRow, versionHint string) string {
 	t.Helper()
 	h, startup, err := New(Config{
@@ -575,7 +575,7 @@ func loginAndGetList(t *testing.T, role Role, rows []ServerRow, versionHint stri
 	if cookie == nil {
 		t.Fatal("启动令牌换会话后应得到会话 cookie")
 	}
-	req := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	req := httptest.NewRequest(http.MethodGet, "/ui/servers/", nil)
 	req.Host = "127.0.0.1:18080"
 	req.AddCookie(cookie)
 	rec := httptest.NewRecorder()
@@ -675,28 +675,28 @@ func TestUnknownUIPathReturnsChinese404WithSession(t *testing.T) {
 	}
 }
 
-// TestSecretsNavFollowsCapability 覆盖审查第 6 项：导航里的「机密项」入口
-// 必须受能力标志控制；未配置机密项读来源时不显示。
-func TestSecretsNavFollowsCapability(t *testing.T) {
+// TestSecretsRouteFollowsCapability 覆盖审查第 6 项：未配置机密项读取来
+// 源时，机密项路由不出现。
+func TestSecretsRouteFollowsCapability(t *testing.T) {
 	withoutSecrets, startup := newTestHandler(t, RoleStandalone, nil)
 	resp := exchangeStartupToken(t, withoutSecrets, startup.URL("127.0.0.1:18080"))
 	cookies := resp.Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("应签发会话 cookie，实际 %d", len(cookies))
 	}
-	list := doGetWithCookie(t, withoutSecrets, cookies[0], "/ui/")
+	list := doGetWithCookie(t, withoutSecrets, cookies[0], "/ui/secrets/")
 	listBody := readResponseBody(t, list)
-	if strings.Contains(listBody, `aria-label="机密项区域"`) || strings.Contains(listBody, `href="/ui/secrets/"`) {
-		t.Fatalf("未配置机密项读来源时不应显示机密项导航：\n%s", listBody)
+	if list.StatusCode != http.StatusNotFound {
+		t.Fatalf("未配置机密项读来源时不应注册机密项路由，状态码=%d 页面：\n%s", list.StatusCode, listBody)
 	}
 
 	withSecrets, startupWithSecrets := newTestHandlerWithSecrets(t, RoleStandalone, nil)
 	respWithSecrets := exchangeStartupToken(t, withSecrets, startupWithSecrets.URL("127.0.0.1:18080"))
-	listWithSecrets := doGetWithCookie(t, withSecrets, respWithSecrets.Cookies()[0], "/ui/")
+	listWithSecrets := doGetWithCookie(t, withSecrets, respWithSecrets.Cookies()[0], "/ui/secrets/")
 	listBodyWithSecrets := readResponseBody(t, listWithSecrets)
-	if !strings.Contains(listBodyWithSecrets, `aria-label="机密项区域"`) ||
-		!strings.Contains(listBodyWithSecrets, `href="/ui/secrets/"`) {
-		t.Fatalf("配置机密项读来源后应显示机密项导航：\n%s", listBodyWithSecrets)
+	if listWithSecrets.StatusCode != http.StatusOK || !strings.Contains(listBodyWithSecrets, "<h1>机密项</h1>") {
+		t.Fatalf("配置机密项读来源后应打开机密项页，状态码=%d 页面：\n%s",
+			listWithSecrets.StatusCode, listBodyWithSecrets)
 	}
 }
 

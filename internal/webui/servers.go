@@ -521,6 +521,10 @@ func sortServerAttentionFirst(rows []ServerListEntry) []ServerListEntry {
 // handleServerEntry 分发 /ui/servers/{id} 与 /ui/servers/{id}/edit|delete。
 func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 	rest := strings.TrimPrefix(r.URL.Path, serversPrefix)
+	if rest == "" {
+		h.handleServerList(w, r)
+		return
+	}
 	id, action, hasAction := strings.Cut(rest, "/")
 	if id == "" || strings.Contains(id, "/") {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
@@ -885,7 +889,7 @@ func (h *handler) handleServerDelete(w http.ResponseWriter, r *http.Request, id 
 			h.renderError(w, r, http.StatusInternalServerError, "删除服务器失败", "删除服务器失败，请稍后重试。")
 			return
 		}
-		http.Redirect(w, r, "/ui/", http.StatusSeeOther)
+		http.Redirect(w, r, serversPrefix, http.StatusSeeOther)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {

@@ -140,7 +140,7 @@ func (h *handler) handleAuthorityRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	h.handleServerList(w, r)
+	h.handleHomePage(w, r)
 }
 
 func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Request) {

@@ -1,4 +1,4 @@
-import { expect, test } from "../helpers";
+import { expect, gotoUIPath, test } from "../helpers";
 import * as net from "node:net";
 import {
   openClientUI,
@@ -11,8 +11,8 @@ async function openTopologyPage(
   ui: { startupURL: string },
 ): Promise<void> {
   await page.goto(ui.startupURL);
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
-  await page.getByRole("link", { name: "网络拓扑" }).click();
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
+  await gotoUIPath(page, "/ui/topology/");
   await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
 }
 
@@ -634,7 +634,7 @@ test("手机深色视口下信息块可读且节点与分组标签能认出机�
   const ui = await startClientUIWithTopology();
   try {
     await openClientUI(page, ui);
-    await page.getByRole("link", { name: "网络拓扑" }).click();
+    await gotoUIPath(page, "/ui/topology/");
     await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
     const canvas = page.locator("#topology-canvas");
     await expect(canvas).not.toHaveAttribute("data-node-count", "0");
@@ -696,7 +696,7 @@ test("客户端只读查看本地快照拓扑", async ({ page }) => {
   const ui = await startClientUIWithTopology();
   try {
     await openClientUI(page, ui);
-    await page.getByRole("link", { name: "网络拓扑" }).click();
+    await gotoUIPath(page, "/ui/topology/");
     await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
 
     await expect(page.getByText("拓扑为只读视图；网络成员的修改请到权威端 Web UI 做。")).toBeVisible();
@@ -1200,7 +1200,7 @@ test("客户端与手机没有布局保存入口", async ({ page, isMobile }) =>
       await openTopologyPage(page, ui);
     } else {
       await openClientUI(page, ui);
-      await page.getByRole("link", { name: "网络拓扑" }).click();
+      await gotoUIPath(page, "/ui/topology/");
       await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
     }
     const canvas = page.locator("#topology-canvas");
@@ -1230,7 +1230,7 @@ test("客户端与手机没有布局保存入口", async ({ page, isMobile }) =>
       expect(saveStatus).toBe(404);
     }
     if (isMobile) {
-      await page.goBack();
+      await gotoUIPath(page, "/ui/servers/");
       await page.getByRole("heading", { name: "服务器" }).waitFor();
       await expect(page.getByRole("link", { name: "新增服务器" })).toBeVisible();
     }

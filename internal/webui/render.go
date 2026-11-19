@@ -180,6 +180,9 @@ type pageData struct {
 	// TopologyPage 控制页面外壳是否加载拓扑图专用的脚本与样式；只有
 	// 网络拓扑页为真。
 	TopologyPage bool
+	// NavCurrent 标记一级导航中的当前区域；空串时按请求路径推导。
+	NavCurrent string
+	Home       *homeView
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
@@ -192,6 +195,9 @@ func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int,
 	if sess := h.currentSession(r); sess != nil {
 		data.CSRFToken = sess.csrf
 		data.Authenticated = true
+	}
+	if data.NavCurrent == "" {
+		data.NavCurrent = navigationArea(r.URL.Path)
 	}
 	h.writePage(w, r, status, page, data)
 }

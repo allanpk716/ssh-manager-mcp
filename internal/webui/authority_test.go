@@ -228,8 +228,8 @@ func TestAuthorityLoginExchangesPasswordForSecureSession(t *testing.T) {
 	listResponse := listRecorder.Result()
 	listBody, _ := io.ReadAll(listResponse.Body)
 	listResponse.Body.Close()
-	if listResponse.StatusCode != http.StatusOK || !strings.Contains(string(listBody), "权威服务器") {
-		t.Fatalf("登录后应看到服务器列表，状态码 = %d，页面：\n%s", listResponse.StatusCode, listBody)
+	if listResponse.StatusCode != http.StatusOK || !strings.Contains(string(listBody), "状态总览") {
+		t.Fatalf("登录后应看到主页状态总览，状态码 = %d，页面：\n%s", listResponse.StatusCode, listBody)
 	}
 }
 
