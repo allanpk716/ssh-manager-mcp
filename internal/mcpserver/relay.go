@@ -58,6 +58,10 @@ const (
 // RelayForProfile 执行 relay_file 的全部廉价校验并在 ⑧ 建后台中继任务, 立即返回
 // 计划元数据 (exec_background 同款形态)。chunkBytes 来自构造期 env seam
 // (SSHMGR_TRANSFER_CHUNK, T2); 测试直传小值。执行序 ①–⑨ 逐字落 spec §2。
+// relayPreflightPause 是测试注入的 preflight 同步点：源端连接建立之后、
+// 目标端拨号之前被调用一次（nil 直通）。仅测试使用。
+var relayPreflightPause func()
+
 func RelayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, projectID, profileID string, in RelayInput, chunkBytes int64, hk ...sshbroker.HostKeyStore) (RelayOutput, error) {
 	return relayForProfile(ctx, st, tm, projectID, profileID, in, nil, chunkBytes, hk...)
 }
@@ -213,6 +217,14 @@ func relayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		}
 		size, mtime = fi.Size(), fi.ModTime().Unix()
 	} else {
+		// 收尾竞态防线：源端拨号前查管理器是否已被 CloseAll 收尾——收尾只关
+		// 已登记槽的连接，已收尾就不再为目标端/源端建立新连接（ErrBgManagerClosed）。
+		auditServer = in.FromServerID
+		if tm.Closed() {
+			status = "cancelled"
+			err = ErrBgManagerClosed
+			return
+		}
 		srv, gerr := st.GetServer(in.FromServerID)
 		if gerr != nil || srv == nil {
 			status = "error"
@@ -278,8 +290,18 @@ func relayForProfile(ctx context.Context, st *store.Store, tm *TaskManager, proj
 		return
 	}
 
+	if relayPreflightPause != nil {
+		relayPreflightPause()
+	}
+
 	// ---- ④ 目标端连接 (dest 一侧的完整门链, 词汇表与源端同) ----
 	auditServer = in.ToServerID
+	// 收尾竞态防线：目标端拨号前同样查收尾（同步点注入的竞态窗口在此之后）。
+	if tm.Closed() {
+		status = "cancelled"
+		err = ErrBgManagerClosed
+		return
+	}
 	dstSrv, derr := st.GetServer(in.ToServerID)
 	if derr != nil || dstSrv == nil {
 		status = "error"

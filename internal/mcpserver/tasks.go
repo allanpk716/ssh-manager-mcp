@@ -493,6 +493,15 @@ func (m *TaskManager) SweepExpired() []string {
 	return swept
 }
 
+// Closed 报告管理器是否已被 CloseAll 收尾。中继 preflight 在两端拨号前查它：
+// CloseAll 只关闭已登记任务槽的连接，preflight 在途的拨号要靠自己放弃，
+// 避免收尾之后再建立新连接（哨兵错误见 ErrBgManagerClosed）。
+func (m *TaskManager) Closed() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.closed
+}
+
 // CloseAll 全量收尾 (照 spec §3 顺序): 持锁置 closed、摘全部表项 (先记待处理
 // 列表)、逐任务 cancel + client 关闭回调、逐任务 notify 一次; 锁外 stopOnce
 // 关 quit、wg.Wait (每个 Run goroutine 持一张 wg 票, Run 必须观察 ctx 返回,
