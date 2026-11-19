@@ -187,8 +187,12 @@ type pageData struct {
 	// 网络拓扑页为真。
 	TopologyPage bool
 	// NavCurrent 标记一级导航中的当前区域；空串时按请求路径推导。
-	NavCurrent string
-	Home       *homeView
+	NavCurrent        string
+	Home              *homeView
+	More              *moreView
+	LocationsNetworks *locationsNetworksView
+	LocationForm      *locationFormView
+	NetworkForm       *networkFormView
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染

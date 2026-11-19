@@ -1944,3 +1944,380 @@ button.danger {
     font-weight: 600;
   }
 }
+
+/* “更多”菜单：手机上一行一个入口，摘要靠右，电脑上同宽扩展。 */
+.more-menu {
+  display: grid;
+  gap: var(--space-medium);
+}
+
+.menu-group {
+  display: grid;
+  gap: var(--space-small);
+}
+
+.menu-group h2 {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.menu-card {
+  overflow: hidden;
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.menu-row-form {
+  margin: 0;
+}
+
+.menu-row {
+  display: flex;
+  width: 100%;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-medium);
+  padding: var(--space-small) var(--space-medium);
+  color: var(--color-text);
+  text-align: left;
+  text-decoration: none;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--color-panel-border);
+  font: inherit;
+  cursor: pointer;
+}
+
+.menu-row:last-child,
+.menu-row-form:last-child .menu-row {
+  border-bottom: 0;
+}
+
+.menu-row:hover,
+.menu-row:focus-visible {
+  background: var(--color-accent-soft);
+}
+
+.menu-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+}
+
+.menu-title {
+  font-weight: 650;
+}
+
+.menu-sub {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.menu-summary {
+  flex-shrink: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.menu-row.danger-row .menu-title {
+  color: #b42318;
+}
+
+/* 地点与网络管理页：手机优先的树、卡片与分段切换。 */
+.locations-networks,
+.location-form-page,
+.network-form-page {
+  display: grid;
+  gap: var(--space-medium);
+}
+
+.subpage-header {
+  display: grid;
+  gap: var(--space-small);
+}
+
+.header-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-small);
+}
+
+.segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  background: #e9edf2;
+  border-radius: 10px;
+}
+
+.segment {
+  padding: 8px 12px;
+  color: var(--color-muted);
+  text-align: center;
+  text-decoration: none;
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.segment.active {
+  color: var(--color-text);
+  background: var(--color-panel);
+  font-weight: 650;
+}
+
+.list-meta {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.other-device-entry {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px dashed var(--color-panel-border);
+  border-radius: 12px;
+}
+
+.other-device-entry p {
+  margin: 0;
+}
+
+.tree-card,
+.network-card {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-small);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.tree-node {
+  padding-left: var(--space-medium);
+  background: transparent;
+}
+
+.tree-node summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+  padding: var(--space-small) var(--space-medium);
+  background: #f8fafc;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.tree-node summary::-webkit-details-marker {
+  display: none;
+}
+
+.tree-node summary::before {
+  content: "▸";
+  flex-shrink: 0;
+  color: var(--color-muted);
+}
+
+.tree-node[open] > summary::before {
+  content: "▾";
+}
+
+.location-name {
+  font-weight: 650;
+}
+
+.location-stats {
+  color: var(--color-muted);
+  font-size: 13px;
+  text-align: right;
+}
+
+.tree-node-body {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-small) 0;
+}
+
+.location-path {
+  margin: 0;
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.machine-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.machine-label {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.machine-items {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-small);
+}
+
+.machine-chip {
+  padding: 2px 10px;
+  background: var(--color-accent-soft);
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.node-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-small);
+}
+
+.disabled-link {
+  display: inline-block;
+  padding: 4px var(--space-small);
+  color: var(--color-muted);
+  background: #f3f4f6;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.network-row {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 12px;
+}
+
+.network-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+}
+
+.network-title-row h3,
+.locations-networks h2 {
+  margin: 0;
+}
+
+.locations-networks h2 {
+  color: var(--color-muted);
+  font-size: 14px;
+}
+
+.field-list {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px var(--space-medium);
+  margin: 0;
+}
+
+.field-list dt {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.field-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tree-option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+  margin-left: 0;
+  padding: 6px var(--space-small);
+}
+
+.tree-option input {
+  flex-shrink: 0;
+}
+
+.checkbox-field label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.empty-text {
+  margin: 0;
+  color: var(--color-muted);
+}
+
+.muted {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.danger-link {
+  color: #b42318;
+}
+
+/* 深度缩进用固定类名，模板不写内联样式。 */
+.depth-0 { margin-left: 0; }
+.depth-1 { margin-left: 18px; }
+.depth-2 { margin-left: 36px; }
+.depth-3 { margin-left: 54px; }
+.depth-4 { margin-left: 72px; }
+.depth-5 { margin-left: 90px; }
+.depth-6 { margin-left: 108px; }
+.depth-7 { margin-left: 126px; }
+.depth-8 { margin-left: 144px; }
+.depth-9 { margin-left: 162px; }
+.depth-10 { margin-left: 180px; }
+.depth-11 { margin-left: 198px; }
+.depth-12 { margin-left: 216px; }
+.tree-children {
+  display: grid;
+  gap: var(--space-small);
+  margin-left: 18px;
+}
+
+/* 软件清单记录卡片：每条记录带字段名，手机上单列自然换行。 */
+.record-cards {
+  display: grid;
+  gap: var(--space-small);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.record-card {
+  display: grid;
+  gap: var(--space-small);
+  padding: var(--space-medium);
+  background: var(--color-panel);
+  border: 1px solid var(--color-panel-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
+}
+
+.record-card h2,
+.record-card h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-small);
+}

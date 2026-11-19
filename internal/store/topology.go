@@ -68,6 +68,12 @@ func (s *Store) AddSite(name, note string) (*models.Site, error) {
 // AddSiteWithParent 登记一个地点并指定上级；parent 为空表示根地点。同
 // 一上级下名字唯一，不同上级下允许同名。
 func (s *Store) AddSiteWithParent(name, note, parent string) (*models.Site, error) {
+	return s.AddSiteWithParentAndSource(name, note, parent, WriteSource{})
+}
+
+// AddSiteWithParentAndSource 与 AddSiteWithParent 相同，并把来源写入审
+// 计行；Web UI 的地点管理页用它区分命令行与页面写入。
+func (s *Store) AddSiteWithParentAndSource(name, note, parent string, source WriteSource) (*models.Site, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -114,11 +120,11 @@ func (s *Store) AddSiteWithParent(name, note, parent string) (*models.Site, erro
 			return nil, pathErr
 		}
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.add", map[string]any{
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "site.add", map[string]any{
 		"name":   site.Name,
 		"parent": parentPath,
 		"note":   site.Note,
-	}); err != nil {
+	}, source); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -130,6 +136,11 @@ func (s *Store) AddSiteWithParent(name, note, parent string) (*models.Site, erro
 // EditSite 按地点引用做部分更新。返回更新后的地点；数据行与审计行在同
 // 一个事务里提交。
 func (s *Store) EditSite(ref string, changes SiteChanges) (*models.Site, error) {
+	return s.EditSiteWithSource(ref, changes, WriteSource{})
+}
+
+// EditSiteWithSource 与 EditSite 相同，并把来源写入审计行。
+func (s *Store) EditSiteWithSource(ref string, changes SiteChanges, source WriteSource) (*models.Site, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -197,7 +208,7 @@ func (s *Store) EditSite(ref string, changes SiteChanges) (*models.Site, error) 
 		}
 		editChanges["parent"] = parentPath
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.edit", topologyEditSummary(originalName, editChanges)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "site.edit", topologyEditSummary(originalName, editChanges), source); err != nil {
 		return nil, err
 	}
 	return site, tx.Commit()
@@ -487,6 +498,11 @@ func (s *Store) ListNetworks(filter NetworkFilter) ([]*models.Network, error) {
 // DeleteSite 删除一个地点。仍有下级地点、机器或物理局域网指向它时列出具
 // 体对象并拒绝。
 func (s *Store) DeleteSite(ref string) error {
+	return s.DeleteSiteWithSource(ref, WriteSource{})
+}
+
+// DeleteSiteWithSource 与 DeleteSite 相同，并把来源写入审计行。
+func (s *Store) DeleteSiteWithSource(ref string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
@@ -528,7 +544,8 @@ func (s *Store) DeleteSite(ref string) error {
 			"还有物理局域网覆盖这个地点：%s；请先删除或改覆盖地点", strings.Join(networkNames, "、")))
 	}
 	if len(blockers) > 0 {
-		return fmt.Errorf("地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；"))
+		return &TopologyValidationError{Message: fmt.Sprintf(
+			"地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；"))}
 	}
 	sitePath, err := sitePathTx(tx, site.ID)
 	if err != nil {
@@ -543,7 +560,7 @@ func (s *Store) DeleteSite(ref string) error {
 	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, site.ID); err != nil {
 		return err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.rm", map[string]any{"name": sitePath}); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "site.rm", map[string]any{"name": sitePath}, source); err != nil {
 		return err
 	}
 	return tx.Commit()

@@ -93,6 +93,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.registerShareRoutes()
 	h.registerSoftwareInventoryRoutes()
 	h.registerOpsRoutes()
+	h.registerMoreRoutes()
 	return h, h, nil
 }
 

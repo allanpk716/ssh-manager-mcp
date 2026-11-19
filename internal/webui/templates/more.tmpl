@@ -1,0 +1,98 @@
+{{define "content"}}
+<section class="more-menu">
+<h1>更多</h1>
+
+{{if or .Caps.ShowSoftwareInventoryArea .Caps.ShowTopologyArea}}
+<section class="menu-group" aria-labelledby="more-assets">
+<h2 id="more-assets">资产</h2>
+<div class="menu-card">
+{{if .Caps.ShowSoftwareInventoryArea}}
+<a class="menu-row" href="/ui/software-inventory/">
+<span class="menu-title">软件清单</span>
+{{if .More.SoftwareInventorySummary}}<span class="menu-summary">{{.More.SoftwareInventorySummary}}</span>{{end}}
+</a>
+{{end}}
+{{if .Caps.ShowTopologyArea}}
+<a class="menu-row" href="/ui/more/locations-networks/">
+<span class="menu-title">地点与网络</span>
+{{if .More.LocationsNetworksSummary}}<span class="menu-summary">{{.More.LocationsNetworksSummary}}</span>{{end}}
+</a>
+<a class="menu-row" href="/ui/topology/">
+<span class="menu-title">网络拓扑图</span>
+<span class="menu-summary">{{.More.TopologySummary}}</span>
+</a>
+{{end}}
+</div>
+</section>
+{{end}}
+
+{{if .Caps.ShowOpsArea}}
+<section class="menu-group" aria-labelledby="more-operations">
+<h2 id="more-operations">运维</h2>
+<div class="menu-card">
+{{if .Caps.CanManageBackups}}
+<a class="menu-row" href="/ui/ops/backup">
+<span class="menu-title">备份</span>
+{{if .More.BackupSummary}}<span class="menu-summary">{{.More.BackupSummary}}</span>{{end}}
+</a>
+{{end}}
+{{if .Caps.CanUpgradeBinary}}
+<a class="menu-row" href="/ui/ops/update">
+<span class="menu-title">升级</span>
+</a>
+{{end}}
+{{if .Caps.CanManageSettings}}
+<a class="menu-row" href="/ui/ops/settings">
+<span class="menu-title">设置</span>
+</a>
+{{end}}
+{{if .Caps.CanQueryVaultAudit}}
+<a class="menu-row" href="/ui/ops/audit">
+<span class="menu-title">审计日志</span>
+</a>
+{{else if .Caps.CanQueryClientAudit}}
+<a class="menu-row" href="/ui/ops/client-audit">
+<span class="menu-title">客户端本机审计</span>
+</a>
+{{end}}
+</div>
+</section>
+{{end}}
+
+{{if .Caps.CanManageProjects}}
+<section class="menu-group" aria-labelledby="more-advanced">
+<h2 id="more-advanced">高级</h2>
+<div class="menu-card">
+<a class="menu-row" href="/ui/ops/access-tokens">
+<span class="menu-copy"><span class="menu-title">MCP 访问令牌</span>
+<span class="menu-sub">给不经配对、直接调用 sshmgr mcp 的程序用</span></span>
+</a>
+{{if .Caps.HasPairingAndDeviceCodes}}
+<a class="menu-row" href="/ui/ops/clients/new">
+<span class="menu-title">手动添加客户端</span>
+</a>
+{{end}}
+</div>
+</section>
+{{end}}
+
+{{if and .Caps.ShowAuthorityActions .Authenticated}}
+<section class="menu-group" aria-labelledby="more-account">
+<h2 id="more-account">账号</h2>
+<div class="menu-card">
+<a class="menu-row" href="/ui/password">
+<span class="menu-title">修改管理员口令</span>
+</a>
+<form class="menu-row-form" method="post" action="/ui/logout">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button class="menu-row" type="submit"><span class="menu-title">注销</span></button>
+</form>
+<form class="menu-row-form" method="post" action="/ui/logout-all">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button class="menu-row danger-row" type="submit"><span class="menu-title">注销全部会话</span></button>
+</form>
+</div>
+</section>
+{{end}}
+</section>
+{{end}}

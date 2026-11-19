@@ -1,0 +1,93 @@
+{{define "content"}}
+<section class="locations-networks">
+<div class="subpage-header">
+<a class="button-link" href="/ui/more/">返回更多</a>
+<h1>地点与网络</h1>
+{{if .LocationsNetworks.CanWrite}}
+<div class="header-actions-row">
+<a class="button-link" href="/ui/more/locations/new">新建地点</a>
+<a class="button-link" href="/ui/more/networks/new?type=physical">新建物理局域网</a>
+<a class="button-link" href="/ui/more/networks/new?type=virtual">新建虚拟局域网</a>
+</div>
+{{end}}
+</div>
+{{if .LocationsNetworks.Notice}}<p class="form-success">{{.LocationsNetworks.Notice}}</p>{{end}}
+<nav class="segmented" aria-label="地点与网络分类">
+<a class="segment{{if eq .LocationsNetworks.Tab "locations"}} active{{end}}" href="/ui/more/locations-networks/">地点</a>
+<a class="segment{{if eq .LocationsNetworks.Tab "networks"}} active{{end}}" href="/ui/more/locations-networks/?tab=networks">网络</a>
+</nav>
+
+{{if eq .LocationsNetworks.Tab "locations"}}
+<section aria-label="地点树">
+<p class="list-meta">{{.LocationsNetworks.SiteCount}} 个地点 · 点地点展开下级与机器</p>
+{{if .LocationsNetworks.CanWrite}}
+<div class="other-device-entry">
+<p>不跑 SSH 的机器（交换机、路由器、NAS 等）在这里登记。</p>
+<a class="button-link" href="/ui/devices/new">登记不跑 SSH 的机器</a>
+</div>
+{{end}}
+<div class="tree-card">
+{{range .LocationsNetworks.Roots}}{{template "locationTreeNode" .}}{{else}}<p class="empty-text">还没有地点。</p>{{end}}
+</div>
+</section>
+{{else}}
+<section aria-label="网络列表">
+<p class="list-meta">{{.LocationsNetworks.NetworkCount}} 个网络 · 点一行查看字段{{if .LocationsNetworks.CanWrite}}，点编辑修改{{end}}</p>
+<h2>物理局域网</h2>
+<div class="network-card">
+{{range .LocationsNetworks.PhysicalNetworks}}{{template "networkRow" .}}{{else}}<p class="empty-text">还没有物理局域网。</p>{{end}}
+</div>
+<h2>虚拟局域网</h2>
+<div class="network-card">
+{{range .LocationsNetworks.VirtualNetworks}}{{template "networkRow" .}}{{else}}<p class="empty-text">还没有虚拟局域网。</p>{{end}}
+</div>
+<p class="form-help">一台机器可有多个地址；sshmgr 连接时会自动挑最合适的地址。</p>
+</section>
+{{end}}
+</section>
+{{end}}
+
+{{define "locationTreeNode"}}
+<details class="tree-node" open>
+<summary>
+<span class="location-name">{{.Site.Name}}</span>
+<span class="location-stats">
+{{.MachineCount}} 台机器{{if .PhysicalNetworkNames}} · {{len .PhysicalNetworkNames}} 个物理网{{end}}{{if and .Children .DescendantMachineCount}} · 下级共 {{.DescendantMachineCount}} 台机器{{end}}
+</span>
+</summary>
+<div class="tree-node-body">
+<p class="location-path">完整路径：{{.Site.LocationPath}}</p>
+<div class="machine-panel">
+<span class="machine-label">机器</span>
+{{if .MachineNames}}<div class="machine-items">{{range .MachineNames}}<span class="machine-chip">{{.}}</span>{{end}}</div>{{else}}<span class="empty-text">没有直接放在此地点的机器。</span>{{end}}
+</div>
+{{if .DeleteReason}}<p class="operation-refusal">{{.DeleteReason}}</p>{{end}}
+{{if .CanWrite}}
+<div class="node-actions">
+<a class="button-link" href="/ui/more/locations/new?parent={{.Site.LocationPath | urlquery}}">新建子地点</a>
+<a class="button-link" href="/ui/more/locations/rename?site={{.Site.LocationPath | urlquery}}">改名</a>
+<a class="button-link" href="/ui/more/locations/move?site={{.Site.LocationPath | urlquery}}">移动到其他上级</a>
+{{if .DeleteReason}}<span class="disabled-link" title="{{.DeleteReason}}">删除</span>{{else}}<a class="button-link danger-link" href="/ui/more/locations/delete?site={{.Site.LocationPath | urlquery}}">删除</a>{{end}}
+</div>
+{{end}}
+<div class="tree-children">{{range .Children}}{{template "locationTreeNode" .}}{{end}}</div>
+</div>
+</details>
+{{end}}
+
+{{define "networkRow"}}
+<article class="network-row">
+<div class="network-title-row">
+<h3>{{.Network.Name}}</h3>
+{{if .CanWrite}}<a class="button-link" href="/ui/more/networks/edit?name={{.Network.Name | urlquery}}">编辑</a>{{end}}
+</div>
+<dl class="field-list">
+<dt>网络类型</dt><dd>{{if eq .Network.Type "physical"}}物理局域网{{else}}虚拟局域网{{end}}</dd>
+{{if eq .Network.Type "physical"}}<dt>覆盖地点</dt><dd>{{if .Network.LocationPath}}{{.Network.LocationPath}}{{else}}未登记{{end}}</dd>{{end}}
+<dt>网段</dt><dd>{{if .Network.NetworkRange}}{{.Network.NetworkRange}}{{else}}未填写{{end}}</dd>
+<dt>标称带宽</dt><dd>{{if .Network.BandwidthMbps}}{{.Network.BandwidthMbps}} Mbps{{else}}未填写{{end}}</dd>
+<dt>按流量计费</dt><dd>{{if .Network.Metered}}是{{else}}否{{end}}</dd>
+<dt>机器数量</dt><dd>{{.MachineCount}} 台</dd>
+</dl>
+</article>
+{{end}}

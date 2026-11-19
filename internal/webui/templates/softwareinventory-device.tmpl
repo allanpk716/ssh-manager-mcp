@@ -29,38 +29,43 @@
 {{end}}
 
 <h2>变化历史</h2>
-<table>
-<thead><tr><th scope="col">时间</th><th scope="col">变化</th><th scope="col">类别</th><th scope="col">名称</th><th scope="col">旧值</th><th scope="col">新值</th></tr></thead>
-<tbody>
-{{range .SoftwareInventoryDevice.History}}<tr>
-<td>{{formatTime .OccurredAt}}</td><td>{{.KindLabel}}</td><td>{{.CategoryLabel}}</td><td>{{.Name}}</td><td>{{if .OldValue}}{{.OldValue}}{{else}}-{{end}}</td><td>{{if .NewValue}}{{.NewValue}}{{else}}-{{end}}</td>
-</tr>{{else}}<tr><td colspan="6">暂无变化历史。</td></tr>{{end}}
-</tbody>
-</table>
+<ul class="record-cards">
+{{range .SoftwareInventoryDevice.History}}
+<li class="record-card">
+<h3>{{.KindLabel}} · {{.Name}}</h3>
+<dl class="field-list">
+<dt>时间</dt><dd>{{formatTime .OccurredAt}}</dd>
+<dt>类别</dt><dd>{{.CategoryLabel}}</dd>
+<dt>旧值</dt><dd>{{if .OldValue}}{{.OldValue}}{{else}}-{{end}}</dd>
+<dt>新值</dt><dd>{{if .NewValue}}{{.NewValue}}{{else}}-{{end}}</dd>
+</dl>
+</li>
+{{else}}<li class="empty-text">暂无变化历史。</li>{{end}}
+</ul>
 </section>
 {{end}}
 
 {{define "softwareInventoryItems"}}
-<table>
-<thead><tr><th scope="col">名称</th><th scope="col">精确版本</th><th scope="col">来源</th><th scope="col">采集或确认时间</th><th scope="col">监听端口与暴露级别</th><th scope="col">其他信息</th></tr></thead>
-<tbody>
-{{range .}}<tr>
-<td>{{.Name}}</td>
-<td>{{.Version}}</td>
-<td>{{.Source}}</td>
-<td>{{if .CollectedAt}}采集：{{formatOptionalTime .CollectedAt}}{{else if .ConfirmedAt}}确认：{{formatOptionalTime .ConfirmedAt}}{{else}}-{{end}}</td>
-<td>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</td>
-<td>
-{{if .BelongsTo}}<div>所属：{{.BelongsTo}}</div>{{end}}
-{{if .ContainerTag}}<div>标签：{{.ContainerTag}}</div>{{end}}
-{{if .ContainerDigest}}<div>摘要：{{.ContainerDigest}}</div>{{end}}
-{{if .CategoryLabel}}<div>类别：{{.CategoryLabel}}</div>{{end}}
-{{if eq .CategoryLabel "容器镜像"}}<div>运行状态：{{if eq .Source "声明"}}未确认{{else if .ContainerRunning}}运行中{{else}}未运行{{end}}</div>{{end}}
-{{if .PackageURL}}<div>软件包统一地址：{{.PackageURL}}</div>{{end}}
-{{if .CPE}}<div>常见平台枚举：{{.CPE}}</div>{{end}}
-{{if .Note}}<div>备注：{{.Note}}</div>{{end}}
-</td>
-</tr>{{else}}<tr><td colspan="6">暂无软件条目。</td></tr>{{end}}
-</tbody>
-</table>
+<ul class="record-cards">
+{{range .}}
+<li class="record-card">
+<h3>{{.Name}}</h3>
+<dl class="field-list">
+<dt>名称</dt><dd>{{.Name}}</dd>
+<dt>精确版本</dt><dd>{{.Version}}</dd>
+<dt>来源</dt><dd>{{.Source}}</dd>
+<dt>采集或确认时间</dt><dd>{{if .CollectedAt}}采集：{{formatOptionalTime .CollectedAt}}{{else if .ConfirmedAt}}确认：{{formatOptionalTime .ConfirmedAt}}{{else}}-{{end}}</dd>
+<dt>监听端口与暴露级别</dt><dd>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
+{{if .BelongsTo}}<dt>所属</dt><dd>{{.BelongsTo}}</dd>{{end}}
+{{if .ContainerTag}}<dt>标签</dt><dd>{{.ContainerTag}}</dd>{{end}}
+{{if .ContainerDigest}}<dt>摘要</dt><dd>{{.ContainerDigest}}</dd>{{end}}
+{{if .CategoryLabel}}<dt>类别</dt><dd>{{.CategoryLabel}}</dd>{{end}}
+{{if eq .CategoryLabel "容器镜像"}}<dt>运行状态</dt><dd>{{if eq .Source "声明"}}未确认{{else if .ContainerRunning}}运行中{{else}}未运行{{end}}</dd>{{end}}
+{{if .PackageURL}}<dt>软件包统一地址</dt><dd>{{.PackageURL}}</dd>{{end}}
+{{if .CPE}}<dt>常见平台枚举</dt><dd>{{.CPE}}</dd>{{end}}
+{{if .Note}}<dt>备注</dt><dd>{{.Note}}</dd>{{end}}
+</dl>
+</li>
+{{else}}<li class="empty-text">暂无软件条目。</li>{{end}}
+</ul>
 {{end}}

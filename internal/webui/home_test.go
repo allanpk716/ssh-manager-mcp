@@ -62,7 +62,7 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		`href="/ui/servers/"`,
 		`href="/ui/clients/"`,
 		`href="/ui/access/profiles"`,
-		`href="/ui/ops/"`,
+		`href="/ui/more/"`,
 		"主页", "服务器", "客户端", "授权", "更多",
 		`href="/ui/add"`,
 		"1 个配对请求待审批",

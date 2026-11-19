@@ -435,10 +435,16 @@ type stubTopologyWriter struct {
 	moveCalls         [][4]string
 	removePhysical    []string
 	networkAddCalls   [][2]string
+	locationAdds      []stubLocationAdd
+	locationEdits     []stubLocationEdit
+	locationDeletes   []string
+	networkAdds       []TopologyNetworkInput
+	networkEdits      []stubNetworkEdit
 	sources           []TopologyWriteSource
 	addMessage        string
 	nextNotFoundError bool
 	nextPlainError    error
+	nextInvalid       *TopologyInvalidInputError
 
 	saveView    string
 	saveLayout  TopologyLayoutSave
@@ -502,6 +508,50 @@ func (w *stubTopologyWriter) AddPhysicalNetwork(
 	return "已登记网络", w.nextError()
 }
 
+type stubLocationAdd struct{ name, parent, note string }
+
+type stubLocationEdit struct {
+	ref    string
+	name   *string
+	parent *string
+	note   *string
+}
+
+type stubNetworkEdit struct {
+	name    string
+	changes TopologyNetworkChanges
+}
+
+func (w *stubTopologyWriter) AddLocation(name, parent, note string, source TopologyWriteSource) (string, error) {
+	w.locationAdds = append(w.locationAdds, stubLocationAdd{name: name, parent: parent, note: note})
+	w.sources = append(w.sources, source)
+	return "已新建地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditLocation(ref string, changes TopologyLocationChanges, source TopologyWriteSource) (string, error) {
+	w.locationEdits = append(w.locationEdits, stubLocationEdit{ref: ref, name: changes.Name, parent: changes.Parent, note: changes.Note})
+	w.sources = append(w.sources, source)
+	return "已保存地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) DeleteLocation(ref string, source TopologyWriteSource) (string, error) {
+	w.locationDeletes = append(w.locationDeletes, ref)
+	w.sources = append(w.sources, source)
+	return "已删除地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) AddManagedNetwork(input TopologyNetworkInput, source TopologyWriteSource) (string, error) {
+	w.networkAdds = append(w.networkAdds, input)
+	w.sources = append(w.sources, source)
+	return "已保存网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditManagedNetwork(name string, changes TopologyNetworkChanges, source TopologyWriteSource) (string, error) {
+	w.networkEdits = append(w.networkEdits, stubNetworkEdit{name: name, changes: changes})
+	w.sources = append(w.sources, source)
+	return "已保存网络", w.nextError()
+}
+
 func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {
 	w.saveCalls++
 	w.saveView, w.saveLayout, w.saveSource = save.ViewKey, save, source
@@ -515,6 +565,11 @@ func (w *stubTopologyWriter) ResetTopologyLayout(view string, source TopologyWri
 }
 
 func (w *stubTopologyWriter) nextError() error {
+	if w.nextInvalid != nil {
+		err := w.nextInvalid
+		w.nextInvalid = nil
+		return err
+	}
 	if w.nextNotFoundError {
 		w.nextNotFoundError = false
 		return &TopologyNameNotFoundError{Message: "设备不存在：没有这台设备"}
