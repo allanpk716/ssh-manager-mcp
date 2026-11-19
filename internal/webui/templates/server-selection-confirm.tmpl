@@ -12,6 +12,8 @@
 {{template "authorization-client-impact" .}}
 <form method="post" action="/ui/access/profiles/{{.Authorization.Confirm.ProfileID}}/grants" class="confirm-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="{{.Authorization.Confirm.ReturnPath}}">
+{{if .Authorization.Confirm.Mode}}<input type="hidden" name="mode" value="{{.Authorization.Confirm.Mode}}">{{end}}
 {{range .Authorization.Confirm.ExpectedIDs}}<input type="hidden" name="expected" value="{{.}}">{{end}}
 {{range .Authorization.Confirm.DesiredIDs}}<input type="hidden" name="server" value="{{.}}">{{end}}
 {{if or .Authorization.Confirm.Added .Authorization.Confirm.Removed}}<button type="submit">确认保存授权</button>{{end}}

@@ -119,6 +119,8 @@
         selectedIDs().forEach(function (id) {
           target.searchParams.append("server", id);
         });
+        target.searchParams.set("mode", "add");
+        target.searchParams.set("return_to", "/ui/servers/");
         window.location.href = target.pathname + target.search;
       });
     });

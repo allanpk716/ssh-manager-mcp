@@ -37,16 +37,12 @@ type stubAccessStore struct {
 	serverProfileApplyConflict *ServerProfileAuthorizationConflict
 	serverProfileApplyErr      error
 
-	deviceCodes           []AccessDeviceCodeSummary
 	addDeviceName         string
 	addDeviceProfile      string
 	addDeviceURL          string
 	addDeviceSrc          AccessWriteSource
 	addDeviceResult       AccessDeviceCodeResult
 	addDeviceErr          error
-	revokeDeviceID        string
-	revokeDeviceSrc       AccessWriteSource
-	revokeDeviceErr       error
 	clients               []ClientSummary
 	client                *ClientDetail
 	clientDetailID        string
@@ -103,25 +99,12 @@ func (s *stubAccessStore) DeleteProfile(id string, source AccessWriteSource) (*A
 	return s.deleteInUse, s.deleteErr
 }
 
-func (s *stubAccessStore) ListDeviceCodes() ([]AccessDeviceCodeSummary, error) {
-	if s.deviceCodes == nil {
-		return nil, nil
-	}
-	return s.deviceCodes, nil
-}
-
 func (s *stubAccessStore) AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error) {
 	s.addDeviceName = name
 	s.addDeviceProfile = profile
 	s.addDeviceURL = serveURL
 	s.addDeviceSrc = source
 	return s.addDeviceResult, s.addDeviceErr
-}
-
-func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) error {
-	s.revokeDeviceID = id
-	s.revokeDeviceSrc = source
-	return s.revokeDeviceErr
 }
 
 func (s stubAccessStore) ListClients() ([]ClientSummary, error) {
@@ -656,11 +639,14 @@ func TestAuthorityGrantAdditionRequiresReverifyAndPreservesSelection(t *testing.
 
 	grantsPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/authorization/profiles/profile-1/servers", cookie)
 	grantsBody := readResponseBody(t, grantsPage)
-	resumePath := "/ui/authorization/profiles/profile-1/servers?server=server-db"
+	resumePath := "/ui/authorization/profiles/profile-1/servers?" + url.Values{
+		"server": {"server-web", "server-db"}, "mode": {"add"}, "return_to": {"/ui/servers/"},
+	}.Encode()
 	csrfToken := hiddenInputValue(t, grantsBody, "csrf_token")
 
 	rejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
 		"csrf_token": {csrfToken}, "expected": {"server-web"}, "server": {"server-db"},
+		"mode": {"add"}, "return_to": {"/ui/servers/"},
 	}, cookie)
 	rejectedBody := readResponseBody(t, rejected)
 	rejectedReverifyLink := `/ui/reverify?next=` + url.QueryEscape(resumePath)
@@ -685,17 +671,23 @@ func TestAuthorityGrantAdditionRequiresReverifyAndPreservesSelection(t *testing.
 	resumed := authorityGet(t, handler, "127.0.0.1:7879", resumePath, cookie)
 	resumedBody := readResponseBody(t, resumed)
 	if !strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-db" checked>`) ||
-		!strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-web">`) {
-		t.Fatalf("重新验证后应保留提交时选择的服务器：\n%s", resumedBody)
+		!strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-web" checked>`) ||
+		!strings.Contains(resumedBody, "新增 1 台、移除 0 台") {
+		t.Fatalf("重新验证后应按追加模式保留原服务器：\n%s", resumedBody)
 	}
 	resumedCSRF := hiddenInputValue(t, resumedBody, "csrf_token")
 	store.grantResult = AccessGrantChange{Added: []AccessServerRef{{ID: "server-db", Name: "db-1"}}}
 	accepted := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
 		"csrf_token": {resumedCSRF}, "expected": {"server-web"}, "server": {"server-db"},
+		"mode": {"add"}, "return_to": {"/ui/servers/"},
 	}, cookie)
 	acceptedBody := readResponseBody(t, accepted)
 	if accepted.StatusCode != http.StatusSeeOther || store.grantProfileID != "profile-1" {
 		t.Fatalf("重新验证后应提交授权，状态码=%d 调用=%q 页面：\n%s", accepted.StatusCode, store.grantProfileID, acceptedBody)
+	}
+	if strings.Join(store.grantDesired, ",") != "server-web,server-db" || accepted.Header.Get("Location") != "/ui/servers/" {
+		t.Fatalf("追加模式重新验证后应保存并集并回服务器列表，desired=%v Location=%q",
+			store.grantDesired, accepted.Header.Get("Location"))
 	}
 }
 

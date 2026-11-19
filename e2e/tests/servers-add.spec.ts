@@ -76,12 +76,17 @@ test("手机服务器列表多选后批量加入 profile", async ({ page, isMobi
     await page.getByRole("link", { name: /运维/ }).click();
 
     await expect(page.getByRole("heading", { name: "调整 运维" })).toBeVisible();
+    await expect(page).toHaveURL(/mode=add/);
+    await expect(page).toHaveURL(/return_to=/);
     await expect(page.locator(".selection-row", { hasText: "db-1" }).locator("input")).toBeChecked();
     await expect(page.locator(".selection-row", { hasText: "old-1" }).locator("input")).toBeChecked();
+    await expect(page.locator(".selection-row", { hasText: "web-1" }).locator("input")).toBeChecked();
+    await expect(page.getByText("新增 1 台、移除 0 台")).toBeVisible();
     await page.screenshot({ path: `${screenshotDir}/mobile-batch-profile-selection.png`, fullPage: true });
     await page.getByRole("button", { name: "下一步" }).click();
     await page.getByRole("button", { name: "确认保存授权" }).click();
-    await expect(page.getByText(/已保存/)).toBeVisible({ timeout: 10_000 });
+    await expect(page).toHaveURL(/\/ui\/servers\/?/);
+    await expect(page.getByRole("heading", { name: "服务器" })).toBeVisible({ timeout: 10_000 });
     await page.screenshot({ path: `${screenshotDir}/mobile-batch-profile-result.png`, fullPage: true });
   } finally {
     await ui.close();

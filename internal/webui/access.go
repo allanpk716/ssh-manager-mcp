@@ -219,9 +219,7 @@ type AccessStore interface {
 	EnableProject(id string, source AccessWriteSource) error
 	RevokeProject(id string, source AccessWriteSource) error
 	DeleteProject(id string, source AccessWriteSource) error
-	ListDeviceCodes() ([]AccessDeviceCodeSummary, error)
 	AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error)
-	RevokeDeviceCode(id string, source AccessWriteSource) error
 	ListClients() ([]ClientSummary, error)
 	ClientDetail(id string) (*ClientDetail, error)
 	PreviewClientProfileChange(id, profileID string) (*ClientProfilePreview, error)
@@ -250,7 +248,6 @@ const (
 	serverProfilePreviewPath    = "/ui/servers/profile-authorization/preview"
 	serverProfileConfirmPath    = "/ui/servers/profile-authorization/confirm"
 	accessDeviceCodesPath       = "/ui/access/device-codes"
-	accessDeviceCodesPrefix     = "/ui/access/device-codes/"
 	clientPairingListPath       = "/ui/clients/pairing/list"
 	clientPairingPrefix         = "/ui/clients/pairing/"
 	legacyAccessPairingPath     = "/ui/access/pairing"
@@ -414,8 +411,12 @@ func (h *handler) handleAccessProfileGrantPost(w http.ResponseWriter, r *http.Re
 	}
 	expected := r.PostForm["expected"]
 	desired := r.PostForm["server"]
+	mode := serverSelectionMode(r.PostFormValue("mode"))
+	desired = mergeServerSelectionDesired(accessServerIDs(profile.Servers), desired, mode)
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath(grantResumePath(profileID, desired)), http.StatusSeeOther)
+		http.Redirect(w, r, reverifyPath(grantResumePath(
+			profileID, desired, mode, r.PostFormValue("return_to"),
+		)), http.StatusSeeOther)
 		return
 	}
 	change, conflict, err := h.cfg.Access.SetServerGrants(
@@ -435,7 +436,7 @@ func (h *handler) handleAccessProfileGrantPost(w http.ResponseWriter, r *http.Re
 	h.setAccessFlash(r, &AccessFlash{
 		ProfileName: profile.Name, Added: change.Added, Removed: change.Removed,
 	})
-	http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
+	http.Redirect(w, r, authorizationReturnPath(r.PostFormValue("return_to"), authorizationResourceKindProfile), http.StatusSeeOther)
 }
 
 func grantAddsServer(expected, desired []string) bool {
@@ -451,10 +452,16 @@ func grantAddsServer(expected, desired []string) bool {
 	return false
 }
 
-func grantResumePath(profileID string, desired []string) string {
+func grantResumePath(profileID string, desired []string, mode, returnTo string) string {
 	query := url.Values{}
 	for _, id := range desired {
 		query.Add("server", id)
+	}
+	if mode != "" {
+		query.Set("mode", mode)
+	}
+	if returnTo != "" {
+		query.Set("return_to", returnTo)
 	}
 	return authorizationProfilesPath + "/" + profileID + authorizationServersSuffix + "?" + query.Encode()
 }

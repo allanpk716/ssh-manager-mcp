@@ -1,13 +1,14 @@
 {{define "server-selection"}}
 <section class="server-selection-page" data-server-selection>
-<p><a href="{{.Authorization.Selection.Resource.CancelPath}}">返回详情</a></p>
+<p><a href="{{.Authorization.Selection.ReturnPath}}">返回</a></p>
 <h1>调整 {{.Authorization.Selection.Resource.Name}} 的服务器</h1>
 <p class="page-note">{{.Authorization.Selection.Resource.KindLabel}}当前授权 {{len .Authorization.Selection.Resource.CurrentServerIDs}} 台。搜索与筛选只影响当前可见行，不会丢失未显示服务器的勾选。</p>
 <form method="post" action="/ui/authorization/selection/preview" class="server-selection-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="resource_kind" value="{{.Authorization.Selection.Resource.Kind}}">
 <input type="hidden" name="resource_id" value="{{.Authorization.Selection.Resource.ID}}">
-<input type="hidden" name="return_to" value="{{.Authorization.Selection.Resource.CancelPath}}">
+<input type="hidden" name="return_to" value="{{.Authorization.Selection.ReturnPath}}">
+{{if .Authorization.Selection.Resource.SelectionMode}}<input type="hidden" name="mode" value="{{.Authorization.Selection.Resource.SelectionMode}}">{{end}}
 {{range .Authorization.Selection.Resource.CurrentServerIDs}}<input type="hidden" name="expected" value="{{.}}">{{end}}
 <div class="server-selection-tools">
 <div class="form-field"><label for="server-selection-search">搜索服务器</label>

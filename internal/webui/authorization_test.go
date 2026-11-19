@@ -313,6 +313,127 @@ func TestServerSelectionConfirmReusesSecretAuthorizationPreview(t *testing.T) {
 	}
 }
 
+func TestServerSelectionAddModeKeepsCurrentServers(t *testing.T) {
+	handler, access, _, cookie := newAuthorizationTestHandler(t)
+
+	selection := doGetWithCookie(t, handler, cookie,
+		"/ui/authorization/profiles/profile-1/servers?server=server-db&mode=add&return_to=%2Fui%2Fservers%2F")
+	selectionBody := readResponseBody(t, selection)
+	if selection.StatusCode != http.StatusOK {
+		t.Fatalf("Profile 追加勾选页状态码=%d 页面：\n%s", selection.StatusCode, selectionBody)
+	}
+	for _, want := range []string{
+		"新增 1 台、移除 0 台",
+		`name="server" value="server-web" checked`,
+		`name="server" value="server-db" checked`,
+		`name="mode" value="add"`,
+		`name="return_to" value="/ui/servers/"`,
+	} {
+		if !strings.Contains(selectionBody, want) {
+			t.Fatalf("追加勾选页应包含 %q：\n%s", want, selectionBody)
+		}
+	}
+	csrf := hiddenInputValue(t, selectionBody, "csrf_token")
+
+	preview := postStandaloneForm(t, handler, cookie, "/ui/authorization/selection/preview", url.Values{
+		"csrf_token":    {csrf},
+		"resource_kind": {"profile"},
+		"resource_id":   {"profile-1"},
+		"mode":          {"add"},
+		"return_to":     {"/ui/servers/"},
+		"server":        {"server-db"},
+	})
+	previewBody := readResponseBody(t, preview)
+	if preview.StatusCode != http.StatusOK {
+		t.Fatalf("Profile 追加确认页状态码=%d 页面：\n%s", preview.StatusCode, previewBody)
+	}
+	for _, want := range []string{"新增 1 台，移除 0 台", "db-1", `name="server" value="server-web"`, `name="server" value="server-db"`} {
+		if !strings.Contains(previewBody, want) {
+			t.Fatalf("Profile 追加确认页应包含 %q：\n%s", want, previewBody)
+		}
+	}
+	if strings.Contains(previewBody, "移除：web-1") {
+		t.Fatalf("追加模式不得把原有授权列为移除：\n%s", previewBody)
+	}
+	if !strings.Contains(previewBody, `href="/ui/servers/"`) {
+		t.Fatalf("追加确认页应能返回服务器列表：\n%s", previewBody)
+	}
+
+	confirmed := postStandaloneForm(t, handler, cookie, "/ui/access/profiles/profile-1/grants", url.Values{
+		"csrf_token": {csrf},
+		"expected":   {"server-web"},
+		"server":     {"server-web", "server-db"},
+		"return_to":  {"/ui/servers/"},
+	})
+	confirmedBody := readResponseBody(t, confirmed)
+	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/servers/" {
+		t.Fatalf("追加保存后应回到服务器列表，状态码=%d 跳转=%q 页面：\n%s",
+			confirmed.StatusCode, confirmed.Header.Get("Location"), confirmedBody)
+	}
+	if strings.Join(access.grantExpected, ",") != "server-web" ||
+		strings.Join(access.grantDesired, ",") != "server-web,server-db" {
+		t.Fatalf("追加保存应保留原服务器并加入新服务器，实际 expected=%v desired=%v",
+			access.grantExpected, access.grantDesired)
+	}
+}
+
+func TestServerSelectionAddModeKeepsSecretAndShareTargets(t *testing.T) {
+	handler, _, writer, cookie := newAuthorizationTestHandler(t)
+
+	cases := []struct {
+		name         string
+		kind         string
+		id           string
+		selectionURL string
+	}{
+		{
+			name: "机密项", kind: "secret", id: "secret-1",
+			selectionURL: "/ui/authorization/secrets/secret-1/servers",
+		},
+		{
+			name: "共享存储", kind: "share", id: "share-1",
+			selectionURL: "/ui/authorization/shares/share-1/servers",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			selection := doGetWithCookie(t, handler, cookie,
+				testCase.selectionURL+"?server=server-db&mode=add&return_to=%2Fui%2Fservers%2F")
+			selectionBody := readResponseBody(t, selection)
+			if selection.StatusCode != http.StatusOK {
+				t.Fatalf("追加勾选页状态码=%d 页面：\n%s", selection.StatusCode, selectionBody)
+			}
+			if !strings.Contains(selectionBody, "新增 1 台、移除 0 台") {
+				t.Fatalf("追加勾选页不应产生移除：\n%s", selectionBody)
+			}
+			csrf := hiddenInputValue(t, selectionBody, "csrf_token")
+			writer.target = nil
+			preview := postStandaloneForm(t, handler, cookie, "/ui/authorization/selection/preview", url.Values{
+				"csrf_token":    {csrf},
+				"resource_kind": {testCase.kind},
+				"resource_id":   {testCase.id},
+				"mode":          {"add"},
+				"return_to":     {"/ui/servers/"},
+				"server":        {"server-db"},
+			})
+			previewBody := readResponseBody(t, preview)
+			if preview.StatusCode != http.StatusOK {
+				t.Fatalf("追加确认页状态码=%d 页面：\n%s", preview.StatusCode, previewBody)
+			}
+			allowed := map[string]bool{}
+			for _, cell := range writer.target {
+				allowed[cell.ServerID] = cell.Allow
+			}
+			if !allowed["server-web"] || !allowed["server-db"] {
+				t.Fatalf("追加模式应保留原有服务器并允许新服务器，目标授权格：%+v", writer.target)
+			}
+			if !strings.Contains(previewBody, `href="/ui/servers/"`) {
+				t.Fatalf("追加确认页应能返回服务器列表：\n%s", previewBody)
+			}
+		})
+	}
+}
+
 func TestProfileServerSelectionConfirmAndApply(t *testing.T) {
 	handler, access, _, cookie := newAuthorizationTestHandler(t)
 	selection := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles/profile-1/servers")
