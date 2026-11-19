@@ -46,21 +46,26 @@ const (
 	TopologyProbeOriginSelf = "self"
 )
 
-// TopologySite 是拓扑图里的一个站点，只携带只读呈现需要的字段。
+// TopologySite 是拓扑图里的一个地点，只携带只读呈现需要的字段。
+// LocationPath 是从根到该地点的完整路径，例如「公司 / 一厂区 / 3 号楼」。
 type TopologySite struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Note string `json:"note"`
+	ID           string `json:"id"`
+	ParentID     string `json:"parent_id,omitempty"`
+	Name         string `json:"name"`
+	LocationPath string `json:"location_path"`
+	Note         string `json:"note"`
 }
 
 // TopologyNetwork 是拓扑图里的一个网络。Type 是 physical（物理局域网）
-// 或 virtual（虚拟局域网）；物理局域网必须带所属站点。
+// 或 virtual（虚拟局域网）；物理局域网的 LocationPath 是它覆盖地点的完
+// 整路径。
 type TopologyNetwork struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Type          string `json:"type"`
 	SiteID        string `json:"site_id"`
 	SiteName      string `json:"site_name"`
+	LocationPath  string `json:"location_path,omitempty"`
 	Note          string `json:"note"`
 	NetworkRange  string `json:"network_range"`
 	BandwidthMbps int64  `json:"bandwidth_mbps"`
@@ -98,17 +103,31 @@ type TopologyCandidate struct {
 // TopologyDevice 是拓扑图上的一台设备。Kind 是 server（有关联服务器条
 // 目）、client（关联客户端实例）或 unmanaged（不受管设备）。
 type TopologyDevice struct {
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	Note           string                  `json:"note"`
-	Kind           string                  `json:"kind"`
-	ClientName     string                  `json:"client_name,omitempty"`
-	Servers        []TopologyDeviceServer  `json:"servers"`
-	SharedStorages []TopologySharedStorage `json:"shared_storages"`
-	Candidates     []TopologyCandidate     `json:"candidates"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Note         string `json:"note"`
+	Kind         string `json:"kind"`
+	ClientName   string `json:"client_name,omitempty"`
+	SiteID       string `json:"site_id,omitempty"`
+	LocationPath string `json:"location_path,omitempty"`
+	// LocationMismatches 非空时说明机器直接登记的地点不在某个物理局域
+	// 网覆盖的地点及其下级里；只是提示，不代表写入被拦截。
+	LocationMismatches []TopologyLocationMismatch `json:"location_mismatches,omitempty"`
+	Servers            []TopologyDeviceServer     `json:"servers"`
+	SharedStorages     []TopologySharedStorage    `json:"shared_storages"`
+	Candidates         []TopologyCandidate        `json:"candidates"`
 	// CandidateNotice 非空时说明没有共同网络候选，只能看兜底主机；文案
 	// 由数据来源生成，页面原样显示。
 	CandidateNotice string `json:"candidate_notice,omitempty"`
+}
+
+// TopologyLocationMismatch 描述一台机器的地点与一个物理局域网覆盖的地
+// 点不一致；两侧都写完整路径，页面原样展示。
+type TopologyLocationMismatch struct {
+	NetworkID           string `json:"network_id"`
+	NetworkName         string `json:"network_name"`
+	DeviceLocationPath  string `json:"device_location_path"`
+	NetworkLocationPath string `json:"network_location_path"`
 }
 
 // TopologyMembership 是一台设备在一个网络里的成员行；登记顺序沿用存储
@@ -158,6 +177,15 @@ type TopologyData struct {
 	LocalDevice                TopologyLocalDevice                 `json:"local_device"`
 }
 
+// TopologyServerMoveResult 是服务器条目改挂到另一台机器后的结果摘要；
+// AnchorCopyNotice 描述同机同端口兄弟条目主机密钥锚的复制事实。
+type TopologyServerMoveResult struct {
+	ServerName   string
+	FromDevice   string
+	ToDevice     string
+	AnchorNotice string
+}
+
 // TopologySource 是 Web UI 读取拓扑数据的唯一入口。instance 是客户端缓存
 // 实例名，空串表示默认实例；单机与权威端来源忽略它。
 type TopologySource interface {
@@ -185,6 +213,34 @@ type TopologyWriteSource struct {
 	RemoteAddress string
 }
 
+// TopologyLocationChanges 表示地点的一次部分更新；指针为空的字段保持
+// 不变，Parent 指向空字符串表示改为根地点。
+type TopologyLocationChanges struct {
+	Name   *string
+	Parent *string
+	Note   *string
+}
+
+// TopologyNetworkInput 是地点与网络页提交的一个新网络。Type 是 physical
+// 或 virtual；Site 是物理局域网覆盖地点的完整路径。
+type TopologyNetworkInput struct {
+	Name          string
+	Type          string
+	Site          string
+	NetworkRange  string
+	BandwidthMbps int64
+	Metered       bool
+}
+
+// TopologyNetworkChanges 表示网络的一次部分更新；类型登记后不可修改。
+type TopologyNetworkChanges struct {
+	Name          *string
+	Site          *string
+	NetworkRange  *string
+	BandwidthMbps *int64
+	Metered       *bool
+}
+
 // ErrTopologyLayoutInvalid 表示布局请求引用了不存在的实体或内容非法；处理
 // 器把它换算成面向浏览器的客户端错误。
 var ErrTopologyLayoutInvalid = errors.New("布局请求内容无效")
@@ -205,6 +261,19 @@ type TopologyWriter interface {
 	// ResetTopologyLayout 清空一个视图保存的全部坐标并写一条来源为 Web UI
 	// 的审计。
 	ResetTopologyLayout(view string, source TopologyWriteSource) error
+	// 地点与网络管理页的写入；实现必须复用存储层的地点树与网络函数，
+	// 保证成环、删除守卫、审计与快照修订号行为一致。
+	AddLocation(name, parent, note string, source TopologyWriteSource) (string, error)
+	EditLocation(ref string, changes TopologyLocationChanges, source TopologyWriteSource) (string, error)
+	DeleteLocation(ref string, source TopologyWriteSource) (string, error)
+	AddManagedNetwork(input TopologyNetworkInput, source TopologyWriteSource) (string, error)
+	EditManagedNetwork(name string, changes TopologyNetworkChanges, source TopologyWriteSource) (string, error)
+	// EditDeviceSite 修改一台机器直接登记的地点；实现必须复用存储层的设
+	// 备编辑函数，保证地点引用解析、审计与快照修订号一致。
+	EditDeviceSite(device, siteRef string, source TopologyWriteSource) (string, error)
+	// MoveServerToDevice 把服务器条目改挂到另一台机器，与命令行
+	// devices move-server 走同一个存储函数。
+	MoveServerToDevice(serverIdentifier, device string, source TopologyWriteSource) (TopologyServerMoveResult, error)
 }
 
 // registerTopologyRoutes 注册拓扑图页面与只读数据接口。没有拓扑来源的构
@@ -391,7 +460,7 @@ func (h *handler) handleTopologyWriteOperation(
 // handleTopologyMembershipAdd 把设备加入网络并登记地址。
 func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员新增接口只接受 POST 请求。",
+		methodNotAllowed: "地址新增接口只接受 POST 请求。",
 		missingFields:    "设备、网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
@@ -405,7 +474,7 @@ func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Req
 // handleTopologyMembershipEdit 修改设备在一个网络里的地址。
 func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员地址修改接口只接受 POST 请求。",
+		methodNotAllowed: "地址修改接口只接受 POST 请求。",
 		missingFields:    "设备、网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
@@ -419,7 +488,7 @@ func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Re
 // handleTopologyMembershipRemove 把设备移出一个网络。
 func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员退出接口只接受 POST 请求。",
+		methodNotAllowed: "地址退出接口只接受 POST 请求。",
 		missingFields:    "设备与网络都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != ""
@@ -434,7 +503,7 @@ func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.
 // 络并登记新地址；「同时加入」走新增接口，不经过这里。
 func (h *handler) handleTopologyMembershipMove(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员移动接口只接受 POST 请求。",
+		methodNotAllowed: "地址移动接口只接受 POST 请求。",
 		missingFields:    "设备、原网络、目标网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.FromNetwork != "" && request.ToNetwork != "" && request.Address != ""
@@ -464,7 +533,7 @@ func (h *handler) handleTopologyMembershipRemovePhysical(w http.ResponseWriter, 
 func (h *handler) handleTopologyNetworkAdd(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
 		methodNotAllowed: "物理局域网新建接口只接受 POST 请求。",
-		missingFields:    "网络名与所属站点都不能为空。",
+		missingFields:    "网络名与覆盖地点都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Name != "" && request.Site != ""
 		},
@@ -565,15 +634,15 @@ func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Reques
 	}
 	for _, coordinate := range request.Containers {
 		if coordinate.EntityType != store.LayoutEntitySite && coordinate.EntityType != store.LayoutEntityNetwork {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标只能是站点或网络。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的地点区域或网络分组框坐标只能是地点或网络。")
 			return
 		}
 		if strings.TrimSpace(coordinate.EntityID) == "" {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标缺少站点或网络标识。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的地点区域或网络分组框坐标缺少地点或网络标识。")
 			return
 		}
 		if coordinate.X == nil || coordinate.Y == nil {
-			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的站点区域或网络分组框坐标必须同时给出横坐标与纵坐标。")
+			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的地点区域或网络分组框坐标必须同时给出横坐标与纵坐标。")
 			return
 		}
 		save.Containers = append(save.Containers, TopologyContainerLayoutCoordinate{
@@ -585,7 +654,7 @@ func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Reques
 		RemoteAddress: remoteIP(r),
 	}); err != nil {
 		if errors.Is(err, ErrTopologyLayoutInvalid) {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局引用的站点、网络或设备不存在，请刷新页面后重试。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局引用的地点、网络或设备不存在，请刷新页面后重试。")
 			return
 		}
 		h.writeTopologyJSONError(w, http.StatusInternalServerError, "保存布局失败，请稍后重试。")

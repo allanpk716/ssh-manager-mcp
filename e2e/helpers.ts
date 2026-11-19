@@ -12,6 +12,71 @@ export const repoRoot = path.resolve(e2eDir, "..");
 const artifactsDir = path.join(e2eDir, ".artifacts");
 const binaryPath = path.join(artifactsDir, `sshmgr${process.platform === "win32" ? ".exe" : ""}`);
 
+export type testSSHServer = {
+  address: string;
+  privateKeyPath: string;
+  close: () => Promise<void>;
+};
+
+// startTestSSHServer 编译并启动 e2e/tools/testsshd。它只监听本机随机端
+// 口，并把配套私钥写入测试指定的临时路径。
+export async function startTestSSHServer(privateKeyPath: string): Promise<testSSHServer> {
+  const server = spawn("go", ["run", "./e2e/tools/testsshd", privateKeyPath], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      ...goCacheEnvironment,
+    },
+  });
+  let output = "";
+  server.stdout.on("data", (chunk) => (output += chunk));
+  server.stderr.on("data", (chunk) => (output += chunk));
+  const address = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`等待 SSH 测试服务启动超时：\n${output}`)), 15_000);
+    const poll = setInterval(() => {
+      const match = output.match(/^127\.0\.0\.1:\d+$/m);
+      if (match) {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(match[0]);
+      }
+    }, 50);
+    server.on("exit", (code) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      reject(new Error(`SSH 测试服务提前退出（${code}）：\n${output}`));
+    });
+  });
+  return {
+    address,
+    privateKeyPath,
+    close: async () => {
+      server.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (server.exitCode !== null) {
+          resolve();
+          return;
+        }
+        server.on("exit", () => resolve());
+      });
+    },
+  };
+}
+
+// goCacheEnvironment 保留本机 Go 构建缓存路径。客户端种子进程把 HOME 指
+// 到临时目录来隔离配置；不带上这几个变量时，go 会认为工具链缓存为空而重
+// 新下载，客户端用例会慢到超时。
+const goCacheValues = spawnSync("go", ["env", "GOCACHE", "GOMODCACHE", "GOPATH"], {
+  cwd: repoRoot,
+  encoding: "utf8",
+}).stdout.trim().split("\n");
+const goCacheEnvironment = {
+  GOCACHE: goCacheValues[0],
+  GOMODCACHE: goCacheValues[1],
+  GOPATH: goCacheValues[2],
+};
+
 // buildBinary 在整轮浏览器测试开始前编译一次 sshmgr，测试进程全部用同一
 // 个二进制，避免每个用例重复编译。
 export async function buildBinary(): Promise<void> {
@@ -181,6 +246,7 @@ export async function startClientUIWithTopology(): Promise<clientUI> {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...goCacheEnvironment,
       SSHMGR_E2E_TOPOLOGY: "1",
       HOME: runDir,
       APPDATA: runDir,
@@ -253,6 +319,7 @@ async function startClientUI(): Promise<clientUI> {
     encoding: "utf8",
     env: {
       ...process.env,
+      ...goCacheEnvironment,
       HOME: runDir,
       APPDATA: runDir,
       XDG_CONFIG_HOME: runDir,
@@ -336,7 +403,7 @@ function reserveLocalPort(): Promise<number> {
 
 // startAuthorityUI 生成角色为权威端的临时加密库，设置管理员口令与随机
 // Web UI 端口，再启动 serve。发现服务显式关闭，测试不占用本机的 UDP 7878。
-async function startAuthorityUI(password: string, pairingMode = ""): Promise<authorityUI> {
+async function startAuthorityUI(password: string, pairingMode = "", clientsSeed = false): Promise<authorityUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-authority-"));
   const servePort = await reserveLocalPort();
   const webPort = await reserveLocalPort();
@@ -351,6 +418,7 @@ async function startAuthorityUI(password: string, pairingMode = ""): Promise<aut
       SSHMGR_VAULT_ROOT: runDir,
       SSHMGR_STORE: path.join(runDir, "store.db"),
       SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+      SSHMGR_E2E_CLIENTS: clientsSeed ? "1" : "",
     },
   });
   if (seed.status !== 0) {
@@ -467,22 +535,36 @@ export const test = base.extend<
 
 export { expect, startAuthorityUI, startClientUI, startStandaloneUI, startEmptyMachineUI };
 
-// openStandaloneUI 用一次性启动链接进入 Web UI，并等待服务器列表出现。
+// gotoUIPath 以当前页面地址为基准打开同一个 Web UI 里的路径；测试配置不设
+// baseURL，直接 page.goto("/ui/...") 无法解析相对地址。
+export async function gotoUIPath(
+  page: import("@playwright/test").Page,
+  path: string,
+): Promise<void> {
+  await page.goto(new URL(path, page.url()).toString());
+}
+
+// openStandaloneUI 用一次性启动链接进入 Web UI 主页，再切到服务器列表；
+// 大多数用例的起点仍是服务器列表。
 export async function openStandaloneUI(
   page: import("@playwright/test").Page,
   ui: standaloneUI,
 ): Promise<void> {
   await page.goto(ui.startupURL);
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
+  await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "服务器" }).click();
+  await page.getByRole("heading", { name: /^服务器/ }).first().waitFor();
 }
 
-// openClientUI 用一次性启动链接进入客户端 Web UI，并等待服务器列表出现。
+// openClientUI 用一次性启动链接进入客户端 Web UI 主页，再切到服务器列表。
 export async function openClientUI(
   page: import("@playwright/test").Page,
   ui: clientUI,
 ): Promise<void> {
   await page.goto(ui.startupURL);
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
+  await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "服务器" }).click();
+  await page.getByRole("heading", { name: /^服务器/ }).first().waitFor();
 }
 
 // openAuthorityUI 进入权威端登录页并完成管理员口令登录。
@@ -494,5 +576,5 @@ export async function openAuthorityUI(
   await page.goto(ui.loginURL);
   await page.getByLabel("管理员口令").fill(password);
   await page.getByRole("button", { name: "登录" }).click();
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
 }

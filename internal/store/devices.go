@@ -22,12 +22,14 @@ type deviceQueryer interface {
 	QueryRow(query string, args ...any) *sql.Row
 }
 
-// DeviceChanges 表示设备的一次部分更新。Client 为空指针代表保持不变；
-// 指向空字符串代表解除客户端实例关联。
+// DeviceChanges 表示设备的一次部分更新。Client 与 Site 为空指针代表保持
+// 不变；Client 指向空字符串代表解除客户端实例关联，Site 指向空字符串代
+// 表清空机器地点。Site 用完整地点路径或全库唯一的裸名字指称。
 type DeviceChanges struct {
 	Name   *string
 	Note   *string
 	Client *string
+	Site   *string
 }
 
 // DeviceFilter 是设备列表的筛选条件；空字符串与 false 表示不筛选。
@@ -63,15 +65,23 @@ type ServerAnchorCopy struct {
 // AddDevice 登记一台设备。客户端实例按名字解析成设备码标识符；设备行与
 // 审计行在同一个事务里提交。
 func (s *Store) AddDevice(name, note, client string) (*models.Device, error) {
-	return s.addDevice(name, note, client, WriteSource{})
+	return s.AddDeviceAtSiteWithSource(name, note, client, "", WriteSource{})
 }
 
 // AddDeviceWithSource 与 AddDevice 相同，并把设备登记审计行标为指定来源。
 func (s *Store) AddDeviceWithSource(name, note, client string, source WriteSource) (*models.Device, error) {
-	return s.addDevice(name, note, client, source)
+	return s.AddDeviceAtSiteWithSource(name, note, client, "", source)
 }
 
-func (s *Store) addDevice(name, note, client string, source WriteSource) (*models.Device, error) {
+// AddDeviceAtSite 登记一台设备并直接指定它的地点；site 为空表示暂不登记
+// 地点。
+func (s *Store) AddDeviceAtSite(name, note, client, site string) (*models.Device, error) {
+	return s.AddDeviceAtSiteWithSource(name, note, client, site, WriteSource{})
+}
+
+// AddDeviceAtSiteWithSource 与 AddDeviceAtSite 相同，并把设备登记审计行标
+// 为指定来源。
+func (s *Store) AddDeviceAtSiteWithSource(name, note, client, site string, source WriteSource) (*models.Device, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -80,7 +90,7 @@ func (s *Store) addDevice(name, note, client string, source WriteSource) (*model
 		return nil, err
 	}
 	defer tx.Rollback()
-	device, err := s.addDeviceTx(tx, name, note, client, source)
+	device, err := s.addDeviceTx(tx, name, note, client, site, source)
 	if err != nil {
 		return nil, err
 	}
@@ -89,19 +99,30 @@ func (s *Store) addDevice(name, note, client string, source WriteSource) (*model
 
 // addDeviceTx 在调用方事务里登记设备；数据行与审计行随外层事务提交。
 func (s *Store) addDeviceTx(
-	tx *sql.Tx, name, note, client string, source WriteSource,
+	tx *sql.Tx, name, note, client, siteRef string, source WriteSource,
 ) (*models.Device, error) {
 	name = strings.TrimSpace(name)
 	if err := validateTopologyName("设备", name); err != nil {
 		return nil, err
 	}
+	siteRef = strings.TrimSpace(siteRef)
+	siteID, siteName := "", ""
+	if siteRef != "" {
+		site, err := resolveSiteRef(tx, siteRef)
+		if err != nil {
+			return nil, err
+		}
+		siteID, siteName = site.ID, site.Name
+	}
 	if err := ensureDeviceNameAvailableTx(tx, name, ""); err != nil {
 		return nil, err
 	}
 	device := &models.Device{
-		ID:   newID(),
-		Name: name,
-		Note: strings.TrimSpace(note),
+		ID:       newID(),
+		Name:     name,
+		Note:     strings.TrimSpace(note),
+		SiteID:   siteID,
+		SiteName: siteName,
 	}
 	if client != "" {
 		var err error
@@ -117,7 +138,11 @@ func (s *Store) addDeviceTx(
 	if err := insertDeviceTx(tx, device); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device), source); err != nil {
+	auditSummary, err := deviceAuditSummaryTx(tx, device)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", auditSummary, source); err != nil {
 		return nil, err
 	}
 	return device, nil
@@ -126,9 +151,9 @@ func (s *Store) addDeviceTx(
 // insertDeviceTx 写入一台设备；自动生成与手工登记共用这一份列映射。
 func insertDeviceTx(tx *sql.Tx, device *models.Device) error {
 	_, err := tx.Exec(
-		`INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
-		 VALUES(?,?,?,?,?,?,?,?)`,
-		device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+		`INSERT INTO devices(id,name,name_lower,note,site_id,client_token_id,client_name,created_at,updated_at)
+		 VALUES(?,?,?,?,?,?,?,?,?)`,
+		device.ID, device.Name, strings.ToLower(device.Name), device.Note, nullableString(device.SiteID),
 		nullableString(device.ClientTokenID), device.ClientName,
 		device.CreatedAt.Unix(), device.UpdatedAt.Unix(),
 	)
@@ -138,6 +163,11 @@ func insertDeviceTx(tx *sql.Tx, device *models.Device) error {
 // EditDevice 按设备名字做部分更新。客户端实例关联既能换成另一个设备码，
 // 也能通过指向空字符串的 Client 字段解除。数据行与审计行同事务提交。
 func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, error) {
+	return s.EditDeviceWithSource(name, changes, WriteSource{})
+}
+
+// EditDeviceWithSource 与 EditDevice 相同，并把审计来源标为命令行或 Web UI。
+func (s *Store) EditDeviceWithSource(name string, changes DeviceChanges, source WriteSource) (*models.Device, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -182,15 +212,33 @@ func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, 
 		}
 		editChanges["client"] = device.ClientName
 	}
+	if changes.Site != nil {
+		siteRef := strings.TrimSpace(*changes.Site)
+		if siteRef == "" {
+			device.SiteID, device.SiteName = "", ""
+		} else {
+			site, resolveErr := resolveSiteRef(tx, siteRef)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			device.SiteID, device.SiteName = site.ID, site.Name
+		}
+		sitePath, pathErr := sitePathTx(tx, device.SiteID)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		editChanges["site"] = sitePath
+	}
 	device.UpdatedAt = time.Unix(now(), 0)
 	if _, err := tx.Exec(
-		`UPDATE devices SET name=?,name_lower=?,note=?,client_token_id=?,client_name=?,updated_at=? WHERE id=?`,
+		`UPDATE devices SET name=?,name_lower=?,note=?,site_id=?,client_token_id=?,client_name=?,updated_at=? WHERE id=?`,
 		device.Name, strings.ToLower(device.Name), device.Note,
+		nullableString(device.SiteID),
 		nullableString(device.ClientTokenID), device.ClientName, device.UpdatedAt.Unix(), device.ID,
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.edit", topologyEditSummary(name, editChanges)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.edit", topologyEditSummary(name, editChanges), source); err != nil {
 		return nil, err
 	}
 	return device, tx.Commit()
@@ -264,7 +312,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, deviceName == "", CLISource())
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, "", deviceName == "", CLISource())
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +350,7 @@ func (s *Store) addServerWithCredentialsToNewDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, true, source)
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, "", true, source)
 	if err != nil {
 		return nil, err
 	}
@@ -313,7 +361,8 @@ func (s *Store) addServerWithCredentialsToNewDevice(
 // 凭据、所属设备、条目与锚复制共用一个事务。deviceName 为空时自动生成
 // 同名设备（重名追加数字后缀），非空时关联已有设备。
 func (s *Store) addServerWithCredentialsToDeviceTx(
-	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName string, createDevice bool, source WriteSource,
+	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName, siteName string,
+	createDevice bool, source WriteSource,
 ) (*AddServerDeviceResult, error) {
 	srv.CredentialID, srv.AuthMethod = "", ""
 	if cred != nil {
@@ -360,12 +409,8 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 		}
 	}
 	if created {
-		device.ID = newID()
-		device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
-		if err := insertDeviceTx(tx, device); err != nil {
-			return nil, err
-		}
-		if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", deviceAuditSummary(device), source); err != nil {
+		device, err = s.addDeviceTx(tx, device.Name, "", "", siteName, source)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -473,35 +518,45 @@ func (s *Store) ListServersForDevice(deviceName string) ([]*models.DeviceServer,
 	return deviceServersForDeviceTx(s.db, device.ID)
 }
 
-// ListDevices 按筛选条件返回设备。站点筛选由设备所在的物理局域网推出；
-// 未归类筛选只返回没有任何网络成员的设备。
+// ListDevices 按筛选条件返回设备。地点筛选按机器直接登记的地点及其下
+// 级匹配；未归类筛选只返回没有任何网络成员的设备。
 func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
-	query := `SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at FROM devices`
+	query := `SELECT device.id,device.name,device.note,COALESCE(device.site_id,''),COALESCE(site.name,''),` +
+		`COALESCE(device.client_token_id,''),device.client_name,device.created_at,device.updated_at ` +
+		`FROM devices device LEFT JOIN sites site ON site.id=device.site_id`
 	var conditions []string
 	var arguments []any
+	var siteIDs map[string]bool
 	if filter.Unassigned {
 		conditions = append(conditions, `NOT EXISTS (
-			SELECT 1 FROM network_memberships member WHERE member.device_id=devices.id)`)
+			SELECT 1 FROM network_memberships member WHERE member.device_id=device.id)`)
 	}
 	if filter.Site != "" {
-		conditions = append(conditions, `EXISTS (
-			SELECT 1 FROM network_memberships member
-			JOIN networks network ON network.id=member.network_id
-			JOIN sites site ON site.id=network.site_id
-				WHERE member.device_id=devices.id AND network.type=? AND lower(site.name)=lower(?))`)
-		arguments = append(arguments, string(models.NetworkPhysical), strings.TrimSpace(filter.Site))
+		site, err := resolveSiteRef(s.db, filter.Site)
+		if err != nil {
+			return nil, err
+		}
+		sites, err := loadSitesTx(s.db)
+		if err != nil {
+			return nil, err
+		}
+		siteIDs = make(map[string]bool)
+		for _, id := range models.NewSiteTree(sites).SubtreeIDs(site.ID) {
+			siteIDs[id] = true
+		}
+		conditions = append(conditions, `device.site_id IS NOT NULL`)
 	}
 	if filter.Network != "" {
 		conditions = append(conditions, `EXISTS (
 			SELECT 1 FROM network_memberships member
 			JOIN networks network ON network.id=member.network_id
-				WHERE member.device_id=devices.id AND lower(network.name)=lower(?))`)
+				WHERE member.device_id=device.id AND lower(network.name)=lower(?))`)
 		arguments = append(arguments, strings.TrimSpace(filter.Network))
 	}
 	if len(conditions) > 0 {
 		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
-	query += " ORDER BY name,id"
+	query += " ORDER BY device.name,device.id"
 	rows, err := s.db.Query(query, arguments...)
 	if err != nil {
 		return nil, err
@@ -512,9 +567,12 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 	for rows.Next() {
 		var device models.Device
 		var created, updated int64
-		if err := rows.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
-			&device.ClientName, &created, &updated); err != nil {
+		if err := rows.Scan(&device.ID, &device.Name, &device.Note, &device.SiteID, &device.SiteName,
+			&device.ClientTokenID, &device.ClientName, &created, &updated); err != nil {
 			return nil, err
+		}
+		if siteIDs != nil && !siteIDs[device.SiteID] {
+			continue
 		}
 		device.CreatedAt, device.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
 		device.Memberships = make([]*models.NetworkMembership, 0)
@@ -529,7 +587,7 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 	}
 	memberRows, err := s.db.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -555,8 +613,8 @@ func (s *Store) ListDevices(filter DeviceFilter) ([]*models.Device, error) {
 func deviceByNameTx(q deviceQueryer, name string) (*models.Device, error) {
 	name = strings.TrimSpace(name)
 	device, err := scanDevice(q.QueryRow(`
-		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
-		FROM devices WHERE name_lower=?`, strings.ToLower(name),
+		SELECT device.id,device.name,device.note,COALESCE(device.site_id,''),COALESCE(site.name,''),COALESCE(device.client_token_id,''),device.client_name,device.created_at,device.updated_at
+		FROM devices device LEFT JOIN sites site ON site.id=device.site_id WHERE device.name_lower=?`, strings.ToLower(name),
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrDeviceNotFound, name)
@@ -570,8 +628,8 @@ func deviceByNameTx(q deviceQueryer, name string) (*models.Device, error) {
 // deviceByIDTx 按内部标识符取设备，供服务器条目读取原设备时使用。
 func deviceByIDTx(q deviceQueryer, id string) (*models.Device, error) {
 	device, err := scanDevice(q.QueryRow(`
-		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
-		FROM devices WHERE id=?`, id,
+		SELECT device.id,device.name,device.note,COALESCE(device.site_id,''),COALESCE(site.name,''),COALESCE(device.client_token_id,''),device.client_name,device.created_at,device.updated_at
+		FROM devices device LEFT JOIN sites site ON site.id=device.site_id WHERE device.id=?`, id,
 	))
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("%w：%s", ErrDeviceNotFound, id)
@@ -598,8 +656,8 @@ func (s *Store) GetDeviceByID(id string) (*models.Device, error) {
 func scanDevice(sc scanner) (*models.Device, error) {
 	var device models.Device
 	var created, updated int64
-	if err := sc.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
-		&device.ClientName, &created, &updated); err != nil {
+	if err := sc.Scan(&device.ID, &device.Name, &device.Note, &device.SiteID, &device.SiteName,
+		&device.ClientTokenID, &device.ClientName, &created, &updated); err != nil {
 		return nil, err
 	}
 	device.CreatedAt, device.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
@@ -616,7 +674,7 @@ func serverByIdentifierTx(tx *sql.Tx, identifier string) (*models.Server, error)
 		return nil, err
 	}
 	row := tx.QueryRow(`
-		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE name=?`, identifier)
 	srv, err = scanServer(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -708,11 +766,17 @@ func clientNameTx(tx *sql.Tx, clientID string) string {
 	return name
 }
 
-// deviceAuditSummary 只写设备字段白名单，不写内部标识符。
-func deviceAuditSummary(device *models.Device) map[string]any {
+// deviceAuditSummaryTx 只写设备字段白名单，不写内部标识符。机器地点写
+// 完整路径，多级树下同名叶级地点也能从审计里区分。
+func deviceAuditSummaryTx(tx *sql.Tx, device *models.Device) (map[string]any, error) {
+	sitePath, err := sitePathTx(tx, device.SiteID)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"name":   device.Name,
 		"note":   device.Note,
 		"client": device.ClientName,
-	}
+		"site":   sitePath,
+	}, nil
 }

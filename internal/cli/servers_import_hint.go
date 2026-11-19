@@ -29,7 +29,7 @@ type importHint struct {
 func scanImportServer(srv *models.Server) []secrethint.Finding {
 	return secrethint.ScanServer(
 		tagsRawForScan(srv.Tags),
-		srv.Description, srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
+		srv.Description, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
 	)
 }
 

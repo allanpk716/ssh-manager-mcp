@@ -119,8 +119,8 @@ func serversShowCmd() *cobra.Command {
 				Host: detail.Server.Host, Port: detail.Server.Port,
 				Shell: string(detail.Server.ShellType), CredentialType: string(detail.CredentialType),
 				HasKeyPassphrase: detail.HasKeyPassphrase, HasSudoPassword: detail.HasSudoPassword,
-				Description: detail.Server.Description, Location: detail.Server.Location,
-				Hardware: detail.Server.Hardware, Services: detail.Server.Services,
+				Description: detail.Server.Description,
+				Hardware:    detail.Server.Hardware, Services: detail.Server.Services,
 				Role: detail.Server.Role, Caveats: detail.Server.Caveats, Tags: detail.Server.Tags,
 				ExposeHost: detail.Server.ExposeHost, DeviceName: detail.DeviceName,
 				HasDevice: detail.HasDevice, AttentionReasons: detail.AttentionReasons,
@@ -141,18 +141,18 @@ func serversShowCmd() *cobra.Command {
 }
 
 type serverDetailText struct {
-	ID, Name, User, Host                                     string
-	Port                                                     int
-	Shell                                                    string
-	CredentialType                                           string
-	HasKeyPassphrase                                         bool
-	HasSudoPassword                                          bool
-	Description, Location, Hardware, Services, Role, Caveats string
-	Tags                                                     []string
-	ExposeHost                                               bool
-	DeviceName                                               string
-	HasDevice                                                bool
-	AttentionReasons                                         []string
+	ID, Name, User, Host                           string
+	Port                                           int
+	Shell                                          string
+	CredentialType                                 string
+	HasKeyPassphrase                               bool
+	HasSudoPassword                                bool
+	Description, Hardware, Services, Role, Caveats string
+	Tags                                           []string
+	ExposeHost                                     bool
+	DeviceName                                     string
+	HasDevice                                      bool
+	AttentionReasons                               []string
 	// Reverse 是单机与权威端的反向授权分组；客户端本地快照后续只填裁剪
 	// 后的机密项与共享存储两组，未装配时保持空指针。
 	Reverse *serverReverseDetailText
@@ -196,7 +196,7 @@ func writeServerDetail(w io.Writer, d serverDetailText) {
 	}
 	fmt.Fprintf(w, "sudo 密码：%s\n", sudo)
 	for _, item := range []struct{ label, value string }{
-		{"说明", d.Description}, {"位置", d.Location}, {"硬件", d.Hardware},
+		{"说明", d.Description}, {"硬件", d.Hardware},
 		{"服务", d.Services}, {"角色", d.Role}, {"注意事项", d.Caveats},
 	} {
 		value := item.value
@@ -349,7 +349,7 @@ func showSnapshotServer(cmd *cobra.Command, identifier, instance string) error {
 			ID: srv.ID, Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
 			Shell: srv.ShellType, CredentialType: credType[srv.CredentialID],
 			HasKeyPassphrase: hasPass[srv.CredentialID], HasSudoPassword: srv.SudoCredentialID != "",
-			Description: srv.Description, Location: srv.Location, Hardware: srv.Hardware,
+			Description: srv.Description, Hardware: srv.Hardware,
 			Services: srv.Services, Role: srv.Role, Caveats: srv.Caveats, Tags: tags,
 			ExposeHost: srv.ExposeHost, DeviceName: deviceNames[srv.DeviceID],
 			HasDevice: deviceNames[srv.DeviceID] != "",
@@ -539,7 +539,6 @@ func runServersComplete(cmd *cobra.Command, queue []string) error {
 		}
 		req := servermanage.CompleteRequest{Identifier: detail.Server.ID}
 		req.Description = readCompletionField(reader, out, "说明", detail.Server.Description)
-		req.Location = readCompletionField(reader, out, "位置", detail.Server.Location)
 		req.Hardware = readCompletionField(reader, out, "硬件", detail.Server.Hardware)
 		req.Services = readCompletionField(reader, out, "服务", detail.Server.Services)
 		req.Role = readCompletionField(reader, out, "角色", detail.Server.Role)

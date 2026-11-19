@@ -1,0 +1,18 @@
+{{define "authorization-client-impact"}}
+{{if .Authorization.Confirm}}
+<section class="shared-card client-impact-card" aria-label="实际能拿到它的客户端如何变化">
+<h2>实际能拿到它的客户端如何变化</h2>
+<p class="section-note">由客户端绑定的 profile 与资源授权服务器共同计算；每个客户端都注明经过哪些服务器取得。</p>
+{{if .Authorization.Confirm.Clients}}
+<div class="row-list">
+{{range .Authorization.Confirm.Clients}}
+<div class="client-row">
+<span class="row-icon">客</span>
+<span class="row-copy"><a href="/ui/clients/{{.ClientID}}"><strong class="row-name">{{.ClientName}}</strong></a><span class="row-subtitle">profile {{.Profile}} · {{.BeforeText}} → {{.AfterText}}</span></span>
+</div>
+{{end}}
+</div>
+{{else}}<p class="empty-inline">没有客户端的实际取得途径变化。</p>{{end}}
+</section>
+{{end}}
+{{end}}

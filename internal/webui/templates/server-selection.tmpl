@@ -1,0 +1,4 @@
+{{define "content"}}
+{{if .Authorization}}{{template "authorization-subpage" .}}
+{{template "server-selection" .}}{{end}}
+{{end}}

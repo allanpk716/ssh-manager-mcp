@@ -41,9 +41,9 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 		return body
 	}
 
-	if body := pageBody(RoleStandalone, true); !strings.Contains(body, `href="/ui/software-inventory/"`) ||
-		!strings.Contains(body, `aria-label="软件清单区域"`) {
-		t.Fatalf("单机配置软件清单来源后应显示导航入口：\n%s", body)
+	if body := pageBody(RoleStandalone, true); !strings.Contains(body, `aria-label="一级导航"`) ||
+		!strings.Contains(body, `>更多<`) {
+		t.Fatalf("单机配置软件清单来源后应显示更多标签：\n%s", body)
 	}
 	if body := pageBody(RoleStandalone, false); strings.Contains(body, `href="/ui/software-inventory/"`) {
 		t.Fatalf("未配置软件清单来源时不应显示导航入口：\n%s", body)
@@ -827,4 +827,29 @@ func postSoftwareInventoryForm(
 	recorder := httptest.NewRecorder()
 	handler.ServeHTTP(recorder, request)
 	return recorder.Result()
+}
+
+// TestSoftwareInventoryTemplatesUseMobileCards 固定手机可读性要求：各清
+// 单页不使用裸表格，记录一律是带字段名的卡片。
+func TestSoftwareInventoryTemplatesUseMobileCards(t *testing.T) {
+	contents, err := templateContents()
+	if err != nil {
+		t.Fatalf("读取模板失败：%v", err)
+	}
+	for _, name := range []string{
+		"softwareinventory.tmpl", "softwareinventory-device.tmpl",
+		"softwareinventory-search.tmpl", "softwareinventory-declarations.tmpl",
+		"softwareinventory-settings.tmpl", "softwareinventory-todos.tmpl",
+	} {
+		body, ok := contents[name]
+		if !ok {
+			t.Fatalf("模板 %s 不存在", name)
+		}
+		if strings.Contains(body, "<table") {
+			t.Fatalf("软件清单模板 %s 不得使用表格：%s", name, body)
+		}
+		if !strings.Contains(body, "field-list") {
+			t.Fatalf("软件清单模板 %s 应使用带字段名的卡片：%s", name, body)
+		}
+	}
 }

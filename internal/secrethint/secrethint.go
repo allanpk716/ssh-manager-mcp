@@ -57,12 +57,11 @@ func ScanValue(field, value string) []Finding {
 
 // ScanServer scans every free-text metadata field of one server entry and
 // concatenates the findings in the fixed field order:
-// tags, description, location, hardware, services, role, caveats.
-func ScanServer(tags, description, location, hardware, services, role, caveats string) []Finding {
+// tags, description, hardware, services, role, caveats.
+func ScanServer(tags, description, hardware, services, role, caveats string) []Finding {
 	fields := []struct{ field, value string }{
 		{"tags", tags},
 		{"description", description},
-		{"location", location},
 		{"hardware", hardware},
 		{"services", services},
 		{"role", role},

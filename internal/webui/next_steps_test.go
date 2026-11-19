@@ -66,21 +66,21 @@ func TestStandaloneHomeShowsOnlyUnfinishedNextSteps(t *testing.T) {
 			cookie := session.Cookies()[0]
 			session.Body.Close()
 
-			resp := doGetWithCookie(t, handler, cookie, "/ui/")
+			resp := doGetWithCookie(t, handler, cookie, "/ui/servers/")
 			defer resp.Body.Close()
 			body := readResponseBody(t, resp)
 			for _, label := range test.wantLabels {
 				if !strings.Contains(body, label) {
-					t.Fatalf("首页应显示下一步 %q：\n%s", label, body)
+					t.Fatalf("服务器页应显示下一步 %q：\n%s", label, body)
 				}
 			}
 			for _, link := range test.wantLinks {
 				if !strings.Contains(body, link) {
-					t.Fatalf("首页应包含下一步链接 %s：\n%s", link, body)
+					t.Fatalf("服务器页应包含下一步链接 %s：\n%s", link, body)
 				}
 			}
 			if len(test.wantLabels) == 0 && strings.Contains(body, "下一步引导") {
-				t.Fatalf("三项都完成后首页不应显示下一步引导卡片：\n%s", body)
+				t.Fatalf("三项都完成后服务器页不应显示下一步引导卡片：\n%s", body)
 			}
 		})
 	}
@@ -129,6 +129,10 @@ type nextStepAccessStore struct {
 
 func (s *nextStepAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
 	return s.profiles, nil
+}
+
+func (s *nextStepAccessStore) ListClients() ([]ClientSummary, error) {
+	return nil, nil
 }
 
 func (s *nextStepAccessStore) ListProjects(bool) ([]AccessProjectSummary, error) {

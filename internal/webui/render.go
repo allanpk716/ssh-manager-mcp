@@ -35,8 +35,11 @@ type pageData struct {
 	Authenticated                     bool
 	Servers                           []ServerRow
 	ServerList                        []ServerListEntry
+	ServerCards                       []ServerCard
+	ServerListFilter                  *ServerListFilterView
+	ServerBatch                       *ServerBatchView
 	ServerAdd                         *serverAddView
-	AddTypeChoice                     *addTypeChoiceView
+	ServerWizard                      *serverWizardView
 	ServerAddResult                   *ServerAddResultView
 	OtherDeviceAddResult              *OtherDeviceAddResultView
 	NextSteps                         []NextStep
@@ -44,6 +47,7 @@ type pageData struct {
 	ServerDetail                      *ServerDetailView
 	ServerDetailNotice                string
 	ServerDetailNoticeKind            string
+	ServerDetailPage                  *serverDetailPageView
 	ServerEdit                        *serverEditView
 	ServerDeletePreview               *ServerDeletePreviewView
 	ServerDeleteNotice                string
@@ -123,6 +127,12 @@ type pageData struct {
 	AccessProjectIncludeRevoked       bool
 	AccessProjectNotice               string
 	AccessProjectFormName             string
+	Clients                           []ClientSummary
+	ClientPendingPairingCount         int
+	Client                            *ClientDetail
+	ClientProfilePreview              *ClientProfilePreview
+	ClientNotice                      string
+	ClientMachineChoices              []ClientMachineChoice
 	AccessProjectFormProfileID        string
 	AccessDeleteRefusal               *AccessProfileInUse
 	AccessGrant                       *AccessGrantView
@@ -131,10 +141,8 @@ type pageData struct {
 	AccessDeleteReverifyID            string
 	ServerProfileAuthorizationPreview ServerProfileAuthorizationPreview
 	ServerProfileAuthorizationNotice  string
-	AccessDeviceCodes                 []AccessDeviceCodeSummary
 	AccessDeviceIssue                 *AccessDeviceIssueView
 	AccessDeviceIssued                *AccessDeviceCodeResult
-	AccessDeviceRevoke                *AccessDeviceCodeSummary
 	AccessPairings                    []AccessPairingSummary
 	AccessPairing                     *AccessPairingSummary
 	AccessPairingForm                 AccessPairingForm
@@ -180,6 +188,15 @@ type pageData struct {
 	// TopologyPage 控制页面外壳是否加载拓扑图专用的脚本与样式；只有
 	// 网络拓扑页为真。
 	TopologyPage bool
+	// NavCurrent 标记一级导航中的当前区域；空串时按请求路径推导。
+	NavCurrent string
+	Home       *homeView
+	// Authorization 承载「授权」标签三个子页与共用服务器勾选组件的数据。
+	Authorization     *authorizationPage
+	More              *moreView
+	LocationsNetworks *locationsNetworksView
+	LocationForm      *locationFormView
+	NetworkForm       *networkFormView
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染
@@ -192,6 +209,9 @@ func (h *handler) renderPage(w http.ResponseWriter, r *http.Request, status int,
 	if sess := h.currentSession(r); sess != nil {
 		data.CSRFToken = sess.csrf
 		data.Authenticated = true
+	}
+	if data.NavCurrent == "" {
+		data.NavCurrent = navigationArea(r.URL.Path)
 	}
 	h.writePage(w, r, status, page, data)
 }
@@ -227,6 +247,17 @@ var pageFuncs = template.FuncMap{
 			labels = append(labels, attentionReasonLabel(item))
 		}
 		return strings.Join(labels, "、")
+	},
+	// reasonLabel 供列表把每个注意原因渲染成独立标签；文案与 joinReasons
+	// 共用同一个代号映射，避免两处文案漂移。
+	"reasonLabel": attentionReasonLabel,
+	// firstLine 只取多行备注的首行；客户端详情的授权资源列表用它控制
+	// 每张卡的高度，完整备注仍在各详情页展示。
+	"firstLine": func(value string) string {
+		if index := strings.IndexAny(value, "\r\n"); index >= 0 {
+			return value[:index]
+		}
+		return value
 	},
 	"shareSystemLabel": func(system string) string {
 		switch system {

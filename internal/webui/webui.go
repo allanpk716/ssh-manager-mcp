@@ -71,6 +71,12 @@ type SecretSource interface {
 	ListSecrets(instance, query, server string) ([]SecretRow, error)
 }
 
+// SecretMissingNoteSource 是机密项读取来源的可选扩展，只给可写角色实现。
+// 它直接复用存储层「备注为空」的查询，授权子页与主页待办共用。
+type SecretMissingNoteSource interface {
+	ListSecretsWithoutNote() ([]SecretRow, error)
+}
+
 // SecretDeliverySecretRow 是页面展示的一个下发记录机密项引用。
 type SecretDeliverySecretRow struct {
 	Name         string
@@ -251,6 +257,28 @@ func (c Config) versionHint() string {
 	return c.VersionHint()
 }
 
+// navigationArea 把请求路径归入五个一级导航之一。尚未拥有专属新页面的
+// 区域先落在现有页面上，后续票据替换目标地址时不需要改这里的归组。
+func navigationArea(path string) string {
+	switch {
+	case path == "/ui/":
+		return "home"
+	case strings.HasPrefix(path, "/ui/servers/") || path == "/ui/add" ||
+		strings.HasPrefix(path, "/ui/devices/"):
+		return "servers"
+	case path == "/ui/access/pairing" || strings.HasPrefix(path, "/ui/access/pairing/") ||
+		path == "/ui/clients" || strings.HasPrefix(path, "/ui/clients/") ||
+		path == "/ui/ops/client" || strings.HasPrefix(path, "/ui/ops/client/"):
+		return "clients"
+	case strings.HasPrefix(path, "/ui/authorization/") || strings.HasPrefix(path, "/ui/access/") ||
+		strings.HasPrefix(path, "/ui/secrets/") ||
+		strings.HasPrefix(path, "/ui/shares/"):
+		return "authorization"
+	default:
+		return "more"
+	}
+}
+
 // sortNeedsAttentionFirst 稳定地把需要注意的服务器排到最前，与终端图形
 // 界面的排序口径一致。
 func sortNeedsAttentionFirst(rows []ServerRow) []ServerRow {
@@ -341,6 +369,47 @@ type capabilities struct {
 	CanUpgradeToServer bool
 }
 
+// ShowClientsTab、ClientsTabPath 等方法把一级导航的可见性与目标地址固定
+// 在能力层；客户端实例页未实现前先指向现有的配对页或客户端状态页。
+func (c capabilities) ShowClientsTab() bool {
+	return c.HasPairingAndDeviceCodes || c.CanUseClientOps
+}
+
+func (c capabilities) ClientsTabPath() string {
+	if c.CanUseClientOps {
+		return "/ui/ops/client"
+	}
+	return "/ui/clients/"
+}
+
+func (c capabilities) ShowAuthorizationTab() bool {
+	return c.CanManageProfiles || c.ShowSecretsArea || c.ShowSharesArea || c.ShowAccessArea
+}
+
+func (c capabilities) AuthorizationTabPath() string {
+	if c.ShowAuthorizationTab() {
+		return authorizationRootPath
+	}
+	switch {
+	case c.CanManageProfiles:
+		return "/ui/access/profiles"
+	case c.ShowSecretsArea:
+		return "/ui/secrets/"
+	case c.ShowSharesArea:
+		return "/ui/shares/"
+	default:
+		return "/ui/access/"
+	}
+}
+
+func (c capabilities) ShowMoreTab() bool {
+	return c.ShowOpsArea || c.ShowSoftwareInventoryArea || c.ShowTopologyArea
+}
+
+func (c capabilities) MoreTabPath() string {
+	return morePath
+}
+
 // capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础
 // 能力，再按是否注入机密项读取来源决定机密项区域入口。
 func capabilitiesForConfig(cfg Config) capabilities {
@@ -414,11 +483,13 @@ type session struct {
 	csrf           string
 	clientInstance string
 	accessFlash    *AccessFlash
-	opsBackupFlash *OpsBackupFlash
-	serverAddDraft *serverAddDraft
-	generation     int64
-	lastActive     time.Time
-	lastVerified   time.Time
+	// authorizationRefusal 保存删除 Profile 被拒绝的一次性提示。
+	authorizationRefusal *AccessProfileInUse
+	opsBackupFlash       *OpsBackupFlash
+	serverAddDraft       *serverAddDraft
+	generation           int64
+	lastActive           time.Time
+	lastVerified         time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
@@ -458,6 +529,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.mux.HandleFunc(startPath, h.handleStart)
 		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		registerAuthorizationRoutes(h)
 		h.registerTopologyRoutes()
 		h.registerAccessRoutes()
 		h.registerServerRoutes()
@@ -465,6 +537,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.registerShareRoutes()
 		h.registerSoftwareInventoryRoutes()
 		h.registerOpsRoutes()
+		h.registerMoreRoutes()
 	}
 	return newLoopbackHandler(cfg, registerRoutes)
 }
@@ -709,7 +782,11 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	h.handleServerList(w, r)
+	if r.URL.Query().Get("attention") == "1" {
+		http.Redirect(w, r, "/ui/servers/?attention=1", http.StatusSeeOther)
+		return
+	}
+	h.handleHomePage(w, r)
 }
 
 // requestClientInstance 返回当前浏览器会话选中的客户端实例；没有会话时退回

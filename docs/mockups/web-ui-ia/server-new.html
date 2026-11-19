@@ -1,0 +1,1236 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>添加服务器 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input, select, textarea { font: inherit; }
+    button, a, label { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 14px 16px calc(174px + env(safe-area-inset-bottom));
+    }
+    .wizard { max-width: 760px; margin: 0 auto; }
+    .title-row {
+      display: grid;
+      grid-template-columns: 76px 1fr 76px;
+      align-items: center;
+      min-height: 44px;
+      gap: 8px;
+    }
+    h1 {
+      margin: 0;
+      text-align: center;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .cancel-link {
+      display: inline-flex;
+      align-items: center;
+      width: max-content;
+      min-height: 44px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 15px;
+    }
+    .demo-tip {
+      margin: 5px 0 15px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+      text-align: center;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      margin: 0 0 18px;
+      padding: 0;
+      list-style: none;
+    }
+    .step {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+      text-align: center;
+    }
+    .step::before, .step::after {
+      content: "";
+      position: absolute;
+      z-index: 0;
+      top: 13px;
+      width: 50%;
+      height: 2px;
+      background: #DDE1E7;
+    }
+    .step::before { left: 0; }
+    .step::after { right: 0; }
+    .step:first-child::before, .step:last-child::after { display: none; }
+    .step-number {
+      position: relative;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 2px solid #D5DAE2;
+      border-radius: 50%;
+      background: var(--bg);
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .step.active { color: var(--primary); font-weight: 600; }
+    .step.active .step-number { border-color: var(--primary); background: var(--primary); color: #FFF; }
+    .step.complete { color: var(--primary); }
+    .step.complete .step-number { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+    .step.complete::before, .step.complete::after, .step.active::before { background: #93C5FD; }
+
+    .panel { animation: panel-in .18s ease-out; }
+    .card {
+      padding: 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .card + .card { margin-top: 12px; }
+    .card h2, .section-title {
+      margin: 0;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .section-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .section-help {
+      margin: 5px 0 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .field { margin-top: 16px; }
+    .field:first-child { margin-top: 0; }
+    .field label, .field-label {
+      display: block;
+      margin-bottom: 7px;
+      color: #374151;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .input, .select, .textarea {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border: 1px solid #DDE1E7;
+      border-radius: 10px;
+      outline: 0;
+      background: #FFF;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .input::placeholder, .textarea::placeholder { color: #9CA3AF; }
+    .input:focus, .select:focus, .textarea:focus {
+      border-color: #93C5FD;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.08);
+    }
+    .input:focus-visible, .select:focus-visible, .textarea:focus-visible { outline: 0; }
+    .input[readonly] { background: #F3F4F6; color: var(--muted); }
+    .textarea { min-height: 88px; resize: vertical; line-height: 21px; }
+    .inline-fields { display: grid; grid-template-columns: minmax(0, 1fr) 105px; gap: 12px; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
+    .address-list { display: grid; gap: 10px; }
+    .address-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px;
+      gap: 9px;
+      padding: 11px;
+      border: 1px solid #ECEEF2;
+      border-radius: 11px;
+      background: #FAFBFC;
+    }
+    .address-row .select { grid-column: 1 / -1; }
+    .address-row .input { min-width: 0; background: #FFF; }
+    .icon-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      min-height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .icon-button:hover { background: #F3F4F6; color: var(--danger); }
+    .add-row-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      width: 100%;
+      min-height: 44px;
+      margin-top: 10px;
+      padding: 0 12px;
+      border: 1px dashed #BFDBFE;
+      border-radius: 10px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .notice {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 13px;
+      border: 1px solid #BFDBFE;
+      border-radius: 12px;
+      background: var(--primary-soft);
+      color: #1E40AF;
+      font-size: 14px;
+      line-height: 21px;
+    }
+    .notice > svg { margin-top: 2px; }
+    .notice p { margin: 0; }
+    .notice-actions { display: grid; gap: 8px; margin-top: 11px; }
+    .notice-actions button {
+      min-height: 44px;
+      padding: 8px 12px;
+      border: 1px solid #93C5FD;
+      border-radius: 9px;
+      background: #FFF;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .notice-actions button:first-child { background: var(--primary); color: #FFF; }
+    .warning-notice {
+      border-color: #F3DEAC;
+      background: var(--warning-soft);
+      color: #92400E;
+    }
+    .shared-address {
+      padding: 14px;
+      border: 1px solid #BFDBFE;
+      border-radius: 11px;
+      background: var(--primary-soft);
+    }
+    .shared-address strong { display: block; color: var(--primary); }
+    .shared-address p { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 4px;
+      padding: 4px;
+      border-radius: 11px;
+      background: #EEF0F4;
+    }
+    .segment {
+      min-height: 44px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .segment[aria-pressed="true"] {
+      background: #FFF;
+      color: var(--primary);
+      box-shadow: 0 1px 3px rgba(17,24,39,.1);
+      font-weight: 600;
+    }
+    .auth-fields { margin-top: 14px; }
+    .file-button { width: 100%; }
+    .selected-key-card {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-top: 10px;
+      padding: 12px 14px;
+      border: 1px solid #BFDBFE;
+      border-radius: 11px;
+      background: var(--primary-soft);
+      color: #1E40AF;
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .selected-key-card strong {
+      min-width: 0;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+    .change-file-button {
+      flex: 0 0 auto;
+      min-height: 44px;
+      padding: 0 4px;
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: underline;
+    }
+    .text-link-button {
+      min-height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 13px;
+      text-decoration: underline;
+    }
+    .auth-warning { margin: 14px 0 0; }
+    .more-options { margin-top: 16px; border-top: 1px solid #F0F1F3; }
+    .more-options summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 48px;
+      cursor: pointer;
+      color: #374151;
+      font-size: 14px;
+      font-weight: 600;
+      list-style: none;
+    }
+    .more-options summary::-webkit-details-marker { display: none; }
+    .more-options summary::after { content: "⌄"; color: var(--muted); font-size: 20px; transition: transform .15s; }
+    .more-options[open] summary::after { transform: rotate(180deg); }
+    .more-fields { padding: 2px 0 4px; }
+
+    .success-card {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      margin-bottom: 12px;
+      padding: 14px 16px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #ECFDF5;
+      color: #065F46;
+      box-shadow: var(--shadow);
+      font-size: 13px;
+      line-height: 21px;
+      overflow-wrap: anywhere;
+    }
+    .success-card svg { margin-top: 1px; color: var(--success); }
+    .success-card strong { font-size: 15px; }
+    .success-card span { display: block; margin-top: 2px; }
+
+    .selected-location {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid #BFDBFE;
+      border-radius: 12px;
+      background: var(--primary-soft);
+    }
+    .selected-location svg { color: var(--primary); }
+    .selected-location small { display: block; margin-bottom: 2px; color: var(--muted); font-size: 12px; }
+    .selected-location strong { display: block; color: var(--primary); line-height: 22px; overflow-wrap: anywhere; }
+    .search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-height: 48px;
+      border: 1px solid #E2E5EA;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .search-box > svg { margin-left: 14px; color: var(--muted); }
+    .search-box input {
+      width: 100%;
+      min-width: 0;
+      height: 46px;
+      padding: 0 12px 0 10px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .search-box input::placeholder { color: #9CA3AF; }
+    .search-box:focus-within { border-color: #93C5FD; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+    .search-box input:focus-visible { outline: 0; }
+    .location-tree { margin: 10px 0 0; padding: 0; list-style: none; }
+    .location-tree ul { margin: 0 0 0 21px; padding: 0 0 0 12px; border-left: 1px solid #E5E7EB; list-style: none; }
+    .tree-row { display: flex; align-items: center; min-height: 44px; }
+    .tree-toggle, .tree-spacer { flex: 0 0 40px; width: 40px; }
+    .tree-toggle {
+      min-height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 20px;
+    }
+    .tree-label {
+      display: flex;
+      flex: 1;
+      align-items: center;
+      gap: 9px;
+      min-height: 44px;
+      padding: 5px 8px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .tree-label:has(input:checked) { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+    .tree-label input { width: 18px; height: 18px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+    .empty-tree { margin: 22px 0; color: var(--muted); font-size: 13px; text-align: center; }
+    .new-location-toggle {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      width: 100%;
+      min-height: 48px;
+      margin-top: 7px;
+      padding: 0 4px;
+      border: 0;
+      border-top: 1px solid #F0F1F3;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-weight: 600;
+      text-align: left;
+    }
+    .new-location-form { padding: 4px 0; }
+
+    .profile-list { display: grid; gap: 12px; margin-top: 16px; }
+    .profile-card {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      min-height: 82px;
+      padding: 15px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+    }
+    .profile-card:has(input:checked) { border-color: #60A5FA; background: #FAFCFF; box-shadow: 0 0 0 1px rgba(37,99,235,.06), var(--shadow); }
+    .profile-card input { width: 21px; height: 21px; margin: 2px 0 0; accent-color: var(--primary); cursor: pointer; }
+    .profile-copy { min-width: 0; }
+    .profile-name { display: block; font-size: 16px; line-height: 23px; font-weight: 700; }
+    .profile-clients { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .visibility-count {
+      margin: 16px 0 0;
+      padding: 13px;
+      border-radius: 11px;
+      background: #EEF0F4;
+      color: #374151;
+      text-align: center;
+      font-size: 14px;
+    }
+    .visibility-count strong { color: var(--primary); font-size: 17px; }
+
+    .action-bar {
+      position: fixed;
+      z-index: 60;
+      right: 0;
+      bottom: calc(64px + env(safe-area-inset-bottom));
+      left: 0;
+      padding: 10px 16px;
+      border-top: 1px solid rgba(229,231,235,.95);
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 -4px 18px rgba(17,24,39,.05);
+      backdrop-filter: blur(16px);
+    }
+    .action-inner { display: flex; gap: 10px; max-width: 728px; margin: 0 auto; }
+    .primary-button, .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      min-height: 46px;
+      padding: 0 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .primary-button { flex: 1; border: 0; background: var(--primary); color: #FFF; box-shadow: 0 1px 2px rgba(37,99,235,.2); }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-button { border: 1px solid var(--line); background: var(--card); color: #374151; box-shadow: var(--shadow); }
+    .action-inner .secondary-button { flex: 1; box-shadow: none; }
+    .skip-button { flex: 0 0 auto !important; border-color: transparent !important; background: transparent !important; color: var(--muted) !important; }
+    .spinner {
+      width: 17px;
+      height: 17px;
+      border: 2px solid rgba(255,255,255,.45);
+      border-top-color: #FFF;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+
+    .completion { padding-top: 22px; text-align: center; animation: panel-in .2s ease-out; }
+    .big-check {
+      display: grid;
+      place-items: center;
+      width: 76px;
+      height: 76px;
+      margin: 8px auto 18px;
+      border-radius: 50%;
+      background: #D1FAE5;
+      color: var(--success);
+    }
+    .completion h2 { margin: 0; font-size: 24px; line-height: 34px; }
+    .completion-subtitle { margin: 8px 0 22px; color: var(--muted); font-size: 14px; }
+    .completion-summary { padding: 5px 16px; text-align: left; }
+    .summary-line { display: flex; align-items: flex-start; gap: 11px; padding: 14px 0; line-height: 22px; }
+    .summary-line + .summary-line { border-top: 1px solid #F0F1F3; }
+    .summary-line svg { margin-top: 2px; color: var(--success); }
+    .summary-line span { min-width: 0; overflow-wrap: anywhere; }
+    .completion-actions { display: grid; gap: 10px; margin-top: 18px; }
+    .completion-actions .primary-button, .completion-actions .secondary-button { width: 100%; }
+    .supplement-link { display: inline-flex; align-items: center; min-height: 44px; margin-top: 9px; color: var(--primary); font-size: 13px; text-decoration: none; }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes panel-in { from { opacity: .4; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 560px) {
+      .address-row { grid-template-columns: minmax(210px, .95fr) minmax(0, 1fr) 44px; align-items: center; }
+      .address-row .select { grid-column: auto; }
+      .notice-actions { grid-template-columns: 1fr 1fr; }
+      .completion-actions { grid-template-columns: 1fr 1fr; }
+    }
+    @media (min-width: 768px) {
+      .topbar { display: block; border-bottom: 1px solid rgba(229,231,235,.9); background: rgba(255,255,255,.96); }
+      .topbar-inner { display: flex; align-items: center; gap: 42px; max-width: 960px; min-height: 64px; margin: 0 auto; padding: 0 16px; }
+      .brand { color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link { flex-direction: row; gap: 7px; min-height: 44px; padding: 0 14px; font-size: 14px; }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 22px; padding-bottom: 108px; }
+      .demo-tip { margin-bottom: 19px; }
+      .card { padding: 20px; }
+      .action-bar { bottom: 0; padding: 12px 16px; }
+      .action-inner { max-width: 720px; }
+      .action-inner .primary-button, .action-inner .secondary-button { flex: 0 0 150px; }
+      .action-inner .primary-button:last-child { margin-left: auto; }
+      .skip-button { flex-basis: 90px !important; }
+      .completion { padding-top: 12px; }
+      .toast { top: 80px; }
+    }
+    @media (max-width: 370px) {
+      .page { padding-right: 12px; padding-left: 12px; }
+      .card { padding: 14px; }
+      .step { font-size: 12px; }
+      .action-inner { gap: 5px; }
+      .primary-button, .secondary-button { padding-right: 10px; padding-left: 10px; }
+      .skip-button { padding-right: 6px !important; padding-left: 6px !important; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>主页</a>
+        <a class="nav-link" href="#" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>服务器</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>客户端</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>授权</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>更多</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <div class="wizard">
+      <div class="title-row">
+        <a class="cancel-link" href="#" id="cancelWizard">‹ 取消</a>
+        <h1>添加服务器</h1>
+        <span></span>
+      </div>
+      <p class="demo-tip" id="demoTip">演示：在地址里输入 192.168.100.235 可看到同机识别</p>
+
+      <ol class="steps" id="steps" aria-label="添加进度">
+        <li class="step active" data-step="1" aria-current="step"><span class="step-number">1</span><span>连接与地址</span></li>
+        <li class="step" data-step="2"><span class="step-number">2</span><span>地点</span></li>
+        <li class="step" data-step="3"><span class="step-number">3</span><span>Profile</span></li>
+      </ol>
+
+      <div class="success-card" id="connectionSuccess" role="status" hidden>
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+        <div><strong>连接成功</strong><span>经 家A-LAN 192.168.100.50 · 已记录主机密钥 <span class="mono">SHA256:4b1d…e9a0</span></span></div>
+      </div>
+
+      <section class="panel" id="step1" aria-label="第 1 步：连接与地址">
+        <div class="card">
+          <h2>连接信息</h2>
+          <div class="field">
+            <label for="serverName">名称</label>
+            <input class="input" id="serverName" value="dev-box" placeholder="例如 dev-box" autocomplete="off">
+          </div>
+          <div class="inline-fields">
+            <div class="field">
+              <label for="loginUser">登录用户</label>
+              <input class="input mono" id="loginUser" value="allan" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="port">端口</label>
+              <input class="input mono" id="port" type="number" value="22" min="1" max="65535" inputmode="numeric">
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-heading"><h2>地址</h2></div>
+          <p class="section-help">这台机器在各个网络里的 IP。sshmgr 连接时会按自己所在的网络自动选择。至少填一个。</p>
+          <div id="addressEditor">
+            <div class="address-list" id="addressList"></div>
+            <button class="add-row-button" id="addAddress" type="button">＋ 再加一个地址</button>
+          </div>
+          <div class="shared-address" id="sharedAddress" hidden>
+            <strong>沿用 NUC10 的地址</strong>
+            <p>地址和地点将与机器 NUC10 共用，地点步骤会自动跳过。</p>
+            <button class="add-row-button" id="editAddressAgain" type="button">重新填写地址</button>
+          </div>
+          <div class="notice" id="sameMachineNotice" hidden>
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/></svg>
+            <div>
+              <p><span class="mono">192.168.100.235</span> 已是机器 NUC10 的地址。这是 NUC10 上的另一个账号吗？</p>
+              <div class="notice-actions">
+                <button id="sameMachineYes" type="button">是，共用 NUC10 的地址和地点</button>
+                <button id="sameMachineNo" type="button">不是，这是另一台机器</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="section-heading"><h2>认证方式</h2></div>
+          <div class="segmented" role="group" aria-label="认证方式">
+            <button class="segment" type="button" data-auth="key" aria-pressed="true">私钥</button>
+            <button class="segment" type="button" data-auth="password" aria-pressed="false">密码</button>
+            <button class="segment" type="button" data-auth="none" aria-pressed="false">暂不填写</button>
+          </div>
+          <div class="auth-fields" id="keyFields">
+            <button class="primary-button file-button" id="choosePrivateKeyFile" type="button">选择私钥文件</button>
+            <input id="privateKeyFile" type="file" hidden>
+            <div class="selected-key-card" id="selectedPrivateKeyCard" hidden>
+              <strong>已选择 id_ed25519 · ED25519</strong>
+              <button class="change-file-button" id="changePrivateKeyFile" type="button">更换</button>
+            </div>
+            <div class="field" id="passphraseField" hidden>
+              <label for="privateKeyPassphrase">私钥口令（如有）</label>
+              <input class="input" id="privateKeyPassphrase" type="password" autocomplete="new-password">
+            </div>
+            <button class="text-link-button" id="pastePrivateKeyToggle" type="button" aria-expanded="false" aria-controls="pastePrivateKeyField">没有文件？粘贴私钥内容</button>
+            <div class="field" id="pastePrivateKeyField" hidden>
+              <label for="privateKey">私钥</label>
+              <textarea class="textarea mono" id="privateKey" placeholder="粘贴私钥内容（静态演示）"></textarea>
+            </div>
+          </div>
+          <div class="auth-fields" id="passwordFields" hidden>
+            <label for="loginPassword">登录密码</label>
+            <input class="input" id="loginPassword" type="password" placeholder="输入登录密码" autocomplete="new-password">
+          </div>
+          <div class="notice warning-notice auth-warning" id="authWarning" hidden>
+            <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></svg>
+            <p>保存后会标为需要注意</p>
+          </div>
+          <details class="more-options">
+            <summary>更多选项</summary>
+            <div class="more-fields">
+              <div class="field">
+                <label for="sudoPassword">sudo 密码</label>
+                <input class="input" id="sudoPassword" type="password" placeholder="可选" autocomplete="new-password">
+              </div>
+              <div class="field">
+                <label for="shellType">shell 类型</label>
+                <select class="select" id="shellType"><option>自动检测</option><option>bash</option><option>zsh</option><option>sh</option></select>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="panel" id="step2" aria-label="第 2 步：地点" hidden>
+        <div class="selected-location">
+          <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg>
+          <div><small>已选地点</small><strong id="selectedLocationPath">公司 / 一厂区 / 3 号楼</strong></div>
+        </div>
+        <div class="notice warning-notice" id="locationWarning" hidden>
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 4 3 20h18L12 4Z"/><path d="M12 9v5M12 17h.01"/></svg>
+          <p id="locationWarningText"></p>
+        </div>
+        <div class="card" style="margin-top:12px">
+          <h2>这台机器在哪？</h2>
+          <p class="section-help">选择机器所在的物理场所，可以选到最细一级。</p>
+          <label class="search-box">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+            <input id="locationSearch" type="search" placeholder="搜索地点" autocomplete="off" aria-label="搜索地点">
+          </label>
+          <div id="locationTree" class="location-tree" role="tree" aria-label="地点树"></div>
+          <p class="empty-tree" id="emptyTree" hidden>没有匹配的地点</p>
+          <button class="new-location-toggle" id="newLocationToggle" type="button" aria-expanded="false">＋ 新建地点</button>
+          <div class="new-location-form" id="newLocationForm" hidden>
+            <div class="field">
+              <label for="newLocationName">名称</label>
+              <input class="input" id="newLocationName" placeholder="例如 2 号楼" autocomplete="off">
+            </div>
+            <div class="field">
+              <label for="parentLocation">上级地点</label>
+              <select class="select" id="parentLocation"></select>
+            </div>
+            <button class="add-row-button" id="createLocation" type="button">创建</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel" id="step3" aria-label="第 3 步：Profile" hidden>
+        <div class="card">
+          <h2>哪些客户端可以使用这台服务器？</h2>
+          <p class="section-help">选择 Profile，绑定它的客户端就能看到并使用这台服务器。</p>
+          <div class="profile-list">
+            <label class="profile-card">
+              <input type="checkbox" name="profile" value="全部" data-client="mini6-claude">
+              <span class="profile-copy"><strong class="profile-name">全部</strong><span class="profile-clients">绑定的客户端：mini6-claude · 8 台服务器</span></span>
+            </label>
+            <label class="profile-card">
+              <input type="checkbox" name="profile" value="训练机" data-client="train3060" checked>
+              <span class="profile-copy"><strong class="profile-name">训练机</strong><span class="profile-clients">绑定的客户端：train3060 · 3 台服务器</span></span>
+            </label>
+            <label class="profile-card">
+              <input type="checkbox" name="profile" value="公司" data-client="laptop-work">
+              <span class="profile-copy"><strong class="profile-name">公司</strong><span class="profile-clients">绑定的客户端：laptop-work · 3 台服务器</span></span>
+            </label>
+          </div>
+          <p class="visibility-count" id="visibilityCount" aria-live="polite">将对 <strong>1</strong> 个客户端可见</p>
+        </div>
+      </section>
+
+      <section class="completion" id="completion" hidden aria-labelledby="completionTitle">
+        <div class="big-check">
+          <svg width="45" height="45" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>
+        </div>
+        <h2 id="completionTitle">已添加 dev-box</h2>
+        <p class="completion-subtitle">服务器已保存，可以开始使用。</p>
+        <div class="card completion-summary">
+          <div class="summary-line"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><span>连接成功</span></div>
+          <div class="summary-line"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z"/><circle cx="12" cy="10" r="2.5"/></svg><span id="completionLocation">地点 公司 / 一厂区 / 3 号楼 · 2 个地址</span></div>
+          <div class="summary-line"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></svg><span id="completionClients">对 1 个客户端可见</span></div>
+        </div>
+        <div class="completion-actions">
+          <button class="primary-button" id="viewDetails" type="button">查看服务器详情</button>
+          <button class="secondary-button" id="addAnother" type="button">继续添加</button>
+        </div>
+        <a class="supplement-link" href="#" id="supplementLink">补充说明信息（用途、硬件等）</a>
+      </section>
+    </div>
+  </main>
+
+  <div class="action-bar" id="actionBar">
+    <div class="action-inner">
+      <button class="secondary-button" id="previousButton" type="button" hidden>上一步</button>
+      <button class="secondary-button skip-button" id="skipButton" type="button" hidden>跳过</button>
+      <button class="primary-button" id="nextButton" type="button">下一步</button>
+    </div>
+  </div>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>主页</a>
+    <a class="nav-link" href="#" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>服务器</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>客户端</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>授权</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>更多</a>
+  </nav>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span id="toastText"></span>
+  </div>
+
+  <script>
+    const state = {
+      step: 1,
+      testing: false,
+      sameMachine: false,
+      selectedLocation: 'building3',
+      expanded: new Set(['company', 'district1']),
+      locationQuery: ''
+    };
+
+    const networkOptions = [
+      ['home', '家A-LAN（物理局域网 · 家 A）'],
+      ['company', '公司-LAN（物理局域网 · 公司 / 一厂区）'],
+      ['netbird', 'NetBird（虚拟局域网）'],
+      ['other', '其他（公网或未登记网络）'],
+      ['new', '＋ 登记新网络…']
+    ];
+
+    const locations = [
+      { id: 'home', name: '家 A', children: [] },
+      { id: 'company', name: '公司', children: [
+        { id: 'district1', name: '一厂区', children: [
+          { id: 'building1', name: '1 号楼', children: [] },
+          { id: 'building3', name: '3 号楼', children: [] }
+        ] },
+        { id: 'district2', name: '二厂区', children: [] }
+      ] }
+    ];
+
+    const addressList = document.getElementById('addressList');
+    const sameMachineNotice = document.getElementById('sameMachineNotice');
+    const addressEditor = document.getElementById('addressEditor');
+    const sharedAddress = document.getElementById('sharedAddress');
+    const nextButton = document.getElementById('nextButton');
+    const previousButton = document.getElementById('previousButton');
+    const skipButton = document.getElementById('skipButton');
+    const locationTree = document.getElementById('locationTree');
+    const parentLocation = document.getElementById('parentLocation');
+    const toast = document.getElementById('toast');
+    let toastTimer;
+    let locationSequence = 0;
+
+    function networkSelect(selected) {
+      return `<select class="select" aria-label="地址所属网络">${networkOptions.map(([value, label]) => `<option value="${value}"${value === selected ? ' selected' : ''}>${label}</option>`).join('')}</select>`;
+    }
+
+    function addAddress(network = 'home', value = '') {
+      const row = document.createElement('div');
+      row.className = 'address-row';
+      row.innerHTML = `${networkSelect(network)}<input class="input mono address-input" type="text" inputmode="decimal" placeholder="IP 地址" value="${value}" aria-label="IP 地址" autocomplete="off"><button class="icon-button delete-address" type="button" aria-label="删除这个地址"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg></button>`;
+      addressList.appendChild(row);
+      row.querySelector('select').addEventListener('focus', event => { event.target.dataset.previous = event.target.value; });
+      row.querySelector('select').addEventListener('change', event => {
+        if (event.target.value === 'new') {
+          window.alert('将打开新建网络');
+          event.target.value = event.target.dataset.previous || 'home';
+        }
+        updateLocationWarning();
+      });
+      row.querySelector('input').addEventListener('focusout', () => detectSameMachine());
+      row.querySelector('.delete-address').addEventListener('click', () => {
+        if (addressList.children.length === 1) row.querySelector('input').value = '';
+        else row.remove();
+        sameMachineNotice.hidden = true;
+        updateLocationWarning();
+      });
+    }
+
+    function detectSameMachine() {
+      const matched = [...document.querySelectorAll('.address-input')].some(input => input.value.trim() === '192.168.100.235');
+      if (!state.sameMachine) sameMachineNotice.hidden = !matched;
+    }
+
+    function setSameMachine(shared) {
+      state.sameMachine = shared;
+      sameMachineNotice.hidden = true;
+      addressEditor.hidden = shared;
+      sharedAddress.hidden = !shared;
+      updateLocationWarning();
+    }
+
+    document.getElementById('sameMachineYes').addEventListener('click', () => setSameMachine(true));
+    document.getElementById('sameMachineNo').addEventListener('click', () => { sameMachineNotice.hidden = true; });
+    document.getElementById('editAddressAgain').addEventListener('click', () => setSameMachine(false));
+    document.getElementById('addAddress').addEventListener('click', () => {
+      addAddress('other');
+      addressList.lastElementChild.querySelector('input').focus();
+    });
+
+    const choosePrivateKeyFile = document.getElementById('choosePrivateKeyFile');
+    const privateKeyFileInput = document.getElementById('privateKeyFile');
+    const selectedPrivateKeyCard = document.getElementById('selectedPrivateKeyCard');
+    const passphraseField = document.getElementById('passphraseField');
+    const pastePrivateKeyToggle = document.getElementById('pastePrivateKeyToggle');
+    const pastePrivateKeyField = document.getElementById('pastePrivateKeyField');
+
+    const openPrivateKeyPicker = () => privateKeyFileInput.click();
+    choosePrivateKeyFile.addEventListener('click', openPrivateKeyPicker);
+    document.getElementById('changePrivateKeyFile').addEventListener('click', openPrivateKeyPicker);
+    privateKeyFileInput.addEventListener('change', () => {
+      if (!privateKeyFileInput.files.length) return;
+      selectedPrivateKeyCard.hidden = false;
+      passphraseField.hidden = false;
+    });
+    pastePrivateKeyToggle.addEventListener('click', () => {
+      pastePrivateKeyField.hidden = false;
+      pastePrivateKeyToggle.setAttribute('aria-expanded', 'true');
+      document.getElementById('privateKey').focus();
+    });
+
+    document.querySelectorAll('.segment').forEach(button => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('.segment').forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+        document.getElementById('keyFields').hidden = button.dataset.auth !== 'key';
+        document.getElementById('passwordFields').hidden = button.dataset.auth !== 'password';
+        document.getElementById('authWarning').hidden = button.dataset.auth !== 'none';
+      });
+    });
+
+    function findLocation(id, nodes = locations, path = []) {
+      for (const node of nodes) {
+        const nextPath = [...path, node];
+        if (node.id === id) return nextPath;
+        const found = findLocation(id, node.children, nextPath);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function locationMatches(node, query) {
+      return node.name.toLocaleLowerCase().includes(query) || node.children.some(child => locationMatches(child, query));
+    }
+
+    function locationNode(node, depth, query) {
+      if (query && !locationMatches(node, query)) return '';
+      const hasChildren = node.children.length > 0;
+      const expanded = query ? true : state.expanded.has(node.id);
+      const path = findLocation(node.id).map(item => item.name).join(' / ');
+      return `<div role="treeitem" aria-level="${depth + 1}"${hasChildren ? ` aria-expanded="${expanded}"` : ''}>
+        <div class="tree-row">
+          ${hasChildren ? `<button class="tree-toggle" type="button" data-toggle-location="${node.id}" aria-label="${expanded ? '收起' : '展开'}${node.name}" aria-expanded="${expanded}">${expanded ? '▾' : '▸'}</button>` : '<span class="tree-spacer"></span>'}
+          <label class="tree-label"><input type="radio" name="location" value="${node.id}"${state.selectedLocation === node.id ? ' checked' : ''}><span>${node.name}</span></label>
+        </div>
+        ${hasChildren && expanded ? `<ul role="group">${node.children.map(child => `<li>${locationNode(child, depth + 1, query)}</li>`).join('')}</ul>` : ''}
+      </div>`;
+    }
+
+    function renderLocations() {
+      const query = state.locationQuery.trim().toLocaleLowerCase();
+      locationTree.innerHTML = `<ul role="group" style="margin:0;padding:0;border:0">${locations.map(node => `<li>${locationNode(node, 0, query)}</li>`).join('')}</ul>`;
+      document.getElementById('emptyTree').hidden = Boolean(locationTree.querySelector('input'));
+      const selected = findLocation(state.selectedLocation);
+      document.getElementById('selectedLocationPath').textContent = selected.map(node => node.name).join(' / ');
+      renderParentLocations();
+      updateLocationWarning();
+    }
+
+    function renderParentLocations() {
+      const currentValue = parentLocation.value;
+      parentLocation.innerHTML = '';
+      function addOptions(nodes, depth) {
+        nodes.forEach(node => {
+          const option = document.createElement('option');
+          option.value = node.id;
+          option.textContent = `${'　'.repeat(depth)}${node.name}`;
+          parentLocation.appendChild(option);
+          addOptions(node.children, depth + 1);
+        });
+      }
+      addOptions(locations, 0);
+      parentLocation.value = [...parentLocation.options].some(option => option.value === currentValue) ? currentValue : state.selectedLocation;
+    }
+
+    locationTree.addEventListener('click', event => {
+      const toggle = event.target.closest('[data-toggle-location]');
+      if (!toggle) return;
+      const id = toggle.dataset.toggleLocation;
+      if (state.expanded.has(id)) state.expanded.delete(id);
+      else state.expanded.add(id);
+      renderLocations();
+    });
+
+    locationTree.addEventListener('change', event => {
+      if (event.target.name !== 'location') return;
+      state.selectedLocation = event.target.value;
+      parentLocation.value = state.selectedLocation;
+      renderLocations();
+    });
+
+    document.getElementById('locationSearch').addEventListener('input', event => {
+      state.locationQuery = event.target.value;
+      renderLocations();
+    });
+
+    document.getElementById('newLocationToggle').addEventListener('click', event => {
+      const form = document.getElementById('newLocationForm');
+      form.hidden = !form.hidden;
+      event.currentTarget.setAttribute('aria-expanded', String(!form.hidden));
+      if (!form.hidden) {
+        parentLocation.value = state.selectedLocation;
+        document.getElementById('newLocationName').focus();
+      }
+    });
+
+    document.getElementById('createLocation').addEventListener('click', () => {
+      const input = document.getElementById('newLocationName');
+      const name = input.value.trim();
+      if (!name) {
+        input.focus();
+        showToast('请先填写地点名称');
+        return;
+      }
+      const parentPath = findLocation(parentLocation.value);
+      const id = `new-location-${++locationSequence}`;
+      parentPath[parentPath.length - 1].children.push({ id, name, children: [] });
+      state.expanded.add(parentLocation.value);
+      state.selectedLocation = id;
+      state.locationQuery = '';
+      document.getElementById('locationSearch').value = '';
+      input.value = '';
+      document.getElementById('newLocationForm').hidden = true;
+      document.getElementById('newLocationToggle').setAttribute('aria-expanded', 'false');
+      renderLocations();
+      showToast(`已创建地点 ${name}`);
+    });
+
+    function updateLocationWarning() {
+      const warning = document.getElementById('locationWarning');
+      const selected = findLocation(state.selectedLocation);
+      if (!selected) return;
+      const path = selected.map(node => node.name).join(' / ');
+      const networks = [...addressList.querySelectorAll('select')].map(select => select.value);
+      let mismatch = '';
+      if (networks.includes('home') && path !== '家 A' && !path.startsWith('家 A / ')) mismatch = '家A-LAN 覆盖 家 A';
+      else if (networks.includes('company') && path !== '公司 / 一厂区' && !path.startsWith('公司 / 一厂区 / ')) mismatch = '公司-LAN 覆盖 公司 / 一厂区';
+      warning.hidden = !mismatch;
+      document.getElementById('locationWarningText').textContent = mismatch ? `${mismatch}，与当前所选地点不一致。请确认地址与地点是否正确。` : '';
+    }
+
+    function selectedClients() {
+      return new Set([...document.querySelectorAll('input[name="profile"]:checked')].map(input => input.dataset.client));
+    }
+
+    function updateVisibility() {
+      const count = selectedClients().size;
+      document.getElementById('visibilityCount').innerHTML = `将对 <strong>${count}</strong> 个客户端可见`;
+    }
+
+    document.querySelectorAll('input[name="profile"]').forEach(input => input.addEventListener('change', updateVisibility));
+
+    function renderStep() {
+      const completed = state.step === 4;
+      document.getElementById('steps').hidden = completed;
+      document.getElementById('demoTip').hidden = completed || state.step !== 1;
+      document.getElementById('connectionSuccess').hidden = completed || state.step === 1;
+      document.getElementById('completion').hidden = !completed;
+      document.getElementById('actionBar').hidden = completed;
+      for (let number = 1; number <= 3; number++) {
+        document.getElementById(`step${number}`).hidden = state.step !== number;
+        const indicator = document.querySelector(`.step[data-step="${number}"]`);
+        indicator.classList.toggle('active', number === state.step);
+        indicator.classList.toggle('complete', number < state.step || completed);
+        if (number === state.step && !completed) indicator.setAttribute('aria-current', 'step');
+        else indicator.removeAttribute('aria-current');
+        indicator.querySelector('.step-number').textContent = number < state.step || completed ? '✓' : String(number);
+      }
+      previousButton.hidden = state.step === 1 || completed;
+      skipButton.hidden = (state.step !== 2 && state.step !== 3) || completed;
+      nextButton.textContent = state.step === 3 ? '完成' : '下一步';
+      window.scrollTo({ top: 0, behavior: 'auto' });
+    }
+
+    function testConnection() {
+      if (state.testing) return;
+      state.testing = true;
+      nextButton.disabled = true;
+      previousButton.disabled = true;
+      nextButton.innerHTML = '<span class="spinner" aria-hidden="true"></span>正在测试连接…';
+      window.setTimeout(() => {
+        state.testing = false;
+        nextButton.disabled = false;
+        previousButton.disabled = false;
+        state.step = state.sameMachine ? 3 : 2;
+        renderStep();
+      }, 1500);
+    }
+
+    function finishWizard(clearProfiles = false) {
+      if (clearProfiles) {
+        document.querySelectorAll('input[name="profile"]').forEach(input => { input.checked = false; });
+        updateVisibility();
+      }
+      const name = document.getElementById('serverName').value.trim() || 'dev-box';
+      const addressCount = state.sameMachine ? 2 : addressList.querySelectorAll('.address-row').length;
+      const location = state.sameMachine ? '家 A（沿用 NUC10）' : findLocation(state.selectedLocation).map(node => node.name).join(' / ');
+      document.getElementById('completionTitle').textContent = `已添加 ${name}`;
+      document.getElementById('completionLocation').textContent = `地点 ${location} · ${addressCount} 个地址`;
+      document.getElementById('completionClients').textContent = `对 ${selectedClients().size} 个客户端可见`;
+      state.step = 4;
+      renderStep();
+    }
+
+    nextButton.addEventListener('click', () => {
+      if (state.step === 1) testConnection();
+      else if (state.step === 2) { state.step = 3; renderStep(); }
+      else if (state.step === 3) finishWizard();
+    });
+
+    previousButton.addEventListener('click', () => {
+      if (state.step === 2) state.step = 1;
+      else if (state.step === 3) state.step = state.sameMachine ? 1 : 2;
+      renderStep();
+    });
+
+    skipButton.addEventListener('click', () => {
+      if (state.step === 2) { state.step = 3; renderStep(); }
+      else if (state.step === 3) finishWizard(true);
+    });
+
+    document.getElementById('addAnother').addEventListener('click', () => {
+      state.step = 1;
+      state.sameMachine = false;
+      state.selectedLocation = 'building3';
+      state.locationQuery = '';
+      document.getElementById('serverName').value = '';
+      document.getElementById('locationSearch').value = '';
+      addressList.innerHTML = '';
+      addAddress('home');
+      addAddress('netbird');
+      setSameMachine(false);
+      document.querySelectorAll('input[name="profile"]').forEach(input => { input.checked = input.value === '训练机'; });
+      updateVisibility();
+      renderLocations();
+      renderStep();
+    });
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      document.getElementById('toastText').textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2800);
+    }
+
+    document.getElementById('viewDetails').addEventListener('click', () => showToast('将打开服务器详情'));
+    document.getElementById('supplementLink').addEventListener('click', event => {
+      event.preventDefault();
+      showToast('将打开说明信息编辑');
+    });
+    document.getElementById('cancelWizard').addEventListener('click', event => {
+      event.preventDefault();
+      showToast('已取消添加（静态演示）');
+    });
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      if (link.id !== 'supplementLink' && link.id !== 'cancelWizard') link.addEventListener('click', event => event.preventDefault());
+    });
+
+    addAddress('home');
+    addAddress('netbird');
+    renderLocations();
+    updateVisibility();
+    renderStep();
+  </script>
+</body>
+</html>

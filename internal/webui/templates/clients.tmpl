@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="client-page">
+<h1>客户端</h1>
+<p class="page-note">已配对的 sshmgr 实例。每个客户端绑定一个 profile，只能看到并使用 profile 里的服务器。</p>
+{{if .ClientPendingPairingCount}}
+<a class="home-task priority client-pending" href="/ui/clients/pairing">
+<span><strong>{{.ClientPendingPairingCount}} 个配对请求待审批</strong></span>
+<span>去审批</span>
+</a>
+{{end}}
+<div class="home-card-list client-list">
+{{range .Clients}}
+<a class="home-task client-card" href="/ui/clients/{{.ID}}">
+<span class="home-task-copy">
+<strong>{{.Name}}</strong>
+{{if .Stale}}<span class="warning">超过 1 天未同步</span>{{end}}
+{{if .UpgradeAvailable}}<span class="warning">可升级</span>{{end}}
+<small>{{.ProfileName}} · {{.ServerCount}} 台服务器</small>
+<small>最后同步 {{.LastPullText}} · 客户端版本 {{if .ClientVersion}}{{.ClientVersion}}{{else}}未声明{{end}}</small>
+<small>{{.MachineText}} · {{.SourceText}}</small>
+</span>
+<span class="home-task-action">详情</span>
+</a>
+{{else}}
+<div class="home-empty-card">还没有客户端实例。</div>
+{{end}}
+</div>
+</section>
+{{end}}

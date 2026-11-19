@@ -1,5 +1,5 @@
 {{define "content"}}
 {{if .AccessPairingNotice}}<div class="{{if .AccessPairingSuccess}}operation-result{{else}}operation-refusal{{end}}" role="alert">{{.AccessPairingNotice}}</div>{{end}}
-<div class="pairing-list-actions"><a href="/ui/access/pairing">刷新列表</a></div>
+<div class="pairing-list-actions"><a href="/ui/clients/pairing">刷新列表</a></div>
 {{template "pairingRows" .}}
 {{end}}

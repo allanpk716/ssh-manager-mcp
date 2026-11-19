@@ -1,0 +1,639 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>配对审批 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible, summary:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 14px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin-left: -10px;
+      padding: 0 10px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .back-link span {
+      margin-right: 5px;
+      font-size: 25px;
+      line-height: 1;
+    }
+    h1 {
+      margin: 5px 0 0;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .intro {
+      margin: 10px 0 18px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 23px;
+    }
+
+    .request-card {
+      padding: 20px 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .request-card.approved { border-color: #A7F3D0; }
+    .request-card.rejected { border-color: #FECACA; }
+    .request-label {
+      margin: 0 0 5px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .instance-name {
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: 25px;
+      line-height: 34px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .authority-block { margin-top: 20px; }
+    .field-label {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .authority-address {
+      display: block;
+      padding: 11px 12px;
+      border: 1px solid #EEF0F3;
+      border-radius: 9px;
+      background: #F9FAFB;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .code-block {
+      margin-top: 18px;
+      padding: 16px 10px 14px;
+      border-radius: 10px;
+      background: #F9FAFB;
+      text-align: center;
+    }
+    .code-block .field-label { margin-bottom: 5px; }
+    .auth-code {
+      display: block;
+      color: var(--text);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: clamp(38px, 11vw, 52px);
+      line-height: 1.25;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: .12em;
+      text-indent: .12em;
+      white-space: nowrap;
+    }
+    .countdown {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 44px;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .countdown-value {
+      color: var(--warning);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 18px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .countdown-value.expired { color: var(--danger); }
+
+    .profile-fieldset {
+      min-width: 0;
+      margin: 17px 0 0;
+      padding: 17px 0 0;
+      border: 0;
+      border-top: 1px solid #F0F1F3;
+    }
+    .profile-fieldset legend {
+      padding: 0;
+      font-size: 15px;
+      font-weight: 650;
+    }
+    .profile-options { display: grid; gap: 10px; margin-top: 12px; }
+    .profile-option {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 68px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      cursor: pointer;
+    }
+    .profile-option:has(input:checked) {
+      border-color: #60A5FA;
+      background: var(--primary-soft);
+    }
+    .profile-option input {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+    .profile-copy { min-width: 0; }
+    .profile-name { display: block; font-size: 15px; font-weight: 650; }
+    .profile-detail {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 18px;
+    }
+    .verify-option {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      min-height: 56px;
+      margin-top: 16px;
+      padding: 9px 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 21px;
+    }
+    .verify-option input {
+      flex: 0 0 auto;
+      width: 20px;
+      height: 20px;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+    .actions { display: grid; gap: 10px; margin-top: 16px; }
+    .primary-button, .danger-button {
+      width: 100%;
+      min-height: 46px;
+      padding: 0 16px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .primary-button {
+      border: 1px solid var(--primary);
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .danger-button {
+      border: 1px solid var(--danger);
+      background: var(--card);
+      color: var(--danger);
+    }
+    .danger-button:active { background: #FEF2F2; }
+
+    .result {
+      padding: 20px 4px;
+      text-align: center;
+    }
+    .result-icon {
+      display: grid;
+      place-items: center;
+      width: 56px;
+      height: 56px;
+      margin: 0 auto 16px;
+      border-radius: 50%;
+      background: #D1FAE5;
+      color: var(--success);
+    }
+    .rejected .result-icon { background: #FEE2E2; color: var(--danger); }
+    .result-title {
+      margin: 0;
+      font-size: 17px;
+      line-height: 27px;
+      font-weight: 650;
+    }
+    .result-detail {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 21px;
+    }
+
+    .history-card {
+      margin-top: 12px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .history-card summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 54px;
+      padding: 0 16px;
+      border-radius: 12px;
+      cursor: pointer;
+      list-style: none;
+      font-weight: 600;
+    }
+    .history-card summary::-webkit-details-marker { display: none; }
+    .history-count {
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 400;
+    }
+    .history-chevron {
+      margin-left: auto;
+      color: var(--muted);
+      transition: transform .18s ease;
+    }
+    .history-card[open] .history-chevron { transform: rotate(180deg); }
+    .history-list { padding: 0 16px; }
+    .history-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 58px;
+      border-top: 1px solid #F0F1F3;
+    }
+    .history-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .history-meta {
+      display: flex;
+      flex: 0 0 auto;
+      align-items: center;
+      gap: 7px;
+      margin-left: auto;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .history-status { font-weight: 600; }
+    .history-status.approved { color: var(--success); }
+    .history-status.rejected { color: var(--danger); }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    @media (min-width: 768px) {
+      .topbar {
+        display: block;
+        border-bottom: 1px solid rgba(229,231,235,.9);
+        background: rgba(255,255,255,.96);
+      }
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        gap: 42px;
+        max-width: 960px;
+        min-height: 64px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      .brand {
+        color: var(--text);
+        text-decoration: none;
+        font-size: 17px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link {
+        flex-direction: row;
+        gap: 7px;
+        min-height: 44px;
+        padding: 0 14px;
+        font-size: 14px;
+      }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 20px; padding-bottom: 48px; }
+      .back-link { margin-left: 0; padding-left: 0; }
+      h1 { margin-top: 8px; }
+      .intro { margin-bottom: 20px; }
+      .request-card { padding: 24px; }
+      .auth-code { font-size: 52px; }
+    }
+
+    @media (max-width: 370px) {
+      .request-card { padding-right: 14px; padding-left: 14px; }
+      .auth-code { font-size: 36px; letter-spacing: .08em; text-indent: .08em; }
+      .history-item { gap: 7px; }
+      .history-meta { gap: 5px; font-size: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+          主页
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+          服务器
+        </a>
+        <a class="nav-link" href="#" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+          客户端
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          授权
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          更多
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <a class="back-link" href="#"><span aria-hidden="true">‹</span>客户端</a>
+    <h1>配对审批</h1>
+    <p class="intro">有新的 sshmgr 实例请求接入。请对照对方屏幕上显示的三项信息，逐位一致再批准。</p>
+
+    <!-- 空状态：没有待审批请求时显示「在新机器上运行 sshmgr pair 发起配对」。 -->
+    <section class="request-card" id="requestCard" aria-label="待审批请求">
+      <div id="requestContent">
+        <p class="request-label">待审批请求</p>
+        <h2 class="instance-name">macbook-air</h2>
+
+        <div class="authority-block">
+          <span class="field-label" id="authorityLabel">对方连接的权威端地址</span>
+          <code class="authority-address" aria-labelledby="authorityLabel">https://192.168.100.235:7878</code>
+        </div>
+
+        <div class="code-block">
+          <span class="field-label" id="codeLabel">短认证码</span>
+          <code class="auth-code" aria-labelledby="codeLabel">482 913</code>
+        </div>
+        <div class="countdown">
+          <span id="countdownLabel">剩余时间</span>
+          <span class="countdown-value" id="countdown" role="timer" aria-live="off">4:59</span>
+        </div>
+
+        <fieldset class="profile-fieldset">
+          <legend>授予 profile</legend>
+          <div class="profile-options">
+            <label class="profile-option">
+              <input type="radio" name="profile" value="全部" checked>
+              <span class="profile-copy">
+                <strong class="profile-name">全部</strong>
+                <span class="profile-detail">包含 8 台服务器</span>
+              </span>
+            </label>
+            <label class="profile-option">
+              <input type="radio" name="profile" value="训练机">
+              <span class="profile-copy">
+                <strong class="profile-name">训练机</strong>
+                <span class="profile-detail">包含 3 台服务器</span>
+              </span>
+            </label>
+            <label class="profile-option">
+              <input type="radio" name="profile" value="公司">
+              <span class="profile-copy">
+                <strong class="profile-name">公司</strong>
+                <span class="profile-detail">包含 3 台服务器</span>
+              </span>
+            </label>
+          </div>
+        </fieldset>
+
+        <label class="verify-option">
+          <input id="verified" type="checkbox">
+          <span>我已逐位比对三项，与对方屏幕一致</span>
+        </label>
+        <div class="actions">
+          <button class="primary-button" id="approveButton" type="button" disabled>批准</button>
+          <button class="danger-button" id="rejectButton" type="button">拒绝</button>
+        </div>
+      </div>
+
+      <div class="result" id="result" role="status" aria-live="polite" tabindex="-1" hidden>
+        <div class="result-icon" id="resultIcon" aria-hidden="true"></div>
+        <p class="result-title" id="resultTitle"></p>
+        <p class="result-detail" id="resultDetail"></p>
+      </div>
+    </section>
+
+    <details class="history-card">
+      <summary>
+        最近处理
+        <span class="history-count" id="historyCount">2 条</span>
+        <svg class="history-chevron" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </summary>
+      <div class="history-list">
+        <div class="history-item" id="currentHistory" hidden>
+          <span class="history-name">macbook-air</span>
+          <span class="history-meta"><span class="history-status" id="currentHistoryStatus"></span><span>· 刚刚</span></span>
+        </div>
+        <div class="history-item">
+          <span class="history-name">train3060</span>
+          <span class="history-meta"><span class="history-status approved">已批准</span><span>· 11-02</span></span>
+        </div>
+        <div class="history-item">
+          <span class="history-name">unknown-host</span>
+          <span class="history-meta"><span class="history-status rejected">已拒绝</span><span>· 10-28</span></span>
+        </div>
+      </div>
+    </details>
+  </main>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+      主页
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+      服务器
+    </a>
+    <a class="nav-link" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+      客户端
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      授权
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      更多
+    </a>
+  </nav>
+
+  <script>
+    const requestCard = document.getElementById('requestCard');
+    const requestContent = document.getElementById('requestContent');
+    const verified = document.getElementById('verified');
+    const approveButton = document.getElementById('approveButton');
+    const rejectButton = document.getElementById('rejectButton');
+    const countdown = document.getElementById('countdown');
+    const countdownLabel = document.getElementById('countdownLabel');
+    const result = document.getElementById('result');
+    const resultIcon = document.getElementById('resultIcon');
+    const resultTitle = document.getElementById('resultTitle');
+    const resultDetail = document.getElementById('resultDetail');
+    const currentHistory = document.getElementById('currentHistory');
+    const currentHistoryStatus = document.getElementById('currentHistoryStatus');
+    const historyCount = document.getElementById('historyCount');
+    const deadline = Date.now() + 299000;
+    let countdownTimer;
+    let resolved = false;
+
+    const checkIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m5 12 4 4L19 6"/></svg>';
+    const closeIcon = '<svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="m6 6 12 12M18 6 6 18"/></svg>';
+
+    function updateApproval() {
+      approveButton.disabled = !verified.checked || resolved || Date.now() >= deadline;
+    }
+
+    function updateCountdown() {
+      if (resolved) return;
+      const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      const minutes = Math.floor(seconds / 60);
+      countdown.textContent = `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+      if (seconds === 0) {
+        window.clearInterval(countdownTimer);
+        countdown.classList.add('expired');
+        countdownLabel.textContent = '请求已过期';
+        approveButton.disabled = true;
+        rejectButton.disabled = true;
+        verified.disabled = true;
+        document.querySelectorAll('input[name="profile"]').forEach(input => { input.disabled = true; });
+      } else {
+        updateApproval();
+      }
+    }
+
+    function finishRequest(approved) {
+      if (resolved || Date.now() >= deadline || (approved && !verified.checked)) return;
+      resolved = true;
+      window.clearInterval(countdownTimer);
+      requestContent.hidden = true;
+      result.hidden = false;
+      requestCard.classList.add(approved ? 'approved' : 'rejected');
+      resultIcon.innerHTML = approved ? checkIcon : closeIcon;
+      resultTitle.textContent = approved
+        ? '已批准。macbook-air 完成配对后会出现在客户端列表'
+        : '已拒绝。macbook-air 的配对请求已关闭';
+      const selectedProfile = document.querySelector('input[name="profile"]:checked').value;
+      resultDetail.textContent = approved ? `授予 profile：${selectedProfile}` : '未授予任何 profile';
+      currentHistoryStatus.textContent = approved ? '已批准' : '已拒绝';
+      currentHistoryStatus.className = `history-status ${approved ? 'approved' : 'rejected'}`;
+      currentHistory.hidden = false;
+      historyCount.textContent = '3 条';
+      result.focus();
+    }
+
+    verified.addEventListener('change', updateApproval);
+    approveButton.addEventListener('click', () => finishRequest(true));
+    rejectButton.addEventListener('click', () => finishRequest(false));
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      link.addEventListener('click', event => event.preventDefault());
+    });
+
+    updateCountdown();
+    countdownTimer = window.setInterval(updateCountdown, 250);
+  </script>
+</body>
+</html>

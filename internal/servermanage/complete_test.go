@@ -45,10 +45,9 @@ func TestCompleteIdempotentAndConditionalCredentials(t *testing.T) {
 	}
 
 	// 条件凭据：无凭据机器设置密码 + 服务器元数据 + sudo 密码。
-	location := "机房 A"
 	filledRole := "应用服务器"
 	result, err := m.Complete(CompleteRequest{
-		Identifier: "bare", Role: &filledRole, Location: &location,
+		Identifier: "bare", Role: &filledRole,
 		Password: "login-pass-7f2a", SudoPassword: "sudo-pass-91bc",
 	}, WebUISource("192.0.2.9"))
 	if err != nil {
@@ -60,15 +59,14 @@ func TestCompleteIdempotentAndConditionalCredentials(t *testing.T) {
 	if got := models.ServerAttentionReasons(result.Server.CredentialID, result.Server.Role, result.Server.Tags); len(got) != 0 {
 		t.Fatalf("设置密码并填角色后不应再有注意原因：%v", got)
 	}
-	if result.Server.Location != "机房 A" {
+	if result.Server.Role != "应用服务器" {
 		t.Fatalf("服务器元数据应写入：%+v", result.Server)
 	}
 
 	// 同一张表单重发：密码与 sudo 留空表示不变；结果幂等。
 	repeatRole := filledRole
-	repeatLocation := location
 	repeat, err := m.Complete(CompleteRequest{
-		Identifier: "bare", Role: &repeatRole, Location: &repeatLocation,
+		Identifier: "bare", Role: &repeatRole,
 	}, WebUISource("192.0.2.9"))
 	if err != nil {
 		t.Fatal(err)

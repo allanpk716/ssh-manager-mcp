@@ -242,7 +242,7 @@ func (s clientUIServerSource) ServerDetail(instance, identifier string) (*webui.
 			Shell:          string(models.NormalizeShellType(srv.ShellType)),
 			CredentialType: credentialType[srv.CredentialID], HasKeyPassphrase: hasPassphrase[srv.CredentialID],
 			HasSudoPassword: srv.SudoCredentialID != "", Description: srv.Description,
-			Location: srv.Location, Hardware: srv.Hardware, Services: srv.Services,
+			Hardware: srv.Hardware, Services: srv.Services,
 			Role: srv.Role, Caveats: srv.Caveats, Tags: tags, ExposeHost: srv.ExposeHost,
 			DeviceName: deviceNames[srv.DeviceID], HasDevice: deviceNames[srv.DeviceID] != "",
 			AttentionReasons: servermanage.ReasonLabels(models.ServerAttentionReasons(srv.CredentialID, srv.Role, tags)),

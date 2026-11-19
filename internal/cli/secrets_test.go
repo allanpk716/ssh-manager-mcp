@@ -118,7 +118,7 @@ func writeSecretValueFile(t *testing.T, name string, value []byte) string {
 func TestSecretsLifecycle(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "测试备注", "--note", "数据库口令", "--stdin")
 	// 换值前先确认可写入服务器列表不受换值影响：这里先留空，授权行为在
 	// allow/disallow 用例里单独覆盖。
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "DB_PASSWORD", "--stdin")
@@ -169,13 +169,13 @@ func TestSecretsValueInputModes(t *testing.T) {
 
 	fileValue := []byte("from-file-value\n\n")
 	valueFile := writeSecretValueFile(t, "value.bin", fileValue)
-	mustSecretsCli(t, "", "secrets", "add", "FILE_VALUE", "--from-file", valueFile)
+	mustSecretsCli(t, "", "secrets", "add", "FILE_VALUE", "--note", "测试备注", "--from-file", valueFile)
 	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "FILE_VALUE").Value; string(got) != string(fileValue) {
 		t.Fatalf("file value must keep every byte including trailing newlines, got %q want %q", got, fileValue)
 	}
 
 	stdinValue := []byte("stdin-value\r\n")
-	mustSecretsCli(t, string(stdinValue), "secrets", "add", "STDIN_VALUE", "--stdin")
+	mustSecretsCli(t, string(stdinValue), "secrets", "add", "STDIN_VALUE", "--note", "测试备注", "--stdin")
 	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "STDIN_VALUE").Value; string(got) != string(stdinValue) {
 		t.Fatalf("stdin value must keep every byte including the trailing newline, got %q want %q", got, stdinValue)
 	}
@@ -193,27 +193,27 @@ func TestSecretsValueInputModes(t *testing.T) {
 		secretsStdinIsTTY = oldTTY
 		secretsReadHiddenLine = oldRead
 	})
-	mustSecretsCli(t, "", "secrets", "add", "INTERACTIVE_VALUE")
+	mustSecretsCli(t, "", "secrets", "add", "INTERACTIVE_VALUE", "--note", "测试备注")
 	if got := secretSnapshotRow(t, secretsSnapshot(t, dbPath, mk), "INTERACTIVE_VALUE").Value; string(got) != "interactive-value" {
 		t.Fatalf("interactive value = %q, want one line without the newline", got)
 	}
 
 	// 两次不一致：报错且不登记。
 	inputs = [][]byte{[]byte("interactive-value"), []byte("different-value!")}
-	_, _, err := runSecretsRoot(t, "", "secrets", "add", "MISMATCH_VALUE")
+	_, _, err := runSecretsRoot(t, "", "secrets", "add", "MISMATCH_VALUE", "--note", "测试备注")
 	if err == nil || !strings.Contains(err.Error(), "两次输入的机密项值不一致") {
 		t.Fatalf("mismatched interactive input must be refused, got %v", err)
 	}
 
 	// 非交互终端且没有来源：明确报错。
 	secretsStdinIsTTY = func() bool { return false }
-	_, _, err = runSecretsRoot(t, "", "secrets", "add", "NO_SOURCE_VALUE")
+	_, _, err = runSecretsRoot(t, "", "secrets", "add", "NO_SOURCE_VALUE", "--note", "测试备注")
 	if err == nil || !strings.Contains(err.Error(), "--from-file") || !strings.Contains(err.Error(), "--stdin") {
 		t.Fatalf("non-interactive input without a source must point at --from-file/--stdin, got %v", err)
 	}
 
 	// 两个来源同时给出：直接拒绝。
-	_, _, err = runSecretsRoot(t, "", "secrets", "add", "BOTH_SOURCES", "--from-file", valueFile, "--stdin")
+	_, _, err = runSecretsRoot(t, "", "secrets", "add", "BOTH_SOURCES", "--note", "测试备注", "--from-file", valueFile, "--stdin")
 	if err == nil || !strings.Contains(err.Error(), "不能同时使用") {
 		t.Fatalf("--from-file with --stdin must be refused, got %v", err)
 	}
@@ -248,7 +248,7 @@ func TestSecretsValueLimits(t *testing.T) {
 		if name == "" {
 			name = "REJECTED"
 		}
-		_, _, err := runSecretsRoot(t, "", "secrets", "add", name, "--from-file", valueFile(t, tc.n, 'v'))
+		_, _, err := runSecretsRoot(t, "", "secrets", "add", name, "--note", "测试备注", "--from-file", valueFile(t, tc.n, 'v'))
 		if tc.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("value of %d bytes must fail with %q, got %v", tc.n, tc.wantErr, err)
@@ -280,26 +280,26 @@ func TestSecretsValueLimits(t *testing.T) {
 // TestSecretsNameRules 覆盖名字只差大小写的冲突、非法字符与目标不存在。
 func TestSecretsNameRules(t *testing.T) {
 	newSecretsEnv(t)
-	mustSecretsCli(t, "initial-value", "secrets", "add", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, "initial-value", "secrets", "add", "API_TOKEN", "--note", "测试备注", "--stdin")
 
 	for _, tc := range []struct {
 		args    []string
 		wantErr string
 	}{
 		{
-			args:    []string{"secrets", "add", "api_token", "--stdin"},
+			args:    []string{"secrets", "add", "api_token", "--note", "测试备注", "--stdin"},
 			wantErr: "大小写不同的名字视为同一个",
 		},
 		{
-			args:    []string{"secrets", "add", "9BAD_NAME", "--stdin"},
+			args:    []string{"secrets", "add", "9BAD_NAME", "--note", "测试备注", "--stdin"},
 			wantErr: "机密项名字不合法",
 		},
 		{
-			args:    []string{"secrets", "add", "BAD-NAME", "--stdin"},
+			args:    []string{"secrets", "add", "BAD-NAME", "--note", "测试备注", "--stdin"},
 			wantErr: "机密项名字不合法",
 		},
 		{
-			args:    []string{"secrets", "add", "口令", "--stdin"},
+			args:    []string{"secrets", "add", "口令", "--note", "测试备注", "--stdin"},
 			wantErr: "机密项名字不合法",
 		},
 		{
@@ -328,7 +328,7 @@ func TestSecretsEnvironmentNameCLI(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
 
-	out := mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
+	out := mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
 	if strings.Contains(out, testSecretValueA) {
 		t.Fatalf("add output leaked the secret value:\n%s", out)
 	}
@@ -368,7 +368,7 @@ func TestSecretsEnvironmentNameCLI(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "清除请使用 --clear-env") {
 		t.Fatalf("empty --env must point at --clear-env, got %v", err)
 	}
-	_, _, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "BAD_ENV", "--env", "PATH", "--stdin")
+	_, _, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "BAD_ENV", "--note", "测试备注", "--env", "PATH", "--stdin")
 	if err == nil || !strings.Contains(err.Error(), "固定拒绝清单") {
 		t.Fatalf("invalid environment name must be rejected by the shared storage rule, got %v", err)
 	}
@@ -396,7 +396,7 @@ func TestSecretsEnvironmentNameCLI(t *testing.T) {
 // 界：第二项字段校验失败时，第一项字段也不能留下半成品改动。
 func TestSecretsEnvironmentNameEditIsAtomic(t *testing.T) {
 	dbPath, _ := newSecretsEnv(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "旧备注", "--env", "HF_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "旧备注", "--env", "HF_TOKEN", "--stdin")
 
 	triggerDB, err := sql.Open("sqlite", dbPath)
 	if err != nil {
@@ -437,8 +437,8 @@ func seedSecretServers(t *testing.T) {
 func TestSecretsAllowDisallow(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "测试备注", "--note", "数据库口令", "--stdin")
 
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
 	out := mustSecretsCli(t, "", "secrets", "list")
@@ -523,7 +523,7 @@ func TestSecretsHelpMentionsNewlineAndNoteRisk(t *testing.T) {
 		}
 	}
 	out := mustSecretsCli(t, "", "secrets", "add", "--help")
-	if !strings.Contains(out, "备注对 agent 可见，不要写敏感内容") {
+	if !strings.Contains(out, "备注必填；agent 只能靠备注判断机密项用途，不要写敏感内容") {
 		t.Fatalf("add help must warn about notes being visible to agents:\n%s", out)
 	}
 }
@@ -547,7 +547,7 @@ func seedSharedStorageSecretVault(t *testing.T) (string, []byte) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"NAS_MOUNT_PASSWORD", "API_TOKEN"} {
-		if err := st.AddSecret(name, "", []byte(testSecretValueA), store.CLISource()); err != nil {
+		if err := st.AddSecret(name, "测试备注", []byte(testSecretValueA), store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.AllowSecrets([]string{name}, []string{"web1"}, store.CLISource()); err != nil {
@@ -557,6 +557,7 @@ func seedSharedStorageSecretVault(t *testing.T) (string, []byte) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -591,7 +592,7 @@ func TestSecretsSingleMachineRole(t *testing.T) {
 	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
 		t.Fatalf("save standalone role: %v", err)
 	}
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--stdin")
 	if out := mustSecretsCli(t, "", "secrets", "list"); !strings.Contains(out, "API_TOKEN") {
 		t.Fatalf("single-machine list must show the secret:\n%s", out)
 	}
@@ -615,7 +616,7 @@ func TestSecretsImportOldSnapshotKeepsSecretsEmpty(t *testing.T) {
 	if out := runCli(t, "shares", "list"); !strings.Contains(out, "没有匹配的共享存储") {
 		t.Fatalf("old snapshot without shared storage must import zero shared storages, got:\n%s", out)
 	}
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--stdin")
 }
 
 // TestSecretsAuditRows 钉住每个动作的审计行：动作名、状态与摘要白名单；换值
@@ -623,7 +624,7 @@ func TestSecretsImportOldSnapshotKeepsSecretsEmpty(t *testing.T) {
 func TestSecretsAuditRows(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "旧备注", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "旧备注", "--stdin")
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
 	mustSecretsCli(t, "", "secrets", "edit", "API_TOKEN", "--note", "新备注")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
@@ -670,8 +671,8 @@ func TestSecretsAuditRows(t *testing.T) {
 func TestSecretsServerRemoveCascade(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--stdin")
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "测试备注", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,DB_PASSWORD", "--servers", "db1,web1")
 
 	mustSecretsCli(t, "", "servers", "rm", "--yes", "db1")
@@ -714,9 +715,9 @@ func seedSecretVaultForExport(t *testing.T) (string, []byte) {
 	t.Helper()
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--env", "HF_TOKEN", "--stdin")
 	mustSecretsCli(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "数据库口令", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "DB_PASSWORD", "--note", "测试备注", "--note", "数据库口令", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "db1,web1")
 	seedDeliveryRecordForExport(t, dbPath, mk)
 	return dbPath, mk
@@ -837,7 +838,7 @@ func TestSecretsEncryptedBackupRoundTrip(t *testing.T) {
 func TestSecretsClientRefused(t *testing.T) {
 	seedClientCacheFixture(t)
 	commands := [][]string{
-		{"secrets", "add", "API_TOKEN", "--stdin"},
+		{"secrets", "add", "API_TOKEN", "--note", "测试备注", "--stdin"},
 		{"secrets", "set", "API_TOKEN", "--stdin"},
 		{"secrets", "edit", "API_TOKEN", "--note", "x"},
 		{"secrets", "rm", "API_TOKEN"},
@@ -864,7 +865,7 @@ func TestSecretsClientRefusedBeforeValueInput(t *testing.T) {
 	secretsStdinIsTTY = func() bool { return false }
 	t.Cleanup(func() { secretsStdinIsTTY = oldTTY })
 
-	_, _, err := runSecretsRoot(t, "", "secrets", "add", "API_TOKEN")
+	_, _, err := runSecretsRoot(t, "", "secrets", "add", "API_TOKEN", "--note", "测试备注")
 	if err == nil || !strings.Contains(err.Error(), "权威端") {
 		t.Fatalf("client add must be refused with the authoritative-machine hint before reading the value, got %v", err)
 	}
@@ -887,13 +888,13 @@ func TestSecretsValueNeverVisible(t *testing.T) {
 		}
 	}
 
-	stdout, stderr, err := runSecretsRoot(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	stdout, stderr, err := runSecretsRoot(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--stdin")
 	record(stdout, stderr, err)
 	stdout, stderr, err = runSecretsRoot(t, testSecretValueB, "secrets", "set", "API_TOKEN", "--stdin")
 	record(stdout, stderr, err)
-	stdout, stderr, err = runSecretsRoot(t, "short", "secrets", "add", "TOO_SHORT", "--stdin")
+	stdout, stderr, err = runSecretsRoot(t, "short", "secrets", "add", "TOO_SHORT", "--note", "测试备注", "--stdin")
 	record(stdout, stderr, err)
-	stdout, stderr, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "api_token", "--stdin")
+	stdout, stderr, err = runSecretsRoot(t, testSecretValueA, "secrets", "add", "api_token", "--note", "测试备注", "--stdin")
 	record(stdout, stderr, err)
 	stdout, stderr, err = runSecretsRoot(t, "", "secrets", "allow", "--secrets", "GHOST", "--servers", "no-such-entry")
 	record(stdout, stderr, err)
@@ -920,7 +921,7 @@ func seedSecretDeliveryReference(t *testing.T) (string, []byte) {
 	t.Helper()
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN", "--servers", "web1")
 	st, err := store.Open(dbPath, mk)
 	if err != nil {
@@ -1011,8 +1012,8 @@ func TestSecretsRmListsDeliveryRecordsBeforeDelete(t *testing.T) {
 func TestSecretsRecordsListsAndFiltersDeliveryRecords(t *testing.T) {
 	dbPath, mk := newSecretsEnv(t)
 	seedSecretServers(t)
-	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "接口令牌", "--stdin")
-	mustSecretsCli(t, testSecretValueB, "secrets", "add", "RETIRED_TOKEN", "--note", "已下线", "--stdin")
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--stdin")
+	mustSecretsCli(t, testSecretValueB, "secrets", "add", "RETIRED_TOKEN", "--note", "测试备注", "--note", "已下线", "--stdin")
 	mustSecretsCli(t, "", "secrets", "allow", "--secrets", "API_TOKEN,RETIRED_TOKEN", "--servers", "web1,web2")
 
 	st, err := store.Open(dbPath, mk)
@@ -1118,6 +1119,25 @@ func TestSecretsRecordsListsAndFiltersDeliveryRecords(t *testing.T) {
 	help := mustSecretsCli(t, "", "secrets", "records", "--help")
 	if !strings.Contains(help, "登记失败") || !strings.Contains(help, "不承诺完整") {
 		t.Fatalf("帮助文字必须说明记录可能缺漏：\n%s", help)
+	}
+}
+
+// TestSecretsNoteRequired 校验命令行的新增与编辑都拒绝空白备注；帮助文
+// 案同步说明备注必填。
+func TestSecretsNoteRequired(t *testing.T) {
+	newSecretsEnv(t)
+	help := runCli(t, "secrets", "add", "--help")
+	if !strings.Contains(help, "备注（必填") {
+		t.Fatalf("新增帮助应说明备注必填：\n%s", help)
+	}
+	_, _, err := runSecretsRoot(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "  ", "--stdin")
+	if err == nil || !strings.Contains(err.Error(), "备注") {
+		t.Fatalf("空白备注新增机密项应被拒绝，实际：%v", err)
+	}
+	mustSecretsCli(t, testSecretValueA, "secrets", "add", "API_TOKEN", "--note", "测试备注", "--note", "接口令牌", "--stdin")
+	_, _, err = runSecretsRoot(t, "", "secrets", "edit", "API_TOKEN", "--note", " ")
+	if err == nil || !strings.Contains(err.Error(), "备注") {
+		t.Fatalf("编辑成空白备注应被拒绝，实际：%v", err)
 	}
 }
 

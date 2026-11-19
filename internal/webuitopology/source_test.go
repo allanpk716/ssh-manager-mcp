@@ -140,6 +140,7 @@ func seedVault(t *testing.T) (*store.Store, string, string, string) {
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "家NAS共享", Device: "NAS", User: "backup", PasswordSecret: "NAS_PASSWORD", Drive: "N",
+		Note: "家NAS共享数据",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

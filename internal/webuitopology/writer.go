@@ -116,6 +116,175 @@ func (w openerWriter) AddPhysicalNetwork(name, site string, source webui.Topolog
 	})
 }
 
+// mapTopologyStoreError 把存储层的地点与网络错误换成 Web UI 的分类错
+// 误：不存在按 404 处理，其余输入与守卫错误按 400 处理。
+func mapTopologyStoreError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, store.ErrSiteNotFound), errors.Is(err, store.ErrNetworkNotFound):
+		return &webui.TopologyNameNotFoundError{Message: err.Error()}
+	case errors.Is(err, store.ErrSiteNameExists), errors.Is(err, store.ErrNetworkNameTaken):
+		return &webui.TopologyInvalidInputError{Message: err.Error()}
+	}
+	var validation *store.TopologyValidationError
+	if errors.As(err, &validation) {
+		return &webui.TopologyInvalidInputError{Message: validation.Message}
+	}
+	return err
+}
+
+// sitePathText 重新读取地点树并返回指定地点的完整路径，供写操作提示使用。
+func sitePathText(st *store.Store, siteID string) (string, error) {
+	sites, err := st.ListSites()
+	if err != nil {
+		return "", err
+	}
+	return models.NewSiteTree(sites).PathString(siteID), nil
+}
+
+func (w openerWriter) AddLocation(
+	name, parent, note string, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		site, err := st.AddSiteWithParentAndSource(name, note, parent, store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", mapTopologyStoreError(err)
+		}
+		path, pathErr := sitePathText(st, site.ID)
+		if pathErr != nil {
+			return "", pathErr
+		}
+		return "已新建地点 " + path, nil
+	})
+}
+
+func (w openerWriter) EditLocation(
+	ref string, changes webui.TopologyLocationChanges, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		site, err := st.EditSiteWithSource(ref, store.SiteChanges{
+			Name: changes.Name, Note: changes.Note, Parent: changes.Parent,
+		}, store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", mapTopologyStoreError(err)
+		}
+		path, pathErr := sitePathText(st, site.ID)
+		if pathErr != nil {
+			return "", pathErr
+		}
+		return "已保存地点 " + path, nil
+	})
+}
+
+func (w openerWriter) DeleteLocation(ref string, source webui.TopologyWriteSource) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		if err := st.DeleteSiteWithSource(ref, store.WebUISource(source.RemoteAddress)); err != nil {
+			return "", mapTopologyStoreError(err)
+		}
+		return "已删除地点 " + ref, nil
+	})
+}
+
+func (w openerWriter) AddManagedNetwork(
+	input webui.TopologyNetworkInput, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		networkType, err := models.ParseNetworkType(input.Type)
+		if err != nil {
+			return "", &webui.TopologyInvalidInputError{Message: err.Error()}
+		}
+		network, err := st.AddNetworkWithSource(models.Network{
+			Name: input.Name, Type: networkType, SiteName: input.Site,
+			NetworkRange: input.NetworkRange, BandwidthMbps: input.BandwidthMbps,
+			Metered: input.Metered,
+		}, store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", mapTopologyStoreError(err)
+		}
+		return fmt.Sprintf("已保存网络 %s（%s）", network.Name, networkTypeLabel(networkType)), nil
+	})
+}
+
+func (w openerWriter) EditManagedNetwork(
+	name string, changes webui.TopologyNetworkChanges, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		network, err := st.EditNetworkWithSource(name, store.NetworkChanges{
+			Name: changes.Name, Site: changes.Site, NetworkRange: changes.NetworkRange,
+			BandwidthMbps: changes.BandwidthMbps, Metered: changes.Metered,
+		}, store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", mapTopologyStoreError(err)
+		}
+		return fmt.Sprintf("已保存网络 %s（%s）", network.Name, networkTypeLabel(network.Type)), nil
+	})
+}
+
+func (w openerWriter) EditDeviceSite(
+	device, siteRef string, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		site := siteRef
+		edited, err := st.EditDeviceWithSource(device, store.DeviceChanges{Site: &site},
+			store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", topologyWriteError(err)
+		}
+		if edited.SiteName == "" {
+			return fmt.Sprintf("已清除设备 %s 的地点", edited.Name), nil
+		}
+		return fmt.Sprintf("已把设备 %s 的地点改为 %s", edited.Name, edited.SiteName), nil
+	})
+}
+
+func (w openerWriter) MoveServerToDevice(
+	serverIdentifier, device string, source webui.TopologyWriteSource,
+) (webui.TopologyServerMoveResult, error) {
+	var result webui.TopologyServerMoveResult
+	_, err := withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		move, err := st.MoveServerToDevice(serverIdentifier, device)
+		if err != nil {
+			return "", topologyWriteError(err)
+		}
+		result = webui.TopologyServerMoveResult{
+			ServerName:   move.Server.Name,
+			FromDevice:   deviceNameOrEmpty(move.FromDevice),
+			ToDevice:     move.ToDevice.Name,
+			AnchorNotice: anchorCopyNotice(move.AnchorCopy),
+		}
+		return "", nil
+	})
+	return result, err
+}
+
+func deviceNameOrEmpty(device *models.Device) string {
+	if device == nil {
+		return ""
+	}
+	return device.Name
+}
+
+func anchorCopyNotice(anchor *store.ServerAnchorCopy) string {
+	if anchor == nil {
+		return ""
+	}
+	if anchor.AnchorConflict {
+		return "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。"
+	}
+	if anchor.Copied {
+		return "已复制同机账号 " + anchor.FromServerName + " 的主机密钥锚。"
+	}
+	return ""
+}
+
+func networkTypeLabel(networkType models.NetworkType) string {
+	if networkType == models.NetworkVirtual {
+		return "虚拟局域网"
+	}
+	return "物理局域网"
+}
+
 // WriterFromStore 返回绑定指定存储的拓扑写入口。
 func WriterFromStore(st *store.Store) webui.TopologyWriter {
 	return openerWriter{open: func() (*store.Store, func(), error) {

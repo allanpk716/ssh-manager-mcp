@@ -278,7 +278,7 @@ func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 		t.Fatalf("登录状态码 = %d，应为 303，页面：\n%s", loginResp.StatusCode, loginBody)
 	}
 
-	devicePage, err := client.Get(base + "/ui/access/device-codes")
+	devicePage, err := client.Get(base + "/ui/ops/clients/new")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,18 +286,18 @@ func TestRunServeWebUIDeviceCodeIssueUsesServePortAndFingerprint(t *testing.T) {
 	devicePage.Body.Close()
 	csrfToken = hiddenCSRFValue(string(deviceBody))
 	if devicePage.StatusCode != http.StatusOK || csrfToken == "" {
-		t.Fatalf("设备码页状态码 = %d，页面：\n%s", devicePage.StatusCode, deviceBody)
+		t.Fatalf("手动添加客户端页状态码 = %d，页面：\n%s", devicePage.StatusCode, deviceBody)
 	}
 
 	issueForm := url.Values{"csrf_token": {csrfToken}, "name": {"laptop"}, "profile": {profileID}}
-	issueResp, err := postAuthorityForm(client, base+"/ui/access/device-codes", issueForm)
+	issueResp, err := postAuthorityForm(client, base+"/ui/ops/clients/new", issueForm)
 	if err != nil {
 		t.Fatal(err)
 	}
 	issueBody, _ := io.ReadAll(issueResp.Body)
 	issueResp.Body.Close()
 	if issueResp.StatusCode != http.StatusOK {
-		t.Fatalf("签发设备码状态码 = %d，应为 200，页面：\n%s", issueResp.StatusCode, issueBody)
+		t.Fatalf("生成客户端接入凭据状态码 = %d，应为 200，页面：\n%s", issueResp.StatusCode, issueBody)
 	}
 	wantURL := "cache pull --url https://" + mainListener.Addr().String()
 	if !strings.Contains(string(issueBody), wantURL) {

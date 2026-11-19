@@ -21,6 +21,7 @@ type AddServerRelationsRequest struct {
 	LoginCredential *models.Credential
 	SudoCredential  *models.Credential
 	DeviceName      string
+	SiteName        string
 	ExistingDevice  bool
 	Memberships     []NetworkMembershipWrite
 	ProfileIDs      []string
@@ -42,6 +43,7 @@ type AddServerRelationsResult struct {
 type AddOtherDeviceRequest struct {
 	Name        string
 	Note        string
+	SiteName    string
 	Memberships []NetworkMembershipWrite
 	Source      WriteSource
 }
@@ -64,7 +66,7 @@ func (s *Store) AddServerWithRelations(
 	defer tx.Rollback()
 	added, err := s.addServerWithCredentialsToDeviceTx(
 		tx, &request.Server, request.LoginCredential, request.SudoCredential,
-		request.DeviceName, !request.ExistingDevice, request.Source,
+		request.DeviceName, request.SiteName, !request.ExistingDevice, request.Source,
 	)
 	if err != nil {
 		return nil, err
@@ -98,7 +100,7 @@ func (s *Store) AddOtherDeviceWithMemberships(request AddOtherDeviceRequest) (*m
 		return nil, err
 	}
 	defer tx.Rollback()
-	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", request.Source)
+	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", request.SiteName, request.Source)
 	if err != nil {
 		return nil, err
 	}

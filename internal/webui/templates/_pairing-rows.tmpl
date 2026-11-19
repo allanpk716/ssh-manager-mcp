@@ -5,13 +5,13 @@
 <article class="pairing-request{{if not .HasShortCode}} pairing-missing-code{{end}}{{if .ForeignTarget}} pairing-foreign{{end}}" id="pairing-{{.ID}}">
 <div class="pairing-comparison">
 <h2 class="pairing-instance">{{.Name}}</h2>
-<p><span>客户端连接的权威端地址</span><span class="pairing-target">{{.TargetURL}}</span></p>
+<p><span>对方连接的权威端地址</span><span class="pairing-target">{{.TargetURL}}</span></p>
 <p><span>6 位短认证码</span>{{if .HasShortCode}}<code class="pairing-short-code">{{.ShortCode}}</code>{{else}}<strong>行缺少短认证码，只能拒绝</strong>{{end}}</p>
 </div>
 <dl class="pairing-fields">
 <div><dt>来源地址</dt><dd>{{.SourceAddress}}</dd></div>
 <div><dt>profile 提示</dt><dd>{{if .ProfileHint}}{{.ProfileHint}}{{else}}未声明{{end}}</dd></div>
-<div><dt>替换同名设备</dt><dd>{{if .ReplaceInactive}}替换同名设备的未激活设备码{{else}}不替换{{end}}</dd></div>
+<div><dt>替换同名设备</dt><dd>{{if .ReplaceInactive}}替换同名客户端的未激活接入凭据{{else}}不替换{{end}}</dd></div>
 <div><dt>状态</dt><dd>{{if eq .State "pending"}}剩余 {{.RemainingSeconds}} 秒{{else if eq .State "approved"}}已批准，等待客户端完成（剩余 {{.RemainingSeconds}} 秒）{{else}}已完成{{end}}</dd></div>
 </dl>
 {{if and (eq .State "pending") .ForeignTarget}}
@@ -22,7 +22,7 @@
 {{if eq .State "pending"}}
 <div class="pairing-actions">
 {{if and .HasShortCode (not .ForeignTarget)}}
-<form method="post" action="/ui/access/pairing/{{.ID}}/approve" class="pairing-form">
+<form method="post" action="/ui/clients/pairing/{{.ID}}/approve" class="pairing-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <label for="pairing-profile-{{.ID}}">批准到 profile</label>
 <select id="pairing-profile-{{.ID}}" name="profile" required>
@@ -32,11 +32,11 @@
 <button type="submit">批准</button>
 </form>
 {{end}}
-<form method="post" action="/ui/access/pairing/{{.ID}}/reject" class="inline-form pairing-reject-form">
+<form method="post" action="/ui/clients/pairing/{{.ID}}/reject" class="inline-form pairing-reject-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <button type="submit">拒绝</button>
 </form>
-<a class="pairing-detail-link" href="/ui/access/pairing/{{.ID}}">查看详情</a>
+<a class="pairing-detail-link" href="/ui/clients/pairing/{{.ID}}">查看详情</a>
 </div>
 {{end}}
 </article>

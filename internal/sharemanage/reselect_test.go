@@ -327,6 +327,7 @@ func newReselectFixture(t *testing.T, system, currentAddress string) reselectFix
 	addedShare, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource())
 	if err != nil {
 		t.Fatal(err)

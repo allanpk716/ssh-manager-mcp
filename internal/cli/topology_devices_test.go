@@ -123,7 +123,7 @@ func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
 	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "虚拟网", "--address", "100.64.0.71")
 
 	out := runCli(t, "devices", "show", "Web 网络存储")
-	for _, want := range []string{"备注：共享照片与备份", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
+	for _, want := range []string{"备注：共享照片与备份", "地点：家A", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("devices show 应显示 Web UI 保存的同一份数据，缺少 %q：\n%s", want, out)
 		}
@@ -138,6 +138,9 @@ func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
 		device, err := st.GetDevice(name)
 		if err != nil || device == nil || device.Note != "共享照片与备份" || device.ClientName != "" {
 			t.Fatalf("两条入口应保存同样的设备字段：%v %+v", err, device)
+		}
+		if name == "Web 网络存储" && (device.SiteID == "" || device.SiteName != "家A") {
+			t.Fatalf("Web UI 登记的其他设备应保存地点，实际：%+v", device)
 		}
 		memberships, err := st.ListNetworkMembershipsByRegistration(name)
 		if err != nil || len(memberships) != 2 ||
@@ -397,7 +400,7 @@ func seedDeviceDeleteFixture(t *testing.T, dbPath string, masterKey []byte) {
 	if err := source.GrantServers(profileID, []string{root.ServerID, deploy.ServerID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.AddSecret("deploy_secret", "", []byte("secret-value"), store.CLISource()); err != nil {
+	if err := source.AddSecret("deploy_secret", "测试备注", []byte("secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.AllowSecrets([]string{"deploy_secret"}, []string{"root", "deploy"}, store.CLISource()); err != nil {
@@ -577,7 +580,7 @@ func TestDevicesRemovePreviewsAndCascadesSharedStorages(t *testing.T) {
 		t.Fatal(err)
 	}
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	before, err := store.Open(dbPath, masterKey)
 	if err != nil {
@@ -717,7 +720,7 @@ func TestDevicesNetworkMembers(t *testing.T) {
 
 	out := runCli(t, "devices", "show", "工作站")
 	for _, want := range []string{
-		"家A局域网（物理局域网，站点 家A）：192.168.1.20",
+		"家A局域网（物理局域网，地点 家A）：192.168.1.20",
 		"虚拟网（虚拟局域网）：Workstation.Example",
 	} {
 		if !strings.Contains(out, want) {
@@ -751,7 +754,14 @@ func TestDevicesListFilters(t *testing.T) {
 	runCli(t, "networks", "add", "公司局域网", "--type", "physical", "--site", "公司A")
 	runCli(t, "networks", "add", "虚拟网", "--type", "virtual")
 	for _, device := range []string{"工作站", "NAS", "公司机器", "未归类设备"} {
-		runCli(t, "devices", "add", device)
+		var site string
+		switch device {
+		case "工作站", "NAS":
+			site = "家A"
+		case "公司机器":
+			site = "公司A"
+		}
+		runCli(t, "devices", "add", device, "--site", site)
 	}
 	runCli(t, "devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20")
 	runCli(t, "devices", "member", "add", "工作站", "--network", "虚拟网", "--address", "100.64.0.5")
@@ -766,7 +776,7 @@ func TestDevicesListFilters(t *testing.T) {
 	out = runCli(t, "devices", "list", "--site", "家A")
 	if !strings.Contains(out, "工作站") || !strings.Contains(out, "NAS") ||
 		strings.Contains(out, "公司机器") || strings.Contains(out, "未归类设备") {
-		t.Fatalf("site filter must return devices in that site's physical networks:\n%s", out)
+		t.Fatalf("site filter must return devices registered in that location:\n%s", out)
 	}
 	out = runCli(t, "devices", "list", "--network", "虚拟网")
 	if !strings.Contains(out, "工作站") || strings.Contains(out, "NAS") ||
@@ -807,7 +817,7 @@ func TestTopologyNamesTrimSurroundingWhitespace(t *testing.T) {
 	withCliStoreEnv(t)
 
 	out := runCli(t, "sites", "add", " 家A ")
-	if !strings.Contains(out, "已登记站点 家A\n") {
+	if !strings.Contains(out, "已登记地点 家A\n") {
 		t.Fatalf("site registration must trim the stored name:\n%s", out)
 	}
 	out = runCli(t, "networks", "add", " 家A局域网 ", "--type", "physical", "--site", " 家A ")

@@ -72,7 +72,7 @@ func TestManagerAdapterUsesAccessManagerAndWebUIAuditSource(t *testing.T) {
 	}
 }
 
-func TestManagerAdapterDeviceCodesIssueListAndRevoke(t *testing.T) {
+func TestManagerAdapterIssuesManualClient(t *testing.T) {
 	key, err := store.GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
@@ -104,34 +104,12 @@ func TestManagerAdapterDeviceCodesIssueListAndRevoke(t *testing.T) {
 		t.Fatalf("拉取命令映射不正确：%q", result.PullCommand)
 	}
 
-	rows, err := source.ListDeviceCodes()
+	auditRows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"cache-token.add"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Name != "laptop" || rows[0].Status != "active" || rows[0].ProfileName != "运维" {
-		t.Fatalf("适配后的设备码列表不正确：%+v", rows)
-	}
-	if rows[0].TokenPrefix == "" || rows[0].ID == "" {
-		t.Fatalf("适配后的设备码行缺少标识符或前缀：%+v", rows[0])
-	}
-
-	if err := source.RevokeDeviceCode(rows[0].ID, webui.AccessWriteSource{RemoteAddress: "192.0.2.7"}); err != nil {
-		t.Fatal(err)
-	}
-	rows, err = source.ListDeviceCodes()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 || rows[0].Status != "revoked" {
-		t.Fatalf("撤销后列表应仍含该行并标记已撤销：%+v", rows)
-	}
-
-	auditRows, err := st.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"cache-token.add", "cache-token.revoke"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(auditRows) != 2 {
-		t.Fatalf("设备码审计行数量 = %d，应为 2：%+v", len(auditRows), auditRows)
+	if len(auditRows) != 1 {
+		t.Fatalf("设备码审计行数量 = %d，应为 1：%+v", len(auditRows), auditRows)
 	}
 	for _, row := range auditRows {
 		if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.7" {

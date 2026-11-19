@@ -116,35 +116,36 @@ func newSitesCmd() *cobra.Command {
 }
 
 func sitesAddCmd() *cobra.Command {
-	var note string
+	var note, parent string
 	c := &cobra.Command{
-		Use:   "add NAME [--note 文本]",
+		Use:   "add NAME [--parent 地点路径] [--note 文本]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Register a topology site",
+		Short: "Register a topology location",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireTopologyVault()
 			if err != nil {
 				return err
 			}
 			defer s.Close()
-			site, err := s.AddSite(args[0], note)
+			site, err := s.AddSiteWithParent(args[0], note, parent)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已登记站点 %s\n", site.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "已登记地点 %s\n", sitePathLabel(site, s))
 			return nil
 		},
 	}
+	c.Flags().StringVar(&parent, "parent", "", "上级地点；传完整路径（如 公司 / 一厂区），空字符串或缺省表示根地点")
 	c.Flags().StringVar(&note, "note", "", "备注")
 	return c
 }
 
 func sitesEditCmd() *cobra.Command {
-	var name, note string
+	var name, note, parent string
 	c := &cobra.Command{
-		Use:   "edit NAME [--name 新名字] [--note 新备注]",
+		Use:   "edit NAME [--name 新名字] [--parent 新上级地点] [--note 新备注]",
 		Args:  cobra.ExactArgs(1),
-		Short: "Edit a topology site with partial-update semantics",
+		Short: "Edit a topology location with partial-update semantics",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireTopologyVault()
 			if err != nil {
@@ -158,16 +159,20 @@ func sitesEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("note") {
 				changes.Note = &note
 			}
+			if cmd.Flags().Changed("parent") {
+				changes.Parent = &parent
+			}
 			site, err := s.EditSite(args[0], changes)
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已修改站点 %s；新名字 %s\n", args[0], site.Name)
+			fmt.Fprintf(cmd.OutOrStdout(), "已修改地点 %s；新名字 %s\n", args[0], site.Name)
 			return nil
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "新名字")
 	c.Flags().StringVar(&note, "note", "", "新备注；传空字符串清空")
+	c.Flags().StringVar(&parent, "parent", "", "新的上级地点；传完整路径，空字符串表示改为根地点")
 	return c
 }
 
@@ -175,7 +180,7 @@ func sitesRmCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "rm NAME",
 		Args:  cobra.ExactArgs(1),
-		Short: "Remove an empty topology site",
+		Short: "Remove an empty topology location",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireTopologyVault()
 			if err != nil {
@@ -185,7 +190,7 @@ func sitesRmCmd() *cobra.Command {
 			if err := s.DeleteSite(args[0]); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "已删除站点 %s\n", args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "已删除地点 %s\n", args[0])
 			return nil
 		},
 	}
@@ -197,7 +202,7 @@ func sitesListCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "list [--instance <name>]",
 		Args:  cobra.NoArgs,
-		Short: "List topology sites and their physical networks",
+		Short: "List topology locations as a tree with their physical networks",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, closeStore, err := openTopologyViewStore(instance)
 			if err != nil {
@@ -217,30 +222,58 @@ func sitesListCmd() *cobra.Command {
 			}
 			out := cmd.OutOrStdout()
 			if len(sites) == 0 {
-				fmt.Fprintln(out, "还没有登记站点")
+				fmt.Fprintln(out, "还没有登记地点")
 				return nil
 			}
 			networksBySite := make(map[string][]*models.Network)
 			for _, network := range physicalNetworks {
 				networksBySite[network.SiteID] = append(networksBySite[network.SiteID], network)
 			}
+			children := make(map[string][]*models.Site)
 			for _, site := range sites {
+				if site.ParentID == site.ID {
+					continue
+				}
+				children[site.ParentID] = append(children[site.ParentID], site)
+			}
+			seen := make(map[string]bool, len(sites))
+			var printSite func(site *models.Site, depth int)
+			printSite = func(site *models.Site, depth int) {
+				if seen[site.ID] {
+					return
+				}
+				seen[site.ID] = true
+				indent := strings.Repeat("  ", depth)
 				note := site.Note
 				if note == "" {
 					note = "（无备注）"
 				}
-				fmt.Fprintf(out, "站点 %s — %s\n", site.Name, note)
+				fmt.Fprintf(out, "%s地点 %s — %s\n", indent, site.Name, note)
 				networks := networksBySite[site.ID]
 				if len(networks) == 0 {
-					fmt.Fprintln(out, "  物理局域网：无")
-					continue
+					fmt.Fprintf(out, "%s  物理局域网：无\n", indent)
 				}
 				for _, network := range networks {
-					fmt.Fprintf(out, "  物理局域网：%s", network.Name)
+					fmt.Fprintf(out, "%s  物理局域网：%s", indent, network.Name)
 					if network.NetworkRange != "" {
 						fmt.Fprintf(out, "（网段 %s）", network.NetworkRange)
 					}
 					fmt.Fprintln(out)
+				}
+				for _, child := range children[site.ID] {
+					printSite(child, depth+1)
+				}
+			}
+			for _, site := range sites {
+				if site.ParentID == "" {
+					printSite(site, 0)
+				}
+			}
+			// 数据损坏导致全部地点都挂在环上时仍要可见：补打未访问过的地
+			// 点，从根层级开始。
+			for _, site := range sites {
+				if !seen[site.ID] {
+					printSite(site, 0)
 				}
 			}
 			return nil
@@ -266,7 +299,7 @@ func networksAddCmd() *cobra.Command {
 		metered      bool
 	)
 	c := &cobra.Command{
-		Use:   "add NAME --type physical|virtual [--site 站点] [--note 文本] [--cidr 网段] [--bandwidth-mbps 带宽] [--metered]",
+		Use:   "add NAME --type physical|virtual [--site 地点路径] [--note 文本] [--cidr 网段] [--bandwidth-mbps 带宽] [--metered]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Register a physical or virtual network",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -291,7 +324,7 @@ func networksAddCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&networkType, "type", "", "网络类型：physical（物理局域网）或 virtual（虚拟局域网）")
-	c.Flags().StringVar(&site, "site", "", "所属站点；物理局域网必填，虚拟局域网不能使用")
+	c.Flags().StringVar(&site, "site", "", "覆盖的地点；物理局域网必填（可为任意一级，传完整路径），虚拟局域网不能使用")
 	c.Flags().StringVar(&note, "note", "", "备注")
 	c.Flags().StringVar(&networkRange, "cidr", "", "网段；只给人看，不参与判断")
 	c.Flags().Int64Var(&bandwidth, "bandwidth-mbps", 0, "标称带宽，单位 Mbit/s；0 表示未填写")
@@ -311,7 +344,7 @@ func networksEditCmd() *cobra.Command {
 		metered      bool
 	)
 	c := &cobra.Command{
-		Use:   "edit NAME [--name 新名字] [--site 站点] [--note 新备注] [--cidr 新网段] [--bandwidth-mbps 新带宽] [--metered=true|false]",
+		Use:   "edit NAME [--name 新名字] [--site 地点路径] [--note 新备注] [--cidr 新网段] [--bandwidth-mbps 新带宽] [--metered=true|false]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Edit a network with partial-update semantics; the type is immutable",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -352,7 +385,7 @@ func networksEditCmd() *cobra.Command {
 	}
 	c.Flags().StringVar(&networkType, "type", "", "网络类型登记后不可修改；此参数只会触发明确报错")
 	c.Flags().StringVar(&name, "name", "", "新名字")
-	c.Flags().StringVar(&site, "site", "", "新的所属站点")
+	c.Flags().StringVar(&site, "site", "", "新的覆盖地点；传完整路径")
 	c.Flags().StringVar(&note, "note", "", "新备注；传空字符串清空")
 	c.Flags().StringVar(&networkRange, "cidr", "", "新网段；传空字符串清空")
 	c.Flags().Int64Var(&bandwidth, "bandwidth-mbps", 0, "新的标称带宽，单位 Mbit/s；0 表示未填写")
@@ -417,7 +450,7 @@ func networksRmCmd() *cobra.Command {
 func networksListCmd() *cobra.Command {
 	var site, networkType, instance string
 	c := &cobra.Command{
-		Use:   "list [--site 站点] [--type physical|virtual] [--instance <name>]",
+		Use:   "list [--site 地点路径] [--type physical|virtual] [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology networks, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -445,26 +478,29 @@ func networksListCmd() *cobra.Command {
 				fmt.Fprintln(out, "没有匹配的网络")
 				return nil
 			}
+			tree, err := cliSiteTree(s)
+			if err != nil {
+				return err
+			}
 			for _, network := range networks {
-				printNetwork(out, network)
+				printNetwork(out, network, tree)
 			}
 			return nil
 		},
 	}
-	c.Flags().StringVar(&site, "site", "", "只显示属于该站点的物理局域网")
+	c.Flags().StringVar(&site, "site", "", "只显示覆盖该地点及其下级的物理局域网")
 	c.Flags().StringVar(&networkType, "type", "", "只显示该类型：physical 或 virtual")
 	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 
-// printNetwork 输出一个网络的登记字段；空选填字段显示为未填写。
-func printNetwork(out io.Writer, network *models.Network) {
-	site := network.SiteName
-	if site == "" {
-		site = "不属于站点"
-	}
+// printNetwork 输出一个网络的登记字段；空选填字段显示为未填写。物理局
+// 域网显示覆盖地点的完整路径。
+func printNetwork(out io.Writer, network *models.Network, tree *models.SiteTree) {
 	fmt.Fprintf(out, "网络 %s — %s\n", network.Name, networkTypeLabel(network.Type))
-	fmt.Fprintf(out, "  站点：%s\n", site)
+	if network.Type == models.NetworkPhysical {
+		fmt.Fprintf(out, "  覆盖地点：%s\n", tree.PathString(network.SiteID))
+	}
 	if network.Note != "" {
 		fmt.Fprintf(out, "  备注：%s\n", network.Note)
 	}
@@ -477,6 +513,28 @@ func printNetwork(out io.Writer, network *models.Network) {
 	if network.Metered {
 		fmt.Fprintln(out, "  按流量计费")
 	}
+}
+
+// cliSiteTree 从存储构建地点树，供命令行输出完整地点路径。
+func cliSiteTree(s *store.Store) (*models.SiteTree, error) {
+	sites, err := s.ListSites()
+	if err != nil {
+		return nil, err
+	}
+	return models.NewSiteTree(sites), nil
+}
+
+// sitePathLabel 返回一个地点的完整路径；读取失败时退回地点名，保证输出
+// 不因展示辅助查询失败而中断。
+func sitePathLabel(site *models.Site, s *store.Store) string {
+	tree, err := cliSiteTree(s)
+	if err != nil {
+		return site.Name
+	}
+	if path := tree.PathString(site.ID); path != "" {
+		return path
+	}
+	return site.Name
 }
 
 // networkTypeLabel 把网络类型的存储代号换成中文说明。

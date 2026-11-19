@@ -1,0 +1,14 @@
+{{define "content"}}
+<section class="one-time-result">
+<h1>客户端接入凭据已生成</h1>
+<div class="operation-refusal">接入凭据只显示这一次，刷新或返回都不会再出现；请立即复制保存。</div>
+<dl class="one-time-fields">
+<div><dt>客户端</dt><dd>{{.AccessDeviceIssued.Name}}</dd></div>
+<div><dt>接入凭据</dt><dd class="secret-value">{{.AccessDeviceIssued.Code}}</dd></div>
+<div><dt>权威端证书公钥指纹</dt><dd class="secret-value">{{.AccessDeviceIssued.Fingerprint}}</dd></div>
+</dl>
+<p>在工作机上执行：</p>
+<pre><code>{{.AccessDeviceIssued.PullCommand}}</code></pre>
+<a class="back-link" href="/ui/clients/" aria-label="返回客户端列表"><span aria-hidden="true">‹</span>客户端</a>
+</section>
+{{end}}

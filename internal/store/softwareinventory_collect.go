@@ -139,7 +139,7 @@ func (s *Store) FullServersForDevice(deviceName string) ([]*models.Server, error
 		return nil, err
 	}
 	rows, err := s.db.Query(`
-		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE device_id=? ORDER BY name,id`, device.ID)
 	if err != nil {
 		return nil, err
@@ -537,7 +537,7 @@ func serverByNameTx(tx *sql.Tx, name string) (*models.Server, error) {
 
 func serverWhereTx(tx *sql.Tx, where string, args ...any) (*models.Server, error) {
 	rows, err := tx.Query(`
-		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE `+where, args...)
 	if err != nil {
 		return nil, err

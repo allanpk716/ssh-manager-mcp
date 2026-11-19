@@ -12,10 +12,10 @@ import (
 // 拒绝清单与全库大小写不敏感唯一约束。所有报错都要说明命中的规则。
 func TestSecretEnvironmentNameValidationAndUniqueness(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.AddSecretWithEnvironmentName("FIRST_TOKEN", "", []byte("first-secret-value"), "HF_TOKEN", CLISource()); err != nil {
+	if err := s.AddSecretWithEnvironmentName("FIRST_TOKEN", "测试备注", []byte("first-secret-value"), "HF_TOKEN", CLISource()); err != nil {
 		t.Fatalf("add secret with environment name: %v", err)
 	}
-	if err := s.AddSecret("SECOND_TOKEN", "", []byte("second-secret-value"), CLISource()); err != nil {
+	if err := s.AddSecret("SECOND_TOKEN", "测试备注", []byte("second-secret-value"), CLISource()); err != nil {
 		t.Fatalf("add secret: %v", err)
 	}
 
@@ -60,7 +60,7 @@ func TestSecretEnvironmentNameValidationAndUniqueness(t *testing.T) {
 		!strings.Contains(err.Error(), "大小写") {
 		t.Fatalf("case-insensitive duplicate environment name must identify the existing secret, got %v", err)
 	}
-	err = s.AddSecretWithEnvironmentName("THIRD_TOKEN", "", []byte("third-secret-value"), "Hf_Token", CLISource())
+	err = s.AddSecretWithEnvironmentName("THIRD_TOKEN", "测试备注", []byte("third-secret-value"), "Hf_Token", CLISource())
 	if !errors.Is(err, ErrSecretEnvironmentNameExists) || !strings.Contains(err.Error(), "FIRST_TOKEN") {
 		t.Fatalf("duplicate environment name must also reject add, got %v", err)
 	}
@@ -70,7 +70,7 @@ func TestSecretEnvironmentNameValidationAndUniqueness(t *testing.T) {
 // 审计只含机密项名与变量名前后值，绝不含机密值。
 func TestSecretEnvironmentNameAudit(t *testing.T) {
 	s := newTestStore(t)
-	if err := s.AddSecretWithEnvironmentName("DEPLOY_TOKEN", "", []byte("deploy-secret-value"), "HF_TOKEN", CLISource()); err != nil {
+	if err := s.AddSecretWithEnvironmentName("DEPLOY_TOKEN", "测试备注", []byte("deploy-secret-value"), "HF_TOKEN", CLISource()); err != nil {
 		t.Fatalf("set environment name while adding: %v", err)
 	}
 	if err := s.SetSecretEnvironmentName("DEPLOY_TOKEN", "MODEL_TOKEN", CLISource()); err != nil {

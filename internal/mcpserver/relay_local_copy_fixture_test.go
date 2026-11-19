@@ -141,7 +141,7 @@ func newRelayLocalCopyEnv(t *testing.T, mounted bool) *relayLocalCopyEnv {
 		t.Fatal(err)
 	}
 	if err := st.AddSecret(
-		"LOCAL_COPY_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"LOCAL_COPY_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -158,6 +158,7 @@ func newRelayLocalCopyEnv(t *testing.T, mounted bool) *relayLocalCopyEnv {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "本地拷贝NAS", User: "mount-user",
 		PasswordSecret: "LOCAL_COPY_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

@@ -79,7 +79,7 @@ func TestServersEditAndDescription(t *testing.T) {
 	mustCli("servers", "add", "--name", "gpu", "--host", "h", "--user", "u",
 		"--password", "pw",
 		"--role", "prod ml", "--special-handling", "do not reboot 02-03:00",
-		"--location", "dc2", "--hardware", "8x A100",
+		"--hardware", "8x A100",
 		"--services", "jupyter", "--description", "owner note")
 
 	// ls now shows role + truncated caveats (description no longer on the ls line)

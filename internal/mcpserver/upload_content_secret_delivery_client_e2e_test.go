@@ -189,7 +189,7 @@ type deliveryClientE2E struct {
 func newDeliveryClientE2E(t *testing.T, secretName, secretValue string) *deliveryClientE2E {
 	t.Helper()
 	authority := newDeliveryE2EVault(t)
-	if err := authority.AddSecret(secretName, "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := authority.AddSecret(secretName, "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	address, hostKey, cleanupTarget := testsshd.Start(t, testsshd.Options{Password: "pw"})

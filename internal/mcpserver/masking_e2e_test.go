@@ -60,7 +60,7 @@ func TestMaskingExecCommandStdoutAndStderr(t *testing.T) {
 func TestMaskingToolErrorText(t *testing.T) {
 	const secretValue = "error-secret-value"
 	st := newStore(t)
-	if err := st.AddSecret("ERROR_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("ERROR_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "mask-test", Version: "test"}, nil)
@@ -128,10 +128,10 @@ func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
 	const secretValue = "boundary-secret-value"
 	const unifiedSecretValue = "unified-layer-secret-value"
 	st := newStore(t)
-	if err := st.AddSecret("BOUNDARY_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("BOUNDARY_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("UNIFIED_TOKEN", "", []byte(unifiedSecretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("UNIFIED_TOKEN", "测试备注", []byte(unifiedSecretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	prefix := strings.Repeat("x", int(MaxOutputBytes)-5)
@@ -187,7 +187,7 @@ func TestMaskingExecCommandTruncatesAfterMasking(t *testing.T) {
 func TestMaskingDownloadFileTruncatesAfterMasking(t *testing.T) {
 	const secretValue = "download-boundary-secret"
 	st := newStore(t)
-	if err := st.AddSecret("DOWNLOAD_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("DOWNLOAD_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	content := strings.Repeat("y", int(MaxOutputBytes)-6) + secretValue + "tail"
@@ -440,7 +440,7 @@ func TestMaskingLifecycleAndFieldShapes(t *testing.T) {
 		thirdValue  = "third-secret-value"
 	)
 	st := newStore(t)
-	if err := st.AddSecret("API_TOKEN", "", []byte(firstValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("API_TOKEN", "测试备注", []byte(firstValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.SetSecretValue("API_TOKEN", []byte(secondValue), store.CLISource()); err != nil {
@@ -542,10 +542,10 @@ func TestMaskingLifecycleAndFieldShapes(t *testing.T) {
 func TestMaskingUsesCurrentServerForTieBreakAndMasksUnauthorizedValues(t *testing.T) {
 	const sharedValue = "shared-secret-value"
 	st := newStore(t)
-	if err := st.AddSecret("AAA_SAME", "", []byte(sharedValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("AAA_SAME", "测试备注", []byte(sharedValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("ZZZ_SAME", "", []byte(sharedValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("ZZZ_SAME", "测试备注", []byte(sharedValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	serverID, err := st.AddServer(&models.Server{Name: "target", Host: "192.0.2.10", Port: 22, User: "u"})
@@ -585,10 +585,10 @@ func TestMaskingUsesCurrentServerForTieBreakAndMasksUnauthorizedValues(t *testin
 func TestMaskingReReadsStoreForEachCall(t *testing.T) {
 	storeA := newStore(t)
 	storeB := newStore(t)
-	if err := storeA.AddSecret("STORE_A", "", []byte("store-a-secret-value"), store.CLISource()); err != nil {
+	if err := storeA.AddSecret("STORE_A", "测试备注", []byte("store-a-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := storeB.AddSecret("STORE_B", "", []byte("store-b-secret-value"), store.CLISource()); err != nil {
+	if err := storeB.AddSecret("STORE_B", "测试备注", []byte("store-b-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	current := storeA
@@ -665,7 +665,7 @@ func TestMaskingReadFailureDoesNotReturnHandlerOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("CLOSED_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("CLOSED_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Close(); err != nil {

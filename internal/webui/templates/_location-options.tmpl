@@ -1,0 +1,8 @@
+{{define "location-options"}}
+{{range .Options}}
+<label class="tree-option {{.DepthClass}}{{if .Disabled}} disabled{{end}}">
+<input type="radio" name="{{$.InputName}}" value="{{.Site.LocationPath}}"{{if eq .Site.LocationPath $.Selected}} checked{{end}}{{if .Disabled}} disabled{{end}}>
+<span>{{if .Site.LocationPath}}{{.Site.LocationPath}}{{else}}{{.Site.Name}}{{end}}{{if .Site.Note}}（{{.Site.Note}}）{{end}}</span>
+</label>
+{{end}}
+{{end}}

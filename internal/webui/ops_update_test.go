@@ -109,8 +109,8 @@ func TestOpsUpdatePageShowsVersionsAndUpgradeButton(t *testing.T) {
 			t.Fatalf("升级页缺少 %q：\n%s", want, body)
 		}
 	}
-	if !strings.Contains(body, `href="/ui/ops/update"`) {
-		t.Fatalf("导航应显示升级入口：\n%s", body)
+	if !strings.Contains(body, `href="/ui/more/"`) || !strings.Contains(body, `>更多<`) {
+		t.Fatalf("导航应显示更多标签：\n%s", body)
 	}
 	if !strings.Contains(body, `name="csrf_token"`) || !strings.Contains(body, "升级到 v0.2.0") {
 		t.Fatalf("可升级时应显示带防跨站请求伪造令牌的升级按钮：\n%s", body)
@@ -239,10 +239,7 @@ func TestOpsUpdateClientPageUsesStartupInstance(t *testing.T) {
 	if ops.updateCheckInstance != "laptop" {
 		t.Fatalf("客户端升级页应按启动实例读取，实际 %q", ops.updateCheckInstance)
 	}
-	if !strings.Contains(body, `aria-label="运维区域"`) || !strings.Contains(body, `href="/ui/ops/update"`) {
-		t.Fatalf("客户端运维导航应显示升级入口：\n%s", body)
-	}
-	if !strings.Contains(body, `href="/ui/ops/client-audit"`) {
-		t.Fatalf("客户端运维导航应保留本机审计入口：\n%s", body)
+	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/more/"`) {
+		t.Fatalf("客户端导航应显示更多标签：\n%s", body)
 	}
 }

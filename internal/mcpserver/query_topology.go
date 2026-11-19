@@ -82,8 +82,11 @@ type queryTopologyDevice struct {
 }
 
 type queryTopologyView struct {
-	origin       *models.Device
-	originNets   []string
+	origin     *models.Device
+	originNets []string
+	// sites 是完整地点树，物理局域网标签与机器地点不一致提示都用它拼
+	// 出「公司 / 一厂区 / 3 号楼」这样的完整路径。
+	sites        *models.SiteTree
 	physical     map[string][]queryTopologyDevice
 	virtual      map[string][]queryTopologyDevice
 	unreachable  []string
@@ -108,6 +111,7 @@ type queryTopologyPairTarget struct {
 
 type queryTopologyPairView struct {
 	origin *models.Device
+	sites  *models.SiteTree
 	// originUsesLocalSuccessCache 表示出发点就是本实例所在设备；只有这
 	// 时，标记 sshmgr 真正拨号时会优先尝试的网络才读本实例的成功地址
 	// 缓存。
@@ -193,8 +197,13 @@ func buildQueryTopologyPairView(st *store.Store, profileID string, origin *model
 		return nil, err
 	}
 
+	siteRows, err := st.ListSites()
+	if err != nil {
+		return nil, err
+	}
 	view := &queryTopologyPairView{
 		origin: origin, now: time.Now(), detail: detail,
+		sites:                       models.NewSiteTree(siteRows),
 		originUsesLocalSuccessCache: queryTopologyOriginUsesLocalSuccessCache(st, bridgeCacheInstance(), origin),
 	}
 	seen := make(map[string]bool, len(rawTargets))
@@ -387,13 +396,18 @@ func buildQueryTopologyView(st *store.Store, profileID string, origin *models.De
 	if err != nil {
 		return nil, err
 	}
+	siteRows, err := st.ListSites()
+	if err != nil {
+		return nil, err
+	}
+	siteTree := models.NewSiteTree(siteRows)
 	view := &queryTopologyView{
-		origin: origin, now: time.Now(), detail: detail,
+		origin: origin, now: time.Now(), detail: detail, sites: siteTree,
 		physical: make(map[string][]queryTopologyDevice),
 		virtual:  make(map[string][]queryTopologyDevice),
 	}
 	originNetworks := networkSet(origin)
-	view.originNets = networkLabels(origin)
+	view.originNets = networkLabels(origin, siteTree)
 
 	var candidates []queryTopologyDevice
 	for _, device := range devices {
@@ -480,14 +494,14 @@ func networkTypes(device *models.Device) map[string]models.NetworkType {
 	return out
 }
 
-func networkLabels(device *models.Device) []string {
+func networkLabels(device *models.Device, tree *models.SiteTree) []string {
 	var physical, virtual []string
 	for _, membership := range device.Memberships {
 		switch membership.NetworkType {
 		case models.NetworkPhysical:
 			label := membership.NetworkName + "（物理局域网"
-			if membership.SiteName != "" {
-				label += "，站点：" + membership.SiteName
+			if membership.SiteID != "" {
+				label += "，覆盖地点：" + tree.PathString(membership.SiteID)
 			}
 			physical = append(physical, label+"）")
 		case models.NetworkVirtual:
@@ -527,9 +541,10 @@ type queryTopologyObservationKey struct {
 
 func renderQueryTopologyView(view *queryTopologyView) string {
 	lines := []string{
-		"出发点：" + view.origin.Name,
+		queryTopologyOriginLabel(view.origin, view.sites),
 		"所属网络：" + strings.Join(nonEmptyList(view.originNets, "未登记"), "、"),
 	}
+	lines = append(lines, queryTopologyMismatchLines(view.origin, view.sites)...)
 	lines = appendGroup(lines, "同在物理局域网：", sortedNetworkNames(view.physical), view.physical, view)
 	lines = appendGroup(lines, "只能经虚拟局域网到达：", sortedNetworkNames(view.virtual), view.virtual, view)
 	lines = append(lines, "无共同网络不可达："+strings.Join(nonEmptyList(view.unreachable, "无"), "、"))
@@ -539,7 +554,7 @@ func renderQueryTopologyView(view *queryTopologyView) string {
 }
 
 func renderQueryTopologyPairView(view *queryTopologyPairView) string {
-	lines := []string{"出发点：" + view.origin.Name}
+	lines := []string{queryTopologyOriginLabel(view.origin, view.sites)}
 	originNetworks := networkSet(view.origin)
 	for _, target := range view.targets {
 		lines = append(lines, "目标："+queryTopologyPairTargetLabel(target))
@@ -552,6 +567,7 @@ func renderQueryTopologyPairView(view *queryTopologyPairView) string {
 		}
 
 		common := commonQueryNetworks(originNetworks, target.device)
+		lines = append(lines, queryTopologyMismatchLines(target.device, view.sites)...)
 		if len(common) == 0 {
 			lines = append(lines, "  无共同网络，不可达")
 			if target.dialFailureReason != "" {
@@ -578,9 +594,17 @@ func renderQueryTopologyPairView(view *queryTopologyPairView) string {
 			selected = target.selected
 		}
 		for _, network := range common {
-			label := network.name + "（" + networkTypeLabel(network.networkType) + "）"
+			label := network.name + "（" + networkTypeLabel(network.networkType)
+			if network.networkType == models.NetworkPhysical && network.siteID != "" {
+				label += "，覆盖地点：" + view.sites.PathString(network.siteID)
+			}
+			label += "）"
 			if network.name == selected {
-				label = network.name + "（" + networkTypeLabel(network.networkType) + "，实际会选）"
+				label = network.name + "（" + networkTypeLabel(network.networkType)
+				if network.networkType == models.NetworkPhysical && network.siteID != "" {
+					label += "，覆盖地点：" + view.sites.PathString(network.siteID)
+				}
+				label += "，实际会选）"
 			}
 			line := label
 			if view.detail {
@@ -611,6 +635,7 @@ func queryTopologyPairTargetLabel(target queryTopologyPairTarget) string {
 type queryTopologyNetwork struct {
 	name        string
 	networkType models.NetworkType
+	siteID      string
 }
 
 func commonQueryNetworks(originNetworks map[string]bool, device *models.Device) []queryTopologyNetwork {
@@ -621,7 +646,9 @@ func commonQueryNetworks(originNetworks map[string]bool, device *models.Device) 
 		}
 		switch membership.NetworkType {
 		case models.NetworkPhysical:
-			physical = append(physical, queryTopologyNetwork{name: membership.NetworkName, networkType: models.NetworkPhysical})
+			physical = append(physical, queryTopologyNetwork{
+				name: membership.NetworkName, networkType: models.NetworkPhysical, siteID: membership.SiteID,
+			})
 		case models.NetworkVirtual:
 			virtual = append(virtual, queryTopologyNetwork{name: membership.NetworkName, networkType: models.NetworkVirtual})
 		}
@@ -725,7 +752,12 @@ func appendGroup(lines []string, title string, networkNames []string,
 	for _, networkName := range networkNames {
 		lines = append(lines, "  "+networkName)
 		for _, candidate := range groups[networkName] {
-			line := queryTopologyDeviceLabel(candidate.device, candidate.entries) + " " + observationLabel(view, candidate.device.ID, networkName)
+			line := strings.TrimSpace(
+				queryTopologyDeviceLabel(candidate.device, candidate.entries) + " " +
+					observationLabel(view, candidate.device.ID, networkName))
+			if mismatch := queryTopologyMismatchMarker(candidate.device, view.sites, networkName); mismatch != "" {
+				line += mismatch
+			}
 			if view.detail {
 				line = queryTopologyDeviceLabel(candidate.device, candidate.entries) + " 角色：" +
 					queryTopologyDeviceRole(candidate.device, candidate.entries) + " " + networkName +
@@ -796,4 +828,66 @@ func nonEmptyList(values []string, emptyLabel string) []string {
 		return []string{emptyLabel}
 	}
 	return values
+}
+
+// queryTopologyOriginLabel 生成出发点行；机器登记了地点时附带完整路径。
+func queryTopologyOriginLabel(device *models.Device, tree *models.SiteTree) string {
+	label := "出发点：" + device.Name
+	if path := tree.PathString(device.SiteID); path != "" {
+		label += "（地点：" + path + "）"
+	}
+	return label
+}
+
+// queryTopologyMismatchLines 生成机器地点与它物理局域网覆盖地点不一致的
+// 提示行；这是提示，不是错误，也不影响连通判断。
+func queryTopologyMismatchLines(device *models.Device, tree *models.SiteTree) []string {
+	var lines []string
+	for _, mismatch := range queryTopologyLocationMismatches(device, tree) {
+		lines = append(lines, "  地点不一致：机器地点为"+mismatch.devicePath+
+			"；"+mismatch.networkName+"覆盖"+mismatch.networkPath)
+	}
+	return lines
+}
+
+// queryTopologyMismatchMarker 生成分组视图设备行末尾的不一致标记；net-
+// workName 用于只标记当前分组里确实不一致的网络。
+func queryTopologyMismatchMarker(device *models.Device, tree *models.SiteTree, networkName string) string {
+	for _, mismatch := range queryTopologyLocationMismatches(device, tree) {
+		if mismatch.networkName != networkName {
+			continue
+		}
+		return "（地点不一致：机器在" + mismatch.devicePath +
+			"；" + mismatch.networkName + "覆盖" + mismatch.networkPath + "）"
+	}
+	return ""
+}
+
+type queryTopologyLocationMismatch struct {
+	networkName string
+	devicePath  string
+	networkPath string
+}
+
+// queryTopologyLocationMismatches 找出机器地点不在其物理局域网覆盖地点
+// 及其下级里的组合。机器或网络没有登记地点时不判断。
+func queryTopologyLocationMismatches(device *models.Device, tree *models.SiteTree) []queryTopologyLocationMismatch {
+	if device == nil || device.SiteID == "" {
+		return nil
+	}
+	var mismatches []queryTopologyLocationMismatch
+	for _, membership := range device.Memberships {
+		if membership == nil || membership.NetworkType != models.NetworkPhysical || membership.SiteID == "" {
+			continue
+		}
+		if tree.Covers(membership.SiteID, device.SiteID) {
+			continue
+		}
+		mismatches = append(mismatches, queryTopologyLocationMismatch{
+			networkName: membership.NetworkName,
+			devicePath:  tree.PathString(device.SiteID),
+			networkPath: tree.PathString(membership.SiteID),
+		})
+	}
+	return mismatches
 }

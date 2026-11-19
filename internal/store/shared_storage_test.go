@@ -97,6 +97,7 @@ func TestSharedStorageAddGetAndList(t *testing.T) {
 	_, err = s.AddSharedStorage(SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -122,6 +123,7 @@ func TestSharedStorageAddRejectsInvalidInput(t *testing.T) {
 	_, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "missing", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err == nil || !strings.Contains(err.Error(), "请先执行 sshmgr devices add 登记设备") {
 		t.Fatalf("提供方设备不存在时应给出登记设备指引，实际：%v", err)
@@ -129,6 +131,7 @@ func TestSharedStorageAddRejectsInvalidInput(t *testing.T) {
 	_, err = s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "missing", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err == nil || !strings.Contains(err.Error(), "请先执行 sshmgr secrets add 登记机密项") {
 		t.Fatalf("挂载密码机密项不存在时应给出登记机密项指引，实际：%v", err)
@@ -138,6 +141,7 @@ func TestSharedStorageAddRejectsInvalidInput(t *testing.T) {
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "z",
 		Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
+		Note:        "共享数据集",
 	}
 	first, err := s.AddSharedStorage(input, CLISource())
 	if err != nil {
@@ -187,7 +191,7 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 	if _, err := s.AddDevice("第二NAS", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("SECOND_MOUNT_PASSWORD", "", []byte("second-password"), CLISource()); err != nil {
+	if err := s.AddSecret("SECOND_MOUNT_PASSWORD", "测试备注", []byte("second-password"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	_, err := s.AddSharedStorage(SharedStorageInput{
@@ -239,23 +243,20 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 	if edited.Version != 3 || edited.ChangeNote != onlyNote {
 		t.Fatalf("只改变更说明也应让版本号加一：%+v", edited)
 	}
-	emptyNote := ""
-	edited, err = s.EditSharedStorage("models", SharedStorageChanges{Note: &emptyNote}, CLISource())
-	if err != nil {
-		t.Fatal(err)
+	blankNote := " "
+	if _, err := s.EditSharedStorage("models", SharedStorageChanges{Note: &blankNote}, CLISource()); err == nil ||
+		!strings.Contains(err.Error(), "备注") {
+		t.Fatalf("把备注改成空白应被拒绝，实际：%v", err)
 	}
-	if edited.Version != 4 || edited.ChangeNote != "" || edited.Note != "" {
-		t.Fatalf("不带变更说明的修改应清空旧说明：%+v", edited)
-	}
-	if after, err := s.SnapshotRevision(); err != nil || after != revisionBefore+3 {
-		t.Fatalf("三次修改后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+3, err)
+	if after, err := s.SnapshotRevision(); err != nil || after != revisionBefore+2 {
+		t.Fatalf("两次成功修改后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+2, err)
 	}
 
 	deleted, err := s.DeleteSharedStorage("MODELS", CLISource())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleted.ID != edited.ID || deleted.Version != 4 {
+	if deleted.ID != edited.ID || deleted.Version != 3 {
 		t.Fatalf("删除应返回删除前的登记：%+v", deleted)
 	}
 	if remaining, err := s.ListSharedStorages(SharedStorageFilter{}); err != nil || len(remaining) != 0 {
@@ -268,8 +269,8 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 5 {
-		t.Fatalf("共享存储增改删应写五条审计行，实际 %d 条：%+v", len(rows), rows)
+	if len(rows) != 4 {
+		t.Fatalf("共享存储增改删应写四条审计行，实际 %d 条：%+v", len(rows), rows)
 	}
 	for _, row := range rows {
 		if strings.Contains(row.Command, "mount-password") || strings.Contains(row.Command, "second-password") {
@@ -280,19 +281,19 @@ func TestSharedStorageEditDeleteVersionAuditAndRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(editRows) != 3 {
+	if len(editRows) != 2 {
 		t.Fatalf("修改审计应记录字段变化与命令行来源：%+v", editRows)
 	}
 	var firstEditSummary map[string]any
-	if err := json.Unmarshal([]byte(editRows[2].Command), &firstEditSummary); err != nil {
-		t.Fatalf("解析第一条修改审计失败：%v\n%s", err, editRows[2].Command)
+	if err := json.Unmarshal([]byte(editRows[1].Command), &firstEditSummary); err != nil {
+		t.Fatalf("解析第一条修改审计失败：%v\n%s", err, editRows[1].Command)
 	}
 	firstEditChanges, ok := firstEditSummary["changes"].(map[string]any)
 	if !ok || firstEditChanges["change-note"] != changeNote {
 		t.Fatalf("修改审计应记录新的变更说明：%+v", firstEditSummary)
 	}
-	if after, err := s.SnapshotRevision(); err != nil || after != revisionBefore+4 {
-		t.Fatalf("删除共享存储后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+4, err)
+	if after, err := s.SnapshotRevision(); err != nil || after != revisionBefore+3 {
+		t.Fatalf("删除共享存储后的快照修订号 = %d，应为 %d：%v", after, revisionBefore+3, err)
 	}
 }
 
@@ -301,6 +302,7 @@ func TestSharedStorageSecretValueChangeBumpsReferencingShares(t *testing.T) {
 	_, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -308,6 +310,7 @@ func TestSharedStorageSecretValueChangeBumpsReferencingShares(t *testing.T) {
 	_, err = s.AddSharedStorage(SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -339,8 +342,8 @@ func TestSharedStorageSecretValueChangeBumpsReferencingShares(t *testing.T) {
 func TestSharedStorageProviderNetworkMembershipChangesBumpShares(t *testing.T) {
 	s := seedSharedStorageVault(t)
 	for _, input := range []SharedStorageInput{
-		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y", Note: "共享数据集"},
 	} {
 		if _, err := s.AddSharedStorage(input, CLISource()); err != nil {
 			t.Fatal(err)
@@ -357,13 +360,14 @@ func TestSharedStorageProviderNetworkMembershipChangesBumpShares(t *testing.T) {
 	if _, err := s.AddDevice("第二NAS", "", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("SECOND_MOUNT_PASSWORD", "", []byte("second-password"), CLISource()); err != nil {
+	if err := s.AddSecret("SECOND_MOUNT_PASSWORD", "测试备注", []byte("second-password"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	var err error
 	_, err = s.AddSharedStorage(SharedStorageInput{
 		Name: "other", Device: "第二NAS", User: "mount-user",
 		PasswordSecret: "SECOND_MOUNT_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -414,8 +418,8 @@ func TestSharedStorageProviderNetworkMembershipChangesBumpShares(t *testing.T) {
 func TestSharedStorageSecretAllowChangesBumpShares(t *testing.T) {
 	s := seedSharedStorageVault(t)
 	for _, input := range []SharedStorageInput{
-		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y", Note: "共享数据集"},
 	} {
 		if _, err := s.AddSharedStorage(input, CLISource()); err != nil {
 			t.Fatal(err)
@@ -484,6 +488,7 @@ func TestSharedStorageSecretMetadataChangesDoNotBumpShares(t *testing.T) {
 	if _, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -523,6 +528,7 @@ func TestSharedStorageLinkedVersionRollsBackWithFailedWrite(t *testing.T) {
 	if _, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

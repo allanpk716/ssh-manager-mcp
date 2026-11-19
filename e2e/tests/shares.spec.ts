@@ -1,24 +1,19 @@
-import {
-  expect,
-  openStandaloneUI,
-  startStandaloneUIWithTopology,
-  test,
-} from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, startStandaloneUIWithTopology, test } from "../helpers";
 
 test("共享存储可挂载范围勾选后预览并确认", async ({ page, sharesStandaloneUI }) => {
   await openStandaloneUI(page, sharesStandaloneUI);
 
-  await page.getByRole("link", { name: "共享存储" }).click();
+  await gotoUIPath(page, "/ui/authorization/shares");
   await page.getByRole("link", { name: "datasets" }).click();
-  const webCheckbox = page.getByRole("checkbox", { name: /web-1/ });
-  const shareDBCheckbox = page.getByRole("checkbox", { name: /share-db/ });
-  await webCheckbox.uncheck();
-  await shareDBCheckbox.check();
+  await page.getByRole("link", { name: "调整服务器" }).click();
 
-  await expect(
-    page.locator("tr", { hasText: "share-db" }).getByText("同设备的其他条目可能也能读到挂载内容。"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "预览可挂载范围变更" }).click();
+  const webRow = page.locator(".selection-row", { hasText: "web-1" });
+  const shareDBRow = page.locator(".selection-row", { hasText: "share-db" });
+  await expect(shareDBRow.getByText("同一台机器上的其他条目可能也能读到挂载内容。")).toBeVisible();
+  await webRow.getByRole("checkbox").uncheck();
+  await shareDBRow.getByRole("checkbox").check();
+  await expect(page.getByText("新增 1 台、移除 1 台")).toBeVisible();
+  await page.getByRole("button", { name: "下一步" }).click();
 
   await expect(page.getByRole("heading", { name: "机密项授权预览" })).toBeVisible();
   await expect(page.getByText("新增 1 个授权，移除 1 个授权。")).toBeVisible();
@@ -33,7 +28,7 @@ test("共享存储桌面手动添加引导展示步骤且没有密码入口", as
   try {
     await openStandaloneUI(page, ui);
 
-    await page.getByRole("link", { name: "共享存储" }).click();
+    await gotoUIPath(page, "/ui/shares/");
     await page.getByRole("link", { name: "家NAS共享" }).click();
     await page.getByRole("link", { name: "打开桌面手动添加引导" }).click();
     await page.getByLabel("这台电脑是拓扑里哪台设备").selectOption({ label: "工作站" });

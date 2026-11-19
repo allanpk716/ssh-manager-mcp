@@ -71,6 +71,15 @@ func (s managerStore) ListSecrets(_, query, server string) ([]webui.SecretRow, e
 	return secretRows(views), nil
 }
 
+// ListSecretsWithoutNote 返回备注为空的机密项，供授权子页与主页待办提示。
+func (s managerStore) ListSecretsWithoutNote() ([]webui.SecretRow, error) {
+	views, err := s.manager.ListWithoutNote()
+	if err != nil {
+		return nil, err
+	}
+	return secretRows(views), nil
+}
+
 func (s managerStore) SecretDeliveryRecords(secretName string) ([]webui.SecretDeliveryRecordRow, error) {
 	records, err := s.manager.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{SecretName: secretName})
 	if err != nil {
@@ -167,6 +176,16 @@ func (s openerStore) ListSecrets(instance, query, server string) ([]webui.Secret
 	}
 	defer closeStore()
 	return managerStore{manager: manager}.ListSecrets(instance, query, server)
+}
+
+// ListSecretsWithoutNote 每次请求重新打开存储后返回缺备注的机密项。
+func (s openerStore) ListSecretsWithoutNote() ([]webui.SecretRow, error) {
+	manager, closeStore, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer closeStore()
+	return managerStore{manager: manager}.ListSecretsWithoutNote()
 }
 
 func (s openerStore) SecretDeliveryRecords(secretName string) ([]webui.SecretDeliveryRecordRow, error) {

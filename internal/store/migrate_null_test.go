@@ -125,7 +125,7 @@ CREATE TABLE projects (
 		// SQL-layer proof that NULLs are gone — guards against a future refactor that
 		// makes GetServer tolerate NULL while leaving the on-disk data corrupted.
 		var nullCount int
-		if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers WHERE description IS NULL OR location IS NULL OR hardware IS NULL OR services IS NULL OR role IS NULL OR caveats IS NULL`).Scan(&nullCount); err != nil {
+		if err := s.db.QueryRow(`SELECT COUNT(*) FROM servers WHERE description IS NULL OR hardware IS NULL OR services IS NULL OR role IS NULL OR caveats IS NULL`).Scan(&nullCount); err != nil {
 			t.Fatal(err)
 		}
 		if nullCount != 0 {
@@ -140,13 +140,12 @@ CREATE TABLE projects (
 	})
 }
 
-// assertEmptyMetadata fails the test unless all six structured-metadata fields read back
+// assertEmptyMetadata fails the test unless all structured-metadata fields read back
 // as the empty string — the value the DEFAULT ” / back-fill guarantees in place of SQL NULL.
 func assertEmptyMetadata(t *testing.T, got *models.Server) {
 	t.Helper()
 	for _, f := range []struct{ name, val string }{
 		{"description", got.Description},
-		{"location", got.Location},
 		{"hardware", got.Hardware},
 		{"services", got.Services},
 		{"role", got.Role},

@@ -385,6 +385,7 @@ func newResidueFixture(t *testing.T) residueFixture {
 		if _, err := st.AddSharedStorage(store.SharedStorageInput{
 			Name: name, Device: "NAS", User: "mount-user",
 			PasswordSecret: setup.secret, Drive: setup.drive,
+			Note: "共享数据集",
 		}, store.CLISource()); err != nil {
 			t.Fatal(err)
 		}

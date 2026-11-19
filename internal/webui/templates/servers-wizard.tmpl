@@ -1,0 +1,83 @@
+{{define "content"}}
+<section class="server-wizard-page" data-server-wizard data-machine-addresses="{{range .ServerWizard.MachineAddresses}}{{.Address}}={{.DeviceName}};{{end}}">
+<h1>新增服务器</h1>
+{{if .ServerWizard.Notice}}<div class="operation-refusal"><p>{{.ServerWizard.Notice}}</p></div>{{end}}
+<ol class="wizard-steps" aria-label="新增服务器步骤">
+<li aria-current="step"><span class="step-number">1</span>连接与地址</li>
+<li><span class="step-number">2</span>地点</li>
+<li><span class="step-number">3</span>Profile</li>
+</ol>
+{{if .ServerWizard.NeedsReverify}}<div class="operation-refusal"><p>提交登录凭据前需要重新验证管理员口令。<a href="{{.ServerWizard.ReverifyPath}}">重新验证管理员口令</a>。</p></div>{{end}}
+<form method="post" action="/ui/servers/new" enctype="multipart/form-data" class="server-form wizard-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="{{.ServerWizard.Form.ReturnTo}}">
+{{if .ServerWizard.Form.StagedCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if .ServerWizard.Form.StagedCredential}}<div class="inline-form staged-credentials"><button type="submit" name="clear_staged_credentials" value="1">清除已暂存的凭据</button><span>清除后保留其他字段，登录凭据需重新填写。</span></div>{{end}}
+<fieldset>
+<legend>连接与地址</legend>
+<div class="form-field"><label for="wizard-name">名称</label><input id="wizard-name" name="name" value="{{.ServerWizard.Form.Name}}" required></div>
+<div class="form-field"><label for="wizard-user">用户</label><input id="wizard-user" name="user" value="{{.ServerWizard.Form.User}}" required autocomplete="off"></div>
+<div class="form-field"><label for="wizard-port">端口</label><input id="wizard-port" name="port" value="{{if .ServerWizard.Form.Port}}{{.ServerWizard.Form.Port}}{{else}}22{{end}}" inputmode="numeric" required></div>
+<div class="address-list" data-address-list>
+{{range $index, $network := .ServerWizard.Form.AddressNetworks}}
+<div class="address-row" data-address-row>
+<label class="form-field">网络<select name="address_network" aria-label="第{{addOne $index}}行地址所属网络">
+<option value="other"{{if eq $network "other"}} selected{{end}}>其他（公网或未登记网络）</option>
+{{range $.ServerWizard.Networks}}<option value="{{.Name}}"{{if eq $network .Name}} selected{{end}}>{{.Name}}</option>{{end}}
+</select></label>
+<label class="form-field">地址<input name="address" value="{{index $.ServerWizard.Form.AddressValues $index}}" autocomplete="off" data-address-input></label>
+<button type="button" class="icon-button" data-remove-address>删除这行</button>
+</div>
+{{end}}
+</div>
+<button type="submit" name="add_address" value="1" class="secondary-button address-add">再添加一个地址</button>
+{{if eq .ServerWizard.Form.DeviceChoice "existing"}}
+<section class="same-machine" data-existing-machine>
+<h2>沿用同一台机器</h2>
+<p>将新增到机器 {{.ServerWizard.Form.ExistingDeviceName}} 上的另一个账号；地址与地点沿用这台机器，地点步骤会自动跳过。</p>
+<input type="hidden" name="device_choice" value="existing">
+<input type="hidden" name="existing_device" value="{{.ServerWizard.Form.ExistingDeviceName}}">
+</section>
+{{else}}
+<section class="same-machine" data-same-machine hidden>
+<h2>识别到相同地址</h2>
+<p>这是 <strong data-same-machine-name></strong> 上的另一个账号吗？</p>
+<input type="hidden" name="existing_device" value="" data-same-machine-field>
+<label class="choice"><input type="radio" name="same_machine" value="1" data-same-machine-yes>是，挂到同一台机器并沿用地址与地点</label>
+<label class="choice"><input type="radio" name="same_machine" value="0" checked>不是，按新机器登记</label>
+</section>
+{{end}}
+</fieldset>
+<fieldset>
+<legend>认证方式</legend>
+<div class="segmented auth-segments" role="radiogroup" aria-label="认证方式">
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="key"{{if eq .ServerWizard.Form.CredentialAction "key"}} checked{{end}}>私钥</label>
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="password"{{if eq .ServerWizard.Form.CredentialAction "password"}} checked{{end}}>密码</label>
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="none"{{if or (eq .ServerWizard.Form.CredentialAction "none") (eq .ServerWizard.Form.CredentialAction "")}} checked{{end}}>暂不填写</label>
+</div>
+<div data-credential-key{{if ne .ServerWizard.Form.CredentialAction "key"}} hidden{{end}}>
+<input type="hidden" name="key_source" value="file">
+<div class="auth-fields">
+<div class="form-field"><label for="wizard-key-file">选择私钥文件</label><input id="wizard-key-file" name="key_file" type="file"></div>
+<button type="button" class="text-button" data-toggle-paste-key>没有文件？改为粘贴私钥</button>
+<div class="form-field" data-paste-key hidden><label for="wizard-key">私钥内容</label><textarea id="wizard-key" name="key" rows="5" autocomplete="off" placeholder="粘贴私钥内容；不在页面回显"></textarea></div>
+<div class="form-field"><label for="wizard-key-pass">私钥口令</label><input id="wizard-key-pass" name="key_passphrase" type="password" autocomplete="new-password"></div>
+</div>
+</div>
+<div class="auth-fields" data-credential-password{{if ne .ServerWizard.Form.CredentialAction "password"}} hidden{{end}}><div class="form-field"><label for="wizard-password">密码</label><input id="wizard-password" name="password" type="password" autocomplete="new-password"></div></div>
+</fieldset>
+<details class="more-options">
+<summary>更多选项</summary>
+<div class="form-field"><label for="wizard-sudo-password">sudo 密码</label><input id="wizard-sudo-password" name="sudo_password" type="password" autocomplete="new-password"></div>
+<div class="form-field"><label for="wizard-shell">shell 类型</label>
+<select id="wizard-shell" name="shell">
+<option value="auto"{{if eq .ServerWizard.Form.Shell "auto"}} selected{{end}}>保存后自动探测</option>
+<option value="posix"{{if eq .ServerWizard.Form.Shell "posix"}} selected{{end}}>POSIX</option>
+<option value="powershell"{{if eq .ServerWizard.Form.Shell "powershell"}} selected{{end}}>PowerShell</option>
+<option value="cmd"{{if eq .ServerWizard.Form.Shell "cmd"}} selected{{end}}>Windows 命令提示符</option>
+</select></div>
+</details>
+<footer class="wizard-actions"><a class="button-link" href="/ui/servers/">取消</a><button type="submit" class="primary-button">测试连接并下一步</button></footer>
+</form>
+</section>
+{{end}}

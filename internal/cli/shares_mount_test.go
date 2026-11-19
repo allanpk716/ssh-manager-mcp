@@ -47,6 +47,7 @@ func TestSharesMountIsIdempotentAndNeedsNoConfirmation(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestSharesMountRejectsCacheClientAndWindowsServer(t *testing.T) {
 
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	windowsError := runCliErr(t, "shares", "mount", "datasets", "windows-web")
 	for _, want := range []string{
 		"Windows 服务器不能持久挂载共享存储", "盘符由每条命令执行前的会话内注入提供",
@@ -104,7 +105,7 @@ func TestSharesShowCheckPrintsEveryServerConclusion(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.AddSecret(
-		"NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -131,6 +132,7 @@ func TestSharesShowCheckPrintsEveryServerConclusion(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +203,7 @@ func seedSharesMountTopology(t *testing.T, st *store.Store) {
 		}
 	}
 	if err := st.AddSecret(
-		"DATASETS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"DATASETS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}

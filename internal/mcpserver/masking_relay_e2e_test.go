@@ -15,7 +15,7 @@ func TestMaskingRelayProgressOutput(t *testing.T) {
 	source := env.root + "/masking/source.txt"
 	destination := env.root + "/masking/destination/relay-secret-path.bin"
 	relayMkFile(t, source, "relay progress masking")
-	if err := env.st.AddSecret("RELAY_PATH", "", []byte(destination), store.CLISource()); err != nil {
+	if err := env.st.AddSecret("RELAY_PATH", "测试备注", []byte(destination), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	session := env.openSession(t)

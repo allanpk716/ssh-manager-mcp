@@ -57,7 +57,7 @@
 
 ## agent 看得见什么（可见性边界）
 
-project token 背后的 agent 通过 `list_servers` 看到：服务器元数据（name/role/services/caveats/location/hardware/tags/description/user/has_sudo）+ **可选的 host**——默认是字面量 `"hidden"`，owner 逐台用 `expose_host` 放开才有明文；**永远看不到**凭据与端口。工具错误文本同样不含主机地址（连接失败时给分类原因，不给 host:port）。这是「接口级不暴露」承诺的全部边界：agent 在服务器上跑 `ip addr` 探出的地址不算违约，本机 owner CLI / cache.bin 的明文也不在本承诺防护范围（见 threat-model.md §3.5）。
+project token 背后的 agent 通过 `list_servers` 看到：服务器元数据（name/role/services/caveats/hardware/tags/description/user/has_sudo）+ **可选的 host**——默认是字面量 `"hidden"`，owner 逐台用 `expose_host` 放开才有明文；**永远看不到**凭据与端口。工具错误文本同样不含主机地址（连接失败时给分类原因，不给 host:port）。这是「接口级不暴露」承诺的全部边界：agent 在服务器上跑 `ip addr` 探出的地址不算违约，本机 owner CLI / cache.bin 的明文也不在本承诺防护范围（见 threat-model.md §3.5）。
 
 工具面共 12 个：`list_servers` / `exec_command` / `download_file` / `upload_file` / `upload_content` / `exec_context` / `forward_port` / `close_port` + 后台三件套 `exec_background` / `exec_output` / `exec_stop` + `relay_file`（大文件中继，Plan 47）——**长活命令（编译/训练/日志跟踪）走后台**：起任务、按 offset 轮询增量输出、用完停；任务表在 broker 进程内，重启即失（详见 [agent-tools.md](./agent-tools.md)）。
 

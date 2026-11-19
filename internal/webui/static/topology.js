@@ -1,5 +1,5 @@
 // 网络拓扑页面脚本：读取内部 JSON 接口，用 Cytoscape.js 呈现物理视图、
-// 虚拟视图与叠加视图。可编辑角色可拖动归类、编辑网络成员，并在拖动后保存
+// 虚拟视图与叠加视图。可编辑角色可拖动归类、编辑网络地址，并在拖动后保存
 // 该视图的布局；写操作全部走 /ui/api/topology/ 下的内部接口。客户端与手
 // 机只读查看，不提供保存入口。
 (function () {
@@ -44,6 +44,11 @@
   var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   // canEdit 表示当前角色提供拓扑写接口；拖动归类还要求精确指针（手机不开放）。
   var canEdit = page !== null && page.getAttribute("data-editable") === "true";
+  // pageReadOnly 表示当前视口只能查看：手机不开放任何写表单；桌面宽度的
+  // 触屏电脑仍按角色能力判断。
+  function pageReadOnly() {
+    return !canEdit || phoneInput.matches;
+  }
   var canChooseRemoteProbeOrigin = probePanel !== null && probePanel.getAttribute("data-remote-origin") !== "false";
   var trayElement = page === null ? null : page.querySelector(".topology-tray");
   var dialogRestoresView = false;
@@ -74,7 +79,7 @@
   }
 
   function networkLabel(source) {
-    return source === "physical" ? "共同物理局域网" : source === "virtual" ? "共同虚拟局域网" : "兜底主机";
+    return source === "physical" ? "共同物理局域网" : source === "virtual" ? "共同虚拟局域网" : "服务器条目地址";
   }
 
   function kindLabel(kind) {
@@ -195,7 +200,7 @@
   }
 
   // deviceHostLine 取节点第二行的主机地址：单条服务器条目直接显示其主机
-  // 地址；其余设备显示网络成员地址，帮助区分同名的机器。
+  // 地址；其余设备显示网络地址地址，帮助区分同名的机器。
   function deviceHostLine(index, device) {
     if (device.servers.length === 1 && String(device.servers[0].host || "").trim() !== "") {
       return device.servers[0].host;
@@ -265,7 +270,7 @@
   function siteNode(site, virtualStyle) {
     return {
       group: "nodes",
-      data: { id: "site:" + site.id, label: site.name || "未命名站点", site: site.id },
+      data: { id: "site:" + site.id, label: site.location_path || site.name || "未命名地点", site: site.id },
       classes: virtualStyle ? "site site-label" : "site",
     };
   }
@@ -627,7 +632,7 @@
   function styleForView() {
     return [
       // 画布配色与页面深色主题一致：文字浅色、底色深色，分组框顶部留出
-      // 标签带，避免子节点盖住站点与网络名称。
+      // 标签带，避免子节点盖住地点与网络名称。
       { selector: "node", style: { "label": "data(label)", "text-valign": "center", "text-halign": "center", "font-size": 12, color: "#e8edf7", "text-wrap": "wrap", "text-max-width": 140 } },
       { selector: ".site", style: { shape: "round-rectangle", "background-color": "#1c2740", "border-color": "#5b6f9e", "border-width": 2, "font-size": 15, "font-weight": "bold", color: "#e8edf7", "text-valign": "top", padding: 24, "padding-top": 30 } },
       { selector: ".site-label", style: { "background-color": "#182031", "border-color": "#4a5b82", "border-style": "dashed", "font-size": 13, padding: 10, "text-valign": "center", "font-weight": "normal", color: "#c9d4ea" } },
@@ -783,7 +788,7 @@
     }
   }
 
-  // currentLayout 把当前视图里可见的设备坐标与站点区域或网络分组框坐标整理成一次保存载荷。
+  // currentLayout 把当前视图里可见的设备坐标与地点区域或网络分组框坐标整理成一次保存载荷。
   // 分身不保存：同一台设备的本体节点是这个视图里的唯一坐标来源。
   function currentLayout() {
     var devices = [];
@@ -800,7 +805,7 @@
           return;
         }
         if (data.site !== undefined) {
-          // 复合节点形式的站点区域或网络分组框渲染出的框由子节点决定；保存框的中心而不是节点内部
+          // 复合节点形式的地点区域或网络分组框渲染出的框由子节点决定；保存框的中心而不是节点内部
           // 的存储坐标，避免子节点移动后留下过期值。
           var box = node.boundingBox();
           containers.push({
@@ -948,7 +953,7 @@
       });
   }
 
-  // isContainerNode 判断节点是否是站点区域或网络分组框；重叠检查只对这两
+  // isContainerNode 判断节点是否是地点区域或网络分组框；重叠检查只对这两
   // 类实体生效。
   function isContainerNode(node) {
     var data = node.data();
@@ -958,9 +963,9 @@
           (node.id().indexOf("network:") === 0 || node.id().indexOf("vnet:") === 0)));
   }
 
-  // overlappingContainer 返回与指定站点区域或网络分组框明显重叠的另一个站点区域或网络分组框节点；交叠面积
+  // overlappingContainer 返回与指定地点区域或网络分组框明显重叠的另一个地点区域或网络分组框节点；交叠面积
   // 超过较小框面积的四分之一视为明显重叠。嵌套关系不算重叠：网络分组框
-  // 本来就画在所属站点区域里。
+  // 本来就画在所属地点区域里。
   function overlappingContainer(node) {
     if (state.cy === null || !isContainerNode(node)) {
       return null;
@@ -997,15 +1002,15 @@
     return found;
   }
 
-  // restorePositions 把整幅画布恢复到拖动前的坐标；站点或网络拖动时子节点
-  // 会一起移动，只还原站点区域或网络分组框本身不够。
+  // restorePositions 把整幅画布恢复到拖动前的坐标；地点或网络拖动时子节点
+  // 会一起移动，只还原地点区域或网络分组框本身不够。
   function restorePositions(positions) {
     if (state.cy === null || positions === null) {
       return;
     }
     state.cy.nodes().forEach(function (node) {
       var target = positions[node.id()];
-      // 只还原子节点：复合节点形式的站点区域或网络分组框的框由子节点决定，直接设置父节点会把子
+      // 只还原子节点：复合节点形式的地点区域或网络分组框的框由子节点决定，直接设置父节点会把子
       // 树再平移一次。占位节点也属于子节点，要随整幅画布一起还原。先停
       // 掉未完成的过渡动画，避免动画把还原结果改掉。
       if (target !== undefined && !node.isParent()) {
@@ -1061,12 +1066,12 @@
     node.stop();
     state.savedBeforeDrag = snapshotPositions();
     if (node.isParent()) {
-      // 复合节点形式的站点区域或网络分组框的框由子节点决定：把整个子树平移，让框中心落在目标坐
-      // 标，与手动拖动站点区域或网络分组框时的整体移动一致。
+      // 复合节点形式的地点区域或网络分组框的框由子节点决定：把整个子树平移，让框中心落在目标坐
+      // 标，与手动拖动地点区域或网络分组框时的整体移动一致。
       var box = node.boundingBox();
       var deltaX = x - (box.x1 + box.x2) / 2;
       var deltaY = y - (box.y1 + box.y2) / 2;
-      // 给复合节点形式的站点区域或网络分组框设置坐标会把整个子树平移同样的差值。
+      // 给复合节点形式的地点区域或网络分组框设置坐标会把整个子树平移同样的差值。
       var stored = node.position();
       node.position({ x: stored.x + deltaX, y: stored.y + deltaY });
     } else {
@@ -1166,7 +1171,7 @@
       if (target === undefined) {
         return;
       }
-      // 复合节点形式的站点区域或网络分组框的框由子节点决定，子节点的保存坐标已经还原了整个子树的
+      // 复合节点形式的地点区域或网络分组框的框由子节点决定，子节点的保存坐标已经还原了整个子树的
       // 位置；单独定位父节点会把子树再推一次。
       if (!node.isParent()) {
         node.position(target);
@@ -1203,7 +1208,7 @@
         classifyCanvasDrop(event.target, state.dragBoxes);
       }
     });
-    // 拖动开始先记下整幅画布坐标：站点区域或网络分组框明显重叠时要整体还原，设备拖动失
+    // 拖动开始先记下整幅画布坐标：地点区域或网络分组框明显重叠时要整体还原，设备拖动失
     // 败时也不丢其它节点的位置。
     state.cy.on("grab", "node", function () {
       state.savedBeforeDrag = snapshotPositions();
@@ -1718,7 +1723,7 @@
   }
 
   function detailAddLinkHTML(label, path, context) {
-    if (!canEdit) {
+    if (pageReadOnly()) {
       return "";
     }
     return (
@@ -1797,13 +1802,16 @@
     if (device.client_name !== "") {
       html += "<dt>客户端实例</dt><dd>" + escapeHTML(device.client_name) + "</dd>";
     }
+    if (device.location_path !== "") {
+      html += "<dt>地点</dt><dd>" + escapeHTML(device.location_path) + "</dd>";
+    }
     html += "</dl>";
 
     html += detailAddLinkHTML("在此设备上新增服务器条目", "/ui/servers/new", { device: device.name });
 
     var memberships = index.membershipsByDevice[device.id] || [];
-    if (!canEdit) {
-      html += "<h3>网络成员</h3><ul>";
+    if (pageReadOnly()) {
+      html += "<h3>网络地址</h3><ul>";
       if (memberships.length === 0) {
         html += "<li>尚未加入任何网络。</li>";
       }
@@ -1821,7 +1829,7 @@
       html += "</ul>";
     } else {
       html += '<p class="detail-operation-error" hidden></p>';
-      html += "<h3>网络成员</h3>";
+      html += "<h3>网络地址</h3>";
       if (memberships.length === 0) {
         html += '<p class="detail-empty">尚未加入任何网络。</p>';
       } else {
@@ -1912,8 +1920,11 @@
     }
     var networks = index.physicalBySite[site.id] || [];
     var html = '<button type="button" class="detail-close">关闭</button>';
-    html += "<h2>" + escapeHTML(site.name) + "</h2><dl>";
-    html += "<dt>类型</dt><dd>站点</dd>";
+    html += "<h2>" + escapeHTML(site.location_path !== "" ? site.location_path : site.name) + "</h2><dl>";
+    html += "<dt>类型</dt><dd>地点</dd>";
+    if (site.location_path !== "") {
+      html += "<dt>完整路径</dt><dd>" + escapeHTML(site.location_path) + "</dd>";
+    }
     if (site.note !== "") {
       html += "<dt>备注</dt><dd>" + escapeHTML(site.note) + "</dd>";
     }
@@ -1923,7 +1934,7 @@
     }
     networks.forEach(function (network) {
       var count = (index.membershipsByNetwork[network.id] || []).length;
-      html += "<li>" + escapeHTML(network.name) + " · " + count + " 台成员设备</li>";
+      html += "<li>" + escapeHTML(network.name) + " · " + count + " 台设备</li>";
     });
     html += "</ul>";
     showDetailHTML(html);
@@ -1940,7 +1951,7 @@
     html += "<h2>" + escapeHTML(network.name) + "</h2><dl>";
     html += "<dt>类型</dt><dd>" + escapeHTML(typeLabel(network.type)) + "</dd>";
     if (network.type === "physical") {
-      html += "<dt>所属站点</dt><dd>" + escapeHTML(network.site_name) + "</dd>";
+      html += "<dt>覆盖地点</dt><dd>" + escapeHTML(network.location_path !== "" ? network.location_path : network.site_name) + "</dd>";
     }
     if (network.network_range !== "") {
       html += "<dt>网段</dt><dd>" + escapeHTML(network.network_range) + "</dd>";
@@ -1952,7 +1963,7 @@
     if (network.note !== "") {
       html += "<dt>备注</dt><dd>" + escapeHTML(network.note) + "</dd>";
     }
-    html += "</dl><h3>成员</h3><ul>";
+    html += "</dl><h3>设备与地址</h3><ul>";
     if (members.length === 0) {
       html += "<li>暂无成员设备。</li>";
     }
@@ -1962,7 +1973,7 @@
       html += "<li>" + escapeHTML(name) + " · " + escapeHTML(membership.address) + "</li>";
     });
     html += "</ul>";
-    html += detailAddLinkHTML("在此新增", "/ui/add", { network: network.name });
+    html += detailAddLinkHTML("在此新增", "/ui/servers/new", { network: network.name });
     showDetailHTML(html);
   }
 
@@ -2179,8 +2190,8 @@
     });
   }
 
-  // openSitePickDialog 处理拖到站点区域但不在任何物理局域网框里的情况：
-  // 选择该站点既有网络或新建（新建只需要网络名）。
+  // openSitePickDialog 处理拖到地点区域但不在任何物理局域网框里的情况：
+  // 选择该地点既有网络或新建（新建只需要网络名）。
   function openSitePickDialog(device, site, sourceNetworkName) {
     var index = indexData(state.data);
     var networks = index.physicalBySite[site.id] || [];
@@ -2190,7 +2201,7 @@
       "<h2>为设备选择物理局域网</h2>" +
       '<p class="dialog-context">设备：<strong>' +
       escapeHTML(device.name) +
-      "</strong> · 站点：<strong>" +
+      "</strong> · 地点：<strong>" +
       escapeHTML(site.name) +
       "</strong></p>" +
       '<fieldset class="dialog-choices"><legend>目标网络</legend>';
@@ -2382,7 +2393,7 @@
 
   // ---- 拖动命中检测 -----------------------------------------------------
 
-  // snapshotDropBoxes 在拖动开始时记录网络框与站点区域的页面坐标；拖动过
+  // snapshotDropBoxes 在拖动开始时记录网络框与地点区域的页面坐标；拖动过
   // 程中复合节点的包围盒会跟随被拖设备扩张，不能作为投放区。
   function snapshotDropBoxes() {
     var boxes = [];
@@ -2467,7 +2478,7 @@
   }
 
   // classifyCanvasDrop 处理画布里设备节点的拖动释放。physicalBox 与
-  // virtualBox 分别是命中到的物理/虚拟网络框，siteBox 是站点区域；拖到托
+  // virtualBox 分别是命中到的物理/虚拟网络框，siteBox 是地点区域；拖到托
   // 盘或空白画布按「移回托盘」处理。
   function classifyCanvasDrop(node, boxes) {
     if (!canEdit || phoneInput.matches || state.cy === null) {
@@ -2497,7 +2508,7 @@
           if (network.id !== sourceNetworkID) {
             openNoticeDialog(
               "无法归类",
-              "同一设备 " + device.name + " 在网络 " + network.name + " 里已有网络成员；请在设备详情里编辑地址。"
+              "同一设备 " + device.name + " 在网络 " + network.name + " 里已有网络地址；请在设备详情里编辑地址。"
             );
           } else {
             restoreAfterDrag();
@@ -2536,7 +2547,7 @@
         } else {
           openNoticeDialog(
             "无法归类",
-            "同一设备 " + device.name + " 在网络 " + target.name + " 里已有网络成员；请在设备详情里编辑地址。"
+            "同一设备 " + device.name + " 在网络 " + target.name + " 里已有网络地址；请在设备详情里编辑地址。"
           );
         }
         return;

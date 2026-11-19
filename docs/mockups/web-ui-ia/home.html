@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>主页 · sshmgr 权威端</title>
+  <style>
+    :root {
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-bg: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --primary-soft: #EFF6FF;
+      --success-soft: #ECFDF5;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { background: var(--bg); }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background: var(--bg);
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    button, input, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    a { color: inherit; text-decoration: none; }
+    svg { display: block; }
+
+    .svg-sprite {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+    }
+
+    .icon {
+      width: 22px;
+      height: 22px;
+      flex: 0 0 auto;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.8;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .topbar { display: none; }
+
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 24px 16px calc(96px + env(safe-area-inset-bottom));
+    }
+
+    .greeting {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .product-kicker {
+      margin: 0 0 3px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .02em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 1.35;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+
+    .owner-badge {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      color: var(--primary);
+      background: var(--primary-soft);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .primary-button {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 12px;
+      color: #FFFFFF;
+      background: var(--primary);
+      box-shadow: 0 2px 5px rgba(37,99,235,.2);
+      font-weight: 650;
+      cursor: pointer;
+    }
+
+    .primary-button:active { background: #1D4ED8; }
+
+    .section { margin-top: 28px; }
+
+    .section-heading {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 0 12px;
+    }
+
+    .section-heading h2 {
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.4;
+      font-weight: 700;
+    }
+
+    .section-count {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .card-list {
+      display: grid;
+      gap: 12px;
+    }
+
+    .task-card {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      width: 100%;
+      min-height: 84px;
+      padding: 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      text-align: left;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      cursor: pointer;
+    }
+
+    .task-card.priority {
+      border-color: #BFDBFE;
+      background: var(--primary-soft);
+    }
+
+    .task-icon {
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      border-radius: 11px;
+      color: var(--warning);
+      background: var(--warning-bg);
+    }
+
+    .priority .task-icon {
+      color: var(--primary);
+      background: #DBEAFE;
+    }
+
+    .task-copy {
+      min-width: 0;
+      flex: 1;
+    }
+
+    .task-title {
+      display: block;
+      margin-bottom: 3px;
+      font-weight: 650;
+    }
+
+    .task-detail {
+      display: block;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+    }
+
+    .task-tail {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex: 0 0 auto;
+    }
+
+    .action-label {
+      color: var(--primary);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .chevron {
+      width: 18px;
+      height: 18px;
+      color: #9CA3AF;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat-card {
+      min-width: 0;
+      min-height: 118px;
+      padding: 16px 12px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      transition: transform .15s ease;
+    }
+
+    .stat-card:active { transform: scale(.98); }
+
+    .stat-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .stat-top .icon {
+      width: 17px;
+      height: 17px;
+    }
+
+    .stat-number {
+      display: block;
+      margin: 6px 0 3px;
+      font-size: 27px;
+      line-height: 1.2;
+      font-weight: 750;
+      letter-spacing: -.03em;
+    }
+
+    .stat-number small {
+      margin-left: 2px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+    }
+
+    .stat-note {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .stat-note.warning { color: var(--warning); }
+
+    .recent-card {
+      padding: 4px 16px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+
+    .timeline-item {
+      position: relative;
+      display: flex;
+      gap: 12px;
+      min-height: 60px;
+      padding: 14px 0;
+    }
+
+    .timeline-item + .timeline-item { border-top: 1px solid var(--line); }
+
+    .timeline-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      margin-top: 7px;
+      border-radius: 50%;
+      background: #93C5FD;
+      box-shadow: 0 0 0 4px var(--primary-soft);
+    }
+
+    .timeline-item:first-child .timeline-dot {
+      background: var(--success);
+      box-shadow: 0 0 0 4px var(--success-soft);
+    }
+
+    .timeline-text { font-size: 13px; }
+
+    .timeline-time {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .bottom-nav {
+      position: fixed;
+      z-index: 20;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 8px env(safe-area-inset-bottom);
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.97);
+    }
+
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 2px;
+      min-width: 0;
+      min-height: 56px;
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .nav-link .icon { width: 22px; height: 22px; }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 650; }
+
+    dialog {
+      width: calc(100% - 32px);
+      max-width: 460px;
+      margin: auto;
+      padding: 0;
+      border: 0;
+      border-radius: 16px;
+      color: var(--text);
+      background: var(--card);
+      box-shadow: 0 20px 60px rgba(0,0,0,.2);
+    }
+
+    dialog::backdrop { background: rgba(17,24,39,.45); }
+
+    .dialog-body { padding: 22px; }
+
+    .dialog-header {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .dialog-header h2 {
+      margin: 0 0 4px;
+      font-size: 19px;
+    }
+
+    .dialog-header p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .close-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin: -10px -10px 0 0;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      color: var(--muted);
+      background: transparent;
+      cursor: pointer;
+    }
+
+    .close-button .icon { width: 20px; height: 20px; }
+
+    .form-field { margin-top: 14px; }
+
+    .form-field label {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .form-field input,
+    .form-field select {
+      width: 100%;
+      min-height: 46px;
+      padding: 10px 12px;
+      border: 1px solid #D1D5DB;
+      border-radius: 10px;
+      color: var(--text);
+      background: #FFFFFF;
+      outline: none;
+    }
+
+    .form-field input:focus,
+    .form-field select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+
+    .dialog-list {
+      overflow: hidden;
+      margin-bottom: 18px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .dialog-list-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 58px;
+      padding: 12px 14px;
+    }
+
+    .dialog-list-item + .dialog-list-item { border-top: 1px solid var(--line); }
+    .dialog-list-item .icon { width: 19px; height: 19px; color: var(--warning); }
+    .dialog-list-item strong { display: block; font-size: 14px; }
+    .dialog-list-item small { display: block; color: var(--muted); font-size: 12px; }
+
+    .dialog-actions {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .dialog-actions .primary-button { min-height: 46px; }
+
+    .secondary-button,
+    .danger-button {
+      min-height: 46px;
+      flex: 1;
+      padding: 10px 16px;
+      border: 1px solid #D1D5DB;
+      border-radius: 12px;
+      background: #FFFFFF;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .danger-button { color: var(--danger); }
+
+    .toast {
+      position: fixed;
+      z-index: 50;
+      right: 16px;
+      bottom: calc(82px + env(safe-area-inset-bottom));
+      left: 16px;
+      max-width: 440px;
+      margin: auto;
+      padding: 12px 16px;
+      border-radius: 10px;
+      color: #FFFFFF;
+      text-align: center;
+      background: #111827;
+      box-shadow: 0 6px 20px rgba(0,0,0,.18);
+      font-size: 13px;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: opacity .2s, transform .2s;
+    }
+
+    .toast.show { opacity: 1; transform: translateY(0); }
+
+    :focus-visible { outline: 3px solid rgba(37,99,235,.35); outline-offset: 3px; }
+
+    @media (max-width: 374px) {
+      .task-card { gap: 10px; padding: 13px; }
+      .task-icon { width: 38px; height: 38px; }
+      .action-label { display: none; }
+      .stats-grid { gap: 8px; }
+      .stat-card { padding: 14px 9px; }
+      .stat-note { font-size: 11px; }
+    }
+
+    @media (min-width: 768px) {
+      .topbar {
+        display: block;
+        border-bottom: 1px solid var(--line);
+        background: var(--card);
+      }
+
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        max-width: 960px;
+        min-height: 64px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+
+      .brand {
+        margin-right: auto;
+        font-size: 17px;
+        font-weight: 750;
+        letter-spacing: -.02em;
+      }
+
+      .top-nav { display: flex; align-items: center; gap: 6px; }
+
+      .top-nav .nav-link {
+        flex-direction: row;
+        gap: 7px;
+        min-height: 44px;
+        padding: 8px 13px;
+        border-radius: 9px;
+        font-size: 14px;
+      }
+
+      .top-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .top-nav .nav-link .icon { width: 18px; height: 18px; }
+      .bottom-nav { display: none; }
+      .page { padding-top: 32px; padding-bottom: 48px; }
+      .greeting { margin-bottom: 24px; }
+      .primary-button.add-server { max-width: 320px; }
+      .section { margin-top: 32px; }
+      .stat-card { padding: 18px; }
+      .stat-note { font-size: 13px; }
+      .toast { bottom: 24px; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="svg-sprite" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></symbol>
+    <symbol id="i-client" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8M12 16v5"/></symbol>
+    <symbol id="i-key" viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 4l4 4M14 6l4 4"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+    <symbol id="i-pair" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4M9 6h6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.7 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="i-profile" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.1a4 4 0 0 1 0 7.8M22 21v-2a4 4 0 0 0-3-3.9"/><circle cx="9" cy="7" r="4"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+  </svg>
+
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#" aria-label="sshmgr 权威端主页">sshmgr 权威端</a>
+      <nav class="top-nav" aria-label="一级导航">
+        <a class="nav-link" href="#" aria-current="page"><svg class="icon"><use href="#i-home"/></svg>主页</a>
+        <a class="nav-link" href="#" data-nav="服务器"><svg class="icon"><use href="#i-server"/></svg>服务器</a>
+        <a class="nav-link" href="#" data-nav="客户端"><svg class="icon"><use href="#i-client"/></svg>客户端</a>
+        <a class="nav-link" href="#" data-nav="授权"><svg class="icon"><use href="#i-key"/></svg>授权</a>
+        <a class="nav-link" href="#" data-nav="更多"><svg class="icon"><use href="#i-more"/></svg>更多</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="greeting" aria-labelledby="page-title">
+      <div>
+        <p class="product-kicker">sshmgr 权威端</p>
+        <h1 id="page-title">你好，Allan</h1>
+      </div>
+      <div class="owner-badge" aria-label="唯一管理员">Owner</div>
+    </section>
+
+    <button class="primary-button add-server" type="button" data-open="add-dialog">
+      <span aria-hidden="true">＋</span> 添加服务器
+    </button>
+
+    <!-- 全部处理完时，将下方卡片列表替换为“一切正常”空状态，无需提供切换交互。 -->
+    <section class="section" aria-labelledby="tasks-title">
+      <div class="section-heading">
+        <h2 id="tasks-title">待你处理</h2>
+        <span class="section-count">3 项</span>
+      </div>
+      <div class="card-list">
+        <button class="task-card priority" type="button" data-open="approval-dialog">
+          <span class="task-icon"><svg class="icon"><use href="#i-pair"/></svg></span>
+          <span class="task-copy">
+            <span class="task-title">1 个配对请求待审批</span>
+            <span class="task-detail">macbook-air 请求接入，等待你确认</span>
+          </span>
+          <span class="task-tail">
+            <span class="action-label">去审批</span>
+            <svg class="icon chevron"><use href="#i-chevron"/></svg>
+          </span>
+        </button>
+
+        <button class="task-card" type="button" data-open="attention-dialog">
+          <span class="task-icon"><svg class="icon"><use href="#i-alert"/></svg></span>
+          <span class="task-copy">
+            <span class="task-title">2 台服务器需要注意</span>
+            <span class="task-detail">3090x2 未设用途、gitlab-urit 未挂凭据</span>
+          </span>
+          <span class="task-tail"><svg class="icon chevron"><use href="#i-chevron"/></svg></span>
+        </button>
+
+        <button class="task-card" type="button" data-open="software-dialog">
+          <span class="task-icon"><svg class="icon"><use href="#i-list"/></svg></span>
+          <span class="task-copy">
+            <span class="task-title">软件清单有待办</span>
+            <span class="task-detail">2 个未识别进程待认领、软路由清单已 9 天未更新</span>
+          </span>
+          <span class="task-tail"><svg class="icon chevron"><use href="#i-chevron"/></svg></span>
+        </button>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="overview-title">
+      <div class="section-heading">
+        <h2 id="overview-title">概况</h2>
+      </div>
+      <div class="stats-grid">
+        <a class="stat-card" href="#" data-nav="服务器" aria-label="查看 8 台服务器">
+          <span class="stat-top">服务器<svg class="icon"><use href="#i-server"/></svg></span>
+          <strong class="stat-number">8<small>台</small></strong>
+          <span class="stat-note warning">2 台需要注意</span>
+        </a>
+        <a class="stat-card" href="#" data-nav="客户端" aria-label="查看 3 个客户端">
+          <span class="stat-top">客户端<svg class="icon"><use href="#i-client"/></svg></span>
+          <strong class="stat-number">3<small>个</small></strong>
+          <span class="stat-note">1 个超过 1 天未同步</span>
+        </a>
+        <a class="stat-card" href="#" data-nav="授权" aria-label="查看 3 个 profile">
+          <span class="stat-top">profile<svg class="icon"><use href="#i-profile"/></svg></span>
+          <strong class="stat-number">3<small>个</small></strong>
+          <span class="stat-note">最大：全部 8 台</span>
+        </a>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="recent-title">
+      <div class="section-heading">
+        <h2 id="recent-title">最近变化</h2>
+      </div>
+      <div class="recent-card">
+        <div class="timeline-item">
+          <span class="timeline-dot" aria-hidden="true"></span>
+          <div class="timeline-text"><span class="timeline-time">2 分钟前</span>客户端 mini6-claude 完成同步</div>
+        </div>
+        <div class="timeline-item">
+          <span class="timeline-dot" aria-hidden="true"></span>
+          <div class="timeline-text"><span class="timeline-time">10 分钟前</span>机密项 HF_TOKEN 授权给 3090x2</div>
+        </div>
+        <div class="timeline-item">
+          <span class="timeline-dot" aria-hidden="true"></span>
+          <div class="timeline-text"><span class="timeline-time">1 小时前</span>客户端 train3060 完成同步</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav" aria-label="一级导航">
+    <a class="nav-link" href="#" aria-current="page"><svg class="icon"><use href="#i-home"/></svg>主页</a>
+    <a class="nav-link" href="#" data-nav="服务器"><svg class="icon"><use href="#i-server"/></svg>服务器</a>
+    <a class="nav-link" href="#" data-nav="客户端"><svg class="icon"><use href="#i-client"/></svg>客户端</a>
+    <a class="nav-link" href="#" data-nav="授权"><svg class="icon"><use href="#i-key"/></svg>授权</a>
+    <a class="nav-link" href="#" data-nav="更多"><svg class="icon"><use href="#i-more"/></svg>更多</a>
+  </nav>
+
+  <dialog id="add-dialog" aria-labelledby="add-title">
+    <form class="dialog-body" id="add-form">
+      <div class="dialog-header">
+        <div><h2 id="add-title">添加服务器</h2><p>登记一个 SSH 登录条目</p></div>
+        <button class="close-button" type="button" data-close aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="form-field"><label for="server-name">名称</label><input id="server-name" name="name" placeholder="例如 mini6" required></div>
+      <div class="form-field"><label for="server-address">用户@地址:端口</label><input id="server-address" name="address" placeholder="allan@192.168.100.6:22" required></div>
+      <div class="dialog-actions">
+        <button class="secondary-button" type="button" data-close>取消</button>
+        <button class="primary-button" type="submit">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="approval-dialog" aria-labelledby="approval-title">
+    <div class="dialog-body">
+      <div class="dialog-header">
+        <div><h2 id="approval-title">审批配对请求</h2><p>确认客户端及其可使用的服务器范围</p></div>
+        <button class="close-button" type="button" data-close aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="dialog-list">
+        <div class="dialog-list-item"><svg class="icon" style="color:var(--primary)"><use href="#i-pair"/></svg><div><strong>macbook-air</strong><small>待审批配对</small></div></div>
+      </div>
+      <div class="form-field"><label for="client-profile">绑定 profile</label><select id="client-profile"><option>全部（8 台）</option><option>训练机（3 台）</option><option>公司（3 台）</option></select></div>
+      <div class="dialog-actions">
+        <button class="danger-button" type="button" data-result="已拒绝 macbook-air 配对">拒绝</button>
+        <button class="primary-button" type="button" data-result="已批准 macbook-air 配对">批准配对</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="attention-dialog" aria-labelledby="attention-title">
+    <div class="dialog-body">
+      <div class="dialog-header">
+        <div><h2 id="attention-title">服务器需要注意</h2><p>补齐信息，让服务器保持可用</p></div>
+        <button class="close-button" type="button" data-close aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="dialog-list">
+        <div class="dialog-list-item"><svg class="icon"><use href="#i-alert"/></svg><div><strong>3090x2</strong><small>未设用途</small></div></div>
+        <div class="dialog-list-item"><svg class="icon"><use href="#i-alert"/></svg><div><strong>gitlab-urit</strong><small>未挂凭据</small></div></div>
+      </div>
+      <button class="primary-button" type="button" data-result="前往服务器处理">前往服务器处理</button>
+    </div>
+  </dialog>
+
+  <dialog id="software-dialog" aria-labelledby="software-title">
+    <div class="dialog-body">
+      <div class="dialog-header">
+        <div><h2 id="software-title">软件清单待办</h2><p>处理未识别进程与过期清单</p></div>
+        <button class="close-button" type="button" data-close aria-label="关闭"><svg class="icon"><use href="#i-close"/></svg></button>
+      </div>
+      <div class="dialog-list">
+        <div class="dialog-list-item"><svg class="icon"><use href="#i-list"/></svg><div><strong>2 个未识别进程</strong><small>等待人工认领</small></div></div>
+        <div class="dialog-list-item"><svg class="icon"><use href="#i-alert"/></svg><div><strong>软路由</strong><small>清单已 9 天未更新</small></div></div>
+      </div>
+      <button class="primary-button" type="button" data-result="前往软件清单处理">前往软件清单处理</button>
+    </div>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const toast = document.getElementById('toast');
+    let toastTimer;
+
+    function showToast(message) {
+      clearTimeout(toastTimer);
+      toast.textContent = message + '（Mock）';
+      toast.classList.add('show');
+      toastTimer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    document.querySelectorAll('[data-open]').forEach(button => {
+      button.addEventListener('click', () => document.getElementById(button.dataset.open).showModal());
+    });
+
+    document.querySelectorAll('dialog').forEach(dialog => {
+      dialog.querySelectorAll('[data-close]').forEach(button => {
+        button.addEventListener('click', () => dialog.close());
+      });
+      dialog.addEventListener('click', event => {
+        if (event.target === dialog) dialog.close();
+      });
+    });
+
+    document.querySelectorAll('[data-result]').forEach(button => {
+      button.addEventListener('click', () => {
+        button.closest('dialog').close();
+        showToast(button.dataset.result);
+      });
+    });
+
+    document.querySelectorAll('[data-nav]').forEach(link => {
+      link.addEventListener('click', event => {
+        event.preventDefault();
+        showToast('打开「' + link.dataset.nav + '」');
+      });
+    });
+
+    document.getElementById('add-form').addEventListener('submit', event => {
+      event.preventDefault();
+      const name = document.getElementById('server-name').value.trim();
+      document.getElementById('add-dialog').close();
+      event.target.reset();
+      showToast('已保存服务器' + (name ? '「' + name + '」' : ''));
+    });
+  </script>
+</body>
+</html>

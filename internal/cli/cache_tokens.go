@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
 	"io"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,7 +14,14 @@ import (
 	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/termdetect"
 )
+
+// cacheTokensStdinIsInteractive 判断标准输入是不是交互终端。移除客户端
+// 是不可逆操作；脚本场景必须显式给 --yes。
+var cacheTokensStdinIsInteractive = func() bool {
+	return termdetect.IsTerminal(os.Stdin.Fd())
+}
 
 // loadServeCertFingerprint 适配访问管理模块的证书指纹注入协议：模块在产
 // 生设备码之前先调用它读取权威端证书公钥指纹，失败时不会留下设备码。
@@ -39,7 +49,10 @@ func newCacheTokensCmd() *cobra.Command {
 		Use:   "cache-tokens",
 		Short: "Manage device authorization codes for offline-cache pulls (owner)",
 	}
-	cmd.AddCommand(cacheTokensAddCmd(), cacheTokensLsCmd(), cacheTokensRevokeCmd(), cacheTokensBindCmd())
+	cmd.AddCommand(
+		cacheTokensAddCmd(), cacheTokensLsCmd(), cacheTokensRevokeCmd(), cacheTokensBindCmd(),
+		cacheTokensRemoveClientCmd(),
+	)
 	return cmd
 }
 
@@ -126,17 +139,33 @@ func cacheTokensBindCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			summary := map[string]any{"name": args[0], "profile": args[1]}
-			defer func() {
-				if aerr := writeCacheTokenAudit(s, "cache-token.bind", summary, err); aerr != nil && err == nil {
-					err = aerr
-				}
-			}()
 			profileID, err := profileIDByName(s, args[1])
+			if err != nil {
+				if aerr := writeCacheTokenAudit(s, "cache-token.bind", map[string]any{"name": args[0], "profile": args[1]}, err); aerr != nil {
+					return aerr
+				}
+				return err
+			}
+			tokens, err := s.ListCacheTokens()
 			if err != nil {
 				return err
 			}
-			if err := s.BindCacheToken(args[0], profileID); err != nil {
+			var expectedProfileID string
+			found := false
+			for _, token := range tokens {
+				if token.Name == args[0] {
+					expectedProfileID, found = token.ProfileID, true
+					break
+				}
+			}
+			if !found {
+				notFound := fmt.Errorf("device code %q not found", args[0])
+				if aerr := writeCacheTokenAudit(s, "cache-token.bind", map[string]any{"name": args[0], "profile": args[1]}, notFound); aerr != nil {
+					return aerr
+				}
+				return notFound
+			}
+			if err := access.New(s).ChangeClientProfile(args[0], expectedProfileID, profileID, access.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "bound cache token %s to profile %s — its next pull serves that profile's authorized servers\n", args[0], args[1])
@@ -167,6 +196,60 @@ func cacheTokensRevokeCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func cacheTokensRemoveClientCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "remove-client [name]",
+		Args:  cobra.ExactArgs(1),
+		Short: "移除客户端：解除机器关联、吊销它的设备码以及配对时生成的 MCP 访问令牌",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			yes, _ := cmd.Flags().GetBool("yes")
+			s, err := openUnlockedStore()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			out := cmd.OutOrStdout()
+			fmt.Fprintln(out, "移除客户端：解除机器关联、吊销它的设备码以及配对时生成的 MCP 访问令牌")
+			if !yes {
+				if !cacheTokensStdinIsInteractive() {
+					return fmt.Errorf("非交互终端不能确认移除客户端；请加 --yes 后重跑")
+				}
+				fmt.Fprint(out, "输入 y 确认移除：")
+				line, err := bufio.NewReader(cmd.InOrStdin()).ReadString('\n')
+				if err != nil && line == "" {
+					return fmt.Errorf("读取移除确认失败: %w", err)
+				}
+				if strings.ToLower(strings.TrimSpace(line)) != "y" {
+					fmt.Fprintln(out, "\n已取消，未移除客户端。")
+					return nil
+				}
+			}
+			detail, err := access.New(s).ClientDetail(args[0])
+			if err != nil {
+				return err
+			}
+			if detail == nil {
+				return fmt.Errorf("client %q not found", args[0])
+			}
+			machineName := ""
+			if detail.Machine != nil {
+				machineName = detail.Machine.Name
+			}
+			if err := access.New(s).RemoveClient(args[0], access.CLISource()); err != nil {
+				return err
+			}
+			if machineName == "" {
+				fmt.Fprintf(out, "已移除客户端 %s\n", detail.Name)
+				return nil
+			}
+			fmt.Fprintf(out, "已移除客户端 %s，并解除机器 %s 的关联\n", detail.Name, machineName)
+			return nil
+		},
+	}
+	c.Flags().Bool("yes", false, "非交互终端确认移除时必须提供")
+	return c
 }
 
 // printCacheToken emits the one-time device code + the server's SPKI fingerprint

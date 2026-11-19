@@ -120,8 +120,8 @@ func TestTopologyNavigationAndPageAvailableForEveryRole(t *testing.T) {
 			home := authorityGet(t, handler, host, "/ui/", cookie)
 			homeBody, _ := io.ReadAll(home.Body)
 			home.Body.Close()
-			if !strings.Contains(string(homeBody), `<a href="/ui/topology/">网络拓扑</a>`) {
-				t.Fatalf("首页导航应出现网络拓扑入口：\n%s", homeBody)
+			if !strings.Contains(string(homeBody), `aria-label="一级导航"`) || !strings.Contains(string(homeBody), `>更多<`) {
+				t.Fatalf("首页一级导航应出现更多标签：\n%s", homeBody)
 			}
 
 			page := authorityGet(t, handler, host, "/ui/topology/", cookie)
@@ -208,13 +208,13 @@ func TestTopologyPageShowsTrayAddOnlyForWritableRoles(t *testing.T) {
 			page := authorityGet(t, handler, host, "/ui/topology/", cookie)
 			body := readResponseBody(t, page)
 			if tc.wantAdd {
-				want := `href="/ui/add?return_to=%2Fui%2Ftopology%2F"`
+				want := `href="/ui/servers/new?return_to=%2Fui%2Ftopology%2F"`
 				if !strings.Contains(body, want) || !strings.Contains(body, "data-topology-add") {
 					t.Fatalf("可写角色拓扑托盘应提供新增入口，缺少 %q：\n%s", want, body)
 				}
 				return
 			}
-			if strings.Contains(body, "data-topology-add") || strings.Contains(body, `href="/ui/add`) {
+			if strings.Contains(body, "data-topology-add") || strings.Contains(body, `href="/ui/servers/new?return_to=`) {
 				t.Fatalf("客户端拓扑页不应提供新增入口：\n%s", body)
 			}
 		})
@@ -435,10 +435,18 @@ type stubTopologyWriter struct {
 	moveCalls         [][4]string
 	removePhysical    []string
 	networkAddCalls   [][2]string
+	locationAdds      []stubLocationAdd
+	locationEdits     []stubLocationEdit
+	locationDeletes   []string
+	networkAdds       []TopologyNetworkInput
+	networkEdits      []stubNetworkEdit
+	siteEdits         [][2]string
+	serverMoves       [][2]string
 	sources           []TopologyWriteSource
 	addMessage        string
 	nextNotFoundError bool
 	nextPlainError    error
+	nextInvalid       *TopologyInvalidInputError
 
 	saveView    string
 	saveLayout  TopologyLayoutSave
@@ -502,6 +510,65 @@ func (w *stubTopologyWriter) AddPhysicalNetwork(
 	return "已登记网络", w.nextError()
 }
 
+type stubLocationAdd struct{ name, parent, note string }
+
+type stubLocationEdit struct {
+	ref    string
+	name   *string
+	parent *string
+	note   *string
+}
+
+type stubNetworkEdit struct {
+	name    string
+	changes TopologyNetworkChanges
+}
+
+func (w *stubTopologyWriter) AddLocation(name, parent, note string, source TopologyWriteSource) (string, error) {
+	w.locationAdds = append(w.locationAdds, stubLocationAdd{name: name, parent: parent, note: note})
+	w.sources = append(w.sources, source)
+	return "已新建地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditLocation(ref string, changes TopologyLocationChanges, source TopologyWriteSource) (string, error) {
+	w.locationEdits = append(w.locationEdits, stubLocationEdit{ref: ref, name: changes.Name, parent: changes.Parent, note: changes.Note})
+	w.sources = append(w.sources, source)
+	return "已保存地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) DeleteLocation(ref string, source TopologyWriteSource) (string, error) {
+	w.locationDeletes = append(w.locationDeletes, ref)
+	w.sources = append(w.sources, source)
+	return "已删除地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) AddManagedNetwork(input TopologyNetworkInput, source TopologyWriteSource) (string, error) {
+	w.networkAdds = append(w.networkAdds, input)
+	w.sources = append(w.sources, source)
+	return "已保存网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditManagedNetwork(name string, changes TopologyNetworkChanges, source TopologyWriteSource) (string, error) {
+	w.networkEdits = append(w.networkEdits, stubNetworkEdit{name: name, changes: changes})
+	w.sources = append(w.sources, source)
+	return "已保存网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditDeviceSite(device, site string, source TopologyWriteSource) (string, error) {
+	w.siteEdits = append(w.siteEdits, [2]string{device, site})
+	w.sources = append(w.sources, source)
+	if site == "" {
+		return "已清除机器地点", w.nextError()
+	}
+	return "已保存机器地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) MoveServerToDevice(serverID, device string, source TopologyWriteSource) (TopologyServerMoveResult, error) {
+	w.serverMoves = append(w.serverMoves, [2]string{serverID, device})
+	w.sources = append(w.sources, source)
+	return TopologyServerMoveResult{ServerName: serverID, ToDevice: device}, w.nextError()
+}
+
 func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {
 	w.saveCalls++
 	w.saveView, w.saveLayout, w.saveSource = save.ViewKey, save, source
@@ -515,6 +582,11 @@ func (w *stubTopologyWriter) ResetTopologyLayout(view string, source TopologyWri
 }
 
 func (w *stubTopologyWriter) nextError() error {
+	if w.nextInvalid != nil {
+		err := w.nextInvalid
+		w.nextInvalid = nil
+		return err
+	}
 	if w.nextNotFoundError {
 		w.nextNotFoundError = false
 		return &TopologyNameNotFoundError{Message: "设备不存在：没有这台设备"}
@@ -1044,5 +1116,39 @@ func TestTopologyLayoutWriterErrorsMapToClientErrors(t *testing.T) {
 	failed.Body.Close()
 	if failed.StatusCode != http.StatusInternalServerError {
 		t.Fatalf("写来源失败的状态码 = %d，应为 500", failed.StatusCode)
+	}
+}
+
+// TestTopologyAssetsUseApprovedTerms 固定拓扑相关界面文案：不出现旧称
+// “站点、网络成员、兜底主机”，手机视口只读，地点显示完整多级路径。
+func TestTopologyAssetsUseApprovedTerms(t *testing.T) {
+	staticJS, err := staticFS.ReadFile("static/topology.js")
+	if err != nil {
+		t.Fatalf("读取 topology.js 失败：%v", err)
+	}
+	templates, err := templateContents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name, body string) {
+		t.Helper()
+		for _, forbidden := range []string{"站点", "网络成员", "兜底主机"} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("%s 不应出现 %q：%s", name, forbidden, body)
+			}
+		}
+	}
+	check("topology.js", string(staticJS))
+	check("topology.tmpl", templates["topology.tmpl"])
+	for _, name := range []string{"share-desktop.tmpl", "ops-upgrade-server.tmpl"} {
+		check(name, templates[name])
+	}
+	js := string(staticJS)
+	for _, want := range []string{
+		"location_path", "pageReadOnly", "服务器条目地址", "网络地址",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("topology.js 缺少 %q，手机只读与多级地点显示未实现", want)
+		}
 	}
 }

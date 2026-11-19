@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="client-profile-page">
+<a class="back-link" href="/ui/clients/{{.Client.ID}}" aria-label="返回客户端详情"><span aria-hidden="true">‹</span>客户端详情</a>
+<h1>更换 profile</h1>
+<p>选择 {{.Client.Name}} 要绑定的新 profile。确认前先核对它将新增与失去的访问范围。</p>
+<nav class="profile-choice-list">
+{{range .AccessProfiles}}{{if ne .ID $.Client.ProfileID}}<a class="profile-choice" href="/ui/clients/{{$.Client.ID}}/profile?profile={{.ID}}">{{.Name}} · {{len .Servers}} 台服务器</a>{{end}}{{end}}
+</nav>
+{{with .ClientProfilePreview}}
+<section class="shared-card profile-preview-card">
+<h2>变更摘要</h2>
+<p>{{.CurrentProfileName}} → {{.DesiredProfileName}}</p>
+<p>将新增可见：{{if .AddedServers}}{{len .AddedServers}} 台 · {{.AddedServerNames}}{{else}}无{{end}}</p>
+<p>将失去可见：{{if .LostServers}}{{len .LostServers}} 台 · {{.LostServerNames}}{{else}}无{{end}}</p>
+<p>将新增可用机密项：{{if .AddedSecrets}}{{len .AddedSecrets}} 项 · {{.AddedSecretNames}}{{else}}无{{end}}</p>
+<p>将失去可用机密项：{{if .LostSecrets}}{{len .LostSecrets}} 项 · {{.LostSecretNames}}{{else}}无{{end}}</p>
+<p>将新增可用共享存储：{{if .AddedShares}}{{len .AddedShares}} 项 · {{.AddedShareNames}}{{else}}无{{end}}</p>
+<p>将失去可用共享存储：{{if .LostShares}}{{len .LostShares}} 项 · {{.LostShareNames}}{{else}}无{{end}}</p>
+<form method="post" action="/ui/clients/{{$.Client.ID}}/profile">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="expected_profile" value="{{.CurrentProfileID}}">
+<input type="hidden" name="profile" value="{{.DesiredProfileID}}">
+<div class="button-row"><button type="submit" class="primary-button">确认更换</button>
+<a class="secondary-button" href="/ui/clients/{{$.Client.ID}}">取消</a></div>
+</form>
+</section>
+{{end}}
+</section>
+{{end}}

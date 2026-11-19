@@ -1,0 +1,28 @@
+{{define "content"}}
+<section class="client-machine-page">
+<a class="back-link" href="/ui/clients/{{.Client.ID}}" aria-label="返回客户端详情"><span aria-hidden="true">‹</span>客户端详情</a>
+<h1>选择机器</h1>
+<p>选择 {{.Client.Name}} 运行所在的物理机。机器按地点分组。</p>
+<form method="post" action="/ui/clients/{{.Client.ID}}/machine">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{range .ClientMachineChoices}}
+<label class="machine-choice">
+<input type="radio" name="machine_id" value="{{.ID}}"{{if not .Available}} disabled{{end}} required>
+<span><strong>{{.Name}}</strong><small>{{if .SitePath}}{{.SitePath}}{{else}}未登记地点{{end}}{{if not .Available}} · 已关联其他客户端{{end}}</small></span>
+</label>
+{{end}}
+<button type="submit">确认选择</button>
+</form>
+<section class="shared-card new-machine-card">
+<h2>新建一台机器</h2>
+<form method="post" action="/ui/clients/{{.Client.ID}}/machine">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="new-machine">机器名</label>
+<input type="text" id="new-machine" name="new_machine">
+<label for="new-machine-site">地点路径</label>
+<input type="text" id="new-machine-site" name="new_site" placeholder="例如：公司 / 一号楼">
+<button type="submit">新建并关联</button>
+</form>
+</section>
+</section>
+{{end}}

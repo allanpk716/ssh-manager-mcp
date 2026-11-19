@@ -1,9 +1,15 @@
 {{define "content"}}
 <section class="server-add-result"{{if and .ServerAddResult.ConnectionTest (eq .ServerAddResult.ConnectionTest.State "running")}} id="server-add-result" hx-get="{{.ServerAddResult.ConnectionTestPollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+{{if .ServerAddResult.FromServerDetail}}
+<h1>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}连接测试进行中{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}连接测试完成{{else}}连接测试未通过{{end}}{{else}}连接测试未启动{{end}}</h1>
+{{else}}
 <h1>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}已保存，连接测试进行中{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}已保存，连接测试完成{{else}}已保存，连接测试未通过{{end}}{{else}}已保存，连接测试未启动{{end}}</h1>
+{{end}}
 <div class="operation-result">
-<p>服务器条目 <strong>{{.ServerAddResult.Detail.Name}}</strong> 已保存；连接测试失败不会删除条目，owner 可以稍后补网络、凭据或手工锚定。</p>
+{{if not .ServerAddResult.FromServerDetail}}<p>服务器条目 <strong>{{.ServerAddResult.Detail.Name}}</strong> 已保存；连接测试失败不会删除条目，owner 可以稍后补网络、凭据或手工锚定。</p>{{end}}
 <dl class="detail-list">
+{{if .ServerAddResult.FromServerDetail}}<div><dt>走的网络</dt><dd>{{.ServerAddResult.ConnectionNetwork}}</dd></div>
+<div><dt>地址</dt><dd>{{.ServerAddResult.ConnectionAddress}}</dd></div>{{end}}
 <div><dt>连接</dt><dd>{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}</dd></div>
 <div><dt>所属设备</dt><dd>{{if .ServerAddResult.DeviceName}}{{.ServerAddResult.DeviceName}}{{else}}未显示{{end}}</dd></div>
 <div><dt>profile 授权</dt><dd>{{if .ServerAddResult.ProfileNamesUnavailable}}无法确认{{else if .ServerAddResult.ProfileNames}}{{joinTags .ServerAddResult.ProfileNames}}{{else}}未授权{{end}}</dd></div>
@@ -22,9 +28,11 @@
 {{if .ServerAddResult.ConnectionTestNotice}}<div class="notice notice-warning"><p>{{.ServerAddResult.ConnectionTestNotice}}</p></div>{{end}}
 </div>
 <div class="inline-form">
+{{if .ServerAddResult.FromServerDetail}}<a class="button-link" href="/ui/servers/{{.ServerAddResult.Detail.ID}}?tab=connection">返回服务器详情</a>{{else}}
 <a class="button-link" href="/ui/servers/{{.ServerAddResult.Detail.ID}}">查看服务器详情</a>
 {{if .ServerAddResult.ReturnTo}}<a class="button-link" href="{{.ServerAddResult.ReturnTo}}">返回网络拓扑</a>{{else}}
-<a class="button-link" href="/ui/">返回服务器列表</a>
+<a class="button-link" href="/ui/servers/">返回服务器列表</a>
+{{end}}
 {{end}}
 </div>
 </section>

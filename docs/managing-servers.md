@@ -36,7 +36,7 @@ db               <uuid>              pguser@10.0.0.5:22 [shell=posix] [-] (prod 
 - `[shell=…]` 是命令策略拆解命令用的 shell 类型标注（默认 `posix`，见[下文专节](#shell-类型标注与探测命令策略)）。
 - `[sudo]` 表示这台机器给了 sudo 密码（agent 看到 `has_sudo=true`）；`[-]` 表示没有。
 - `(role)` 来自 `--role`（这台机器的用途）；空则显示 `-`。
-- `·` 后面是 `--special-handling`（Caveats）的截断预览——给 agent 看的操作注意事项，约 40 字符截断；空则 `-`。其余结构化字段（location / hardware / services / description）不在 ls 行上，agent 通过 `list_servers` 看全。
+- `·` 后面是 `--special-handling`（Caveats）的截断预览——给 agent 看的操作注意事项，约 40 字符截断；空则 `-`。其余结构化字段（hardware/services/description）不在 ls 行上，agent 通过 `list_servers` 看全。
 - **密码 / 私钥永远不会出现在任何列表里。**
 
 ---
@@ -56,7 +56,6 @@ sshmgr servers add \
   [--tags prod,gpu]                 # 可选，逗号分隔
   [--description '<你的备注>']        # 可选，给 agent 看的自由文本
   # 结构化字段（都可选，都会展示给 agent；详见下表）：
-  [--location '<部署位置>']           # e.g. dc2 rack14 / us-east-1a
   [--hardware '<硬件配置>']           # e.g. 8x A100 80GB, 1TB RAM
   [--services '<跑了什么>']           # e.g. postgres primary, prometheus
   [--role '<这台机器的用途>']          # e.g. prod pg primary
@@ -80,7 +79,6 @@ understands what each box is and how to act safely:
 
 | Flag | Field | Example |
 |---|---|---|
-| `--location` | where deployed | `dc2 rack14` / `us-east-1a` |
 | `--hardware` | hardware config | `8x A100 80GB, 1TB RAM` |
 | `--services` | what's deployed/running | `postgres primary, prometheus` |
 | `--role` | this server's purpose | `prod pg primary` |
@@ -88,6 +86,9 @@ understands what each box is and how to act safely:
 
 `--description` is supplementary free-text; `--tags` is free-form labels. Both are also
 shown to the agent.
+
+「这台机器在哪里」不再用元数据字段表达——由网络拓扑里机器直接登记的地点
+决定，`list_servers` 以只读 `site` 完整路径返回（见 ADR 0021）。
 
 > ⚠️ **Do not put secrets in any of these fields.** Keys, tokens, and PII entered here
 > travel into the agent's context and the upstream LLM provider on every `list_servers`
@@ -203,7 +204,6 @@ sshmgr servers edit <name> [flags...]
 | `--user <用户>` | 改登录用户 |
 | `--description '<备注>'` | 改 / 加备注 |
 | `--tags a,b,c` | **替换**整组 tags（不是追加） |
-| `--location '<部署位置>'` | 改 / 加 location（结构化字段，展示给 agent） |
 | `--hardware '<硬件配置>'` | 改 / 加 hardware |
 | `--services '<跑了什么>'` | 改 / 加 services |
 | `--role '<用途>'` | 改 / 加 role |

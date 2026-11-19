@@ -1863,7 +1863,7 @@ func TestUploadContentForProfileNoLeakConnectError(t *testing.T) {
 // host:port shape and the audit must hold one error-status row.
 func TestUploadContentForProfileNoLeakSFTPMidFailure(t *testing.T) {
 	st, pid, srvID, root := ucSeed(t)
-	if err := st.AddSecret("MIDFAIL_TOKEN", "", []byte("mid-failure-secret"), store.CLISource()); err != nil {
+	if err := st.AddSecret("MIDFAIL_TOKEN", "测试备注", []byte("mid-failure-secret"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AllowSecrets([]string{"MIDFAIL_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {

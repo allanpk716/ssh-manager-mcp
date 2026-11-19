@@ -1,5 +1,7 @@
 # 客户端元数据编辑:受审计转发写从「仅可新增」扩展到「乐观锁更新」
 
+> **2026-11-18 修订**:服务器元数据的 Location 字段由 ADR 0021 取消,「在哪」改由网络拓扑的地点表达;下文的六个字段按五个读。
+
 服务器条目的六个元数据字段(Role/Services/Location/Hardware/Caveats/Description)读面向 agent(list_servers 全量可见)、写却只属于 owner(权威端 TUI/CLI),探明服务器的 agent 无法把发现记回,元数据靠人肉登权威端维护而腐化。我们决定:**客户端经设备码认证发起元数据部分更新,权威 broker 以 revision 乐观锁(单调整数列,一切 UPDATE servers 路径统一自增)做 CAS,冲突 409 并附六字段现值供一跳重试;变更与审计行(骨架+每字段旧值截断 200 字节)同事务落库;写成功后本地只读快照经第二个窄写口镜像补记,不产生第二事实源;全局开关(serve --metadata-edit / SSHMGR_SERVE_METADATA_EDIT / serve.metadata_edit)默认开**。批 1 只挂客户端缓存脸的 MCP 工具,批 2 再补客户端 CLI/TUI 表单(同路由)。这是锚定转发(ADR 0002)确立的「设备码认证的受审计写」模式从 insert-only 到条件更新的扩展——写类别升级,护栏相应升级(乐观锁替代仅可新增)。
 
 ## Considered Options

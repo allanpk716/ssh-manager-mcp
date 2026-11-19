@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// AccessProjectSummary 是项目页列表的一行：令牌本体从不出现，只有前缀。
+// AccessProjectSummary 是 MCP 访问令牌页列表的一行：令牌本体从不出现，只有前缀。
 type AccessProjectSummary struct {
 	ID          string
 	Name        string
@@ -41,7 +41,7 @@ func (p AccessProjectSummary) StatusText() string {
 	}
 }
 
-// IsRevoked 表示项目已吊销：吊销不可逆，只剩删除入口。
+// IsRevoked 表示MCP 访问令牌已吊销：吊销不可逆，只剩删除入口。
 func (p AccessProjectSummary) IsRevoked() bool { return p.Status == "revoked" }
 
 // CanRotate 表示项目还能轮换令牌；已吊销项目轮换会被拒绝，不显示入口。
@@ -56,7 +56,7 @@ func (p AccessProjectSummary) CanEnable() bool { return p.Status == "disabled" }
 // CanRevoke 表示项目还未吊销，可以执行吊销。
 func (p AccessProjectSummary) CanRevoke() bool { return !p.IsRevoked() }
 
-// AccessProjectToken 是签发或轮换项目令牌的一次性结果：令牌与已代入令牌
+// AccessProjectToken 是签发或轮换 MCP 访问令牌的一次性结果：令牌与已代入令牌
 // 的 `.mcp.json` 片段只在同一次提交响应里展示。
 type AccessProjectToken struct {
 	ID      string
@@ -66,16 +66,16 @@ type AccessProjectToken struct {
 }
 
 const (
-	accessProjectsPath = "/ui/access/projects"
+	accessProjectsPath = "/ui/ops/access-tokens"
 
-	projectRotatePath  = "/ui/access/projects/rotate"
-	projectDisablePath = "/ui/access/projects/disable"
-	projectEnablePath  = "/ui/access/projects/enable"
-	projectRevokePath  = "/ui/access/projects/revoke"
-	projectDeletePath  = "/ui/access/projects/delete"
+	projectRotatePath  = "/ui/ops/access-tokens/rotate"
+	projectDisablePath = "/ui/ops/access-tokens/disable"
+	projectEnablePath  = "/ui/ops/access-tokens/enable"
+	projectRevokePath  = "/ui/ops/access-tokens/revoke"
+	projectDeletePath  = "/ui/ops/access-tokens/delete"
 )
 
-// handleAccessProjects 渲染项目令牌列表；include_revoked=1 时把已吊销的
+// handleAccessProjects 渲染MCP 访问令牌列表；include_revoked=1 时把已吊销的
 // 项目也显示出来。
 func (h *handler) handleAccessProjects(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != accessProjectsPath {
@@ -87,13 +87,13 @@ func (h *handler) handleAccessProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "项目页只接受 GET 与 POST 请求。")
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "MCP 访问令牌页只接受 GET 与 POST 请求。")
 		return
 	}
 	includeRevoked := r.URL.Query().Get("include_revoked") == "1"
 	projects, err := h.cfg.Access.ListProjects(includeRevoked)
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取项目令牌列表失败", "读取项目令牌列表失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "读取 MCP 访问令牌列表失败", "读取 MCP 访问令牌列表失败，请稍后重试。")
 		return
 	}
 	profiles, err := h.cfg.Access.ListProfiles()
@@ -102,7 +102,7 @@ func (h *handler) handleAccessProjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.renderPage(w, r, http.StatusOK, "projects.tmpl", pageData{
-		Title: "项目令牌", AccessProjects: projects, AccessProfiles: profiles,
+		Title: "MCP 访问令牌", AccessProjects: projects, AccessProfiles: profiles,
 		AccessProjectIncludeRevoked: includeRevoked,
 		AccessProjectNotice:         projectReverifyNotice(r.URL.Query()),
 		AccessProjectFormName:       r.URL.Query().Get("add_name"),
@@ -115,9 +115,9 @@ func (h *handler) handleAccessProjects(w http.ResponseWriter, r *http.Request) {
 func projectReverifyNotice(query url.Values) string {
 	switch {
 	case query.Get("reverify_add") == "1":
-		return "签发项目令牌前需要重新验证管理员口令，验证后请重新提交签发表单。"
+		return "签发 MCP 访问令牌前需要重新验证管理员口令，验证后请重新提交签发表单。"
 	case query.Get("reverify_rotate") != "":
-		return "轮换项目令牌前需要重新验证管理员口令，验证后请重新提交轮换。"
+		return "轮换 MCP 访问令牌前需要重新验证管理员口令，验证后请重新提交轮换。"
 	case query.Get("reverify_enable") != "":
 		return "重新启用项目前需要重新验证管理员口令，验证后请重新提交。"
 	case query.Get("reverify_disable") != "":
@@ -131,14 +131,14 @@ func projectReverifyNotice(query url.Values) string {
 	}
 }
 
-// handleAccessProjectAdd 处理项目令牌签发表单。令牌只在这一个响应里出现：
+// handleAccessProjectAdd 处理 MCP 访问令牌签发表单。令牌只在这一个响应里出现：
 // 成功时直接渲染一次性页面（带 no-store），不重定向，也不把令牌写进任何
 // 链接、日志或会话。
 func (h *handler) handleAccessProjectAdd(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	profileID := r.PostFormValue("profile_id")
 	if name == "" || profileID == "" {
-		h.renderError(w, r, http.StatusBadRequest, "签发项目令牌失败", "项目名称和 profile 都不能为空。")
+		h.renderError(w, r, http.StatusBadRequest, "签发 MCP 访问令牌失败", "项目名称和 profile 都不能为空。")
 		return
 	}
 	if !h.projectSensitiveActionAllowed(w, r, url.Values{
@@ -148,10 +148,10 @@ func (h *handler) handleAccessProjectAdd(w http.ResponseWriter, r *http.Request)
 	}
 	token, err := h.cfg.Access.AddProject(name, profileID, AccessWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "签发项目令牌失败", "签发项目令牌失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "签发 MCP 访问令牌失败", "签发 MCP 访问令牌失败，请稍后重试。")
 		return
 	}
-	h.renderProjectToken(w, r, "已签发项目令牌", token)
+	h.renderProjectToken(w, r, "已签发 MCP 访问令牌", token)
 }
 
 // renderProjectToken 渲染签发或轮换后的令牌一次性页面。根处理器对全部响
@@ -164,15 +164,15 @@ func (h *handler) renderProjectToken(w http.ResponseWriter, r *http.Request, tit
 	})
 }
 
-// handleAccessProjectRotate 轮换项目令牌并把新令牌按一次性页面直接返回。
+// handleAccessProjectRotate 轮换 MCP 访问令牌并把新令牌按一次性页面直接返回。
 func (h *handler) handleAccessProjectRotate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "轮换项目令牌只接受 POST 请求。")
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "轮换 MCP 访问令牌只接受 POST 请求。")
 		return
 	}
 	id := r.PostFormValue("project_id")
 	if id == "" {
-		h.renderError(w, r, http.StatusBadRequest, "轮换项目令牌失败", "缺少项目标识符。")
+		h.renderError(w, r, http.StatusBadRequest, "轮换 MCP 访问令牌失败", "缺少项目标识符。")
 		return
 	}
 	if !h.projectSensitiveActionAllowed(w, r, url.Values{"reverify_rotate": {id}}) {
@@ -180,13 +180,13 @@ func (h *handler) handleAccessProjectRotate(w http.ResponseWriter, r *http.Reque
 	}
 	token, err := h.cfg.Access.RotateProject(id, AccessWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "轮换项目令牌失败", "轮换项目令牌失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "轮换 MCP 访问令牌失败", "轮换 MCP 访问令牌失败，请稍后重试。")
 		return
 	}
-	h.renderProjectToken(w, r, "已轮换项目令牌", token)
+	h.renderProjectToken(w, r, "已轮换 MCP 访问令牌", token)
 }
 
-// handleAccessProjectDisable 停用一个项目令牌，停用可逆。
+// handleAccessProjectDisable 停用一个 MCP 访问令牌，停用可逆。
 func (h *handler) handleAccessProjectDisable(w http.ResponseWriter, r *http.Request) {
 	h.handleAccessProjectStatus(w, r, "停用项目失败", "停用项目失败，请稍后重试。", false, "reverify_disable",
 		func(id string, source AccessWriteSource) error {
@@ -194,7 +194,7 @@ func (h *handler) handleAccessProjectDisable(w http.ResponseWriter, r *http.Requ
 		})
 }
 
-// handleAccessProjectEnable 重新启用一个已停用的项目令牌。
+// handleAccessProjectEnable 重新启用一个已停用的 MCP 访问令牌。
 func (h *handler) handleAccessProjectEnable(w http.ResponseWriter, r *http.Request) {
 	h.handleAccessProjectStatus(w, r, "重新启用项目失败", "重新启用项目失败，请稍后重试。", false, "reverify_enable",
 		func(id string, source AccessWriteSource) error {
@@ -202,7 +202,7 @@ func (h *handler) handleAccessProjectEnable(w http.ResponseWriter, r *http.Reque
 		})
 }
 
-// handleAccessProjectRevoke 永久吊销项目令牌；表单必须勾选确认，避免误触。
+// handleAccessProjectRevoke 永久吊销 MCP 访问令牌；表单必须勾选确认，避免误触。
 func (h *handler) handleAccessProjectRevoke(w http.ResponseWriter, r *http.Request) {
 	h.handleAccessProjectStatus(w, r, "吊销项目失败", "吊销项目失败，请稍后重试。", true, "reverify_revoke",
 		func(id string, source AccessWriteSource) error {
@@ -250,9 +250,9 @@ func (h *handler) handleAccessProjectStatus(
 	http.Redirect(w, r, accessProjectsPath, http.StatusSeeOther)
 }
 
-// projectSensitiveActionAllowed 校验权威端项目令牌写操作。签发、轮换、启
+// projectSensitiveActionAllowed 校验权威端 MCP 访问令牌写操作。签发、轮换、启
 // 停、吊销与删除都会改变访问凭据或授权状态，必须最近 5 分钟内验证过管理
-// 员口令。未验证时重定向到重新验证页；resume 保存验证后要回到的项目页查
+// 员口令。未验证时重定向到重新验证页；resume 保存验证后要回到的 MCP 访问令牌页查
 // 询参数。单机不要求重新验证。
 func (h *handler) projectSensitiveActionAllowed(w http.ResponseWriter, r *http.Request, resume url.Values) bool {
 	if h.cfg.Role != RoleServer || h.recentlyVerified(h.currentSession(r)) {

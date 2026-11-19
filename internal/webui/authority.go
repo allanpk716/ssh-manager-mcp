@@ -86,6 +86,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/reverify", h.requireSession(h.handleAuthorityReverify))
 	h.mux.HandleFunc("/ui/", h.requireSession(h.handleAuthorityRoot))
 	// 拓扑图页面与访问区域路由按权威端角色注册全部已实现的页面。
+	registerAuthorizationRoutes(h)
 	h.registerTopologyRoutes()
 	h.registerAccessRoutes()
 	h.registerServerRoutes()
@@ -93,6 +94,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.registerShareRoutes()
 	h.registerSoftwareInventoryRoutes()
 	h.registerOpsRoutes()
+	h.registerMoreRoutes()
 	return h, h, nil
 }
 
@@ -140,7 +142,7 @@ func (h *handler) handleAuthorityRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	h.handleServerList(w, r)
+	h.handleHomePage(w, r)
 }
 
 func (h *handler) handleAuthorityLoginPost(w http.ResponseWriter, r *http.Request) {

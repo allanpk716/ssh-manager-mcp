@@ -1,0 +1,1212 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>NUC10 · 服务器 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.modal-open { overflow: hidden; }
+    button, input, select { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 10px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    .back-link {
+      display: inline-flex;
+      align-items: center;
+      min-height: 44px;
+      margin-left: -8px;
+      padding: 0 8px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .back-link span { margin-right: 3px; color: var(--primary); font-size: 28px; line-height: 1; }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .subtitle {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 20px;
+      overflow-wrap: anywhere;
+    }
+
+    .primary-button, .secondary-button, .text-button, .danger-button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 16px;
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: #374151;
+      box-shadow: var(--shadow);
+      font-size: 14px;
+    }
+    .text-button {
+      padding: 0 12px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      font-size: 14px;
+    }
+    .small-button {
+      min-width: 44px;
+      min-height: 44px;
+      margin: -8px -8px -8px 0;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .sticky-tabs {
+      position: sticky;
+      z-index: 30;
+      top: 0;
+      margin: 16px -16px 12px;
+      padding: 8px 16px;
+      background: rgba(245,246,248,.95);
+      backdrop-filter: blur(14px);
+    }
+    .segmented {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 3px;
+      padding: 4px;
+      border-radius: 12px;
+      background: #E9EDF3;
+    }
+    .segment {
+      min-width: 0;
+      min-height: 44px;
+      padding: 0 5px;
+      border: 0;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .segment[aria-selected="true"] {
+      background: var(--card);
+      color: var(--primary);
+      box-shadow: 0 1px 3px rgba(17,24,39,.1);
+      font-weight: 650;
+    }
+    .detail-section { display: grid; gap: 12px; }
+    .card {
+      min-width: 0;
+      padding: 16px;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .card-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 28px;
+    }
+    .card-heading h2, .auth-title {
+      margin: 0;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .info-list { margin: 7px 0 0; }
+    .info-row {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 44px;
+      padding: 11px 0;
+      border-bottom: 1px solid #F0F1F3;
+    }
+    .info-row:last-child { border-bottom: 0; }
+    .info-label { flex: 0 0 auto; color: var(--muted); font-size: 14px; line-height: 22px; }
+    .info-value {
+      min-width: 0;
+      text-align: right;
+      line-height: 22px;
+      overflow-wrap: anywhere;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    .saved {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      margin-left: 5px;
+      padding: 1px 7px;
+      border-radius: 5px;
+      background: #ECFDF5;
+      color: var(--success);
+      font-size: 12px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .fingerprint { font-size: 13px; }
+    .field-note { display: block; margin-top: 2px; color: var(--muted); font-size: 12px; font-weight: 400; }
+    .button-row { display: flex; gap: 10px; margin-top: 14px; }
+    .button-row > button { flex: 1; }
+    .connection-result {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+      padding: 11px 12px;
+      border-radius: 9px;
+      background: #ECFDF5;
+      color: #047857;
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .connection-result svg { margin-top: 1px; color: var(--success); }
+
+    .description-list { margin-top: 7px; }
+    .description-row {
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr);
+      gap: 4px 10px;
+      padding: 11px 0;
+      border-bottom: 1px solid #F0F1F3;
+    }
+    .description-row:last-child { border-bottom: 0; }
+    .description-label { color: var(--muted); font-size: 14px; line-height: 24px; }
+    .description-value { min-width: 0; line-height: 24px; overflow-wrap: anywhere; }
+    .empty-field {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 32px;
+      margin: -4px 0;
+      color: #9CA3AF;
+    }
+    .empty-field .small-button { margin-top: -4px; margin-bottom: -4px; }
+
+    .location-value { margin-top: 7px; font-size: 21px; line-height: 30px; font-weight: 700; }
+    .card-help { margin: 10px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .address-list { margin-top: 9px; }
+    .address-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 82px;
+      padding: 12px 0;
+      border-bottom: 1px solid #F0F1F3;
+    }
+    .address-item:last-child { border-bottom: 0; }
+    .address-copy { min-width: 0; }
+    .network-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; }
+    .network-name { font-weight: 650; }
+    .type-tag {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 1px 7px;
+      border-radius: 5px;
+      background: #F3F4F6;
+      color: #4B5563;
+      font-size: 12px;
+      line-height: 18px;
+    }
+    .ip-address {
+      display: block;
+      margin-top: 6px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 14px;
+      line-height: 20px;
+      overflow-wrap: anywhere;
+    }
+    .add-address-button { width: 100%; margin-top: 10px; }
+    .inline-form {
+      margin-top: 12px;
+      padding: 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: #F9FAFB;
+    }
+    .form-grid { display: grid; gap: 10px; }
+    .form-field { display: grid; gap: 6px; }
+    .form-field > span { color: var(--muted); font-size: 13px; }
+    .form-input, .form-select {
+      width: 100%;
+      min-width: 0;
+      min-height: 44px;
+      padding: 0 11px;
+      border: 1px solid #D8DDE5;
+      border-radius: 9px;
+      background: #FFFFFF;
+      color: var(--text);
+    }
+    .warning-box {
+      margin-top: 10px;
+      padding: 10px 11px;
+      border-radius: 8px;
+      background: var(--warning-soft);
+      color: #92400E;
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+    .form-actions .secondary-button { box-shadow: none; }
+    .machine-link {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 54px;
+      margin-top: 8px;
+      color: var(--text);
+      text-decoration: none;
+    }
+    .machine-name { display: block; font-weight: 650; }
+    .machine-address { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; }
+    .chevron { color: #9CA3AF; font-size: 25px; }
+    .footer-link {
+      display: inline-flex;
+      align-items: center;
+      justify-self: center;
+      min-height: 44px;
+      padding: 0 10px;
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 13px;
+    }
+
+    .auth-card { padding-top: 13px; padding-bottom: 5px; }
+    .auth-title { padding: 0 0 5px; }
+    .auth-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      min-height: 78px;
+      padding: 13px 0;
+      border-top: 1px solid #F0F1F3;
+    }
+    .auth-copy { flex: 1; min-width: 0; }
+    .resource-name { display: block; font-weight: 700; line-height: 22px; overflow-wrap: anywhere; }
+    .resource-detail { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 20px; overflow-wrap: anywhere; }
+    .switch {
+      position: relative;
+      flex: 0 0 48px;
+      width: 48px;
+      height: 44px;
+      margin: 0 -3px 0 0;
+      padding: 0;
+      border: 0;
+      border-radius: 22px;
+      background: transparent;
+      cursor: pointer;
+    }
+    .switch::before {
+      content: "";
+      position: absolute;
+      top: 10px;
+      left: 3px;
+      width: 42px;
+      height: 24px;
+      border-radius: 99px;
+      background: #D1D5DB;
+      transition: background .18s ease;
+    }
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 12px;
+      left: 5px;
+      width: 20px;
+      height: 20px;
+      border-radius: 50%;
+      background: #FFFFFF;
+      box-shadow: 0 1px 3px rgba(17,24,39,.25);
+      transition: transform .18s ease;
+    }
+    .switch[aria-checked="true"]::before { background: var(--primary); }
+    .switch[aria-checked="true"]::after { transform: translateX(18px); }
+
+    .collection-card .card-heading { align-items: flex-start; }
+    .collection-meta { margin: 0; color: var(--muted); font-size: 13px; line-height: 21px; }
+    .collection-card .secondary-button { flex: 0 0 auto; margin-top: -7px; }
+    .software-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 3px;
+      width: 220px;
+      padding: 4px;
+      border-radius: 11px;
+      background: #E9EDF3;
+    }
+    .software-tab {
+      min-height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+    }
+    .software-tab[aria-selected="true"] { background: #FFFFFF; color: var(--primary); box-shadow: 0 1px 2px rgba(17,24,39,.08); font-weight: 650; }
+    .software-list { display: grid; gap: 12px; }
+    .software-card { padding: 14px 16px; }
+    .software-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+    .software-name { margin: 0; font-size: 16px; line-height: 24px; }
+    .software-version { margin-left: 5px; color: #374151; font-weight: 500; }
+    .software-detail { margin: 5px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .warning-tag {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+    .danger-card { border: 1px solid #FECACA; }
+    .danger-card h2 { color: var(--danger); }
+    .danger-card p { margin: 7px 0 12px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .danger-button {
+      width: 100%;
+      border: 1px solid #FECACA;
+      background: #FFFFFF;
+      color: var(--danger);
+    }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    .drawer-shell {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: rgba(17,24,39,.46);
+      cursor: default;
+      animation: fade-in .18s ease-out;
+    }
+    .drawer {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      max-height: min(88vh, 760px);
+      overflow-y: auto;
+      padding: 9px 20px calc(20px + env(safe-area-inset-bottom));
+      border-radius: 20px 20px 0 0;
+      background: var(--card);
+      box-shadow: 0 -12px 40px rgba(17,24,39,.16);
+      animation: slide-up .22s ease-out;
+    }
+    .drawer-handle { width: 38px; height: 4px; margin: 0 auto 10px; border-radius: 99px; background: #D1D5DB; }
+    .drawer-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .drawer-header h2 { margin: 0; font-size: 19px; line-height: 28px; }
+    .close-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-right: -9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .step-caption { margin: 3px 0 14px; color: var(--muted); font-size: 13px; line-height: 20px; }
+    .search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-height: 48px;
+      border: 1px solid #E2E5EA;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .search-box > svg { margin-left: 14px; color: var(--muted); }
+    .search-box input {
+      width: 100%;
+      min-width: 0;
+      height: 46px;
+      padding: 0 12px 0 10px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .search-box input::placeholder { color: #9CA3AF; }
+    .search-box:focus-within { border-color: #93C5FD; box-shadow: 0 0 0 3px rgba(37,99,235,.08); }
+    .search-box input:focus-visible { outline: 0; }
+    .location-tree {
+      max-height: 310px;
+      margin-top: 12px;
+      padding: 4px;
+      overflow-y: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+    .tree-row { display: flex; align-items: center; padding-left: calc(var(--depth) * 17px); }
+    .tree-toggle {
+      display: grid;
+      flex: 0 0 38px;
+      place-items: center;
+      width: 38px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 17px;
+    }
+    .tree-toggle:disabled { opacity: 0; cursor: default; }
+    .tree-toggle span { display: block; transition: transform .15s ease; }
+    .tree-toggle[aria-expanded="true"] span { transform: rotate(90deg); }
+    .tree-select {
+      display: flex;
+      flex: 1;
+      align-items: center;
+      gap: 9px;
+      min-width: 0;
+      min-height: 44px;
+      padding: 0 9px;
+      border: 0;
+      border-radius: 8px;
+      background: transparent;
+      cursor: pointer;
+      text-align: left;
+    }
+    .tree-select[aria-pressed="true"] { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+    .radio-dot {
+      display: grid;
+      flex: 0 0 18px;
+      place-items: center;
+      width: 18px;
+      height: 18px;
+      border: 1.5px solid #C3C9D2;
+      border-radius: 50%;
+      background: #FFFFFF;
+    }
+    .tree-select[aria-pressed="true"] .radio-dot { border-color: var(--primary); }
+    .tree-select[aria-pressed="true"] .radio-dot::after { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--primary); }
+    .tree-empty { margin: 0; padding: 24px 12px; color: var(--muted); text-align: center; font-size: 13px; }
+    .new-location-button { width: 100%; margin-top: 10px; }
+    .new-location-form { margin-top: 12px; }
+    .drawer-actions { display: flex; gap: 10px; margin-top: 18px; }
+    .drawer-actions .primary-button, .drawer-actions .secondary-button { flex: 1; }
+    .drawer-actions .secondary-button { box-shadow: none; }
+    .confirm-box { padding: 16px; border: 1px solid #BFDBFE; border-radius: 12px; background: var(--primary-soft); }
+    .confirm-text { margin: 0; font-size: 15px; line-height: 25px; }
+    .drawer-note { margin: 13px 0 0; color: var(--muted); font-size: 13px; line-height: 20px; }
+
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFFFFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slide-up { from { transform: translateY(30px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 768px) {
+      .topbar { display: block; border-bottom: 1px solid rgba(229,231,235,.9); background: rgba(255,255,255,.96); }
+      .topbar-inner { display: flex; align-items: center; gap: 42px; max-width: 960px; min-height: 64px; margin: 0 auto; padding: 0 16px; }
+      .brand { color: var(--text); text-decoration: none; font-size: 17px; font-weight: 700; white-space: nowrap; }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link { flex-direction: row; gap: 7px; min-height: 44px; padding: 0 14px; font-size: 14px; }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 15px; padding-bottom: 48px; }
+      .sticky-tabs { margin-top: 20px; }
+      #connection { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      #connection .danger-card { grid-column: 1 / -1; }
+      #addresses { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      #addresses .address-card, #addresses .footer-link { grid-column: 1 / -1; }
+      #authorization { grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: start; }
+      .software-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .toast { top: 80px; }
+    }
+
+    @media (max-width: 370px) {
+      .card { padding-right: 14px; padding-left: 14px; }
+      .segment { font-size: 13px; }
+      .description-row { grid-template-columns: 76px minmax(0, 1fr); }
+      .collection-card .card-heading { display: block; }
+      .collection-card .secondary-button { margin-top: 10px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>主页</a>
+        <a class="nav-link" href="#" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>服务器</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>客户端</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>授权</a>
+        <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>更多</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page">
+    <a class="back-link" href="#" aria-label="返回服务器列表"><span aria-hidden="true">‹</span>服务器</a>
+    <h1>NUC10</h1>
+    <p class="subtitle">root@192.168.100.235:22</p>
+
+    <div class="sticky-tabs">
+      <div class="segmented" role="tablist" aria-label="服务器详情">
+        <button class="segment" id="tab-connection" type="button" role="tab" aria-selected="true" aria-controls="connection" data-section="connection">连接</button>
+        <button class="segment" id="tab-addresses" type="button" role="tab" aria-selected="false" aria-controls="addresses" data-section="addresses" tabindex="-1">地址与地点</button>
+        <button class="segment" id="tab-authorization" type="button" role="tab" aria-selected="false" aria-controls="authorization" data-section="authorization" tabindex="-1">授权</button>
+        <button class="segment" id="tab-software" type="button" role="tab" aria-selected="false" aria-controls="software" data-section="software" tabindex="-1">软件</button>
+      </div>
+    </div>
+
+    <section class="detail-section" id="connection" role="tabpanel" aria-labelledby="tab-connection">
+      <article class="card">
+        <div class="card-heading"><h2>连接信息</h2></div>
+        <div class="info-list">
+          <div class="info-row"><span class="info-label">名称</span><span class="info-value">NUC10</span></div>
+          <div class="info-row"><span class="info-label">登录用户</span><span class="info-value mono">root</span></div>
+          <div class="info-row"><span class="info-label">端口</span><span class="info-value mono">22</span></div>
+          <div class="info-row"><span class="info-label">认证方式</span><span class="info-value">私钥<span class="saved">已保存</span></span></div>
+          <div class="info-row"><span class="info-label">sudo 密码</span><span class="info-value"><span class="saved">已保存</span></span></div>
+          <div class="info-row"><span class="info-label">主机密钥指纹</span><span class="info-value mono fingerprint">SHA256:9f3a…c21e<span class="field-note">首次连接时记录</span></span></div>
+          <div class="info-row"><span class="info-label">shell 类型</span><span class="info-value">自动：posix</span></div>
+        </div>
+        <div class="button-row">
+          <button class="primary-button" id="testConnection" type="button">测试连接</button>
+          <button class="secondary-button" type="button" data-demo="编辑连接信息（静态演示）">编辑</button>
+        </div>
+        <div class="connection-result" id="connectionResult" role="status" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+          <span>连接成功 · 经 家A-LAN 192.168.100.235 · 12ms</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-heading"><h2>说明信息</h2></div>
+        <div class="description-list">
+          <div class="description-row"><span class="description-label">用途</span><span class="description-value">内部服务与开发环境</span></div>
+          <div class="description-row"><span class="description-label">部署了什么</span><span class="description-value">Docker、sshmgr 权威端 broker</span></div>
+          <div class="description-row"><span class="description-label">硬件</span><span class="description-value">Intel NUC10</span></div>
+          <div class="description-row"><span class="description-label">注意事项</span><span class="description-value empty-field">未填写<button class="small-button" type="button" data-demo="补充注意事项（静态演示）">补充</button></span></div>
+          <div class="description-row"><span class="description-label">备注</span><span class="description-value empty-field">未填写<button class="small-button" type="button" data-demo="补充备注（静态演示）">补充</button></span></div>
+        </div>
+      </article>
+
+      <article class="card danger-card">
+        <h2>危险区</h2>
+        <p>删除后，这台服务器的连接信息和授权关系将被移除。</p>
+        <button class="danger-button" type="button" data-demo="删除服务器（静态演示）">删除服务器</button>
+      </article>
+    </section>
+
+    <section class="detail-section" id="addresses" role="tabpanel" aria-labelledby="tab-addresses" hidden>
+      <article class="card">
+        <div class="card-heading"><h2>地点</h2><button class="small-button" id="changeLocation" type="button">更改</button></div>
+        <div class="location-value" id="currentLocation">家 A</div>
+      </article>
+
+      <article class="card address-card">
+        <div class="card-heading"><h2>地址</h2></div>
+        <p class="card-help">sshmgr 连接时会按自己所在的网络自动选择地址</p>
+        <div class="address-list" id="addressList"></div>
+        <button class="secondary-button add-address-button" id="addAddress" type="button">＋ 添加地址</button>
+        <div class="inline-form" id="addressForm" hidden>
+          <div class="form-grid">
+            <label class="form-field"><span>网络</span><select class="form-select" id="addressNetwork"><option>家A-LAN</option><option>公司-LAN</option><option>NetBird</option><option>其他（公网或未登记网络）</option></select></label>
+            <label class="form-field"><span>地址</span><input class="form-input mono" id="addressInput" type="text" inputmode="decimal" placeholder="例如 192.168.100.235" autocomplete="off"></label>
+          </div>
+          <div class="warning-box" id="addressWarning" role="status" hidden></div>
+          <div class="form-actions"><button class="secondary-button" id="cancelAddress" type="button">取消</button><button class="primary-button" id="saveAddress" type="button">保存</button></div>
+        </div>
+      </article>
+
+      <article class="card">
+        <div class="card-heading"><h2>同一台机器上的其他账号</h2></div>
+        <p class="card-help">这些账号与 NUC10 共用上面的地址和地点，修改会同时生效</p>
+        <a class="machine-link" href="#"><span><span class="machine-name">NUC10-docker</span><span class="machine-address mono">app@192.168.100.235:2222</span></span><span class="chevron" aria-hidden="true">›</span></a>
+      </article>
+      <a class="footer-link" href="#">在 地点与网络 中查看全部</a>
+    </section>
+
+    <section class="detail-section" id="authorization" role="tabpanel" aria-labelledby="tab-authorization">
+      <article class="card auth-card">
+        <h2 class="auth-title">Profile</h2>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">全部</strong><span class="resource-detail">能看到它的客户端：mini6-claude</span></div><button class="switch" type="button" role="switch" aria-checked="true" aria-label="授权 profile 全部" data-kind="profile" data-name="全部"></button></div>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">训练机</strong><span class="resource-detail">绑定客户端：train3060</span></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="授权 profile 训练机" data-kind="profile" data-name="训练机"></button></div>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">公司</strong><span class="resource-detail">绑定客户端：laptop-work</span></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="授权 profile 公司" data-kind="profile" data-name="公司"></button></div>
+      </article>
+      <article class="card auth-card">
+        <h2 class="auth-title">机密项</h2>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">OPENAI_KEY</strong><span class="resource-detail">环境变量 $OPENAI_KEY · 最近写入 /srv/app/.env，昨天</span></div><button class="switch" type="button" role="switch" aria-checked="true" aria-label="授权机密项 OPENAI_KEY" data-kind="secret" data-name="OPENAI_KEY"></button></div>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">HF_TOKEN</strong><span class="resource-detail">环境变量 $HF_TOKEN</span></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="授权机密项 HF_TOKEN" data-kind="secret" data-name="HF_TOKEN"></button></div>
+      </article>
+      <article class="card auth-card">
+        <h2 class="auth-title">共享存储</h2>
+        <div class="auth-row"><div class="auth-copy"><strong class="resource-name">nas-data</strong><span class="resource-detail">由 NAS 提供 · 授权后在本机挂载于 /mnt/nas-data</span></div><button class="switch" type="button" role="switch" aria-checked="false" aria-label="授权共享存储 nas-data" data-kind="共享存储" data-name="nas-data"></button></div>
+      </article>
+    </section>
+
+    <section class="detail-section" id="software" role="tabpanel" aria-labelledby="tab-software" hidden>
+      <article class="card collection-card">
+        <div class="card-heading"><p class="collection-meta" id="collectionMeta">最近采集：2 小时前 · 采集者：权威端</p><button class="secondary-button" id="collectNow" type="button">立即采集</button></div>
+      </article>
+      <div class="software-tabs" role="tablist" aria-label="软件清单类型">
+        <button class="software-tab" id="measuredTab" type="button" role="tab" aria-selected="true" aria-controls="measuredList">实测</button>
+        <button class="software-tab" id="declaredTab" type="button" role="tab" aria-selected="false" aria-controls="declaredList" tabindex="-1">声明</button>
+      </div>
+      <div class="software-list" id="measuredList" role="tabpanel" aria-labelledby="measuredTab">
+        <article class="card software-card"><h3 class="software-name">Debian <span class="software-version">12</span></h3><p class="software-detail">操作系统</p></article>
+        <article class="card software-card"><h3 class="software-name">Docker <span class="software-version">28.1</span></h3><p class="software-detail">容器运行环境</p></article>
+        <article class="card software-card"><h3 class="software-name">sshmgr <span class="software-version">0.22.0</span></h3><p class="software-detail">权威端服务</p></article>
+        <article class="card software-card"><div class="software-heading"><h3 class="software-name">caddy <span class="software-version">2.9</span></h3><span class="warning-tag">待确认暴露</span></div><p class="software-detail">监听所有地址 <span class="mono">:443</span></p></article>
+        <article class="card software-card"><h3 class="software-name">sshd</h3><p class="software-detail">SSH 远程登录服务</p></article>
+      </div>
+      <div class="software-list" id="declaredList" role="tabpanel" aria-labelledby="declaredTab" hidden>
+        <article class="card software-card"><h3 class="software-name">sshmgr 权威端 broker</h3><p class="software-detail">暴露级别：虚拟局域网</p></article>
+      </div>
+    </section>
+  </main>
+
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>主页</a>
+    <a class="nav-link" href="#" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>服务器</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>客户端</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>授权</a>
+    <a class="nav-link" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>更多</a>
+  </nav>
+
+  <div class="drawer-shell" id="locationDrawer" hidden>
+    <button class="drawer-backdrop" type="button" aria-label="关闭地点选择器" data-close-drawer tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="locationDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header"><h2 id="locationDrawerTitle">选择地点</h2><button class="close-button" type="button" aria-label="关闭" data-close-drawer><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <p class="step-caption">每台机器直接选择自己的地点，可选到最细一级</p>
+      <label class="search-box"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg><input id="locationSearch" type="search" placeholder="搜索地点" autocomplete="off" aria-label="搜索地点"></label>
+      <div class="location-tree" id="locationTree" aria-label="地点树"></div>
+      <button class="secondary-button new-location-button" id="newLocationButton" type="button">＋ 新建地点</button>
+      <div class="inline-form new-location-form" id="newLocationForm" hidden>
+        <div class="form-grid">
+          <label class="form-field"><span>名称</span><input class="form-input" id="newLocationName" type="text" placeholder="输入地点名称" autocomplete="off"></label>
+          <label class="form-field"><span>上级地点</span><select class="form-select" id="newLocationParent"></select></label>
+        </div>
+        <div class="form-actions"><button class="secondary-button" id="cancelNewLocation" type="button">取消</button><button class="primary-button" id="createLocation" type="button">创建</button></div>
+      </div>
+      <div class="drawer-actions"><button class="primary-button" id="confirmLocation" type="button">确定</button></div>
+    </section>
+  </div>
+
+  <div class="drawer-shell" id="secretDrawer" hidden>
+    <button class="drawer-backdrop" type="button" aria-label="关闭机密项确认" data-close-drawer tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="secretDrawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header"><h2 id="secretDrawerTitle">确认授权机密项</h2><button class="close-button" type="button" aria-label="关闭" data-close-drawer><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <p class="step-caption">请确认这台服务器的机密项权限</p>
+      <div class="confirm-box"><p class="confirm-text" id="secretConfirmText"></p></div>
+      <p class="drawer-note">机密项只能在已授权的服务器上写入和使用。</p>
+      <div class="drawer-actions"><button class="secondary-button" type="button" data-close-drawer>取消</button><button class="primary-button" id="confirmSecret" type="button">确认授权</button></div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg><span id="toastText"></span></div>
+
+  <script>
+    const locations = [
+      { id: 'home', name: '家 A', children: [] },
+      { id: 'company', name: '公司', expanded: true, children: [
+        { id: 'plant-1', name: '一厂区', expanded: true, children: [
+          { id: 'building-1', name: '1 号楼', children: [] },
+          { id: 'building-3', name: '3 号楼', children: [] }
+        ] },
+        { id: 'plant-2', name: '二厂区', children: [] }
+      ] }
+    ];
+    const networkMeta = {
+      '家A-LAN': { type: '物理局域网 · 家 A', coverage: '家 A' },
+      '公司-LAN': { type: '物理局域网 · 公司 / 一厂区', coverage: '公司 / 一厂区' },
+      'NetBird': { type: '虚拟局域网' },
+      '其他（公网或未登记网络）': { type: '其他' }
+    };
+    const addresses = [
+      { id: 'address-home', network: '家A-LAN', value: '192.168.100.235' },
+      { id: 'address-netbird', network: 'NetBird', value: '100.88.12.235' }
+    ];
+
+    let currentLocationId = 'home';
+    let draftLocationId = 'home';
+    let locationQuery = '';
+    let customLocationCount = 0;
+    let editingAddressId = null;
+    let activeDrawer = null;
+    let lastFocusedElement = null;
+    let pendingSecret = null;
+    let pendingSecretState = false;
+    let toastTimer;
+
+    const locationDrawer = document.getElementById('locationDrawer');
+    const secretDrawer = document.getElementById('secretDrawer');
+    const locationTree = document.getElementById('locationTree');
+    const locationSearch = document.getElementById('locationSearch');
+    const newLocationForm = document.getElementById('newLocationForm');
+    const newLocationButton = document.getElementById('newLocationButton');
+    const newLocationParent = document.getElementById('newLocationParent');
+    const newLocationName = document.getElementById('newLocationName');
+    const addressForm = document.getElementById('addressForm');
+    const addressNetwork = document.getElementById('addressNetwork');
+    const addressInput = document.getElementById('addressInput');
+
+    function escapeHTML(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+    }
+
+    function findLocation(id, nodes = locations, parents = []) {
+      for (const node of nodes) {
+        const path = [...parents, node.name];
+        if (node.id === id) return { node, path };
+        const found = findLocation(id, node.children, path);
+        if (found) return found;
+      }
+      return null;
+    }
+
+    function currentLocationPath() {
+      return findLocation(currentLocationId).path.join(' / ');
+    }
+
+    function locationMatches(node, query) {
+      return node.name.toLocaleLowerCase().includes(query) || node.children.some(child => locationMatches(child, query));
+    }
+
+    function renderLocationNode(node, depth, query) {
+      if (query && !locationMatches(node, query)) return '';
+      const hasChildren = node.children.length > 0;
+      const expanded = query ? hasChildren : Boolean(node.expanded);
+      const selected = node.id === draftLocationId;
+      const name = escapeHTML(node.name);
+      const children = expanded ? node.children.map(child => renderLocationNode(child, depth + 1, query)).join('') : '';
+      return `<div class="tree-node"><div class="tree-row" style="--depth:${depth}"><button class="tree-toggle" type="button" data-toggle-location="${node.id}" aria-label="${expanded ? '收起' : '展开'}${name}" aria-expanded="${expanded}" ${hasChildren ? '' : 'disabled'}><span aria-hidden="true">▸</span></button><button class="tree-select" type="button" data-select-location="${node.id}" aria-pressed="${selected}"><span class="radio-dot" aria-hidden="true"></span><span>${name}</span></button></div>${children}</div>`;
+    }
+
+    function renderLocationTree() {
+      const query = locationQuery.trim().toLocaleLowerCase();
+      const content = locations.map(node => renderLocationNode(node, 0, query)).join('');
+      locationTree.innerHTML = content || '<p class="tree-empty">没有匹配的地点</p>';
+    }
+
+    function populateParentOptions() {
+      const options = [];
+      function addOptions(nodes, path) {
+        nodes.forEach(node => {
+          const nodePath = [...path, node.name];
+          options.push(`<option value="${node.id}">${escapeHTML(nodePath.join(' / '))}</option>`);
+          addOptions(node.children, nodePath);
+        });
+      }
+      addOptions(locations, []);
+      newLocationParent.innerHTML = '<option value="">无（顶级）</option>' + options.join('');
+    }
+
+    function openDrawer(drawer) {
+      lastFocusedElement = document.activeElement;
+      activeDrawer = drawer;
+      drawer.hidden = false;
+      document.body.classList.add('modal-open');
+      const closeButton = drawer.querySelector('.close-button');
+      if (closeButton) closeButton.focus();
+    }
+
+    function closeDrawer() {
+      if (!activeDrawer) return;
+      activeDrawer.hidden = true;
+      activeDrawer = null;
+      document.body.classList.remove('modal-open');
+      if (lastFocusedElement) lastFocusedElement.focus();
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      document.getElementById('toastText').textContent = message;
+      document.getElementById('toast').hidden = false;
+      toastTimer = window.setTimeout(() => { document.getElementById('toast').hidden = true; }, 3200);
+    }
+
+    function activateSection(name, scrollToTabs = true) {
+      document.querySelectorAll('.segment').forEach(button => {
+        const selected = button.dataset.section === name;
+        button.setAttribute('aria-selected', String(selected));
+        button.tabIndex = selected ? 0 : -1;
+      });
+      document.querySelectorAll('main > .detail-section').forEach(section => { section.hidden = section.id !== name; });
+      if (scrollToTabs) {
+        const tabs = document.querySelector('.sticky-tabs');
+        const top = tabs.getBoundingClientRect().top + window.scrollY - 8;
+        window.scrollTo({ top, behavior: 'smooth' });
+      }
+    }
+
+    document.querySelectorAll('.segment').forEach(button => {
+      button.addEventListener('click', () => activateSection(button.dataset.section));
+      button.addEventListener('keydown', event => {
+        if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+        event.preventDefault();
+        const tabs = [...document.querySelectorAll('.segment')];
+        const direction = event.key === 'ArrowRight' ? 1 : -1;
+        const next = tabs[(tabs.indexOf(button) + direction + tabs.length) % tabs.length];
+        next.focus();
+        activateSection(next.dataset.section);
+      });
+    });
+
+    document.getElementById('testConnection').addEventListener('click', () => {
+      document.getElementById('connectionResult').hidden = false;
+    });
+
+    document.getElementById('changeLocation').addEventListener('click', () => {
+      draftLocationId = currentLocationId;
+      locationQuery = '';
+      locationSearch.value = '';
+      newLocationForm.hidden = true;
+      newLocationButton.hidden = false;
+      newLocationName.value = '';
+      renderLocationTree();
+      populateParentOptions();
+      openDrawer(locationDrawer);
+    });
+
+    locationSearch.addEventListener('input', () => {
+      locationQuery = locationSearch.value;
+      renderLocationTree();
+    });
+
+    locationTree.addEventListener('click', event => {
+      const toggle = event.target.closest('[data-toggle-location]');
+      if (toggle && !toggle.disabled) {
+        const found = findLocation(toggle.dataset.toggleLocation);
+        found.node.expanded = !found.node.expanded;
+        renderLocationTree();
+        return;
+      }
+      const select = event.target.closest('[data-select-location]');
+      if (select) {
+        draftLocationId = select.dataset.selectLocation;
+        renderLocationTree();
+        if (!newLocationForm.hidden) newLocationParent.value = draftLocationId;
+      }
+    });
+
+    newLocationButton.addEventListener('click', () => {
+      newLocationForm.hidden = false;
+      newLocationButton.hidden = true;
+      populateParentOptions();
+      newLocationParent.value = draftLocationId;
+      newLocationName.focus();
+    });
+
+    document.getElementById('cancelNewLocation').addEventListener('click', () => {
+      newLocationForm.hidden = true;
+      newLocationButton.hidden = false;
+      newLocationName.value = '';
+      newLocationButton.focus();
+    });
+
+    document.getElementById('createLocation').addEventListener('click', () => {
+      const name = newLocationName.value.trim();
+      if (!name) {
+        showToast('请输入地点名称');
+        newLocationName.focus();
+        return;
+      }
+      const node = { id: `custom-${++customLocationCount}`, name, children: [] };
+      const parentId = newLocationParent.value;
+      if (parentId) {
+        const parent = findLocation(parentId).node;
+        parent.children.push(node);
+        parent.expanded = true;
+      } else {
+        locations.push(node);
+      }
+      draftLocationId = node.id;
+      locationQuery = '';
+      locationSearch.value = '';
+      newLocationName.value = '';
+      newLocationForm.hidden = true;
+      newLocationButton.hidden = false;
+      renderLocationTree();
+      populateParentOptions();
+      showToast(`已创建地点 ${name}`);
+    });
+
+    document.getElementById('confirmLocation').addEventListener('click', () => {
+      currentLocationId = draftLocationId;
+      document.getElementById('currentLocation').textContent = currentLocationPath();
+      closeDrawer();
+      renderAddressWarning();
+      showToast(`地点已改为 ${currentLocationPath()}`);
+    });
+
+    function renderAddresses() {
+      document.getElementById('addressList').innerHTML = addresses.map(address => {
+        const meta = networkMeta[address.network];
+        return `<div class="address-item"><div class="address-copy"><div class="network-heading"><span class="network-name">${escapeHTML(address.network)}</span><span class="type-tag">${meta.type}</span></div><span class="ip-address">${escapeHTML(address.value)}</span></div><button class="small-button" type="button" data-edit-address="${address.id}">编辑</button></div>`;
+      }).join('');
+    }
+
+    function renderAddressWarning() {
+      const meta = networkMeta[addressNetwork.value];
+      const warning = document.getElementById('addressWarning');
+      if (!meta.coverage) {
+        warning.hidden = true;
+        return;
+      }
+      const location = currentLocationPath();
+      const matches = location === meta.coverage || location.startsWith(meta.coverage + ' / ');
+      warning.hidden = matches;
+      if (!matches) warning.textContent = `${addressNetwork.value} 覆盖的是 ${meta.coverage}，与这台机器的地点 ${location} 不一致`;
+    }
+
+    function openAddressForm(id) {
+      editingAddressId = id;
+      const address = addresses.find(item => item.id === id);
+      addressNetwork.value = address ? address.network : '家A-LAN';
+      addressInput.value = address ? address.value : '';
+      addressForm.hidden = false;
+      renderAddressWarning();
+      addressInput.focus();
+    }
+
+    document.getElementById('addAddress').addEventListener('click', () => openAddressForm(null));
+    document.getElementById('addressList').addEventListener('click', event => {
+      const button = event.target.closest('[data-edit-address]');
+      if (button) openAddressForm(button.dataset.editAddress);
+    });
+    addressNetwork.addEventListener('change', renderAddressWarning);
+    document.getElementById('cancelAddress').addEventListener('click', () => {
+      addressForm.hidden = true;
+      editingAddressId = null;
+      document.getElementById('addAddress').focus();
+    });
+    document.getElementById('saveAddress').addEventListener('click', () => {
+      const value = addressInput.value.trim();
+      if (!value) {
+        showToast('请输入地址');
+        addressInput.focus();
+        return;
+      }
+      if (editingAddressId) {
+        const address = addresses.find(item => item.id === editingAddressId);
+        address.network = addressNetwork.value;
+        address.value = value;
+      } else {
+        addresses.push({ id: `address-${Date.now()}`, network: addressNetwork.value, value });
+      }
+      addressForm.hidden = true;
+      editingAddressId = null;
+      renderAddresses();
+      showToast('地址已保存');
+    });
+
+    function setSwitch(button, checked) {
+      button.setAttribute('aria-checked', String(checked));
+    }
+
+    document.querySelectorAll('.switch').forEach(button => {
+      button.addEventListener('click', () => {
+        const checked = button.getAttribute('aria-checked') === 'true';
+        if (button.dataset.kind === 'secret') {
+          pendingSecret = button.dataset.name;
+          pendingSecretState = !checked;
+          document.getElementById('secretDrawerTitle').textContent = pendingSecretState ? '确认授权机密项' : '确认取消授权';
+          document.getElementById('secretConfirmText').textContent = pendingSecretState
+            ? `授权后 NUC10 可写入 ${pendingSecret}；实际能拿到它的客户端：mini6-claude（经 profile 全部）`
+            : `取消授权后 NUC10 不可写入 ${pendingSecret}；已有写入内容不会被自动删除。`;
+          document.getElementById('confirmSecret').textContent = pendingSecretState ? '确认授权' : '确认取消';
+          openDrawer(secretDrawer);
+        } else {
+          setSwitch(button, !checked);
+          showToast(`已${checked ? '取消' : '开启'}${button.dataset.kind} ${button.dataset.name}授权`);
+        }
+      });
+    });
+
+    document.getElementById('confirmSecret').addEventListener('click', () => {
+      const button = document.querySelector(`.switch[data-kind="secret"][data-name="${pendingSecret}"]`);
+      if (button) setSwitch(button, pendingSecretState);
+      closeDrawer();
+      showToast(`${pendingSecret} 已${pendingSecretState ? '授权' : '取消授权'}`);
+    });
+
+    function activateSoftwareTab(measured) {
+      document.getElementById('measuredTab').setAttribute('aria-selected', String(measured));
+      document.getElementById('measuredTab').tabIndex = measured ? 0 : -1;
+      document.getElementById('declaredTab').setAttribute('aria-selected', String(!measured));
+      document.getElementById('declaredTab').tabIndex = measured ? -1 : 0;
+      document.getElementById('measuredList').hidden = !measured;
+      document.getElementById('declaredList').hidden = measured;
+    }
+    document.getElementById('measuredTab').addEventListener('click', () => activateSoftwareTab(true));
+    document.getElementById('declaredTab').addEventListener('click', () => activateSoftwareTab(false));
+    document.getElementById('collectNow').addEventListener('click', () => {
+      document.getElementById('collectionMeta').textContent = '最近采集：刚刚 · 采集者：权威端';
+      showToast('软件清单采集完成');
+    });
+
+    document.querySelectorAll('[data-close-drawer]').forEach(button => button.addEventListener('click', closeDrawer));
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && activeDrawer) closeDrawer();
+    });
+    document.querySelectorAll('[data-demo]').forEach(button => button.addEventListener('click', () => showToast(button.dataset.demo)));
+    document.querySelectorAll('a[href="#"]').forEach(link => link.addEventListener('click', event => event.preventDefault()));
+
+    renderAddresses();
+    activateSection('connection', false);
+  </script>
+</body>
+</html>

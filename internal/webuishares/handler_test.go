@@ -100,7 +100,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 
 	page := body(t, h.do(http.MethodGet, "/ui/shares/", nil))
 	for _, want := range []string{
-		"共享存储", "datasets", "NAS", "Z", "版本号", "可挂载服务器数量", "1",
+		"共享存储", "datasets", "NAS", "可挂载 1 台",
 		"只显示本客户端可用的部分，修改请到权威端。",
 	} {
 		if !strings.Contains(page, want) {
@@ -278,18 +278,26 @@ func TestShareDetailMountScopeChecklistPreviewsAndConfirmsAuthorization(t *testi
 
 	detail := body(t, h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil))
 	for _, want := range []string{
-		"可挂载范围勾选清单", "linux-web", "web 服务器", "posix",
-		"linux-db", "windows-web", "powershell",
-		"同设备的其他条目可能也能读到挂载内容", "预览可挂载范围变更",
+		"授权的服务器", "linux-web", "web 服务器", "posix", "实际能拿到它的客户端",
+		`href="/ui/authorization/shares/` + datasetsID + `/servers"`, "调整服务器",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("共享存储详情的可挂载范围勾选清单缺少 %q：\n%s", want, detail)
 		}
 	}
-	if !strings.Contains(detail, `name="cell__`+secretID+`__`+linuxWebID+`" value="1" checked`) ||
-		strings.Contains(detail, `name="cell__`+secretID+`__`+linuxDBID+`" value="1" checked`) ||
-		strings.Contains(detail, `name="cell__`+secretID+`__`+windowsWebID+`" value="1" checked`) {
-		t.Fatalf("可挂载范围勾选清单的初始状态不正确：\n%s", detail)
+
+	selection := body(t, h.do(http.MethodGet, "/ui/authorization/shares/"+datasetsID+"/servers", nil))
+	for _, want := range []string{
+		"linux-web", "linux-db", "windows-web",
+		`name="server" value="` + linuxWebID + `" checked`,
+		`name="server" value="` + linuxDBID + `"`,
+		`name="server" value="` + windowsWebID + `"`,
+		"同一台机器上的其他条目可能也能读到挂载内容",
+		"全选当前筛选结果",
+	} {
+		if !strings.Contains(selection, want) {
+			t.Fatalf("共享存储勾选页缺少 %q：\n%s", want, selection)
+		}
 	}
 
 	cellPrefix := "cell__" + secretID + "__"
@@ -495,7 +503,7 @@ func mustServerToDevice(t *testing.T, st *store.Store, name string, shell models
 
 func mustSecret(t *testing.T, st *store.Store, name string) {
 	t.Helper()
-	if err := st.AddSecret(name, "", []byte(name+"-value-不回显"), store.CLISource()); err != nil {
+	if err := st.AddSecret(name, "测试备注", []byte(name+"-value-不回显"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -541,9 +549,9 @@ func TestSharesPageListsRowsAndFilters(t *testing.T) {
 		t.Fatalf("共享存储列表状态码 = %d，页面：\n%s", page.StatusCode, pageBody)
 	}
 	for _, want := range []string{
-		"共享存储", "datasets", "NAS", "Z", "备份NAS", "backup",
-		"版本号", "可挂载服务器数量", "新增共享存储",
-		`href="/ui/shares/` + datasetsID + `"`,
+		"共享存储", "datasets", "NAS", "备份NAS", "backup",
+		"datasets 的备注", "可挂载 1 台", "新建共享存储",
+		`href="/ui/authorization/shares/` + datasetsID + `"`,
 	} {
 		if !strings.Contains(pageBody, want) {
 			t.Fatalf("列表缺少 %q：\n%s", want, pageBody)
@@ -784,7 +792,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	invalid := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"DATASETS"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"D"}, "directories": {"缺等号的目录"},
+		"drive": {"D"}, "directories": {"缺等号的目录"}, "note": {"目录约定错误"},
 	})
 	invalidBody := body(t, invalid)
 	if invalid.StatusCode != http.StatusBadRequest {
@@ -802,7 +810,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	duplicate := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"E"},
+		"drive": {"E"}, "note": {"重复共享"},
 	})
 	duplicateBody := body(t, duplicate)
 	if duplicate.StatusCode != http.StatusBadRequest || !strings.Contains(duplicateBody, "共享名已存在") {
@@ -812,7 +820,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	badDrive := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"scratch2"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"C"},
+		"drive": {"C"}, "note": {"非法盘符"},
 	})
 	badDriveBody := body(t, badDrive)
 	if badDrive.StatusCode != http.StatusBadRequest || !strings.Contains(badDriveBody, "盘符不合法") {
@@ -1239,7 +1247,7 @@ func TestAuthorityShareMountScopeConfirmRequiresReverifyAndPreservesTarget(t *te
 	now := time.Date(2026, 11, 13, 11, 0, 0, 0, time.Local)
 	h := newShareAuthorityHandler(t, st, &now)
 	now = now.Add(6 * time.Minute)
-	csrf := authorityPageCSRF(t, h, "/ui/shares/"+datasetsID)
+	csrf := authorityPageCSRF(t, h, "/ui/shares/"+datasetsID+"/edit")
 
 	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
 		"csrf_token":                            {csrf},
@@ -1300,4 +1308,36 @@ func authorityPageCSRF(t *testing.T, h authorityHandler, target string) string {
 	t.Helper()
 	page := body(t, h.do(http.MethodGet, target, nil))
 	return authorityHiddenValue(t, page, "csrf_token")
+}
+
+// TestShareNoteRequiredWebUI 校验 Web UI 的新增与编辑都拒绝空白备注，并把
+// 存储层文案直接显示在表单页上。
+func TestShareNoteRequiredWebUI(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	blankAdd := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"scratch"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Y"}, "directories": {"临时数据=tmp"}, "note": {" "},
+	})
+	blankAddBody := body(t, blankAdd)
+	if blankAdd.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankAddBody, "共享存储备注不能为空") {
+		t.Fatalf("空白备注新增应被拒绝并显示原因，状态码=%d：\n%s", blankAdd.StatusCode, blankAddBody)
+	}
+
+	blankEdit := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/edit", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Z"}, "directories": {"临时数据=tmp"}, "note": {" "},
+	})
+	blankEditBody := body(t, blankEdit)
+	if blankEdit.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankEditBody, "共享存储备注不能为空") {
+		t.Fatalf("编辑成空白备注应被拒绝并显示原因，状态码=%d：\n%s", blankEdit.StatusCode, blankEditBody)
+	}
 }

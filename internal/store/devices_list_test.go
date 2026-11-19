@@ -16,7 +16,7 @@ func TestListDevicesFiltersNamesCaseInsensitively(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := st.AddDevice("Workstation", "", ""); err != nil {
+	if _, err := st.AddDeviceAtSite("Workstation", "", "", "Office"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddNetworkMembership("Workstation", "Lab", "192.0.2.10"); err != nil {
@@ -28,7 +28,7 @@ func TestListDevicesFiltersNamesCaseInsensitively(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(bySite) != 1 || bySite[0].Name != "Workstation" {
-		t.Fatalf("site filter must compare names case-insensitively, got: %+v", bySite)
+		t.Fatalf("site filter must compare machine locations case-insensitively, got: %+v", bySite)
 	}
 	byNetwork, err := st.ListDevices(DeviceFilter{Network: "lab"})
 	if err != nil {

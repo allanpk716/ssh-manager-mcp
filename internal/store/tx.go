@@ -34,11 +34,11 @@ func insertServerTx(db dbtx, srv *models.Server) (string, error) {
 	// credential_id has no '' row to reference, so a literal '' would violate it.
 	cred := nullableString(srv.CredentialID)
 	_, err := db.Exec(
-		`INSERT INTO servers (id,name,host,port,user,device_id,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
+		`INSERT INTO servers (id,name,host,port,user,device_id,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision)
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0)`,
 		id, srv.Name, srv.Host, srv.Port, srv.User, nullableString(srv.DeviceID), string(srv.AuthMethod), cred, sudo,
 		string(models.NormalizeShellType(string(srv.ShellType))), string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
+		srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, ts, ts,
 	)
 	if err != nil {
 		// Localize the name-collision error — the raw driver text
@@ -63,10 +63,10 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 	// Same NULL-for-"" mapping as insertServerTx (Plan 20 C0 credential-less form).
 	cred := nullableString(srv.CredentialID)
 	res, err := db.Exec(
-		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,shell_type=?,tags=?,description=?,location=?,hardware=?,services=?,role=?,caveats=?,expose_host=?,updated_at=?,revision=revision+1 WHERE id=?`,
+		`UPDATE servers SET name=?,host=?,port=?,user=?,auth_method=?,credential_id=?,sudo_credential_id=?,shell_type=?,tags=?,description=?,hardware=?,services=?,role=?,caveats=?,expose_host=?,updated_at=?,revision=revision+1 WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.User, string(srv.AuthMethod), cred, sudo,
 		string(models.NormalizeShellType(string(srv.ShellType))), string(tagsJSON), srv.Description,
-		srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, now(), srv.ID,
+		srv.Hardware, srv.Services, srv.Role, srv.Caveats, srv.ExposeHost, now(), srv.ID,
 	)
 	if err != nil {
 		return err
@@ -80,7 +80,7 @@ func updateServerTx(db dbtx, srv *models.Server) error {
 // getServerTx loads one server row by id on db.
 func getServerTx(db dbtx, id string) (*models.Server, error) {
 	return scanServer(db.QueryRow(
-		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
+		`SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision FROM servers WHERE id=?`, id,
 	))
 }
 
@@ -142,7 +142,7 @@ func (s *Store) AddServerWithCredentials(srv *models.Server, cred, sudo *models.
 		return "", err
 	}
 	defer tx.Rollback() // no-op after Commit
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "", true, WriteSource{})
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, "", "", true, WriteSource{})
 	if err != nil {
 		return "", err
 	}

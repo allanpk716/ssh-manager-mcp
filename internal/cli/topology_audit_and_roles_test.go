@@ -63,7 +63,7 @@ func TestTopologyWritesAuditOnce(t *testing.T) {
 	}{
 		{
 			action: "site.add",
-			want:   map[string]any{"name": "家A", "note": "初始备注"},
+			want:   map[string]any{"name": "家A", "note": "初始备注", "parent": ""},
 		},
 		{
 			action: "site.edit",
@@ -137,7 +137,7 @@ func TestDevicesWriteAuditOnce(t *testing.T) {
 	}{
 		{
 			action: "device.add",
-			want:   map[string]any{"name": "工作站", "note": "初始备注", "client": "laptop"},
+			want:   map[string]any{"name": "工作站", "note": "初始备注", "client": "laptop", "site": ""},
 		},
 		{
 			action: "device.member-add",
@@ -322,7 +322,7 @@ func TestTopologyClientViewsCacheAndRefusesWrites(t *testing.T) {
 		t.Fatalf("client workstation detail must show its server and no other client association:\n%s", out)
 	}
 	if out := runCli(t, "devices", "show", "笔记本"); !strings.Contains(out, "客户端实例：laptop") ||
-		!strings.Contains(out, "家A局域网（物理局域网，站点 家A）：192.168.1.20") {
+		!strings.Contains(out, "家A局域网（物理局域网，地点 家A）：192.168.1.20") {
 		t.Fatalf("client laptop detail must show its own association and membership:\n%s", out)
 	}
 }

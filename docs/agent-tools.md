@@ -163,7 +163,7 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
    `server is not in your profile` 拒绝。
 2. **动手前读该机的 owner 上下文。** `list_servers` 的每行带 owner 给的操作
    须知：`caveats`（**特殊处理规则，动手前必读**）、`role`（这台机器是干嘛的）、
-   `services`（上面部署了什么）、`location` / `hardware` / `tags` / `description`。
+   `services`（上面部署了什么）、`hardware` / `tags` / `description`。
    忽略 caveats 是踩坑第一原因。
 3. **核对 `has_sudo` 再提权。** `has_sudo=false` 的机器别尝试提权——
    `sudo=true` 会直接报 `sudo not configured for server ...`。空字段 = 无。
@@ -186,12 +186,12 @@ JSON 转义、压缩、加密等变换后的值，也不防 agent 有意绕开�
 | `host` / `user` | SSH 用户；host 默认是 `"hidden"`（owner 未披露，用 id 寻址；owner 逐台放开后才是明文） |
 | `has_sudo` | `true` 才支持 `sudo=true`（= owner 给这台机配了 sudo 凭据） |
 | `device` | owner 登记的设备名；`device` 值相同的多行服务器条目属于同一台登记机器，重启这台机器会让这些条目一起断开。空字符串表示未登记设备 |
-| `site` | 设备的物理局域网所属站点名；多个站点按名字排序后用「、」连接。空字符串表示未登记 |
+| `site` | 机器直接登记的地点完整路径（如「公司 / 一厂区 / 3 号楼」），只读。空字符串表示未登记 |
 | `networks` | 设备所属网络名；物理局域网在前、虚拟局域网在后，同类按名字排序。空数组表示未登记 |
 | `role` | 这台机器的用途（如 "prod pg primary"） |
 | `services` | 上面部署/运行着什么 |
 | `caveats` | **操作须知 & 特殊处理规则——动手前读**；空 = 无 |
-| `location` / `hardware` | 部署位置 / 硬件配置 |
+| `hardware` | 硬件配置 |
 | `tags` / `description` | 自由标签 / owner 补充说明（优先看上面的结构化字段） |
 
 **拓扑字段只是登记信息**——它们说明 owner 把机器、站点和网络登记在什么
@@ -601,20 +601,20 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 
 ### update_server_metadata
 
-**只在缓存模式（多机部署的工作机）存在**——把服务器条目的六个描述性字段
-（`role` / `services` / `location` / `hardware` / `caveats` / `description`）
+**只在缓存模式（多机部署的工作机）存在**——把服务器条目的五个描述性字段
+（`role` / `services` / `hardware` / `caveats` / `description`）
 写回共享 vault：agent 探明一台服务器后（查了硬件、发现了部署了什么服务），当场
 记回去，后续所有会话的 `list_servers` 都受益。**仅缓存脸**：权威端本机的
 agent 面没有这个工具（owner 用 Web UI / 命令行编辑）。
 
 - 参数：`server_id` + `expected_revision`（你在 `list_servers` 里读到的
-  `revision` 值——乐观锁令牌）+ 六个字段各可选。
-- **省略 = 不改，空串 = 清空**：不传 `location` 就是保持原值；传
-  `"location": ""` 才是清掉它。每次至少传一个字段。
+  `revision` 值——乐观锁令牌）+ 五个字段各可选。
+- **省略 = 不改，空串 = 清空**：不传 `role` 就是保持原值；传
+  `"role": ""` 才是清掉它。每次至少传一个字段。
 - **只写你验证过的**：这是共享事实源——把猜的、道听途说的写进去会误导所有
   后续会话。
 - **冲突自愈**：别人（owner 或另一台设备）在你列出之后先改了，你会得到 409
-  错误——错误里带**当前的 revision 和六个字段的现值**：把你的意图和现值合并，
+  错误——错误里带**当前的 revision 和五个字段的现值**：把你的意图和现值合并，
   用新 revision 重试一次即可，不需要任何人工介入。
 - 连接信息（host/port/用户/凭据）与标签（tags）**不可**经此工具修改——那是
   owner 的结构性操作。
@@ -947,7 +947,7 @@ HEAD，后续重构以符号名为准）：
 | `sudo=true` → broker 跑 `sudo -S -p '' -- <cmd>`、密码写 stdin；**不要自己拼 sudo 前缀** | `internal/sshbroker/sudo.go:25-30,46`；`internal/mcpserver/server.go:179`；`internal/mcpserver/core.go:70` |
 | `has_sudo` = owner 配了 sudo 凭据（`SudoCredentialID != ""`）；false 时 sudo=true 报 `sudo not configured for server ...` | `internal/mcpserver/core.go:56,150-153`；`internal/mcpserver/types.go:14` |
 | name ≠ id：工具描述 "Pass the server's id (from list_servers), not its name" | `internal/mcpserver/server.go:78,177` |
-| list_servers 字段清单（id/name/host（默认 `"hidden"`，owner 逐台 opt-in）/user/has_sudo/role/services/caveats/location/hardware/tags/description）永不含凭据；caveats "READ BEFORE acting" | `internal/mcpserver/types.go:5-22`；`internal/mcpserver/server.go:63` |
+| list_servers 字段清单（id/name/host（默认 `"hidden"`，owner 逐台 opt-in）/user/has_sudo/device/site/networks/role/services/caveats/hardware/tags/description）永不含凭据；caveats "READ BEFORE acting" | `internal/mcpserver/types.go`；`internal/mcpserver/server.go` |
 | 空字段=无；tags 空数组非 null（schema 一致性） | `internal/mcpserver/core.go:41-50` |
 | out-of-profile 拒绝文案 + 四工具同一道门（连接前先 gate） | `internal/mcpserver/types.go:95`；`internal/mcpserver/core.go:97-101,223-227,332-335,455-458` |
 | `no_credential`：连接前拒绝，错误自带配置提示（`vault.ErrNoCredential`） | `internal/vault/vault.go:112-121`；`internal/mcpserver/core.go:112-117` |

@@ -29,19 +29,17 @@ func TestHandlerOtherDeviceAddTypeSwitchAndFieldVisibility(t *testing.T) {
 	_, _, h := newIntegrationHandler(t)
 
 	typePage := h.do(http.MethodGet, "/ui/add", nil)
-	typeBody := integrationBody(t, typePage)
-	if typePage.StatusCode != http.StatusOK || !strings.Contains(typeBody, ">服务器</strong>") ||
-		!strings.Contains(typeBody, ">其他设备</strong>") {
-		t.Fatalf("类型选择页应同时提供服务器与其他设备，状态码=%d：\n%s", typePage.StatusCode, typeBody)
+	if typePage.StatusCode != http.StatusSeeOther || !strings.Contains(typePage.Header.Get("Location"), "/ui/servers/new") {
+		t.Fatalf("旧类型选择页应重定向到服务器分步新增，状态码=%d 跳转=%s", typePage.StatusCode, typePage.Header.Get("Location"))
 	}
 
 	formPage := h.do(http.MethodGet, "/ui/devices/new", nil)
 	formBody := integrationBody(t, formPage)
 	if formPage.StatusCode != http.StatusOK || !strings.Contains(formBody, "新增其他设备") ||
 		!strings.Contains(formBody, "设备名") || !strings.Contains(formBody, "备注") ||
-		!strings.Contains(formBody, "站点") || !strings.Contains(formBody, "物理局域网") ||
-		!strings.Contains(formBody, "虚拟局域网成员") {
-		t.Fatalf("其他设备表单应提供设备与站点与网络成员字段，状态码=%d：\n%s", formPage.StatusCode, formBody)
+		!strings.Contains(formBody, "地点") || !strings.Contains(formBody, "物理局域网") ||
+		!strings.Contains(formBody, "虚拟局域网地址") {
+		t.Fatalf("其他设备表单应提供设备、地点与网络地址字段，状态码=%d：\n%s", formPage.StatusCode, formBody)
 	}
 	for _, forbidden := range []string{"登录凭据", "profile 授权", "shell 类型", "客户端实例", "向 agent 展示主机地址", "连接测试"} {
 		if strings.Contains(formBody, forbidden) {
@@ -79,7 +77,7 @@ func TestHandlerOtherDeviceAddSavesMembershipsAndWritesWebUIAudit(t *testing.T) 
 	}
 	memberships, err := st.ListNetworkMemberships("网络存储")
 	if err != nil || len(memberships) != 2 {
-		t.Fatalf("其他设备应保存物理与虚拟网络成员：%v %+v", err, memberships)
+		t.Fatalf("其他设备应保存物理与虚拟网络地址：%v %+v", err, memberships)
 	}
 	if servers, err := st.ListServers(); err != nil || len(servers) != 0 {
 		t.Fatalf("其他设备路径不得创建服务器条目：%v %v", servers, err)
@@ -91,7 +89,7 @@ func TestHandlerOtherDeviceAddSavesMembershipsAndWritesWebUIAudit(t *testing.T) 
 	}
 	memberRows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"device.member-add"}})
 	if err != nil || len(memberRows) != 2 {
-		t.Fatalf("两条网络成员应各写一条 device.member-add 审计：%v %+v", err, memberRows)
+		t.Fatalf("两条网络地址应各写一条 device.member-add 审计：%v %+v", err, memberRows)
 	}
 	for _, row := range append(deviceRows, memberRows...) {
 		if row.Source != store.AuditSourceWebUI {
@@ -124,11 +122,11 @@ func TestHandlerOtherDeviceAddValidationKeepsFieldsAndCreatesNothing(t *testing.
 		notice string
 	}{
 		{
-			name: "站点需要物理成员",
+			name: "地点需要物理地址",
 			form: url.Values{
 				"device_name": {"半位置设备"}, "note": {"保留备注"}, "site": {"家A"},
 			},
-			notice: "填写站点时必须同时填写物理局域网与地址",
+			notice: "填写地点时必须同时填写物理局域网与地址",
 		},
 		{
 			name: "网络与地址必须成对",
@@ -136,7 +134,7 @@ func TestHandlerOtherDeviceAddValidationKeepsFieldsAndCreatesNothing(t *testing.
 				"device_name": {"半位置设备"}, "note": {"保留备注"},
 				"physical_network": {"家A局域网"},
 			},
-			notice: "网络成员必须同时填写网络与地址",
+			notice: "网络地址必须同时填写网络与地址",
 		},
 		{
 			name: "地址也必须选择网络",
@@ -144,7 +142,7 @@ func TestHandlerOtherDeviceAddValidationKeepsFieldsAndCreatesNothing(t *testing.
 				"device_name": {"半位置设备"}, "note": {"保留备注"},
 				"physical_address": {"192.168.1.61"}, "virtual_network": {"", "虚拟网"}, "virtual_address": {"", ""},
 			},
-			notice: "网络成员必须同时填写网络与地址",
+			notice: "网络地址必须同时填写网络与地址",
 		},
 		{
 			name: "地址冲突显示占用设备",
@@ -187,11 +185,11 @@ func TestHandlerOtherDeviceAddWithoutLocationCreatesUnassignedDevice(t *testing.
 	})
 	body := integrationBody(t, response)
 	if response.StatusCode != http.StatusSeeOther {
-		t.Fatalf("站点与网络成员留空应保存为未归类设备，状态码=%d：\n%s", response.StatusCode, body)
+		t.Fatalf("地点与网络地址留空应保存为未归类设备，状态码=%d：\n%s", response.StatusCode, body)
 	}
 	memberships, err := st.ListNetworkMemberships("暂不归类设备")
 	if err != nil || len(memberships) != 0 {
-		t.Fatalf("站点与网络成员留空不应创建网络成员：%v %+v", err, memberships)
+		t.Fatalf("地点与网络地址留空不应创建网络地址：%v %+v", err, memberships)
 	}
 	result := h.do(http.MethodGet, response.Header.Get("Location"), nil)
 	resultBody := integrationBody(t, result)

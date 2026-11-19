@@ -35,7 +35,7 @@ func TestStandaloneOpsUpgradeServerRequiresConfirmationAndShutsDownAfterPage(t *
 		t.Fatalf("升级确认页状态码 = %d，应为 200：\n%s", page.StatusCode, pageBody)
 	}
 	for _, want := range []string{
-		"升级为权威端", "已有服务器、Profile、项目令牌与机密项保持不变",
+		"升级为权威端", "已有服务器、Profile、MCP 访问令牌与机密项保持不变",
 		"需要设置管理员口令", "提权安装 serve", "正式 Web UI 改由 serve 提供",
 		`action="/ui/ops/upgrade-server/confirm"`,
 	} {

@@ -7,7 +7,7 @@
 <button type="button" class="topology-view" data-view="virtual">虚拟视图</button>
 <button type="button" class="topology-view" data-view="overlay">叠加视图</button>
 </div>
-<p class="topology-hint">画布支持平移与缩放；点设备、站点或网络查看详情。{{if .Caps.CanEditTopology}}可把设备拖进网络框归类、拖回托盘取消归类。{{end}}</p>
+<p class="topology-hint">画布支持平移与缩放；点设备、地点或网络查看详情。{{if .Caps.CanEditTopology}}可把设备拖进网络框归类、拖回托盘取消归类。{{end}}</p>
 <p class="topology-layout-status" data-topology-status role="status" hidden></p>
 {{if .Caps.CanEditTopology}}<button type="button" class="topology-reset" data-topology-reset hidden>重置布局</button>{{end}}
 </header>
@@ -17,12 +17,12 @@
 </label>
 <p class="topology-probe-status" role="status" data-probe-state="idle">未触发探测。</p>
 </div>{{end}}
-{{if not .Caps.CanEditTopology}}<p class="topology-readonly">拓扑为只读视图；网络成员的修改请到权威端 Web UI 做。</p>{{end}}
+{{if not .Caps.CanEditTopology}}<p class="topology-readonly">拓扑为只读视图；网络地址的修改请到权威端 Web UI 做。</p>{{end}}
 <div class="topology-body">
 <div class="topology-canvas-wrap"><div id="topology-canvas" class="topology-canvas" role="application" aria-label="网络拓扑画布" data-view="physical"></div></div>
 <aside class="topology-tray" aria-label="未归类设备">
 <h2>未归类设备</h2>
-{{if .Caps.CanEditTopology}}<div class="topology-tray-add"><a data-topology-add href="/ui/add?return_to=%2Fui%2Ftopology%2F">新增</a></div>{{end}}
+{{if .Caps.CanEditTopology}}<div class="topology-tray-add"><a data-topology-add href="/ui/servers/new?return_to=%2Fui%2Ftopology%2F">在此新增</a></div>{{end}}
 <ul class="topology-tray-list"></ul>
 <p class="topology-tray-empty">全部设备都已归入物理局域网。</p>
 </aside>

@@ -238,6 +238,14 @@ func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.
 	if result.Requested {
 		state = "requested"
 	}
+	if returnTo := safeReturnPath(r.PostFormValue("return_to"), "", "/ui/servers/"); returnTo != "" {
+		separator := "&"
+		if !strings.Contains(returnTo, "?") {
+			separator = "?"
+		}
+		http.Redirect(w, r, returnTo+separator+"collect="+state, http.StatusSeeOther)
+		return
+	}
 	target := url.Values{"device": {deviceName}, "collect": {state}}
 	http.Redirect(w, r, "/ui/software-inventory/devices?"+target.Encode(), http.StatusSeeOther)
 }

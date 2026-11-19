@@ -777,6 +777,7 @@ func seedMountShareVault(t *testing.T, setup mountShareFixtureSetup) mountShareS
 			{Purpose: "临时数据", Path: "tmp"},
 			{Purpose: "数据集", Path: "datasets"},
 		},
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

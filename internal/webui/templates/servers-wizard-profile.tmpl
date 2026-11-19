@@ -1,0 +1,25 @@
+{{define "content"}}
+<section class="server-wizard-profile">
+<h1>选择 Profile</h1>
+<ol class="wizard-steps" aria-label="新增服务器步骤">
+<li><span class="step-number">✓</span>连接与地址</li>{{if not .ServerWizard.SameMachine}}<li><span class="step-number">✓</span>地点</li>{{end}}<li aria-current="step"><span class="step-number">{{if .ServerWizard.SameMachine}}2{{else}}3{{end}}</span>Profile</li>
+</ol>
+<form method="post" action="/ui/servers/new/profile" class="wizard-form" data-profile-step>
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ServerWizard.ServerID}}">
+<input type="hidden" name="task_id" value="{{.ServerWizard.TaskID}}">
+<input type="hidden" name="return_to" value="{{.ServerWizard.ReturnTo}}">
+<input type="hidden" name="site_action" value="{{.ServerWizard.SiteAction}}">
+<input type="hidden" name="site_id" value="{{.ServerWizard.SiteID}}">
+<input type="hidden" name="new_site_parent" value="{{.ServerWizard.NewSiteParent}}">
+<input type="hidden" name="new_site_name" value="{{.ServerWizard.NewSiteName}}">
+<input type="hidden" name="new_site_note" value="{{.ServerWizard.NewSiteNote}}">
+<fieldset><legend>Profile</legend>
+{{range .ServerWizard.Profiles}}<label class="choice profile-choice"><input type="checkbox" name="profile_id" value="{{.ID}}" data-client-ids="{{joinTags .ClientIDs}}"{{if .Checked}} checked{{end}}><span><strong>{{.Name}}</strong><small>将对 {{len .ClientIDs}} 个客户端可见</small></span></label>
+{{else}}<p class="empty-inline">还没有 Profile，可以先跳过。</p>{{end}}
+</fieldset>
+<p class="section-note" data-profile-client-summary>当前勾选将对 0 个客户端可见</p>
+<footer class="wizard-actions"><a class="button-link" href="/ui/servers/new/site?server={{.ServerWizard.ServerID}}&amp;task={{.ServerWizard.TaskID}}&amp;return_to={{.ServerWizard.ReturnTo}}">上一步</a><button type="submit" name="finish" value="skip" class="secondary-button">跳过 Profile</button><button type="submit" name="finish" value="save" class="primary-button">完成新增</button></footer>
+</form>
+</section>
+{{end}}

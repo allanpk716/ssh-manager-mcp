@@ -1,9 +1,9 @@
-import { expect, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, test } from "../helpers";
 
 test("设置页切换配对开关后刷新仍保持", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "设置", exact: true }).click();
+  await gotoUIPath(page, "/ui/ops/settings");
   const pairing = page.locator(".setting-item", {
     has: page.getByRole("heading", { name: "serve.pairing", exact: true }),
   });

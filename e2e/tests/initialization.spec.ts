@@ -19,9 +19,10 @@ test("空机器走完单机初始化向导并延续会话进入正式首页", as
     await expect(page.getByText("请备份此文件。")).toBeVisible();
 
     await page.getByRole("button", { name: "进入单机正式页面" }).click();
-    await expect(page.getByRole("heading", { name: "服务器" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "状态总览" })).toBeVisible();
     await expect(page).toHaveURL(/\/ui\/$/);
 
+    await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "服务器" }).click();
     const nextSteps = page.locator(".next-steps");
     await expect(nextSteps.getByRole("heading", { name: "下一步引导" })).toBeVisible();
     await expect(nextSteps.getByRole("link", { name: "录服务器" })).toBeVisible();

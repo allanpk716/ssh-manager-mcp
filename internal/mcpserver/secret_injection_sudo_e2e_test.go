@@ -20,7 +20,7 @@ func TestSecretEnvironmentInjectionExecCommandSudo(t *testing.T) {
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "测试备注", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +103,7 @@ func TestSecretEnvironmentInjectionSudoToleratesPasswordNotConsumed(t *testing.T
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "测试备注", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClientWithSudo(t, st, testsshd.Options{
@@ -151,7 +151,7 @@ func TestSecretEnvironmentInjectionExecBackgroundSudo(t *testing.T) {
 	const userCommand = `printf '%s\n' "$ELEVATED_API_TOKEN"`
 
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ELEVATED_API_TOKEN", "测试备注", []byte(secretValue), "ELEVATED_API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 

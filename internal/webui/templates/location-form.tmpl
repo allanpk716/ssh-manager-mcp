@@ -1,0 +1,48 @@
+{{define "content"}}
+<section class="location-form-page">
+<div class="subpage-header">
+<a class="back-link" href="/ui/more/locations-networks/" aria-label="返回地点与网络"><span aria-hidden="true">‹</span>地点与网络</a>
+<h1>{{if eq .LocationForm.Mode "create"}}新建地点{{else if eq .LocationForm.Mode "rename"}}地点改名{{else if eq .LocationForm.Mode "move"}}移动地点{{else}}删除地点{{end}}</h1>
+</div>
+{{if .LocationForm.Error}}<div class="operation-refusal"><p>{{.LocationForm.Error}}</p></div>{{end}}
+{{if .LocationForm.Site}}<p class="location-path">完整路径：{{.LocationForm.Site.LocationPath}}</p>{{end}}
+
+{{if eq .LocationForm.Mode "delete"}}
+{{if .LocationForm.DeleteReason}}
+<div class="operation-refusal"><p>{{.LocationForm.DeleteReason}}</p></div>
+<p>这个地点现在不能删除。先处理上面的对象，再回来删除。</p>
+{{else}}
+<form method="post" action="/ui/more/locations/delete">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="site" value="{{.LocationForm.Site.LocationPath}}">
+<p class="form-help">删除地点会同时删除它在拓扑图里的区域位置记录。</p>
+<button type="submit">确认删除</button>
+</form>
+{{end}}
+{{else}}
+<form method="post" action="{{if eq .LocationForm.Mode "create"}}/ui/more/locations/new{{else if eq .LocationForm.Mode "rename"}}/ui/more/locations/rename{{else}}/ui/more/locations/move{{end}}">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{if .LocationForm.ReturnTo}}<input type="hidden" name="return_to" value="{{.LocationForm.ReturnTo}}">{{end}}
+{{if .LocationForm.Site}}<input type="hidden" name="site" value="{{.LocationForm.Site.LocationPath}}">{{end}}
+{{if ne .LocationForm.Mode "move"}}
+<div class="form-field">
+<label for="location-name">名称</label>
+<input id="location-name" name="name" value="{{.LocationForm.Name}}" maxlength="40" autocomplete="off" required>
+</div>
+{{end}}
+{{if ne .LocationForm.Mode "rename"}}
+<fieldset class="form-fields">
+<legend>上级地点</legend>
+{{range .LocationForm.Options}}
+<label class="tree-option {{.DepthClass}}">
+<input type="radio" name="parent" value="{{.Site.LocationPath}}"{{if eq $.LocationForm.Parent .Site.LocationPath}} checked{{end}}{{if .Disabled}} disabled{{end}}>
+<span>{{.Site.Name}}{{if .Depth}} <span class="muted">（{{.Site.LocationPath}}）</span>{{end}}</span>
+</label>
+{{end}}
+</fieldset>
+{{end}}
+<button type="submit">保存</button>
+</form>
+{{end}}
+</section>
+{{end}}

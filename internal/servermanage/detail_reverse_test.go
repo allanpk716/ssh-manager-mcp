@@ -62,6 +62,7 @@ func TestDetailReverseViewSummarizesAuthorizations(t *testing.T) {
 		if _, err := m.st.AddSharedStorage(store.SharedStorageInput{
 			Name: share, Device: "gpu-workstation", User: "mount-user",
 			PasswordSecret: "DATASET_PASSWORD", Drive: drive,
+			Note: "共享数据集",
 		}, store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
@@ -69,6 +70,7 @@ func TestDetailReverseViewSummarizesAuthorizations(t *testing.T) {
 	if _, err := m.st.AddSharedStorage(store.SharedStorageInput{
 		Name: "worker-data", Device: "gpu-workstation", User: "mount-user",
 		PasswordSecret: "WORKER_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -209,6 +211,7 @@ func TestDetailReverseViewComparesSiblingSharesByDeviceID(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "worker-data", Device: "storage", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -227,6 +230,7 @@ func TestDetailReverseViewComparesSiblingSharesByDeviceID(t *testing.T) {
 			name TEXT NOT NULL,
 			name_lower TEXT NOT NULL,
 			note TEXT NOT NULL DEFAULT '',
+			site_id TEXT,
 			client_token_id TEXT UNIQUE,
 			client_name TEXT NOT NULL DEFAULT '',
 			created_at INTEGER NOT NULL,

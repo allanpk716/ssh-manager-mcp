@@ -160,7 +160,7 @@ func TestServerDetailEditsOrdinarySecretAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server, nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK {
 		t.Fatalf("服务器详情状态码=%d：\n%s", detail.StatusCode, detailBody)
@@ -259,9 +259,9 @@ func TestServerDetailEditsSharedStorageAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []store.SharedStorageInput{
-		{Name: "datasets", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Y"},
-		{Name: "media", Device: "storage", User: "media-user", PasswordSecret: "MEDIA_PASSWORD", Drive: "X"},
+		{Name: "datasets", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Y", Note: "共享数据集"},
+		{Name: "media", Device: "storage", User: "media-user", PasswordSecret: "MEDIA_PASSWORD", Drive: "X", Note: "共享数据集"},
 	} {
 		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
 			t.Fatal(err)
@@ -281,7 +281,7 @@ func TestServerDetailEditsSharedStorageAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server, nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK {
 		t.Fatalf("服务器详情状态码=%d：\n%s", detail.StatusCode, detailBody)
@@ -475,7 +475,7 @@ func TestServerDetailEditsProfileAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server, nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK ||
 		!strings.Contains(detailBody, "/ui/servers/profile-authorization/preview") ||
@@ -736,7 +736,7 @@ func TestAuthorityServerProfileEditRequiresRecentPasswordVerification(t *testing
 		t.Fatalf("权威端登录失败，状态码=%d cookie=%v", loggedIn.StatusCode, loggedIn.Cookies())
 	}
 
-	detail := do(http.MethodGet, "/ui/servers/"+server, nil, session)
+	detail := do(http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil, session)
 	detailBody := authorizationBody(t, detail)
 	csrf := authorizationCSRFValue(detailBody)
 	now = now.Add(6 * time.Minute)
@@ -815,6 +815,7 @@ func TestAuthorityServerShareEditRequiresRecentPasswordVerification(t *testing.T
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "storage", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -1017,7 +1018,7 @@ func TestClientServerDetailHasNoReverseAuthorizationWriteEntrance(t *testing.T) 
 		t.Fatalf("应签发客户端会话 cookie，实际 %d，状态码=%d 页面：\n%s",
 			len(cookies), response.StatusCode, data)
 	}
-	client := authorizationRequest(handler, cookies[0], http.MethodGet, "/ui/servers/srv-web", nil)
+	client := authorizationRequest(handler, cookies[0], http.MethodGet, "/ui/servers/srv-web?tab=authorization", nil)
 	page := authorizationBody(t, client)
 	if client.StatusCode != http.StatusOK ||
 		!strings.Contains(page, "仅显示本客户端可用的部分，修改请到权威端。") ||
@@ -1036,9 +1037,8 @@ func TestClientServerDetailHasNoReverseAuthorizationWriteEntrance(t *testing.T) 
 		!strings.Contains(page, "API_TOKEN") ||
 		!strings.Contains(page, "datasets") ||
 		!strings.Contains(page, "NAS") ||
-		!strings.Contains(page, "mount-user") ||
 		!strings.Contains(page, "/mnt/sshmgr/datasets") ||
-		!strings.Contains(page, "同设备其他服务器条目带来的共享存储") ||
+		!strings.Contains(page, "同一台机器上的其他账号带来的共享存储") ||
 		!strings.Contains(page, "worker-data") ||
 		!strings.Contains(page, "worker") {
 		t.Fatalf("客户端详情应只读展示两组内容且没有写入口，状态码=%d：\n%s", client.StatusCode, page)

@@ -113,6 +113,12 @@ func (m *Manager) List(filter ListFilter) ([]store.SecretView, error) {
 	return store.FilterSecretsByQuery(views, filter.Query), nil
 }
 
+// ListWithoutNote 返回备注为空或仅空白的机密项。授权子页与主页待办用
+// 它提示 owner 补备注；机密项值与其他字段照常不包含值。
+func (m *Manager) ListWithoutNote() ([]store.SecretView, error) {
+	return m.st.ListSecretsWithoutNote()
+}
+
 // SecretDeliveryRecords 按过滤器返回 owner 的下发记录，供命令行与 Web UI
 // 共用；查询结果只含模板、哈希与元数据，不含机密项值。
 func (m *Manager) SecretDeliveryRecords(filter store.SecretDeliveryRecordFilter) ([]store.SecretDeliveryRecord, error) {

@@ -37,16 +37,36 @@ type stubAccessStore struct {
 	serverProfileApplyConflict *ServerProfileAuthorizationConflict
 	serverProfileApplyErr      error
 
-	deviceCodes      []AccessDeviceCodeSummary
-	addDeviceName    string
-	addDeviceProfile string
-	addDeviceURL     string
-	addDeviceSrc     AccessWriteSource
-	addDeviceResult  AccessDeviceCodeResult
-	addDeviceErr     error
-	revokeDeviceID   string
-	revokeDeviceSrc  AccessWriteSource
-	revokeDeviceErr  error
+	addDeviceName         string
+	addDeviceProfile      string
+	addDeviceURL          string
+	addDeviceSrc          AccessWriteSource
+	addDeviceResult       AccessDeviceCodeResult
+	addDeviceErr          error
+	clients               []ClientSummary
+	client                *ClientDetail
+	clientDetailID        string
+	clientProfilePreview  *ClientProfilePreview
+	previewClientID       string
+	previewProfileID      string
+	changeProfileClientID string
+	changeProfileExpected string
+	changeProfileDesired  string
+	changeProfileSrc      AccessWriteSource
+	changeProfileErr      error
+	machineChoices        []ClientMachineChoice
+	linkMachineClientID   string
+	linkMachineID         string
+	linkMachineSrc        AccessWriteSource
+	linkMachineErr        error
+	createMachineClientID string
+	createMachineName     string
+	createMachineSite     string
+	createMachineSrc      AccessWriteSource
+	createMachineErr      error
+	removeClientID        string
+	removeClientSrc       AccessWriteSource
+	removeClientErr       error
 
 	pairings            []AccessPairingSummary
 	approvePairingID    string
@@ -79,13 +99,6 @@ func (s *stubAccessStore) DeleteProfile(id string, source AccessWriteSource) (*A
 	return s.deleteInUse, s.deleteErr
 }
 
-func (s *stubAccessStore) ListDeviceCodes() ([]AccessDeviceCodeSummary, error) {
-	if s.deviceCodes == nil {
-		return nil, nil
-	}
-	return s.deviceCodes, nil
-}
-
 func (s *stubAccessStore) AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error) {
 	s.addDeviceName = name
 	s.addDeviceProfile = profile
@@ -94,10 +107,64 @@ func (s *stubAccessStore) AddDeviceCode(name, profile, serveURL string, source A
 	return s.addDeviceResult, s.addDeviceErr
 }
 
-func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) error {
-	s.revokeDeviceID = id
-	s.revokeDeviceSrc = source
-	return s.revokeDeviceErr
+func (s stubAccessStore) ListClients() ([]ClientSummary, error) {
+	if s.clients == nil {
+		return nil, nil
+	}
+	return s.clients, nil
+}
+
+func (s *stubAccessStore) ClientDetail(id string) (*ClientDetail, error) {
+	s.clientDetailID = id
+	if s.client == nil {
+		return nil, nil
+	}
+	return s.client, nil
+}
+
+func (s *stubAccessStore) PreviewClientProfileChange(id, profileID string) (*ClientProfilePreview, error) {
+	s.previewClientID = id
+	s.previewProfileID = profileID
+	if s.clientProfilePreview == nil {
+		return nil, nil
+	}
+	return s.clientProfilePreview, nil
+}
+
+func (s *stubAccessStore) ChangeClientProfile(id, expectedProfileID, desiredProfileID string, source AccessWriteSource) error {
+	s.changeProfileClientID = id
+	s.changeProfileExpected = expectedProfileID
+	s.changeProfileDesired = desiredProfileID
+	s.changeProfileSrc = source
+	return s.changeProfileErr
+}
+
+func (s *stubAccessStore) ListClientMachineChoices(id string) ([]ClientMachineChoice, error) {
+	if s.machineChoices == nil {
+		return nil, nil
+	}
+	return s.machineChoices, nil
+}
+
+func (s *stubAccessStore) LinkClientMachine(id, machineID string, source AccessWriteSource) error {
+	s.linkMachineClientID = id
+	s.linkMachineID = machineID
+	s.linkMachineSrc = source
+	return s.linkMachineErr
+}
+
+func (s *stubAccessStore) CreateAndLinkClientMachine(id, machineName, sitePath string, source AccessWriteSource) error {
+	s.createMachineClientID = id
+	s.createMachineName = machineName
+	s.createMachineSite = sitePath
+	s.createMachineSrc = source
+	return s.createMachineErr
+}
+
+func (s *stubAccessStore) RemoveClient(id string, source AccessWriteSource) error {
+	s.removeClientID = id
+	s.removeClientSrc = source
+	return s.removeClientErr
 }
 
 func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error) {
@@ -158,8 +225,9 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 
 	standalonePage := doGetWithCookie(t, standalone, standaloneCookie, "/ui/access/profiles")
 	standaloneBody := readResponseBody(t, standalonePage)
-	if standalonePage.StatusCode != http.StatusOK || !strings.Contains(standaloneBody, "Profile") {
-		t.Fatalf("单机应打开 Profile 页，状态码=%d 页面：\n%s", standalonePage.StatusCode, standaloneBody)
+	if standalonePage.StatusCode != http.StatusSeeOther || standalonePage.Header.Get("Location") != "/ui/authorization/profiles" {
+		t.Fatalf("旧 Profile 地址应重定向到授权子页，状态码=%d 跳转=%q 页面：\n%s",
+			standalonePage.StatusCode, standalonePage.Header.Get("Location"), standaloneBody)
 	}
 	for _, path := range []string{"/ui/access/pairing", "/ui/access/device-codes"} {
 		resp := doGetWithCookie(t, standalone, standaloneCookie, path)
@@ -183,7 +251,7 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 
 	clientPage := doGetWithCookie(t, client, clientCookie, "/ui/access/")
 	clientBody := readResponseBody(t, clientPage)
-	if clientPage.StatusCode != http.StatusOK || !strings.Contains(clientBody, "profile、配对、设备码和项目令牌在权威端管理") {
+	if clientPage.StatusCode != http.StatusOK || !strings.Contains(clientBody, "profile、配对、客户端实例与 MCP 访问令牌在权威端管理") {
 		t.Fatalf("客户端访问区域应只有权威端提示，状态码=%d 页面：\n%s", clientPage.StatusCode, clientBody)
 	}
 	for _, target := range []string{
@@ -222,7 +290,7 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 		t.Fatalf("构造权威端 Web UI Handler 失败：%v", err)
 	}
 	serverCookie := authoritySuccessfulLogin(t, server, "127.0.0.1:7879", "correct-password")
-	serverPage := authorityGet(t, server, "127.0.0.1:7879", "/ui/access/profiles", serverCookie)
+	serverPage := authorityGet(t, server, "127.0.0.1:7879", "/ui/authorization/profiles", serverCookie)
 	serverBody := readResponseBody(t, serverPage)
 	if serverPage.StatusCode != http.StatusOK || !strings.Contains(serverBody, "Profile") {
 		t.Fatalf("权威端应打开 Profile 页，状态码=%d 页面：\n%s", serverPage.StatusCode, serverBody)
@@ -232,8 +300,8 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 	standalonePage := loginAndGetList(t, RoleStandalone, []ServerRow{{Name: "web-1"}}, "")
 	for _, want := range []string{
-		`<a href="/ui/access/">访问</a>`,
-		`<a href="/ui/access/profiles">Profile</a>`,
+		`href="/ui/authorization/"`,
+		`>授权<`,
 	} {
 		if !strings.Contains(standalonePage, want) {
 			t.Fatalf("单机导航应包含 %q：\n%s", want, standalonePage)
@@ -244,8 +312,8 @@ func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 	}
 
 	clientPage := loginAndGetList(t, RoleClient, []ServerRow{{Name: "web-1"}}, "")
-	if !strings.Contains(clientPage, `<a href="/ui/access/">访问</a>`) {
-		t.Fatalf("客户端导航应显示访问区域入口：\n%s", clientPage)
+	if !strings.Contains(clientPage, `>授权<`) {
+		t.Fatalf("客户端导航应显示授权标签：\n%s", clientPage)
 	}
 	if strings.Contains(clientPage, `<a href="/ui/access/profiles">Profile</a>`) {
 		t.Fatalf("客户端导航不应显示 Profile 数据入口：\n%s", clientPage)
@@ -261,10 +329,10 @@ func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 		t.Fatalf("构造权威端 Web UI Handler 失败：%v", err)
 	}
 	cookie := authoritySuccessfulLogin(t, server, "127.0.0.1:7879", "correct-password")
-	serverPageResponse := authorityGet(t, server, "127.0.0.1:7879", "/ui/access/profiles", cookie)
+	serverPageResponse := authorityGet(t, server, "127.0.0.1:7879", "/ui/authorization/profiles", cookie)
 	serverPage := readResponseBody(t, serverPageResponse)
-	if !strings.Contains(serverPage, `<a href="/ui/access/profiles">Profile</a>`) {
-		t.Fatalf("权威端导航应显示 Profile 入口：\n%s", serverPage)
+	if !strings.Contains(serverPage, `href="/ui/authorization/"`) || !strings.Contains(serverPage, ">授权<") {
+		t.Fatalf("权威端导航应显示授权标签：\n%s", serverPage)
 	}
 }
 
@@ -280,6 +348,8 @@ func TestProfilePageListsGrantsAndReferences(t *testing.T) {
 			Servers:     []AccessServerRef{{ID: "server-web", Name: "web-1"}},
 			Projects:    []AccessReference{{Name: "项目甲", Status: "active"}},
 			DeviceCodes: []AccessReference{{Name: "笔记本", Status: "active"}},
+		}}, clients: []ClientSummary{{
+			ID: "client-1", Name: "笔记本", ProfileID: "profile-1", ProfileName: "运维",
 		}}},
 		Port: 18080,
 	})
@@ -290,18 +360,23 @@ func TestProfilePageListsGrantsAndReferences(t *testing.T) {
 	cookie := session.Cookies()[0]
 	session.Body.Close()
 
-	response := doGetWithCookie(t, handler, cookie, "/ui/access/profiles")
+	response := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles")
 	body := readResponseBody(t, response)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("Profile 页状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
 	for _, want := range []string{
-		"运维", "web-1", "项目令牌", "1", "设备码", "笔记本",
-		`<a href="/ui/access/profiles/profile-1/grants">调整授权</a>`,
-		`<button type="submit">删除</button>`,
+		"运维", "1 台服务器", "1 个客户端",
+		`href="/ui/authorization/profiles/profile-1"`, `value="profile-1"`,
+		`<button type="submit" class="danger-link">删除</button>`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("Profile 页应包含 %q：\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{"项目令牌", "设备码", "站点", "网络成员", "登录条目", "兜底主机", "cache token"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("Profile 页不应出现 %q：\n%s", forbidden, body)
 		}
 	}
 }
@@ -325,7 +400,7 @@ func TestProfilePageAddsProfileThroughAccessStore(t *testing.T) {
 		"name": {"team-a"},
 	})
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/access/profiles" {
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/authorization/profiles" {
 		t.Fatalf("新增 profile 应回到列表，状态码=%d 跳转=%q 页面：\n%s", response.StatusCode, response.Header.Get("Location"), body)
 	}
 	if store.addName != "team-a" {
@@ -355,7 +430,7 @@ func TestProfilePageDeletesProfileThroughAccessStore(t *testing.T) {
 		"profile_id": {"profile-1"},
 	})
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/access/profiles" {
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/authorization/profiles" {
 		t.Fatalf("删除 profile 应回到列表，状态码=%d 跳转=%q 页面：\n%s", response.StatusCode, response.Header.Get("Location"), body)
 	}
 	if store.deleteID != "profile-1" || store.deleteSrc.RemoteAddress != "198.51.100.9" {
@@ -389,12 +464,15 @@ func TestProfilePageShowsReferencedProfileDeleteRefusal(t *testing.T) {
 		"profile_id": {"profile-1"},
 	})
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusConflict {
-		t.Fatalf("被引用的 profile 删除应返回 409，状态码=%d 页面：\n%s", response.StatusCode, body)
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/authorization/profiles" {
+		t.Fatalf("被引用的 profile 删除应回到列表并显示拒绝原因，状态码=%d 跳转=%q 页面：\n%s",
+			response.StatusCode, response.Header.Get("Location"), body)
 	}
-	for _, want := range []string{"仍被引用", "项目甲", "笔记本"} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("删除被拒页面应包含 %q：\n%s", want, body)
+	list := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles")
+	listBody := readResponseBody(t, list)
+	for _, want := range []string{"仍被引用，不能删除", "运维"} {
+		if !strings.Contains(listBody, want) {
+			t.Fatalf("删除被拒后的列表应包含 %q：\n%s", want, listBody)
 		}
 	}
 }
@@ -421,18 +499,26 @@ func TestGrantFormPrechecksCurrentServers(t *testing.T) {
 
 	response := doGetWithCookie(t, handler, cookie, "/ui/access/profiles/profile-1/grants")
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("授权表单状态码=%d 页面：\n%s", response.StatusCode, body)
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/authorization/profiles/profile-1/servers" {
+		t.Fatalf("旧授权表单地址应重定向到服务器勾选页，状态码=%d 跳转=%q 页面：\n%s",
+			response.StatusCode, response.Header.Get("Location"), body)
 	}
-	if !strings.Contains(body, `<input type="checkbox" name="server" value="server-web" checked>`) {
-		t.Fatalf("当前已授权服务器应预先勾选：\n%s", body)
+	selection := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles/profile-1/servers")
+	body = readResponseBody(t, selection)
+	if selection.StatusCode != http.StatusOK {
+		t.Fatalf("服务器勾选页状态码=%d 页面：\n%s", selection.StatusCode, body)
 	}
-	if !strings.Contains(body, `<input type="checkbox" name="server" value="server-db">`) {
-		t.Fatalf("未授权服务器不应勾选：\n%s", body)
+	for _, want := range []string{
+		`<input type="checkbox" name="server" value="server-web" checked>`,
+		`<input type="checkbox" name="server" value="server-db">`,
+		`<input type="hidden" name="expected" value="server-web">`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("服务器勾选页应包含 %q：\n%s", want, body)
+		}
 	}
-	if !strings.Contains(body, `<input type="hidden" name="expected" value="server-web">`) {
-		t.Fatalf("表单应保存打开时看到的授权集合：\n%s", body)
-	}
+	_ = body
 }
 
 func TestGrantFormSubmitsFullSetAndShowsSummary(t *testing.T) {
@@ -464,7 +550,7 @@ func TestGrantFormSubmitsFullSetAndShowsSummary(t *testing.T) {
 		"expected": {"server-web"}, "server": {"server-db"},
 	})
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/access/profiles" {
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/authorization/profiles" {
 		t.Fatalf("提交授权应回到列表，状态码=%d 跳转=%q 页面：\n%s", response.StatusCode, response.Header.Get("Location"), body)
 	}
 	if store.grantProfileID != "profile-1" ||
@@ -474,9 +560,9 @@ func TestGrantFormSubmitsFullSetAndShowsSummary(t *testing.T) {
 		t.Fatalf("授权提交参数不正确：%+v", store)
 	}
 
-	list := doGetWithCookie(t, handler, cookie, "/ui/access/profiles")
+	list := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles")
 	listBody := readResponseBody(t, list)
-	if !strings.Contains(listBody, "新增授权：db-1；撤销授权：web-1") {
+	if !strings.Contains(listBody, "已保存 运维 的授权：新增 1 台，移除 1 台") {
 		t.Fatalf("授权提交后应显示结果摘要：\n%s", listBody)
 	}
 }
@@ -510,16 +596,19 @@ func TestGrantConflictRendersLatestServerSet(t *testing.T) {
 		"expected": {"server-web"}, "server": {"server-db"},
 	})
 	body := readResponseBody(t, response)
-	if response.StatusCode != http.StatusConflict {
-		t.Fatalf("授权冲突应返回 409，状态码=%d 页面：\n%s", response.StatusCode, body)
+	conflictTarget := "/ui/authorization/profiles/profile-1/servers?conflict=1"
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != conflictTarget {
+		t.Fatalf("授权冲突应回到勾选页重新核对，状态码=%d 跳转=%q 页面：\n%s",
+			response.StatusCode, response.Header.Get("Location"), body)
 	}
-	if !strings.Contains(body, "授权范围已被其他入口修改") {
-		t.Fatalf("授权冲突应说明原因：\n%s", body)
-	}
-	if !strings.Contains(body, `<input type="checkbox" name="server" value="server-db" checked>`) ||
-		!strings.Contains(body, `<input type="checkbox" name="server" value="server-web">`) ||
-		!strings.Contains(body, `<input type="hidden" name="expected" value="server-db">`) {
-		t.Fatalf("授权冲突应用最新授权范围重新渲染表单：\n%s", body)
+	selection := doGetWithCookie(t, handler, cookie, conflictTarget)
+	selectionBody := readResponseBody(t, selection)
+	for _, want := range []string{
+		"授权已被其他入口修改", `<input type="checkbox" name="server" value="server-web" checked>`,
+	} {
+		if !strings.Contains(selectionBody, want) {
+			t.Fatalf("授权冲突后的勾选页应包含 %q：\n%s", want, selectionBody)
+		}
 	}
 }
 
@@ -548,17 +637,16 @@ func TestAuthorityGrantAdditionRequiresReverifyAndPreservesSelection(t *testing.
 	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 	auth.now = auth.now.Add(6 * time.Minute)
 
-	grantsPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", cookie)
+	grantsPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/authorization/profiles/profile-1/servers", cookie)
 	grantsBody := readResponseBody(t, grantsPage)
-	resumePath := "/ui/access/profiles/profile-1/grants?server=server-db"
-	wantReverifyLink := `/ui/reverify?next=` + url.QueryEscape("/ui/access/profiles/profile-1/grants?server=server-web")
-	if !strings.Contains(grantsBody, wantReverifyLink) {
-		t.Fatalf("未重新验证的授权表单应链接重新验证页 %q：\n%s", wantReverifyLink, grantsBody)
-	}
+	resumePath := "/ui/authorization/profiles/profile-1/servers?" + url.Values{
+		"server": {"server-web", "server-db"}, "mode": {"add"}, "return_to": {"/ui/servers/"},
+	}.Encode()
 	csrfToken := hiddenInputValue(t, grantsBody, "csrf_token")
 
 	rejected := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
 		"csrf_token": {csrfToken}, "expected": {"server-web"}, "server": {"server-db"},
+		"mode": {"add"}, "return_to": {"/ui/servers/"},
 	}, cookie)
 	rejectedBody := readResponseBody(t, rejected)
 	rejectedReverifyLink := `/ui/reverify?next=` + url.QueryEscape(resumePath)
@@ -569,7 +657,7 @@ func TestAuthorityGrantAdditionRequiresReverifyAndPreservesSelection(t *testing.
 		t.Fatalf("未重新验证时不应调用访问管理模块，实际调用 profile=%q", store.grantProfileID)
 	}
 
-	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", wantReverifyLink, cookie)
+	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/reverify?next="+url.QueryEscape(resumePath), cookie)
 	reverifyBody := readResponseBody(t, reverifyPage)
 	reverifyCSRF := hiddenInputValue(t, reverifyBody, "csrf_token")
 	reverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
@@ -583,17 +671,23 @@ func TestAuthorityGrantAdditionRequiresReverifyAndPreservesSelection(t *testing.
 	resumed := authorityGet(t, handler, "127.0.0.1:7879", resumePath, cookie)
 	resumedBody := readResponseBody(t, resumed)
 	if !strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-db" checked>`) ||
-		!strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-web">`) {
-		t.Fatalf("重新验证后应保留提交时选择的服务器：\n%s", resumedBody)
+		!strings.Contains(resumedBody, `<input type="checkbox" name="server" value="server-web" checked>`) ||
+		!strings.Contains(resumedBody, "新增 1 台、移除 0 台") {
+		t.Fatalf("重新验证后应按追加模式保留原服务器：\n%s", resumedBody)
 	}
 	resumedCSRF := hiddenInputValue(t, resumedBody, "csrf_token")
 	store.grantResult = AccessGrantChange{Added: []AccessServerRef{{ID: "server-db", Name: "db-1"}}}
 	accepted := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/access/profiles/profile-1/grants", url.Values{
 		"csrf_token": {resumedCSRF}, "expected": {"server-web"}, "server": {"server-db"},
+		"mode": {"add"}, "return_to": {"/ui/servers/"},
 	}, cookie)
 	acceptedBody := readResponseBody(t, accepted)
 	if accepted.StatusCode != http.StatusSeeOther || store.grantProfileID != "profile-1" {
 		t.Fatalf("重新验证后应提交授权，状态码=%d 调用=%q 页面：\n%s", accepted.StatusCode, store.grantProfileID, acceptedBody)
+	}
+	if strings.Join(store.grantDesired, ",") != "server-web,server-db" || accepted.Header.Get("Location") != "/ui/servers/" {
+		t.Fatalf("追加模式重新验证后应保存并集并回服务器列表，desired=%v Location=%q",
+			store.grantDesired, accepted.Header.Get("Location"))
 	}
 }
 
@@ -621,7 +715,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 	}
 	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 	auth.now = auth.now.Add(6 * time.Minute)
-	profilesPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/access/profiles", cookie)
+	profilesPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/authorization/profiles", cookie)
 	profilesBody := readResponseBody(t, profilesPage)
 	csrfToken := hiddenInputValue(t, profilesBody, "csrf_token")
 
@@ -629,7 +723,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 		"csrf_token": {csrfToken}, "name": {"team-a"},
 	}, cookie)
 	addedBody := readResponseBody(t, added)
-	addRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/profiles")
+	addRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/authorization/profiles")
 	if added.StatusCode != http.StatusSeeOther || added.Header.Get("Location") != addRedirect || store.addName != "" {
 		t.Fatalf("新增 profile 应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
 			added.StatusCode, added.Header.Get("Location"), store.addName, addedBody)
@@ -639,7 +733,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 	addReverifyBody := readResponseBody(t, addReverifyPage)
 	addReverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
 		"csrf_token": {hiddenInputValue(t, addReverifyBody, "csrf_token")},
-		"password":   {"correct-password"}, "next": {"/ui/access/profiles"},
+		"password":   {"correct-password"}, "next": {"/ui/authorization/profiles"},
 	}, cookie)
 	if addReverified.StatusCode != http.StatusSeeOther {
 		t.Fatalf("新增 profile 重新验证失败，状态码=%d：%s", addReverified.StatusCode, readResponseBody(t, addReverified))
@@ -657,7 +751,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 		"csrf_token": {csrfToken}, "expected": {"server-web", "server-db"}, "server": {"server-web"},
 	}, cookie)
 	revokedBody := readResponseBody(t, revoked)
-	revokeRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/access/profiles/profile-1/grants?server=server-web")
+	revokeRedirect := `/ui/reverify?next=` + url.QueryEscape("/ui/authorization/profiles/profile-1/servers?server=server-web")
 	if revoked.StatusCode != http.StatusSeeOther || revoked.Header.Get("Location") != revokeRedirect || store.grantProfileID != "" {
 		t.Fatalf("纯撤销授权也应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
 			revoked.StatusCode, revoked.Header.Get("Location"), store.grantProfileID, revokedBody)
@@ -667,7 +761,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 	grantReverifyBody := readResponseBody(t, grantReverifyPage)
 	grantReverified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
 		"csrf_token": {hiddenInputValue(t, grantReverifyBody, "csrf_token")},
-		"password":   {"correct-password"}, "next": {"/ui/access/profiles/profile-1/grants?server=server-web"},
+		"password":   {"correct-password"}, "next": {"/ui/authorization/profiles/profile-1/servers?server=server-web"},
 	}, cookie)
 	if grantReverified.StatusCode != http.StatusSeeOther {
 		t.Fatalf("撤销授权重新验证失败，状态码=%d：%s", grantReverified.StatusCode, readResponseBody(t, grantReverified))
@@ -686,7 +780,7 @@ func TestAuthorityProfileReverificationRules(t *testing.T) {
 		"csrf_token": {csrfToken}, "profile_id": {"profile-1"},
 	}, cookie)
 	deleteRejectedBody := readResponseBody(t, deleteRejected)
-	resumePath := "/ui/access/profiles?reverify_delete=profile-1"
+	resumePath := "/ui/authorization/profiles?reverify_delete=profile-1"
 	wantRedirect := `/ui/reverify?next=` + url.QueryEscape(resumePath)
 	if deleteRejected.StatusCode != http.StatusSeeOther || deleteRejected.Header.Get("Location") != wantRedirect || store.deleteID != "" {
 		t.Fatalf("删除 profile 应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s", deleteRejected.StatusCode, deleteRejected.Header.Get("Location"), store.deleteID, deleteRejectedBody)
@@ -774,7 +868,7 @@ func TestAccessWriteRoutesRequireOriginAndCSRFToken(t *testing.T) {
 	session := exchangeStartupToken(t, handler, startup.URL("127.0.0.1:18080"))
 	cookie := session.Cookies()[0]
 	session.Body.Close()
-	page := doGetWithCookie(t, handler, cookie, "/ui/access/profiles")
+	page := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles")
 	pageBody := readResponseBody(t, page)
 	csrfToken := hiddenInputValue(t, pageBody, "csrf_token")
 
@@ -872,7 +966,7 @@ func readResponseBody(t *testing.T, response *http.Response) string {
 
 func postStandaloneForm(t *testing.T, handler http.Handler, cookie *http.Cookie, target string, form url.Values) *http.Response {
 	t.Helper()
-	page := doGetWithCookie(t, handler, cookie, "/ui/access/profiles")
+	page := doGetWithCookie(t, handler, cookie, "/ui/authorization/profiles")
 	pageBody := readResponseBody(t, page)
 	match := regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(pageBody)
 	if match == nil {

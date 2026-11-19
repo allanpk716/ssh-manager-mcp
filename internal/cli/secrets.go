@@ -76,14 +76,14 @@ func secretsAddCmd() *cobra.Command {
 	var note, environmentName, fromFile string
 	var fromStdin bool
 	c := &cobra.Command{
-		Use:   "add NAME [--note 文本] [--from-file PATH | --stdin]",
+		Use:   "add NAME --note 文本 [--from-file PATH | --stdin]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Register a secret (value is write-only)",
 		Long: `Register a secret in the vault.
 
 ` + secretsValueInputHelp + `
 
---note 备注：备注对 agent 可见，不要写敏感内容。`,
+--note 备注：备注必填；agent 只能靠备注判断机密项用途，不要写敏感内容。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := requireSecretsVault()
 			if err != nil {
@@ -104,7 +104,8 @@ func secretsAddCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&note, "note", "", "备注（对 agent 可见，不要写敏感内容）")
+	c.Flags().StringVar(&note, "note", "", "备注（必填；对 agent 可见，不要写敏感内容）")
+	_ = c.MarkFlagRequired("note")
 	c.Flags().StringVar(&environmentName, "env", "", "环境变量名（可选）")
 	registerSecretValueInputFlags(c, &fromFile, &fromStdin)
 	return c
@@ -201,7 +202,7 @@ func secretsEditCmd() *cobra.Command {
 			return nil
 		},
 	}
-	c.Flags().StringVar(&note, "note", "", "新的备注（对 agent 可见，不要写敏感内容）")
+	c.Flags().StringVar(&note, "note", "", "新的备注（必填；对 agent 可见，不要写敏感内容）")
 	c.Flags().StringVar(&environmentName, "env", "", "新的环境变量名（与 --clear-env 互斥）")
 	c.Flags().BoolVar(&clearEnvironmentName, "clear-env", false, "清除环境变量名（与 --env 互斥）")
 	return c

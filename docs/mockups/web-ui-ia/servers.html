@@ -1,0 +1,1065 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>服务器 · sshmgr 权威端</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #F5F6F8;
+      --card: #FFFFFF;
+      --primary: #2563EB;
+      --primary-soft: #EFF6FF;
+      --text: #111827;
+      --muted: #6B7280;
+      --warning: #D97706;
+      --warning-soft: #FEF3C7;
+      --danger: #DC2626;
+      --success: #059669;
+      --line: #E5E7EB;
+      --shadow: 0 1px 2px rgba(0,0,0,.06);
+    }
+
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      font-size: 15px;
+      -webkit-font-smoothing: antialiased;
+    }
+    body.modal-open { overflow: hidden; }
+    button, input { font: inherit; }
+    button, a { -webkit-tap-highlight-color: transparent; }
+    button { color: inherit; }
+    button:focus-visible, a:focus-visible, input:focus-visible {
+      outline: 3px solid rgba(37,99,235,.25);
+      outline-offset: 2px;
+    }
+    button:disabled { cursor: not-allowed; opacity: .45; }
+    svg { display: block; flex: 0 0 auto; }
+
+    .topbar { display: none; }
+    .page {
+      width: 100%;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 22px 16px calc(104px + env(safe-area-inset-bottom));
+    }
+    .page.selecting { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 22px;
+      line-height: 30px;
+      font-weight: 700;
+      letter-spacing: -.02em;
+    }
+    .title-count {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 25px;
+      height: 24px;
+      margin-left: 7px;
+      padding: 0 7px;
+      border-radius: 8px;
+      background: #E9EDF3;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 600;
+      vertical-align: 2px;
+    }
+    .primary-button, .secondary-button, .text-button {
+      min-height: 44px;
+      border: 0;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .primary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 0 16px;
+      background: var(--primary);
+      color: #FFFFFF;
+      box-shadow: 0 1px 2px rgba(37,99,235,.2);
+    }
+    .primary-button:active { background: #1D4ED8; }
+    .secondary-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .secondary-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      padding: 0 13px;
+      border: 1px solid var(--line);
+      background: var(--card);
+      color: #374151;
+      box-shadow: var(--shadow);
+      font-size: 14px;
+    }
+    .secondary-button.active {
+      border-color: #BFDBFE;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+
+    .controls { margin-top: 18px; }
+    .search-box {
+      position: relative;
+      display: flex;
+      align-items: center;
+      min-height: 48px;
+      border: 1px solid #E2E5EA;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .search-box > svg { margin-left: 14px; color: var(--muted); }
+    .search-box input {
+      width: 100%;
+      min-width: 0;
+      height: 46px;
+      padding: 0 44px 0 10px;
+      border: 0;
+      outline: 0;
+      background: transparent;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .search-box input::placeholder { color: #9CA3AF; }
+    .search-box:focus-within {
+      border-color: #93C5FD;
+      box-shadow: 0 0 0 3px rgba(37,99,235,.08);
+    }
+    .search-box input:focus-visible { outline: 0; }
+    .clear-search {
+      position: absolute;
+      right: 3px;
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      border: 0;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .filters {
+      display: flex;
+      gap: 8px;
+      margin: 12px -16px 0;
+      padding: 0 16px 3px;
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+    .filters::-webkit-scrollbar { display: none; }
+    .chip {
+      flex: 0 0 auto;
+      min-height: 44px;
+      padding: 0 15px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--card);
+      color: #4B5563;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+    }
+    .chip[aria-pressed="true"] {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #FFFFFF;
+      font-weight: 600;
+    }
+    .chip.attention[aria-pressed="false"] { color: var(--warning); }
+
+    .list-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 42px;
+      padding: 6px 1px 4px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .list-meta span:last-child { text-align: right; }
+    .server-list {
+      display: grid;
+      gap: 12px;
+    }
+    .server-card {
+      position: relative;
+      display: flex;
+      gap: 0;
+      min-width: 0;
+      padding: 16px;
+      border: 1px solid transparent;
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+      transition: border-color .16s ease, background .16s ease;
+    }
+    .server-card.attention-card { border-color: #F3DEAC; }
+    .selection-mode .server-card { cursor: pointer; }
+    .server-card.selected {
+      border-color: #60A5FA;
+      background: #FAFCFF;
+      box-shadow: 0 0 0 1px rgba(37,99,235,.06), var(--shadow);
+    }
+    .check-control {
+      display: none;
+      flex: 0 0 44px;
+      align-items: flex-start;
+      justify-content: flex-start;
+      width: 44px;
+      height: 44px;
+      margin: -5px 4px 0 -10px;
+      padding: 8px;
+      border: 0;
+      background: transparent;
+      cursor: pointer;
+    }
+    .selection-mode .check-control { display: flex; }
+    .check-circle {
+      display: grid;
+      place-items: center;
+      width: 23px;
+      height: 23px;
+      border: 1.5px solid #C3C9D2;
+      border-radius: 50%;
+      background: #FFFFFF;
+      color: transparent;
+    }
+    .selected .check-circle {
+      border-color: var(--primary);
+      background: var(--primary);
+      color: #FFFFFF;
+    }
+    .card-content { flex: 1; min-width: 0; }
+    .card-heading {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .server-name {
+      min-width: 0;
+      margin: 0;
+      overflow-wrap: anywhere;
+      font-size: 17px;
+      line-height: 25px;
+      font-weight: 700;
+      letter-spacing: -.01em;
+    }
+    .warning-tag {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      min-height: 25px;
+      padding: 3px 8px;
+      border-radius: 6px;
+      background: var(--warning-soft);
+      color: var(--warning);
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+    }
+    .address {
+      margin: 5px 0 0;
+      overflow-wrap: anywhere;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .network-line {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .same-machine {
+      display: inline-flex;
+      align-items: center;
+      min-height: 21px;
+      padding: 1px 7px;
+      border-radius: 5px;
+      background: #F3F4F6;
+      color: #4B5563;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .card-counts {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px 17px;
+      margin-top: 13px;
+      padding-top: 12px;
+      border-top: 1px solid #F0F1F3;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .count-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 22px;
+      white-space: nowrap;
+    }
+    .count-icon { font-size: 14px; line-height: 1; }
+    .count-item strong { color: #374151; font-weight: 600; }
+    .empty-state {
+      padding: 42px 20px;
+      border: 1px dashed #D6DAE1;
+      border-radius: 12px;
+      background: rgba(255,255,255,.55);
+      text-align: center;
+    }
+    .empty-state svg { margin: 0 auto 12px; color: #9CA3AF; }
+    .empty-state h2 { margin: 0; font-size: 17px; }
+    .empty-state p { margin: 7px 0 16px; color: var(--muted); font-size: 13px; }
+    .text-button {
+      padding: 0 16px;
+      background: var(--primary-soft);
+      color: var(--primary);
+    }
+
+    .mobile-nav {
+      position: fixed;
+      z-index: 50;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(229,231,235,.9);
+      background: rgba(255,255,255,.97);
+      box-shadow: 0 -1px 8px rgba(17,24,39,.035);
+      backdrop-filter: blur(14px);
+    }
+    .nav-link {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 3px;
+      min-height: 54px;
+      border-radius: 9px;
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 11px;
+      line-height: 16px;
+    }
+    .nav-link[aria-current="page"] { color: var(--primary); font-weight: 600; }
+    .nav-link svg { width: 22px; height: 22px; }
+
+    .selection-bar {
+      position: fixed;
+      z-index: 60;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--line);
+      background: rgba(255,255,255,.98);
+      box-shadow: 0 -6px 24px rgba(17,24,39,.08);
+      backdrop-filter: blur(16px);
+    }
+    .selection-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .selected-count { font-size: 14px; font-weight: 650; }
+    .cancel-selection {
+      min-width: 60px;
+      min-height: 44px;
+      margin: -8px 0;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+      font-weight: 500;
+    }
+    .selection-actions { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .selection-actions button {
+      min-height: 44px;
+      padding: 5px 7px;
+      border: 1px solid #BFDBFE;
+      border-radius: 9px;
+      background: var(--primary-soft);
+      color: var(--primary);
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .drawer-shell {
+      position: fixed;
+      z-index: 100;
+      inset: 0;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+    }
+    .drawer-backdrop {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      border: 0;
+      background: rgba(17,24,39,.46);
+      cursor: default;
+      animation: fade-in .18s ease-out;
+    }
+    .drawer {
+      position: relative;
+      width: 100%;
+      max-width: 640px;
+      max-height: min(88vh, 720px);
+      overflow-y: auto;
+      padding: 9px 20px calc(20px + env(safe-area-inset-bottom));
+      border-radius: 20px 20px 0 0;
+      background: var(--card);
+      box-shadow: 0 -12px 40px rgba(17,24,39,.16);
+      animation: slide-up .22s ease-out;
+    }
+    .drawer-handle {
+      width: 38px;
+      height: 4px;
+      margin: 0 auto 10px;
+      border-radius: 99px;
+      background: #D1D5DB;
+    }
+    .drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .drawer-header h2 { margin: 0; font-size: 19px; line-height: 28px; }
+    .close-button {
+      display: grid;
+      place-items: center;
+      width: 44px;
+      height: 44px;
+      margin-right: -9px;
+      padding: 0;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .step-caption { margin: 3px 0 17px; color: var(--muted); font-size: 13px; }
+    .secret-options { display: grid; gap: 10px; }
+    .secret-option {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 68px;
+      padding: 11px 13px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      cursor: pointer;
+    }
+    .secret-option:has(input:checked) {
+      border-color: #60A5FA;
+      background: var(--primary-soft);
+    }
+    .secret-option input {
+      width: 20px;
+      height: 20px;
+      margin: 0;
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+    .secret-copy { min-width: 0; }
+    .secret-name { display: block; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; font-weight: 650; }
+    .secret-detail { display: block; margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 18px; }
+    .drawer-note {
+      margin: 14px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 20px;
+    }
+    .drawer-actions { display: flex; gap: 10px; margin-top: 20px; }
+    .drawer-actions .primary-button, .drawer-actions .secondary-button { flex: 1; }
+    .drawer-actions .secondary-button { box-shadow: none; }
+    .summary-box {
+      padding: 16px;
+      border: 1px solid #BFDBFE;
+      border-radius: 12px;
+      background: var(--primary-soft);
+    }
+    .summary-label { color: var(--muted); font-size: 13px; }
+    .summary-secret { display: block; margin-top: 4px; color: var(--primary); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 19px; }
+    .summary-text { margin: 14px 0 0; color: var(--text); font-size: 15px; line-height: 24px; }
+    .summary-help { margin: 12px 0 0; color: var(--muted); font-size: 13px; line-height: 21px; }
+
+    .toast {
+      position: fixed;
+      z-index: 200;
+      top: 16px;
+      left: 50%;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: max-content;
+      max-width: calc(100% - 32px);
+      min-height: 48px;
+      padding: 10px 15px;
+      border: 1px solid #A7F3D0;
+      border-radius: 12px;
+      background: #FFFFFF;
+      color: #065F46;
+      box-shadow: 0 8px 30px rgba(17,24,39,.14);
+      transform: translateX(-50%);
+      font-size: 14px;
+      line-height: 20px;
+      animation: toast-in .2s ease-out;
+    }
+    .toast svg { color: var(--success); }
+
+    @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+    @keyframes slide-up { from { transform: translateY(30px); opacity: .6; } to { transform: translateY(0); opacity: 1; } }
+    @keyframes toast-in { from { transform: translate(-50%, -10px); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+    @media (min-width: 768px) {
+      .topbar {
+        display: block;
+        border-bottom: 1px solid rgba(229,231,235,.9);
+        background: rgba(255,255,255,.96);
+      }
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        gap: 42px;
+        max-width: 960px;
+        min-height: 64px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      .brand {
+        color: var(--text);
+        text-decoration: none;
+        font-size: 17px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+      .desktop-nav { display: flex; align-items: center; gap: 6px; height: 64px; }
+      .desktop-nav .nav-link {
+        flex-direction: row;
+        gap: 7px;
+        min-height: 44px;
+        padding: 0 14px;
+        font-size: 14px;
+      }
+      .desktop-nav .nav-link[aria-current="page"] { background: var(--primary-soft); }
+      .desktop-nav .nav-link svg { width: 19px; height: 19px; }
+      .mobile-nav { display: none; }
+      .page { padding-top: 28px; padding-bottom: 48px; }
+      .page.selecting { padding-bottom: 128px; }
+      .title-row { align-items: center; }
+      .controls { margin-top: 20px; }
+      .search-box { max-width: 520px; }
+      .filters { margin-right: 0; margin-left: 0; padding-right: 0; padding-left: 0; }
+      .server-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+      .selection-bar {
+        right: 16px;
+        bottom: 20px;
+        left: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        max-width: 928px;
+        margin: 0 auto;
+        padding: 12px 16px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+      }
+      .selection-summary { margin: 0; }
+      .cancel-selection { margin: -8px 0 -8px 8px; }
+      .selected-count { padding: 0 8px; }
+      .selection-actions { min-width: 420px; }
+      .drawer { border-radius: 20px 20px 0 0; }
+      .toast { top: 80px; }
+    }
+
+    @media (max-width: 370px) {
+      .selection-actions { gap: 5px; }
+      .selection-actions button { font-size: 12px; padding-right: 3px; padding-left: 3px; }
+      .server-card { padding: 14px; }
+      .card-counts { gap: 8px 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; animation: none !important; transition: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#">sshmgr 权威端</a>
+      <nav class="desktop-nav" aria-label="一级导航">
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+          主页
+        </a>
+        <a class="nav-link" href="#" aria-current="page">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+          服务器
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+          客户端
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+          授权
+        </a>
+        <a class="nav-link" href="#">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+          更多
+        </a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="page" id="page">
+    <section aria-labelledby="page-title">
+      <div class="title-row">
+        <h1 id="page-title">服务器<span class="title-count" id="titleCount">8</span></h1>
+        <button class="primary-button" id="addButton" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          添加
+        </button>
+      </div>
+      <div class="secondary-actions">
+        <button class="secondary-button" id="importButton" type="button">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 15v4a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-4"/></svg>
+          导入 SSH 配置
+        </button>
+        <button class="secondary-button" id="multiButton" type="button" aria-pressed="false">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="m14 17 2 2 4-4"/></svg>
+          <span id="multiButtonText">多选</span>
+        </button>
+      </div>
+    </section>
+
+    <section class="controls" aria-label="搜索与筛选">
+      <label class="search-box">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="searchInput" type="search" placeholder="搜索名称或地址" autocomplete="off" aria-label="按名称或地址搜索">
+        <button class="clear-search" id="clearSearch" type="button" aria-label="清空搜索" hidden>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="currentColor" opacity=".12" stroke="none"/><path d="m9 9 6 6m0-6-6 6"/></svg>
+        </button>
+      </label>
+      <div class="filters" role="group" aria-label="筛选服务器">
+        <button class="chip" type="button" data-filter="all" aria-pressed="true">全部</button>
+        <button class="chip attention" type="button" data-filter="attention" aria-pressed="false">只看需要注意(2)</button>
+        <button class="chip" type="button" data-filter="家 A" aria-pressed="false">家 A</button>
+        <button class="chip" type="button" data-filter="公司" aria-pressed="false">公司</button>
+        <button class="chip" type="button" data-filter="NetBird" aria-pressed="false">NetBird</button>
+      </div>
+    </section>
+
+    <div class="list-meta">
+      <span id="resultCount">8 台服务器</span>
+      <span id="listHint">需要注意的排在最前</span>
+    </div>
+    <section class="server-list" id="serverList" aria-label="服务器列表" aria-live="polite"></section>
+    <section class="empty-state" id="emptyState" hidden>
+      <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6"/></svg>
+      <h2>没有匹配的服务器</h2>
+      <p>试试其他名称、地址或筛选条件。</p>
+      <button class="text-button" id="resetFilters" type="button">清除筛选</button>
+    </section>
+  </main>
+
+  <nav class="mobile-nav" id="mobileNav" aria-label="一级导航">
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+      主页
+    </a>
+    <a class="nav-link" href="#" aria-current="page">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+      服务器
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+      客户端
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+      授权
+    </a>
+    <a class="nav-link" href="#">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+      更多
+    </a>
+  </nav>
+
+  <section class="selection-bar" id="selectionBar" aria-label="多选操作" hidden>
+    <div class="selection-summary">
+      <span class="selected-count" id="selectedCount">已选 0 台</span>
+      <button class="cancel-selection" id="cancelSelection" type="button">取消</button>
+    </div>
+    <div class="selection-actions">
+      <button id="profileAction" type="button" disabled>加入 profile</button>
+      <button id="secretAction" type="button" disabled>授权机密项</button>
+      <button id="storageAction" type="button" disabled>授权共享存储</button>
+    </div>
+  </section>
+
+  <div class="drawer-shell" id="secretDrawer" hidden>
+    <button class="drawer-backdrop" id="drawerBackdrop" type="button" aria-label="关闭授权机密项抽屉" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header">
+        <h2 id="drawerTitle">授权机密项</h2>
+        <button class="close-button" id="closeDrawer" type="button" aria-label="关闭">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+
+      <div id="secretStep">
+        <p class="step-caption">第 1 步，共 2 步 · 选择要授权的机密项</p>
+        <div class="secret-options" id="secretOptions"></div>
+        <p class="drawer-note">授权后，机密项可在这批服务器上作为环境变量注入。</p>
+        <div class="drawer-actions">
+          <button class="primary-button" id="nextStep" type="button" disabled>下一步</button>
+        </div>
+      </div>
+
+      <div id="confirmStep" hidden>
+        <p class="step-caption">第 2 步，共 2 步 · 确认授权范围</p>
+        <div class="summary-box">
+          <span class="summary-label">确认授权</span>
+          <strong class="summary-secret" id="summarySecret"></strong>
+          <p class="summary-text" id="summaryText"></p>
+        </div>
+        <p class="summary-help">已有的授权不会改变，只会为新增服务器补上授权。</p>
+        <div class="drawer-actions">
+          <button class="secondary-button" id="previousStep" type="button">上一步</button>
+          <button class="primary-button" id="confirmSecret" type="button">确认授权</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden>
+    <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+    <span id="toastText"></span>
+  </div>
+
+  <script>
+    const servers = [
+      { id: '3090x2', name: '3090x2', address: 'ai@10.20.3.42:22', location: '公司', networks: ['公司-LAN'], clients: 3, secrets: ['HF_TOKEN'], shares: 1, warning: '未设用途' },
+      { id: 'gitlab-urit', name: 'gitlab-urit', address: 'git@10.20.1.10:22', location: '公司', networks: ['公司-LAN'], clients: 1, secrets: [], shares: 0, warning: '未挂凭据' },
+      { id: 'mini6', name: 'mini6', address: 'allan@192.168.100.6:22', location: '家 A', networks: ['家A-LAN', 'NetBird'], clients: 1, secrets: ['OPENAI_KEY'], shares: 0 },
+      { id: 'NUC10', name: 'NUC10', address: 'root@192.168.100.235:22', location: '家 A', networks: ['家A-LAN', 'NetBird'], clients: 1, secrets: ['OPENAI_KEY'], shares: 0, sameMachine: true },
+      { id: 'NUC10-docker', name: 'NUC10-docker', address: 'app@192.168.100.235:2222', location: '家 A', networks: ['家A-LAN', 'NetBird'], clients: 1, secrets: [], shares: 0, sameMachine: true },
+      { id: 'train3060', name: 'train3060', address: 'ubuntu@192.168.100.30:22', location: '家 A', networks: ['家A-LAN', 'NetBird'], clients: 2, secrets: ['HF_TOKEN'], shares: 1 },
+      { id: '4090x2', name: '4090x2', address: 'ai@10.20.3.41:22', location: '公司', networks: ['公司-LAN', 'NetBird'], clients: 3, secrets: ['HF_TOKEN'], shares: 1 },
+      { id: '软路由', name: '软路由', address: 'root@192.168.100.1:22', location: '家 A', networks: ['家A-LAN'], clients: 1, secrets: [], shares: 0 }
+    ];
+
+    const secretCatalog = [
+      { name: 'HF_TOKEN', detail: '环境变量 $HF_TOKEN' },
+      { name: 'OPENAI_KEY', detail: '环境变量 $OPENAI_KEY' },
+      { name: 'nas-mount-pass', detail: '共享存储挂载密码' }
+    ];
+
+    const state = {
+      filter: 'all',
+      query: '',
+      selecting: false,
+      selected: new Set(),
+      chosenSecret: null
+    };
+
+    const page = document.getElementById('page');
+    const serverList = document.getElementById('serverList');
+    const emptyState = document.getElementById('emptyState');
+    const searchInput = document.getElementById('searchInput');
+    const clearSearch = document.getElementById('clearSearch');
+    const multiButton = document.getElementById('multiButton');
+    const multiButtonText = document.getElementById('multiButtonText');
+    const mobileNav = document.getElementById('mobileNav');
+    const selectionBar = document.getElementById('selectionBar');
+    const selectedCount = document.getElementById('selectedCount');
+    const profileAction = document.getElementById('profileAction');
+    const secretAction = document.getElementById('secretAction');
+    const storageAction = document.getElementById('storageAction');
+    const secretDrawer = document.getElementById('secretDrawer');
+    const secretStep = document.getElementById('secretStep');
+    const confirmStep = document.getElementById('confirmStep');
+    const secretOptions = document.getElementById('secretOptions');
+    const nextStep = document.getElementById('nextStep');
+    const summarySecret = document.getElementById('summarySecret');
+    const summaryText = document.getElementById('summaryText');
+    const toast = document.getElementById('toast');
+    const toastText = document.getElementById('toastText');
+    let toastTimer;
+    let lastFocusedElement;
+
+    const icons = {
+      check: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>'
+    };
+
+    function filteredServers() {
+      const query = state.query.trim().toLocaleLowerCase();
+      return servers.filter(server => {
+        const matchesQuery = !query || `${server.name} ${server.address}`.toLocaleLowerCase().includes(query);
+        let matchesFilter = true;
+        if (state.filter === 'attention') matchesFilter = Boolean(server.warning);
+        else if (state.filter === '家 A' || state.filter === '公司') matchesFilter = server.location === state.filter;
+        else if (state.filter === 'NetBird') matchesFilter = server.networks.includes('NetBird');
+        return matchesQuery && matchesFilter;
+      });
+    }
+
+    function serverCard(server) {
+      const selected = state.selected.has(server.id);
+      return `
+        <article class="server-card${server.warning ? ' attention-card' : ''}${selected ? ' selected' : ''}" data-server-id="${server.id}" aria-label="${server.name}${server.warning ? '，需要注意：' + server.warning : ''}">
+          <button class="check-control" type="button" aria-label="${selected ? '取消选择' : '选择'} ${server.name}" aria-pressed="${selected}" tabindex="${state.selecting ? '0' : '-1'}">
+            <span class="check-circle">${icons.check}</span>
+          </button>
+          <div class="card-content">
+            <div class="card-heading">
+              <h2 class="server-name">${server.name}</h2>
+              ${server.warning ? `<span class="warning-tag">${server.warning}</span>` : ''}
+            </div>
+            <p class="address">${server.address}</p>
+            <div class="network-line">
+              <span>${server.location} · ${server.networks.join('、')}</span>
+              ${server.sameMachine ? '<span class="same-machine">同机 2 个登录</span>' : ''}
+            </div>
+            <div class="card-counts" aria-label="授权统计">
+              <span class="count-item" title="能看到它的客户端数"><span class="count-icon" aria-hidden="true">👥</span><strong>${server.clients}</strong><span>客户端</span></span>
+              <span class="count-item" title="已授权的机密项数"><span class="count-icon" aria-hidden="true">🔑</span><strong>${server.secrets.length}</strong><span>机密项</span></span>
+              <span class="count-item" title="已授权的共享存储数"><span class="count-icon" aria-hidden="true">🗄</span><strong>${server.shares}</strong><span>共享存储</span></span>
+            </div>
+          </div>
+        </article>`;
+    }
+
+    function renderServers() {
+      const visible = filteredServers();
+      serverList.innerHTML = visible.map(serverCard).join('');
+      emptyState.hidden = visible.length !== 0;
+      serverList.hidden = visible.length === 0;
+      document.getElementById('resultCount').textContent = `${visible.length} 台服务器`;
+      document.getElementById('listHint').textContent = state.selecting ? '点卡片或勾选框选择' : '需要注意的排在最前';
+      page.classList.toggle('selection-mode', state.selecting);
+      updateSelectionBar();
+    }
+
+    function updateSelectionBar() {
+      const count = state.selected.size;
+      selectedCount.textContent = `已选 ${count} 台`;
+      profileAction.disabled = count === 0;
+      secretAction.disabled = count === 0;
+      storageAction.disabled = count === 0;
+    }
+
+    function setSelecting(active) {
+      state.selecting = active;
+      if (!active) state.selected.clear();
+      page.classList.toggle('selecting', active);
+      multiButton.classList.toggle('active', active);
+      multiButton.setAttribute('aria-pressed', String(active));
+      multiButtonText.textContent = active ? '退出多选' : '多选';
+      selectionBar.hidden = !active;
+      mobileNav.hidden = active;
+      renderServers();
+    }
+
+    function toggleServer(id) {
+      if (!state.selecting) return;
+      if (state.selected.has(id)) state.selected.delete(id);
+      else state.selected.add(id);
+      renderServers();
+    }
+
+    function renderSecretOptions() {
+      secretOptions.innerHTML = secretCatalog.map(secret => {
+        const authorizedCount = servers.filter(server => server.secrets.includes(secret.name)).length;
+        return `
+          <label class="secret-option">
+            <input type="radio" name="secret" value="${secret.name}" ${state.chosenSecret === secret.name ? 'checked' : ''}>
+            <span class="secret-copy">
+              <strong class="secret-name">${secret.name}</strong>
+              <span class="secret-detail">${secret.detail} · 已授权 ${authorizedCount} 台</span>
+            </span>
+          </label>`;
+      }).join('');
+      nextStep.disabled = !state.chosenSecret;
+    }
+
+    function openSecretDrawer() {
+      if (!state.selected.size) return;
+      lastFocusedElement = document.activeElement;
+      state.chosenSecret = null;
+      secretStep.hidden = false;
+      confirmStep.hidden = true;
+      renderSecretOptions();
+      secretDrawer.hidden = false;
+      document.body.classList.add('modal-open');
+      document.getElementById('closeDrawer').focus();
+    }
+
+    function closeSecretDrawer() {
+      secretDrawer.hidden = true;
+      document.body.classList.remove('modal-open');
+      if (lastFocusedElement) lastFocusedElement.focus();
+    }
+
+    function showConfirmation() {
+      const chosen = state.chosenSecret;
+      const chosenServers = servers.filter(server => state.selected.has(server.id));
+      const added = chosenServers.filter(server => !server.secrets.includes(chosen));
+      const existing = chosenServers.filter(server => server.secrets.includes(chosen));
+      const addedNames = added.map(server => server.name).join('、');
+      const existingNames = existing.map(server => server.name).join('、');
+      summarySecret.textContent = chosen;
+      summaryText.textContent = `${chosen}：新增 ${added.length} 台${added.length ? `（${addedNames}）` : ''}，已有 ${existing.length} 台不变${existing.length ? `（${existingNames}）` : ''}`;
+      secretStep.hidden = true;
+      confirmStep.hidden = false;
+      document.getElementById('previousStep').focus();
+    }
+
+    function confirmAuthorization() {
+      const chosen = state.chosenSecret;
+      let addedCount = 0;
+      servers.forEach(server => {
+        if (state.selected.has(server.id) && !server.secrets.includes(chosen)) {
+          server.secrets.push(chosen);
+          addedCount += 1;
+        }
+      });
+      closeSecretDrawer();
+      setSelecting(false);
+      showToast(addedCount ? `已为 ${addedCount} 台服务器授权 ${chosen}` : `${chosen} 的授权已是最新状态`);
+    }
+
+    function showToast(message) {
+      window.clearTimeout(toastTimer);
+      toastText.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+    }
+
+    document.querySelectorAll('.chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        state.filter = chip.dataset.filter;
+        document.querySelectorAll('.chip').forEach(item => item.setAttribute('aria-pressed', String(item === chip)));
+        renderServers();
+      });
+    });
+
+    searchInput.addEventListener('input', () => {
+      state.query = searchInput.value;
+      clearSearch.hidden = !state.query;
+      renderServers();
+    });
+
+    clearSearch.addEventListener('click', () => {
+      searchInput.value = '';
+      state.query = '';
+      clearSearch.hidden = true;
+      searchInput.focus();
+      renderServers();
+    });
+
+    document.getElementById('resetFilters').addEventListener('click', () => {
+      state.filter = 'all';
+      state.query = '';
+      searchInput.value = '';
+      clearSearch.hidden = true;
+      document.querySelectorAll('.chip').forEach(chip => chip.setAttribute('aria-pressed', String(chip.dataset.filter === 'all')));
+      renderServers();
+    });
+
+    multiButton.addEventListener('click', () => setSelecting(!state.selecting));
+    document.getElementById('cancelSelection').addEventListener('click', () => setSelecting(false));
+
+    serverList.addEventListener('click', event => {
+      const card = event.target.closest('.server-card');
+      if (card && state.selecting) toggleServer(card.dataset.serverId);
+    });
+
+    secretAction.addEventListener('click', openSecretDrawer);
+    document.getElementById('closeDrawer').addEventListener('click', closeSecretDrawer);
+    document.getElementById('drawerBackdrop').addEventListener('click', closeSecretDrawer);
+
+    secretOptions.addEventListener('change', event => {
+      if (event.target.name === 'secret') {
+        state.chosenSecret = event.target.value;
+        nextStep.disabled = false;
+      }
+    });
+
+    nextStep.addEventListener('click', showConfirmation);
+    document.getElementById('previousStep').addEventListener('click', () => {
+      confirmStep.hidden = true;
+      secretStep.hidden = false;
+      const checked = secretOptions.querySelector('input:checked');
+      if (checked) checked.focus();
+    });
+    document.getElementById('confirmSecret').addEventListener('click', confirmAuthorization);
+
+    profileAction.addEventListener('click', () => showToast(`已将 ${state.selected.size} 台服务器加入 profile（静态演示）`));
+    storageAction.addEventListener('click', () => showToast(`已为 ${state.selected.size} 台服务器打开共享存储授权（静态演示）`));
+    document.getElementById('addButton').addEventListener('click', () => showToast('添加服务器（静态演示）'));
+    document.getElementById('importButton').addEventListener('click', () => showToast('导入 SSH 配置（静态演示）'));
+
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !secretDrawer.hidden) closeSecretDrawer();
+    });
+
+    document.querySelectorAll('a[href="#"]').forEach(link => {
+      link.addEventListener('click', event => event.preventDefault());
+    });
+
+    renderServers();
+  </script>
+</body>
+</html>

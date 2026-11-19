@@ -1,0 +1,31 @@
+{{define "content"}}
+<section class="server-wizard-site">
+<h1>选择地点</h1>
+<ol class="wizard-steps" aria-label="新增服务器步骤">
+<li><span class="step-number">✓</span>连接与地址</li><li aria-current="step"><span class="step-number">2</span>地点</li><li><span class="step-number">3</span>Profile</li>
+</ol>
+<form method="get" action="/ui/servers/new/profile" class="wizard-form">
+<input type="hidden" name="server" value="{{.ServerWizard.ServerID}}">
+<input type="hidden" name="task" value="{{.ServerWizard.TaskID}}">
+<input type="hidden" name="same_machine" value="{{.ServerWizard.SameMachine}}">
+<input type="hidden" name="return_to" value="{{.ServerWizard.ReturnTo}}">
+<div class="form-field"><label for="location-search">搜索地点</label><input id="location-search" data-site-search autocomplete="off"></div>
+<fieldset class="site-tree" data-site-tree>
+<legend>地点树</legend>
+{{range .ServerWizard.SiteNodes}}<label class="tree-label site-depth-{{.Depth}}" data-site-row data-site-text="{{.Path}}"><input type="radio" name="site_id" value="{{.ID}}"{{if .Selected}} checked{{end}}><span>{{.Path}}</span></label>
+{{else}}<p class="empty-inline">还没有登记地点。</p>{{end}}
+</fieldset>
+<details>
+<summary>当场新建地点</summary>
+<div class="form-field"><label for="new-site-name">新地点名字</label><input id="new-site-name" name="new_site_name"></div>
+<div class="form-field"><label for="new-site-parent">上级地点</label>
+<select id="new-site-parent" name="new_site_parent">
+<option value="">作为根地点</option>
+{{range .ServerWizard.SiteNodes}}<option value="{{.Path}}">{{.Path}}</option>{{end}}
+</select></div>
+<div class="form-field"><label for="new-site-note">备注</label><input id="new-site-note" name="new_site_note"></div>
+</details>
+<footer class="wizard-actions"><button type="submit" name="site_action" value="skip" class="secondary-button">跳过地点</button><button type="submit" name="site_action" value="new" class="secondary-button">新建并选择</button><button type="submit" name="site_action" value="select" class="primary-button">使用选中地点</button></footer>
+</form>
+</section>
+{{end}}

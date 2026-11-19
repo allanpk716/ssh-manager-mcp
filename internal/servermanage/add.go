@@ -41,6 +41,18 @@ type AddResult struct {
 	AnchorCopy    *store.ServerAnchorCopy
 }
 
+// FinishAddRequest 是分步新增后两步的提交：地点可以跳过或当场新建；
+// ProfileIDs 为空表示跳过授权。
+type FinishAddRequest struct {
+	ServerID      string
+	SiteAction    string
+	SiteID        string
+	NewSiteParent string
+	NewSiteName   string
+	NewSiteNote   string
+	ProfileIDs    []string
+}
+
 // OtherDeviceAddRequest 是新增不受管设备的提交：只登记设备、备注与网络成
 // 员，不创建服务器条目或连接测试任务。
 type OtherDeviceAddRequest struct {
@@ -63,6 +75,7 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 		_ = m.writeAudit("server.add", addAuditSummary(req), err, src)
 		return nil, err
 	}
+	req.Server = prepared.server
 	membershipWrites := make([]store.NetworkMembershipWrite, 0, len(prepared.memberships))
 	for _, membership := range prepared.memberships {
 		membershipWrites = append(membershipWrites, store.NetworkMembershipWrite{
@@ -74,6 +87,7 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 		LoginCredential: req.LoginCredential,
 		SudoCredential:  req.SudoCredential,
 		DeviceName:      prepared.deviceName,
+		SiteName:        req.SiteName,
 		ExistingDevice:  req.ExistingDevice,
 		Memberships:     membershipWrites,
 		ProfileIDs:      req.ProfileIDs,
@@ -92,6 +106,76 @@ func (m *Manager) Add(req AddRequest, src Source) (*AddResult, error) {
 		ProfileNames: added.ProfileNames,
 		AnchorCopy:   added.AnchorCopy,
 	}, nil
+}
+
+// FinishAdd 保存分步新增的地点与 profile 授权。前两步若跳过则不改对应数
+// 据；地点创建、机器地点修改与授权差异各走存储层公共函数并保留审计。
+func (m *Manager) FinishAdd(req FinishAddRequest, src Source) error {
+	serverID := strings.TrimSpace(req.ServerID)
+	srv, err := m.st.ResolveServer(serverID)
+	if err != nil || srv == nil {
+		if err == nil {
+			err = fmt.Errorf("server %q not found", serverID)
+		}
+		return err
+	}
+	source := storeWriteSource(src)
+	siteRef := strings.TrimSpace(req.SiteID)
+	switch strings.TrimSpace(req.SiteAction) {
+	case "", "skip":
+		siteRef = ""
+	case "new":
+		name := strings.TrimSpace(req.NewSiteName)
+		if name == "" {
+			return &FieldError{Field: "site", CLI: "site name is required", Page: "新地点名字不能为空。"}
+		}
+		site, addErr := m.st.AddSiteWithParent(name, strings.TrimSpace(req.NewSiteNote), strings.TrimSpace(req.NewSiteParent))
+		if addErr != nil {
+			return addErr
+		}
+		siteRef = site.ID
+	case "select":
+		if siteRef == "" {
+			return &FieldError{Field: "site", CLI: "site is required", Page: "请先选择一个地点。"}
+		}
+	default:
+		return &FieldError{Field: "site", CLI: "invalid site action", Page: "地点选择无效。"}
+	}
+	if siteRef != "" {
+		device, deviceErr := m.st.GetDeviceByID(srv.DeviceID)
+		if deviceErr != nil {
+			return deviceErr
+		}
+		if siteName, siteErr := m.sitePathByID(siteRef); siteErr != nil {
+			return siteErr
+		} else if siteName != "" {
+			siteRef = siteName
+		} else {
+			return &FieldError{Field: "site", CLI: "site not found", Page: "选择的地点不存在，请重新选择。"}
+		}
+		if _, err = m.st.EditDeviceWithSource(device.Name, store.DeviceChanges{Site: &siteRef}, source); err != nil {
+			return err
+		}
+	}
+	expected, err := m.st.ProfilesForServer(serverID)
+	if err != nil {
+		return err
+	}
+	if _, conflict, err := m.st.AdjustServerProfiles(serverID, expected, req.ProfileIDs); err != nil || conflict {
+		if conflict {
+			return &FieldError{Field: "profile", CLI: "profile authorization conflict", Page: "Profile 授权已被其他入口修改，请重新核对。"}
+		}
+		return err
+	}
+	return nil
+}
+
+func (m *Manager) sitePathByID(siteID string) (string, error) {
+	sites, err := m.st.ListSites()
+	if err != nil {
+		return "", err
+	}
+	return models.NewSiteTree(sites).PathString(siteID), nil
 }
 
 // AddOtherDevice 保存一台不受管设备与它的网络成员。先做整份校验；设备与
@@ -119,7 +203,7 @@ func (m *Manager) AddOtherDevice(req OtherDeviceAddRequest, src Source) (*OtherD
 		})
 	}
 	device, err := m.st.AddOtherDeviceWithMemberships(store.AddOtherDeviceRequest{
-		Name: req.DeviceName, Note: req.Note,
+		Name: req.DeviceName, Note: req.Note, SiteName: req.SiteName,
 		Memberships: membershipWrites, Source: storeWriteSource(src),
 	})
 	if err != nil {
@@ -219,7 +303,7 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 			return preparedAdd{}, err
 		}
 		if len(memberships) > 0 {
-			return preparedAdd{}, &FieldError{Field: "device", CLI: "existing device memberships cannot be replaced", Page: "已有设备沿用全部网络成员，不能再登记新的站点与网络成员。"}
+			return preparedAdd{}, &FieldError{Field: "device", CLI: "existing device memberships cannot be replaced", Page: "已有设备沿用全部网络地址，不能再登记新的地点与网络地址。"}
 		}
 	}
 	if req.Server.Host == "" {
@@ -234,7 +318,7 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 	if req.Server.Host == "" && len(deviceMemberships) == 0 && len(memberships) == 0 {
 		return preparedAdd{}, &FieldError{
 			Field: "host", CLI: "host or at least one network membership is required",
-			Page: "兜底主机与网络成员地址至少填写一项。",
+			Page: "至少填写一个网络地址，或填写其他（公网或未登记网络）地址。",
 		}
 	}
 
@@ -279,7 +363,7 @@ func (m *Manager) prepareNetworkMemberships(
 			continue
 		}
 		if membership.Network == "" || membership.Address == "" {
-			return nil, nil, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "网络成员必须同时填写网络与地址。"}
+			return nil, nil, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "每行网络地址必须同时选择网络并填写地址。"}
 		}
 		network, ok := networkByName[membership.Network]
 		if !ok {
@@ -307,13 +391,17 @@ func (m *Manager) prepareNetworkMemberships(
 	}
 	if siteName != "" {
 		physical := ""
+		selectedSite, siteErr := m.st.ResolveSite(siteName)
+		if siteErr != nil {
+			return nil, nil, siteErr
+		}
 		for _, membership := range memberships {
 			if network, ok := networkByName[membership.Network]; ok && network.Type == models.NetworkPhysical {
 				physical = membership.Network
-				if network.SiteName != siteName {
+				if network.SiteID != selectedSite.ID {
 					return nil, nil, &FieldError{
 						Field: "site", CLI: "physical network does not belong to site",
-						Page: "物理局域网不属于所选站点，请重新选择。",
+						Page: "物理局域网不属于所选地点，请重新选择。",
 					}
 				}
 				break
@@ -322,7 +410,7 @@ func (m *Manager) prepareNetworkMemberships(
 		if physical == "" {
 			return nil, nil, &FieldError{
 				Field: "site", CLI: "site requires a physical network membership",
-				Page: "填写站点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填站点。",
+				Page: "填写地点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填地点。",
 			}
 		}
 	}

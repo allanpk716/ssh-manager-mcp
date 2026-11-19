@@ -1,0 +1,23 @@
+{{define "content"}}
+{{if .Authorization}}{{template "authorization-subpage" .}}
+<section class="authorization-confirm-page">
+<p><a href="{{.Authorization.Confirm.ReturnPath}}">返回继续调整</a></p>
+<h1>确认授权</h1>
+<p>{{.Authorization.Confirm.ResourceName}}：新增 {{len .Authorization.Confirm.Added}} 台，移除 {{len .Authorization.Confirm.Removed}} 台。</p>
+<section class="shared-card">
+<h2>服务器变化</h2>
+<p>新增：{{if .Authorization.Confirm.Added}}{{range .Authorization.Confirm.Added}}{{.Name}}、{{end}}{{else}}无{{end}}</p>
+<p>移除：{{if .Authorization.Confirm.Removed}}{{range .Authorization.Confirm.Removed}}{{.Name}}、{{end}}{{else}}无{{end}}</p>
+</section>
+{{template "authorization-client-impact" .}}
+<form method="post" action="/ui/access/profiles/{{.Authorization.Confirm.ProfileID}}/grants" class="confirm-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="return_to" value="{{.Authorization.Confirm.ReturnPath}}">
+{{if .Authorization.Confirm.Mode}}<input type="hidden" name="mode" value="{{.Authorization.Confirm.Mode}}">{{end}}
+{{range .Authorization.Confirm.ExpectedIDs}}<input type="hidden" name="expected" value="{{.}}">{{end}}
+{{range .Authorization.Confirm.DesiredIDs}}<input type="hidden" name="server" value="{{.}}">{{end}}
+{{if or .Authorization.Confirm.Added .Authorization.Confirm.Removed}}<button type="submit">确认保存授权</button>{{end}}
+<a class="button-link" href="{{.Authorization.Confirm.ReturnPath}}">返回继续调整</a>
+</form>
+</section>{{end}}
+{{end}}
