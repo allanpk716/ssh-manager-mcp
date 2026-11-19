@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -487,5 +488,46 @@ func TestBridgeIOCopierPhase1Done(t *testing.T) {
 	b.Close() // Close 关闭 SDK 侧写端 → copier 读到 EOF
 	if !b.WaitCopierPhase1(2 * time.Second) {
 		t.Fatal("phase 1 must complete after the SDK write end closes")
+	}
+}
+
+// TestBridgeIOCloseThenHostClosesInputRepeatedly 钉住持续集成 Windows
+// 竞争检测车道实际报出的交错(#293):BridgeIO.Close 返回后,调用方立即关闭
+// 交给桥的真实输入读端。Close 必须先等齐窥视探测路径的 goroutine,这个
+// 交错在竞争检测下才会干净;重复足够轮次命中探测的轮询窗口。奇数轮带
+// 一笔在途请求帧,覆盖「探测判为可读后进入转发」的路径。
+func TestBridgeIOCloseThenHostClosesInputRepeatedly(t *testing.T) {
+	const rounds = 200
+	for round := 0; round < rounds; round++ {
+		inR, inW, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		outR, outW, err := os.Pipe()
+		if err != nil {
+			inR.Close()
+			inW.Close()
+			t.Fatal(err)
+		}
+		b, err := hotswap.NewBridgeIO(inR, outW, true)
+		if err != nil {
+			inR.Close()
+			inW.Close()
+			outR.Close()
+			outW.Close()
+			t.Fatal(err)
+		}
+		if round%2 == 1 {
+			frame := `{"jsonrpc":"2.0","id":` + strconv.Itoa(round) + `,"method":"ping"}` + "\n"
+			if _, err := inW.WriteString(frame); err != nil {
+				t.Fatal(err)
+			}
+		}
+		b.Close()
+		// 竞争现场的关键交错:Close 返回后立即关闭真实输入读端。
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
 	}
 }
