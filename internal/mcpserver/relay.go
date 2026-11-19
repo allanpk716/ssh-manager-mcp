@@ -725,8 +725,9 @@ type RelayTaskSpec struct {
 }
 
 // runRelay 是 relay 任务的 BgTaskSpec.Run 闭包体 (T3 终态纪律零复制): 挂双连接
-// 槽后交 runTask——stopReq/timeout/failed/done→ok 锁内映射、closed 抑制、终态
-// notify、cancel 释放 WithTimeout、锁外关双连接、auditEnd(relay-bg-end) 全继承。
+// 槽后交 runTask——stopReq/timeout/failed/done→ok 锁内映射、closed 抑制、
+// relay-bg-end 结束审计、终态 notify、cancel 释放 WithTimeout、锁外关双连接
+// 全继承。
 func (tm *TaskManager) runRelay(ctx context.Context, t *bgTask, spec *RelayTaskSpec) {
 	tm.mu.Lock()
 	t.client, t.auxClient = spec.DstCli, spec.SrcCli

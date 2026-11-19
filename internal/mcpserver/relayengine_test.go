@@ -294,9 +294,9 @@ func TestRelayEngineZeroByteStartBeforeEndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := waitTerminal(t, e.tm, out.TaskID, 10*time.Second)
-	if s.status != bgStatusDone {
-		t.Fatalf("status = %q err=%q, want done (zero-byte transfer)", s.status, s.errText)
+	view := waitTerminalViaOutput(t, e.tm, out.TaskID, 10*time.Second)
+	if view.Status != bgStatusDone {
+		t.Fatalf("status = %q err=%q, want done (zero-byte transfer)", view.Status, view.ErrText)
 	}
 	if fi, serr := os.Stat(filepath.FromSlash(to)); serr != nil || fi.Size() != 0 {
 		t.Fatalf("zero-byte real name: fi=%v err=%v", fi, serr)
@@ -321,32 +321,25 @@ func TestRelayEngineZeroByteStartBeforeEndAudit(t *testing.T) {
 	}
 
 	// 审计: start(ok) 锁内先落 (start-before-end, 秒级失败/完成也不倒挂);
-	// end 行 action=relay-bg-end, Command=taskID。
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		rows := relayAuditRows(t, e.st, 30)
-		var startRow, endRow *store.AuditRow
-		for i := range rows {
-			if rows[i].Action == "relay-bg-start" && rows[i].Status == "ok" {
-				startRow = &rows[i]
-			}
-			if rows[i].Action == "relay-bg-end" && rows[i].Status == "ok" {
-				endRow = &rows[i]
-			}
+	// end 行 action=relay-bg-end, Command=taskID。终态经长轮询观察到以后，
+	// 这里单次查询审计，不等待异步落笔。
+	rows := relayAuditRows(t, e.st, 30)
+	var startRow, endRow *store.AuditRow
+	endCount := 0
+	for i := range rows {
+		if rows[i].Action == "relay-bg-start" && rows[i].Status == "ok" {
+			startRow = &rows[i]
 		}
-		if startRow != nil && endRow != nil {
-			if endRow.Command != out.TaskID {
-				t.Fatalf("end Command = %q, want taskID %q", endRow.Command, out.TaskID)
-			}
-			if endRow.TS.Before(startRow.TS) {
-				t.Fatalf("end row (%v) predates start row (%v) — start must be written in the insert lock first", endRow.TS, startRow.TS)
-			}
-			break
+		if rows[i].Action == "relay-bg-end" && rows[i].Status == "ok" && rows[i].Command == out.TaskID {
+			endRow = &rows[i]
+			endCount++
 		}
-		if time.Now().After(deadline) {
-			t.Fatalf("audit rows never settled: %+v", rows)
-		}
-		time.Sleep(5 * time.Millisecond)
+	}
+	if startRow == nil || endRow == nil || endCount != 1 {
+		t.Fatalf("relay end audit rows for task %s = %d, want exactly one; rows=%+v", out.TaskID, endCount, rows)
+	}
+	if endRow.TS.Before(startRow.TS) {
+		t.Fatalf("end row (%v) predates start row (%v) — start must be written in the insert lock first", endRow.TS, startRow.TS)
 	}
 }
 

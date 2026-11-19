@@ -1084,9 +1084,9 @@ func TestRelayForProfileReturnValueAndAudit(t *testing.T) {
 		}
 	}
 
-	s := waitTerminal(t, e.tm, out.TaskID, 5*time.Second)
-	if s.status != bgStatusDone {
-		t.Fatalf("relay engine: status = %q, want done", s.status)
+	view := waitTerminalViaOutput(t, e.tm, out.TaskID, 5*time.Second)
+	if view.Status != bgStatusDone {
+		t.Fatalf("relay engine: status = %q, want done", view.Status)
 	}
 
 	wantStart := fmt.Sprintf("relay local:%s -> %s:%s (1000 bytes, 1 chunks, resumed 0)",
@@ -1096,9 +1096,17 @@ func TestRelayForProfileReturnValueAndAudit(t *testing.T) {
 	if start.Command != wantStart {
 		t.Fatalf("start Command = %q, want %q", start.Command, wantStart)
 	}
-	end := relayAuditFind(t, rows, "relay-bg-end", "ok")
-	if end.Command != out.TaskID {
-		t.Fatalf("end Command = %q, want taskID %q", end.Command, out.TaskID)
+	var end *store.AuditRow
+	endCount := 0
+	for index := range rows {
+		row := &rows[index]
+		if row.Action == "relay-bg-end" && row.Command == out.TaskID {
+			end = row
+			endCount++
+		}
+	}
+	if endCount != 1 || end == nil || end.Status != "ok" {
+		t.Fatalf("relay end rows for task %s = %d, want exactly one ok row; rows=%+v", out.TaskID, endCount, rows)
 	}
 	if end.TS.Before(start.TS) {
 		t.Fatalf("end row (%v) predates start row (%v) — start must be written inside the insert lock first", end.TS, start.TS)
