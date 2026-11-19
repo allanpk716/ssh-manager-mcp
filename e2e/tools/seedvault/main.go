@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/paths"
 	"ssh-manager-mcp/internal/probeobserve"
 	"ssh-manager-mcp/internal/proberesults"
 	"ssh-manager-mcp/internal/roles"
@@ -38,7 +40,28 @@ func main() {
 	}
 }
 
+// checkIsolatedEnvironment 是种子工具的自证防线：本工具以独立进程运行，
+// 测试进程里「必须显式设置配置根」的保护在这里不生效；隔离环境缺失或指
+// 向运行目录之外时立即失败，避免静默读写开发者真实用户目录。
+func checkIsolatedEnvironment(dir string) error {
+	root := strings.TrimSpace(os.Getenv("SSHMGR_CONFIG_ROOT"))
+	if root == "" {
+		return errors.New("SSHMGR_CONFIG_ROOT 未设置：种子工具拒绝在未隔离环境运行（浏览器测试必须把全部状态路径指向测试临时目录）")
+	}
+	resolved, err := paths.UserConfigDir()
+	if err != nil {
+		return fmt.Errorf("解析配置根失败：%w", err)
+	}
+	if rel, err := filepath.Rel(dir, resolved); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("配置根 %s 不在运行目录 %s 之内：种子工具拒绝运行", resolved, dir)
+	}
+	return nil
+}
+
 func seed(dir string) error {
+	if err := checkIsolatedEnvironment(dir); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
