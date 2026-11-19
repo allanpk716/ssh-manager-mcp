@@ -64,10 +64,10 @@ export async function startTestSSHServer(privateKeyPath: string): Promise<testSS
   };
 }
 
-// goCacheEnvironment 保留本机 Go 构建缓存路径。客户端种子进程把 HOME 指
+// goCacheEnvironment 保留本机 Go 构建缓存与工具链选择。种子进程把 HOME 指
 // 到临时目录来隔离配置；不带上这几个变量时，go 会认为工具链缓存为空而重
 // 新下载，客户端用例会慢到超时。
-const goCacheValues = spawnSync("go", ["env", "GOCACHE", "GOMODCACHE", "GOPATH"], {
+const goCacheValues = spawnSync("go", ["env", "GOCACHE", "GOMODCACHE", "GOPATH", "GOTOOLCHAIN"], {
   cwd: repoRoot,
   encoding: "utf8",
 }).stdout.trim().split("\n");
@@ -75,7 +75,26 @@ const goCacheEnvironment = {
   GOCACHE: goCacheValues[0],
   GOMODCACHE: goCacheValues[1],
   GOPATH: goCacheValues[2],
+  GOTOOLCHAIN: goCacheValues[3],
 };
+
+// seedVaultEnvironment 是 seedvault 种子进程的隔离环境：HOME 族与全部状态
+// 路径显式指向测试临时目录（不依赖 SSHMGR_STORE 顺带钉住角色文件的间接
+// 效应），Go 工具链环境保留本机值（HOME 改道后 go 仍复用缓存与工具链）。
+function seedVaultEnvironment(runDir: string): Record<string, string> {
+  return {
+    ...process.env,
+    ...goCacheEnvironment,
+    HOME: runDir,
+    APPDATA: runDir,
+    XDG_CONFIG_HOME: runDir,
+    SSHMGR_CONFIG_ROOT: runDir,
+    SSHMGR_VAULT_ROOT: runDir,
+    SSHMGR_STORE: path.join(runDir, "store.db"),
+    SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+    SSHMGR_CACHE_DIR: path.join(runDir, "cache"),
+  };
+}
 
 // buildBinary 在整轮浏览器测试开始前编译一次 sshmgr，测试进程全部用同一
 // 个二进制，避免每个用例重复编译。
@@ -188,12 +207,7 @@ async function startStandaloneUI(setup?: (runDir: string) => void): Promise<stan
   const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
     cwd: repoRoot,
     encoding: "utf8",
-    env: {
-      ...process.env,
-      SSHMGR_VAULT_ROOT: runDir,
-      SSHMGR_STORE: path.join(runDir, "store.db"),
-      SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
-    },
+    env: seedVaultEnvironment(runDir),
   });
   if (seed.status !== 0) {
     await rm(runDir, { recursive: true, force: true });
@@ -213,12 +227,7 @@ async function startEmptyMachineUI(): Promise<standaloneUI> {
 // 子库给探测目标登记该端口，用例在本地监听它完成真实触发探测。
 export async function startStandaloneUIWithTopology(probePort?: number): Promise<standaloneUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-topology-"));
-  const seedEnv: Record<string, string> = {
-    SSHMGR_E2E_TOPOLOGY: "1",
-    SSHMGR_VAULT_ROOT: runDir,
-    SSHMGR_STORE: path.join(runDir, "store.db"),
-    SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
-  };
+  const seedEnv: Record<string, string> = { SSHMGR_E2E_TOPOLOGY: "1" };
   if (probePort !== undefined) {
     seedEnv.SSHMGR_E2E_PROBE_PORT = String(probePort);
   }
@@ -226,7 +235,7 @@ export async function startStandaloneUIWithTopology(probePort?: number): Promise
     cwd: repoRoot,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...seedVaultEnvironment(runDir),
       ...seedEnv,
     },
   });
@@ -411,13 +420,10 @@ async function startAuthorityUI(password: string, pairingMode = "", clientsSeed 
     cwd: repoRoot,
     encoding: "utf8",
     env: {
-      ...process.env,
+      ...seedVaultEnvironment(runDir),
       SSHMGR_E2E_ROLE: "server",
       SSHMGR_E2E_WEB_PORT: String(webPort),
       SSHMGR_E2E_ADMIN_PASSWORD: password,
-      SSHMGR_VAULT_ROOT: runDir,
-      SSHMGR_STORE: path.join(runDir, "store.db"),
-      SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
       SSHMGR_E2E_CLIENTS: clientsSeed ? "1" : "",
     },
   });
