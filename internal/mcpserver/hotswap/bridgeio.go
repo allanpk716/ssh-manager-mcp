@@ -251,13 +251,16 @@ func (b *BridgeIO) WaitCopierPhase1(d time.Duration) bool {
 	}
 }
 
-// Close 收尾:关闭 SDK 侧管道、唤醒 copier。只在进程将退时调用;真实
-// 句柄不关(随进程回收)。
+// Close 收尾:等输入转发循环与在途的窥视探测退出,再关闭 SDK 侧管道、
+// 唤醒 copier。除「转发循环已阻塞在真实输入读上」这个例外——那次读
+// 无法由桥侧取消,Close 不等待,避免悬挂——返回后桥不再访问真实输入
+// 文件句柄,调用方可以随即关闭它。只在进程将退时调用;真实句柄不由
+// 此侧关闭(随进程回收)。
 func (b *BridgeIO) Close() {
 	b.closeOnce.Do(func() {
 		close(b.copierQuit)
 		if b.feeder != nil {
-			b.feeder.stop()
+			b.feeder.stopAndWait()
 		}
 		if b.sdkInR != nil {
 			b.sdkInR.Close()
@@ -300,18 +303,20 @@ const (
 type feeder struct {
 	in *os.File
 
-	mu           sync.Mutex
-	state        feederState
-	dest         *os.File      // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
-	held         []byte        // hold 期间扣住的字节
-	dead         bool          // 真实标准输入已 EOF/出错
-	wantHold     bool          // Hold 已登记,待消息边界生效
-	wantPark     bool          // Park 已登记,待消息边界生效
-	noPeek       bool          // 窥视卡死后置真:本 feeder 永久退回阻塞读
-	atBoundary   bool          // 已转发流的最后字节是 '\n'(或尚无转发)——帧边界
-	frozen       chan struct{} // hold/park 生效或 feeder 死亡时关闭,一次
-	frozenOnce   sync.Once
-	sdkDelivered *atomic.Int64 // 字节级进账(目的地为 SDK 侧管道时累计;retireTo 切泵侧后置 nil,泵侧字节不参与 SDK 配平)
+	mu            sync.Mutex
+	state         feederState
+	dest          *os.File      // 当前转发目的地(run: SDK 写端;pump: 泵侧写端)
+	held          []byte        // hold 期间扣住的字节
+	dead          bool          // 真实标准输入已 EOF/出错
+	wantHold      bool          // Hold 已登记,待消息边界生效
+	wantPark      bool          // Park 已登记,待消息边界生效
+	noPeek        bool          // 窥视卡死后置真:本 feeder 永久退回阻塞读
+	atBoundary    bool          // 已转发流的最后字节是 '\n'(或尚无转发)——帧边界
+	frozen        chan struct{} // hold/park 生效或 feeder 死亡时关闭,一次
+	frozenOnce    sync.Once
+	sdkDelivered  *atomic.Int64 // 字节级进账(目的地为 SDK 侧管道时累计;retireTo 切泵侧后置 nil,泵侧字节不参与 SDK 配平)
+	readingRealIn bool          // 转发循环正阻塞在真实输入的读调用内(stopAndWait 据此决定不等待)
+	loopDone      chan struct{} // 转发循环退出时关闭,一次(Close 用它等齐窥视探测路径)
 }
 
 // peekProbe 窥视一次,带卡死探测:stuck=true 表示窥视调用在预算内没有
@@ -319,8 +324,10 @@ type feeder struct {
 func (f *feeder) peekProbe() (readable, ok, stuck bool) {
 	f.mu.Lock()
 	noPeek := f.noPeek
+	dead := f.dead
 	f.mu.Unlock()
-	if noPeek {
+	if noPeek || dead {
+		// Close 已请求停止时不再发起探测;调用方随后的检查点会退出循环。
 		return false, false, false
 	}
 	type res struct {
@@ -337,12 +344,20 @@ func (f *feeder) peekProbe() (readable, ok, stuck bool) {
 }
 
 func newFeeder(in, dest *os.File, sdkDelivered *atomic.Int64) *feeder {
-	f := &feeder{in: in, dest: dest, sdkDelivered: sdkDelivered, atBoundary: true, frozen: make(chan struct{})}
+	f := &feeder{
+		in:           in,
+		dest:         dest,
+		sdkDelivered: sdkDelivered,
+		atBoundary:   true,
+		frozen:       make(chan struct{}),
+		loopDone:     make(chan struct{}),
+	}
 	go f.loop()
 	return f
 }
 
 func (f *feeder) loop() {
+	defer close(f.loopDone)
 	buf := make([]byte, 32*1024)
 	for {
 		readable, known, stuck := f.peekProbe()
@@ -362,8 +377,16 @@ func (f *feeder) loop() {
 			time.Sleep(feederIdlePoll)
 			continue
 		}
+		if !f.beginRealRead() {
+			return // Close 已请求停止:不再对真实输入发起新的读
+		}
 		n, rerr := f.in.Read(buf) // 不持锁读:状态切换只动锁内状态
+		f.finishRealRead()
 		f.mu.Lock()
+		if f.dead {
+			f.mu.Unlock()
+			return // Close 已请求停止:那次在途读交回后,不再访问真实输入。
+		}
 		if n > 0 {
 			switch f.state {
 			case feederRun, feederPump:
@@ -532,15 +555,48 @@ func (f *feeder) flushPumpSide() {
 	f.held = nil
 }
 
-// stop 请求 feeder 停止(Close 路径):置 dead 并关目的地。feeder 可能
-// 仍阻塞在真实标准输入的读上——随进程退出回收,不影响收尾。
-func (f *feeder) stop() {
+// stopAndWait 请求输入转发循环停止并等它退出(Close 路径):置 dead 并
+// 关目的地。等待把窥视探测路径一并等齐——循环要等本周期探测返回(或
+// 卡死预算到期放弃)才会到退出点,此后不会再发起探测,也不会再访问真实
+// 输入文件句柄。
+//
+// 例外是循环已阻塞在真实输入的读调用内:那次读只有输入到达、对端关闭
+// 或进程退出才会返回,而真实输入不由此侧关闭,等它必然悬挂。此时不等待。
+// Close 返回后,循环只可能先让这一次已在途的读返回;读一返回就检查停止
+// 标记并退出,不再发起新的读或窥视探测。窥视卡死预算到期后被放弃的调用
+// 同样不等待(无从等待),阻塞中的调用随进程退出回收,维持现状。
+func (f *feeder) stopAndWait() {
+	f.mu.Lock()
+	if !f.dead {
+		f.dieLocked()
+	}
+	reading := f.readingRealIn
+	f.mu.Unlock()
+	if reading {
+		return
+	}
+	<-f.loopDone
+}
+
+// beginRealRead 登记「转发循环即将阻塞在真实输入的读上」,并拒绝在
+// Close 已请求停止后发起新读。登记与检查在同一锁内完成,stopAndWait
+// 因此只会看到两种确定状态之一:循环已在读内(不等待,避免悬挂),或
+// 循环会在下一个检查点退出(等 loopDone)。
+func (f *feeder) beginRealRead() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.dead {
-		return
+		return false
 	}
-	f.dieLocked()
+	f.readingRealIn = true
+	return true
+}
+
+// finishRealRead 清除真实输入读的占用登记(读返回后调用)。
+func (f *feeder) finishRealRead() {
+	f.mu.Lock()
+	f.readingRealIn = false
+	f.mu.Unlock()
 }
 
 // writeCountedLocked 写进当前目的地;目的地仍是 SDK 侧管道时累计字节级
