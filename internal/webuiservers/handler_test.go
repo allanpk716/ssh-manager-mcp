@@ -260,7 +260,7 @@ func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 		"host": {"192.168.1.10"}, "shell": {"auto"},
 		"credential_action": {"key"}, "key_source": {"paste"}, "key": {string(keyPEM)},
 		"sudo_password": {"sudo-secret"}, "description": {"网站服务器"},
-		"location": {"机柜 A"}, "hardware": {"2 核 4GB"}, "services": {"nginx"},
+		"hardware": {"2 核 4GB"}, "services": {"nginx"},
 		"role": {"网站"}, "special_handling": {"维护窗口每周三"}, "tags": {"prod,web"},
 		"expose_host": {"1"}, "device_choice": {"new"}, "device_name": {"工作站"},
 		"physical_network": {"家A局域网"}, "physical_address": {"192.168.1.10"},
@@ -606,7 +606,7 @@ func TestHandlerCompleteValidationErrorUsesPageText(t *testing.T) {
 	resp := h.do(http.MethodPost, "/ui/servers/complete", url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
 		"queue":      {id}, "position": {"0"}, "action": {"save"},
-		"description": {"页面说明"}, "location": {}, "hardware": {},
+		"description": {"页面说明"}, "hardware": {},
 		"services": {}, "role": {"网站"}, "special_handling": {},
 		"sudo_password": {}, "password": {"new-login"}, "key_passphrase": {},
 	})
