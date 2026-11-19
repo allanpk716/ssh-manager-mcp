@@ -3,11 +3,15 @@ package models
 import "time"
 
 // Device 是网络拓扑里的节点，代表一台机器。客户端实例按设备码的一对一
-// 关联只保存标识符与名字；设备码本体仍是客户端登记里的凭据行。
+// 关联只保存标识符与名字；设备码本体仍是客户端登记里的凭据行。SiteID
+// 是机器直接登记的地点，可空；机器地点与物理局域网覆盖的地点不一致时
+// 只提示、不拦截写入。
 type Device struct {
 	ID            string
 	Name          string
 	Note          string
+	SiteID        string
+	SiteName      string
 	ClientTokenID string
 	ClientName    string
 	Memberships   []*NetworkMembership
@@ -35,6 +39,7 @@ type NetworkMembership struct {
 	NetworkID         string
 	NetworkName       string
 	NetworkType       NetworkType
+	SiteID            string
 	SiteName          string
 	Address           string
 	RegistrationOrder int64

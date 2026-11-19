@@ -12,8 +12,8 @@ import (
 
 // 拓扑操作的稳定错误；报错文本直接面向 owner，自带完整原因。
 var (
-	ErrSiteNotFound     = errors.New("站点不存在")
-	ErrSiteNameExists   = errors.New("站点名字已存在")
+	ErrSiteNotFound     = errors.New("地点不存在")
+	ErrSiteNameExists   = errors.New("地点名字已存在")
 	ErrNetworkNotFound  = errors.New("网络不存在")
 	ErrNetworkNameTaken = errors.New("网络名字已存在")
 )
@@ -26,11 +26,12 @@ type TopologyValidationError struct {
 
 func (e *TopologyValidationError) Error() string { return e.Message }
 
-// SiteChanges 表示站点的一次部分更新。指针为空代表这个字段保持不变；
-// 备注传空字符串代表清空备注。
+// SiteChanges 表示地点的一次部分更新。指针为空代表这个字段保持不变；
+// 备注与上级传空字符串代表清空；上级用完整路径或全库唯一的裸名字指称。
 type SiteChanges struct {
-	Name *string
-	Note *string
+	Name   *string
+	Note   *string
+	Parent *string
 }
 
 // NetworkChanges 表示网络的一次部分更新。网络类型没有指针字段：类型登
@@ -59,13 +60,20 @@ func validateTopologyName(objectType, name string) error {
 	return nil
 }
 
-// AddSite 登记一个站点。站点行与审计行在同一个事务里提交。
+// AddSite 登记一个根地点。地点行与审计行在同一个事务里提交。
 func (s *Store) AddSite(name, note string) (*models.Site, error) {
+	return s.AddSiteWithParent(name, note, "")
+}
+
+// AddSiteWithParent 登记一个地点并指定上级；parent 为空表示根地点。同
+// 一上级下名字唯一，不同上级下允许同名。
+func (s *Store) AddSiteWithParent(name, note, parent string) (*models.Site, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
 	name = strings.TrimSpace(name)
-	if err := validateTopologyName("站点", name); err != nil {
+	parent = strings.TrimSpace(parent)
+	if err := validateTopologyName("地点", name); err != nil {
 		return nil, err
 	}
 	tx, err := s.db.Begin()
@@ -73,25 +81,43 @@ func (s *Store) AddSite(name, note string) (*models.Site, error) {
 		return nil, err
 	}
 	defer tx.Rollback()
-	if err := ensureSiteNameAvailableTx(tx, name, ""); err != nil {
+	parentID := ""
+	if parent != "" {
+		parentSite, resolveErr := resolveSiteRef(tx, parent)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		parentID = parentSite.ID
+	}
+	if err := ensureSiteNameAvailableTx(tx, name, parentID, ""); err != nil {
 		return nil, err
 	}
 	site := &models.Site{
 		ID:        newID(),
+		ParentID:  parentID,
 		Name:      name,
 		Note:      strings.TrimSpace(note),
 		CreatedAt: time.Unix(now(), 0),
 		UpdatedAt: time.Unix(now(), 0),
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO sites(id,name,name_lower,note,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
-		site.ID, site.Name, strings.ToLower(site.Name), site.Note, site.CreatedAt.Unix(), site.UpdatedAt.Unix(),
+		`INSERT INTO sites(id,name,name_lower,parent_id,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+		site.ID, site.Name, strings.ToLower(site.Name), nullableString(site.ParentID), site.Note,
+		site.CreatedAt.Unix(), site.UpdatedAt.Unix(),
 	); err != nil {
 		return nil, err
 	}
+	parentPath := ""
+	if site.ParentID != "" {
+		var pathErr error
+		if parentPath, pathErr = sitePathTx(tx, site.ParentID); pathErr != nil {
+			return nil, pathErr
+		}
+	}
 	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.add", map[string]any{
-		"name": site.Name,
-		"note": site.Note,
+		"name":   site.Name,
+		"parent": parentPath,
+		"note":   site.Note,
 	}); err != nil {
 		return nil, err
 	}
@@ -101,28 +127,46 @@ func (s *Store) AddSite(name, note string) (*models.Site, error) {
 	return site, nil
 }
 
-// EditSite 按站点名字做部分更新。返回更新后的站点；数据行与审计行在
-// 同一个事务里提交。
-func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error) {
+// EditSite 按地点引用做部分更新。返回更新后的地点；数据行与审计行在同
+// 一个事务里提交。
+func (s *Store) EditSite(ref string, changes SiteChanges) (*models.Site, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
-	name = strings.TrimSpace(name)
+	ref = strings.TrimSpace(ref)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	site, err := siteByNameTx(tx, name)
+	site, err := resolveSiteRef(tx, ref)
 	if err != nil {
 		return nil, err
 	}
+	parentChanged := false
+	if changes.Parent != nil {
+		newParent := strings.TrimSpace(*changes.Parent)
+		if newParent == "" {
+			site.ParentID = ""
+			parentChanged = true
+		} else {
+			parentSite, resolveErr := resolveSiteRef(tx, newParent)
+			if resolveErr != nil {
+				return nil, resolveErr
+			}
+			if err := ensureSiteParentAllowedTx(tx, site.ID, parentSite.ID); err != nil {
+				return nil, err
+			}
+			site.ParentID = parentSite.ID
+			parentChanged = true
+		}
+	}
 	if changes.Name != nil {
 		newName := strings.TrimSpace(*changes.Name)
-		if err := validateTopologyName("站点", newName); err != nil {
+		if err := validateTopologyName("地点", newName); err != nil {
 			return nil, err
 		}
-		if err := ensureSiteNameAvailableTx(tx, newName, site.ID); err != nil {
+		if err := ensureSiteNameAvailableTx(tx, newName, site.ParentID, site.ID); err != nil {
 			return nil, err
 		}
 		site.Name = newName
@@ -132,8 +176,9 @@ func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error)
 	}
 	site.UpdatedAt = time.Unix(now(), 0)
 	if _, err := tx.Exec(
-		`UPDATE sites SET name=?,name_lower=?,note=?,updated_at=? WHERE id=?`,
-		site.Name, strings.ToLower(site.Name), site.Note, site.UpdatedAt.Unix(), site.ID,
+		`UPDATE sites SET name=?,name_lower=?,parent_id=?,note=?,updated_at=? WHERE id=?`,
+		site.Name, strings.ToLower(site.Name), nullableString(site.ParentID), site.Note,
+		site.UpdatedAt.Unix(), site.ID,
 	); err != nil {
 		return nil, err
 	}
@@ -144,13 +189,20 @@ func (s *Store) EditSite(name string, changes SiteChanges) (*models.Site, error)
 	if changes.Note != nil {
 		editChanges["note"] = site.Note
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.edit", topologyEditSummary(name, editChanges)); err != nil {
+	if parentChanged {
+		parentPath, pathErr := sitePathTx(tx, site.ParentID)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		editChanges["parent"] = parentPath
+	}
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.edit", topologyEditSummary(site.Name, editChanges)); err != nil {
 		return nil, err
 	}
 	return site, tx.Commit()
 }
 
-// AddNetwork 登记一个网络。类型与站点归属在同一个事务里校验，网络行与
+// AddNetwork 登记一个网络。类型与覆盖地点在同一个事务里校验，网络行与
 // 审计行一起提交。
 func (s *Store) AddNetwork(input models.Network) (*models.Network, error) {
 	return s.AddNetworkWithSource(input, WriteSource{})
@@ -178,9 +230,13 @@ func (s *Store) AddNetworkWithSource(input models.Network, source WriteSource) (
 		return nil, err
 	}
 	defer tx.Rollback()
-	siteID, siteName, err := networkSiteForTypeTx(tx, input.Type, input.SiteName)
+	site, err := networkSiteForTypeTx(tx, input.Type, input.SiteName)
 	if err != nil {
 		return nil, err
+	}
+	siteID, siteName := "", ""
+	if site != nil {
+		siteID, siteName = site.ID, site.Name
 	}
 	if err := ensureNetworkNameAvailableTx(tx, input.Name, ""); err != nil {
 		return nil, err
@@ -208,7 +264,11 @@ func (s *Store) AddNetworkWithSource(input models.Network, source WriteSource) (
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "network.add", networkAuditSummary(network), source); err != nil {
+	auditSummary, err := networkAuditSummaryTx(tx, network)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "network.add", auditSummary, source); err != nil {
 		return nil, err
 	}
 	return network, tx.Commit()
@@ -249,12 +309,17 @@ func (s *Store) EditNetworkWithSource(name string, changes NetworkChanges, sourc
 		editChanges["name"] = network.Name
 	}
 	if changes.Site != nil {
-		siteID, siteName, err := networkSiteForTypeTx(tx, network.Type, strings.TrimSpace(*changes.Site))
-		if err != nil {
-			return nil, err
+		site, siteErr := networkSiteForTypeTx(tx, network.Type, strings.TrimSpace(*changes.Site))
+		if siteErr != nil {
+			return nil, siteErr
 		}
+		siteID, siteName := site.ID, site.Name
 		network.SiteID, network.SiteName = siteID, siteName
-		editChanges["site"] = siteName
+		sitePath, pathErr := sitePathTx(tx, network.SiteID)
+		if pathErr != nil {
+			return nil, pathErr
+		}
+		editChanges["site"] = sitePath
 	}
 	if changes.Note != nil {
 		network.Note = strings.TrimSpace(*changes.Note)
@@ -360,8 +425,9 @@ func serversWithoutOtherMembershipsTx(tx *sql.Tx, networkID string) ([]string, e
 	return names, rows.Err()
 }
 
-// ListNetworks 按筛选条件返回网络。结果先按站点名字、再按网络名字排序，
-// 让站点列表与网络列表都保持稳定输出。
+// ListNetworks 按筛选条件返回网络。结果先按地点名字、再按网络名字排序，
+// 让地点列表与网络列表都保持稳定输出。地点筛选按「覆盖的地点及其下
+// 级」匹配，与地点树的浏览习惯一致。
 func (s *Store) ListNetworks(filter NetworkFilter) ([]*models.Network, error) {
 	if filter.Type != "" {
 		if _, err := models.ParseNetworkType(string(filter.Type)); err != nil {
@@ -374,9 +440,21 @@ func (s *Store) ListNetworks(filter NetworkFilter) ([]*models.Network, error) {
 		FROM networks net LEFT JOIN sites site ON site.id=net.site_id`
 	var conditions []string
 	var arguments []any
+	var coveringSiteIDs map[string]bool
 	if filter.Site != "" {
-		conditions = append(conditions, "lower(site.name)=lower(?)")
-		arguments = append(arguments, strings.TrimSpace(filter.Site))
+		site, err := resolveSiteRef(s.db, filter.Site)
+		if err != nil {
+			return nil, err
+		}
+		sites, err := loadSitesTx(s.db)
+		if err != nil {
+			return nil, err
+		}
+		coveringSiteIDs = make(map[string]bool)
+		for _, id := range models.NewSiteTree(sites).SubtreeIDs(site.ID) {
+			coveringSiteIDs[id] = true
+		}
+		conditions = append(conditions, "net.site_id IS NOT NULL")
 	}
 	if filter.Type != "" {
 		conditions = append(conditions, "net.type=?")
@@ -397,31 +475,59 @@ func (s *Store) ListNetworks(filter NetworkFilter) ([]*models.Network, error) {
 		if err != nil {
 			return nil, err
 		}
+		if coveringSiteIDs != nil && !coveringSiteIDs[network.SiteID] {
+			continue
+		}
 		out = append(out, network)
 	}
 	return out, rows.Err()
 }
 
-// DeleteSite 删除没有物理局域网引用的站点。仍有网络时列出网络名字并拒绝。
-func (s *Store) DeleteSite(name string) error {
+// DeleteSite 删除一个地点。仍有下级地点、机器或物理局域网指向它时列出具
+// 体对象并拒绝。
+func (s *Store) DeleteSite(ref string) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
+	ref = strings.TrimSpace(ref)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	site, err := siteByNameTx(tx, name)
+	site, err := resolveSiteRef(tx, ref)
 	if err != nil {
 		return err
+	}
+	var blockers []string
+	childNames, err := namesReferencingSiteTx(tx,
+		`SELECT name FROM sites WHERE parent_id=? ORDER BY name,id`, site.ID)
+	if err != nil {
+		return err
+	}
+	if len(childNames) > 0 {
+		blockers = append(blockers, fmt.Sprintf(
+			"还有下级地点：%s；请先删除或改上级", strings.Join(childNames, "、")))
+	}
+	deviceNames, err := namesReferencingSiteTx(tx,
+		`SELECT name FROM devices WHERE site_id=? ORDER BY name,id`, site.ID)
+	if err != nil {
+		return err
+	}
+	if len(deviceNames) > 0 {
+		blockers = append(blockers, fmt.Sprintf(
+			"还有机器登记在这个地点：%s；请先改机器地点", strings.Join(deviceNames, "、")))
 	}
 	networkNames, err := networkNamesForSiteTx(tx, site.ID)
 	if err != nil {
 		return err
 	}
 	if len(networkNames) > 0 {
-		return fmt.Errorf("站点 %s 下还有物理局域网：%s；请先删除或改归属这些网络", site.Name, strings.Join(networkNames, "、"))
+		blockers = append(blockers, fmt.Sprintf(
+			"还有物理局域网覆盖这个地点：%s；请先删除或改覆盖地点", strings.Join(networkNames, "、")))
+	}
+	if len(blockers) > 0 {
+		return fmt.Errorf("地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；"))
 	}
 	if _, err := tx.Exec(
 		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
@@ -432,38 +538,30 @@ func (s *Store) DeleteSite(name string) error {
 	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, site.ID); err != nil {
 		return err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.rm", map[string]any{"name": site.Name}); err != nil {
+	sitePath, err := sitePathTx(tx, site.ID)
+	if err != nil {
+		return err
+	}
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.rm", map[string]any{"name": sitePath}); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-// ListSites 返回全部站点，按名字排序。
+// ListSites 返回全部地点（带上级标识符），按名字排序。
 func (s *Store) ListSites() ([]*models.Site, error) {
-	rows, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY name,id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := make([]*models.Site, 0)
-	for rows.Next() {
-		var site models.Site
-		var created, updated int64
-		if err := rows.Scan(&site.ID, &site.Name, &site.Note, &created, &updated); err != nil {
-			return nil, err
-		}
-		site.CreatedAt, site.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
-		out = append(out, &site)
-	}
-	return out, rows.Err()
+	return loadSitesTx(s.db)
 }
 
-// ensureSiteNameAvailableTx 检查站点名字在小写比较下的唯一性。excludeID
-// 为空时检查全表，编辑时传当前站点标识符排除自己。
-func ensureSiteNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
+// ensureSiteNameAvailableTx 检查地点名字在同一上级下（忽略大小写）唯一。
+// excludeID 为空时检查新增，编辑时传当前地点标识符排除自己。
+func ensureSiteNameAvailableTx(tx *sql.Tx, name, parentID, excludeID string) error {
 	var count int
 	name = strings.TrimSpace(name)
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM sites WHERE name_lower=? AND id<>?`, strings.ToLower(name), excludeID).Scan(&count); err != nil {
+	if err := tx.QueryRow(
+		`SELECT COUNT(*) FROM sites WHERE COALESCE(parent_id,'')=? AND name_lower=? AND id<>?`,
+		parentID, strings.ToLower(name), excludeID,
+	).Scan(&count); err != nil {
 		return err
 	}
 	if count > 0 {
@@ -472,43 +570,26 @@ func ensureSiteNameAvailableTx(tx *sql.Tx, name, excludeID string) error {
 	return nil
 }
 
-// siteByNameTx 按名字取站点；不存在时返回 ErrSiteNotFound。
-func siteByNameTx(tx *sql.Tx, name string) (*models.Site, error) {
-	var site models.Site
-	var created, updated int64
-	name = strings.TrimSpace(name)
-	err := tx.QueryRow(`SELECT id,name,note,created_at,updated_at FROM sites WHERE name_lower=?`, strings.ToLower(name)).
-		Scan(&site.ID, &site.Name, &site.Note, &created, &updated)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("%w：%s", ErrSiteNotFound, name)
-	}
-	if err != nil {
-		return nil, err
-	}
-	site.CreatedAt, site.UpdatedAt = time.Unix(created, 0), time.Unix(updated, 0)
-	return &site, nil
-}
-
-// networkSiteForTypeTx 校验网络类型与站点归属的组合，并返回站点标识符与
-// 名字。物理局域网必须有站点；虚拟局域网必须没有站点。
-func networkSiteForTypeTx(tx *sql.Tx, networkType models.NetworkType, siteName string) (string, string, error) {
+// networkSiteForTypeTx 校验网络类型与覆盖地点的组合并返回地点。物理局
+// 域网必须登记覆盖一个地点（可以是任意一级）；虚拟局域网不覆盖地点。
+func networkSiteForTypeTx(tx *sql.Tx, networkType models.NetworkType, siteRef string) (*models.Site, error) {
 	switch networkType {
 	case models.NetworkPhysical:
-		if strings.TrimSpace(siteName) == "" {
-			return "", "", &TopologyValidationError{Message: "物理局域网必须归属一个站点；请用 --site 指定"}
+		if strings.TrimSpace(siteRef) == "" {
+			return nil, &TopologyValidationError{Message: "物理局域网必须登记覆盖的地点；请用 --site 指定"}
 		}
-		site, err := siteByNameTx(tx, siteName)
+		site, err := resolveSiteRef(tx, siteRef)
 		if err != nil {
-			return "", "", err
+			return nil, err
 		}
-		return site.ID, site.Name, nil
+		return site, nil
 	case models.NetworkVirtual:
-		if strings.TrimSpace(siteName) != "" {
-			return "", "", &TopologyValidationError{Message: "虚拟局域网不属于站点；请去掉 --site"}
+		if strings.TrimSpace(siteRef) != "" {
+			return nil, &TopologyValidationError{Message: "虚拟局域网不覆盖地点；请去掉 --site"}
 		}
-		return "", "", nil
+		return nil, nil
 	default:
-		return "", "", fmt.Errorf("未知网络类型 %q；只接受 physical（物理局域网）或 virtual（虚拟局域网）", string(networkType))
+		return nil, fmt.Errorf("未知网络类型 %q；只接受 physical（物理局域网）或 virtual（虚拟局域网）", string(networkType))
 	}
 }
 
@@ -596,17 +677,22 @@ func topologyEditSummary(objectName string, changes map[string]any) map[string]a
 	return map[string]any{"name": objectName, "changes": changes}
 }
 
-// networkAuditSummary 只放网络字段的白名单值，不写内部标识符与时间。
-func networkAuditSummary(network *models.Network) map[string]any {
+// networkAuditSummaryTx 只放网络字段的白名单值，不写内部标识符与时间。
+// 覆盖地点写完整路径，多级树下同名叶级地点也能从审计里区分。
+func networkAuditSummaryTx(tx *sql.Tx, network *models.Network) (map[string]any, error) {
+	sitePath, err := sitePathTx(tx, network.SiteID)
+	if err != nil {
+		return nil, err
+	}
 	return map[string]any{
 		"name":           network.Name,
 		"type":           string(network.Type),
-		"site":           network.SiteName,
+		"site":           sitePath,
 		"note":           network.Note,
 		"cidr":           network.NetworkRange,
 		"bandwidth-mbps": network.BandwidthMbps,
 		"metered":        network.Metered,
-	}
+	}, nil
 }
 
 // boolInt 把布尔值转换成 SQLite 的整数存储形态。

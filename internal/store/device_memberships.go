@@ -438,7 +438,7 @@ func (s *Store) RemovePhysicalNetworkMembershipsWithSource(
 	}
 	rows, err := tx.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -485,7 +485,7 @@ func (s *Store) ListNetworkMemberships(deviceName string) ([]*models.NetworkMemb
 	}
 	rows, err := s.db.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -516,7 +516,7 @@ func (s *Store) ListNetworkMembershipsByRegistration(deviceName string) ([]*mode
 	}
 	rows, err := s.db.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -552,7 +552,7 @@ func (s *Store) ListNetworkMembershipsForNetwork(networkName string) ([]*models.
 	}
 	rows, err := tx.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -614,7 +614,7 @@ func physicalVirtualAddressConflictWarningTx(
 func networkMembershipsForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.NetworkMembership, error) {
 	rows, err := tx.Query(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -648,7 +648,7 @@ func networkMembershipTx(tx *sql.Tx, deviceName, networkName string) (*models.Ne
 	}
 	row := tx.QueryRow(`
 		SELECT member.device_id,device.name,member.network_id,network.name,network.type,
-		       COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
+		       COALESCE(network.site_id,''),COALESCE(site.name,''),member.address,member.registration_order,member.created_at,member.updated_at
 		FROM network_memberships member
 		JOIN devices device ON device.id=member.device_id
 		JOIN networks network ON network.id=member.network_id
@@ -690,7 +690,7 @@ func scanNetworkMembership(sc scanner) (*models.NetworkMembership, error) {
 		updated     int64
 	)
 	if err := sc.Scan(&membership.DeviceID, &membership.DeviceName, &membership.NetworkID,
-		&membership.NetworkName, &networkType, &membership.SiteName, &membership.Address,
+		&membership.NetworkName, &networkType, &membership.SiteID, &membership.SiteName, &membership.Address,
 		&order, &created, &updated); err != nil {
 		return nil, err
 	}

@@ -147,9 +147,10 @@ type SnapshotSoftwareDeclarationPort struct {
 	UpdatedAt     int64  `json:"updated_at"`
 }
 
-// SnapshotSite 是全量快照里的站点段。
+// SnapshotSite 是全量快照里的地点段。ParentID 为空表示根地点。
 type SnapshotSite struct {
 	ID        string `json:"id"`
+	ParentID  string `json:"parent_id,omitempty"`
 	Name      string `json:"name"`
 	Note      string `json:"note"`
 	CreatedAt int64  `json:"created_at"`
@@ -177,6 +178,7 @@ type SnapshotDevice struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Note          string `json:"note"`
+	SiteID        string `json:"site_id,omitempty"`
 	ClientTokenID string `json:"client_token_id"`
 	ClientName    string `json:"client_name"`
 	CreatedAt     int64  `json:"created_at"`
@@ -1055,13 +1057,13 @@ type snapshotTopologySection struct {
 func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID string) (snapshotTopologySection, error) {
 	cropToProfile := profileID != ""
 	var sites []SnapshotSite
-	siteRows, err := s.db.Query(`SELECT id,name,note,created_at,updated_at FROM sites ORDER BY id`)
+	siteRows, err := s.db.Query(`SELECT id,COALESCE(parent_id,''),name,note,created_at,updated_at FROM sites ORDER BY id`)
 	if err != nil {
 		return snapshotTopologySection{}, err
 	}
 	for siteRows.Next() {
 		var site SnapshotSite
-		if err := siteRows.Scan(&site.ID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
+		if err := siteRows.Scan(&site.ID, &site.ParentID, &site.Name, &site.Note, &site.CreatedAt, &site.UpdatedAt); err != nil {
 			siteRows.Close()
 			return snapshotTopologySection{}, err
 		}
@@ -1095,8 +1097,8 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 	}
 
 	deviceQuery := `
-		SELECT id,name,note,COALESCE(client_token_id,''),client_name,created_at,updated_at
-		FROM devices
+		SELECT device.id,device.name,device.note,COALESCE(device.site_id,''),COALESCE(device.client_token_id,''),device.client_name,device.created_at,device.updated_at
+		FROM devices device
 		`
 	queryArguments := make([]any, 0, 4)
 	if cropToProfile {
@@ -1106,9 +1108,9 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 			          JOIN profile_servers grant_row ON grant_row.server_id=server.id
 			          WHERE grant_row.profile_id=?)
 			   OR (
-			          NOT EXISTS(SELECT 1 FROM servers server WHERE server.device_id=devices.id)
-			          AND COALESCE(devices.client_token_id,'')='')
-			   OR (?<>'' AND COALESCE(devices.client_token_id,'')=?)
+			          NOT EXISTS(SELECT 1 FROM servers server WHERE server.device_id=device.id)
+			          AND COALESCE(device.client_token_id,'')='')
+			   OR (?<>'' AND COALESCE(device.client_token_id,'')=?)
 			`
 		queryArguments = append(queryArguments, profileID, initiatingClientTokenID, initiatingClientTokenID)
 	}
@@ -1121,7 +1123,7 @@ func (s *Store) readSnapshotTopologySection(profileID, initiatingClientTokenID s
 	delivered := make(map[string]bool)
 	for deviceRows.Next() {
 		var device SnapshotDevice
-		if err := deviceRows.Scan(&device.ID, &device.Name, &device.Note, &device.ClientTokenID,
+		if err := deviceRows.Scan(&device.ID, &device.Name, &device.Note, &device.SiteID, &device.ClientTokenID,
 			&device.ClientName, &device.CreatedAt, &device.UpdatedAt); err != nil {
 			deviceRows.Close()
 			return snapshotTopologySection{}, err
@@ -1286,8 +1288,8 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	// 旧快照没有这两段时循环体不执行，导入后仍是零行。
 	for _, site := range snap.Sites {
 		if _, err := tx.Exec(
-			`INSERT INTO sites(id,name,name_lower,note,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
-			site.ID, site.Name, strings.ToLower(site.Name), site.Note, site.CreatedAt, site.UpdatedAt,
+			`INSERT INTO sites(id,name,name_lower,parent_id,note,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+			site.ID, site.Name, strings.ToLower(site.Name), nullIfEmpty(site.ParentID), site.Note, site.CreatedAt, site.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("insert site %s: %w", site.ID, err)
 		}
@@ -1305,9 +1307,9 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 	}
 	for _, device := range snap.Devices {
 		if _, err := tx.Exec(`
-			INSERT INTO devices(id,name,name_lower,note,client_token_id,client_name,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?)`,
-			device.ID, device.Name, strings.ToLower(device.Name), device.Note,
+			INSERT INTO devices(id,name,name_lower,note,site_id,client_token_id,client_name,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?)`,
+			device.ID, device.Name, strings.ToLower(device.Name), device.Note, nullIfEmpty(device.SiteID),
 			nullIfEmpty(device.ClientTokenID), device.ClientName, device.CreatedAt, device.UpdatedAt,
 		); err != nil {
 			return fmt.Errorf("insert device %s: %w", device.ID, err)

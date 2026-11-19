@@ -196,6 +196,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// 票 #295：地点改为多级树、机器直接登记地点。它排在设备生成迁移
+	// 之后，因为旧数据里机器的地点要从它物理局域网的归属回填。
+	if err := migrateSiteTreeAndDeviceSites(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
 	// P6). On an existing store.db the ACL was set at creation time by whoever
 	// first created it (interactive user or service account); re-running it
@@ -886,7 +892,10 @@ CREATE TABLE IF NOT EXISTS credentials (
 CREATE TABLE IF NOT EXISTS sites (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  name_lower TEXT NOT NULL UNIQUE,
+  name_lower TEXT NOT NULL,
+  -- parent_id 不声明外部键：全量快照按标识符顺序恢复地点，下级可能先
+  -- 于上级写入；完整性由写入事务的上级解析与删除守卫保证。
+  parent_id TEXT,
   note TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
@@ -910,6 +919,7 @@ CREATE TABLE IF NOT EXISTS devices (
   name TEXT NOT NULL,
   name_lower TEXT NOT NULL UNIQUE,
   note TEXT NOT NULL DEFAULT '',
+  site_id TEXT REFERENCES sites(id),
   client_token_id TEXT UNIQUE,
   client_name TEXT NOT NULL DEFAULT '',
   created_at INTEGER NOT NULL,

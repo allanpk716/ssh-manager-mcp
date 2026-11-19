@@ -98,7 +98,7 @@ func (s *Store) AddOtherDeviceWithMemberships(request AddOtherDeviceRequest) (*m
 		return nil, err
 	}
 	defer tx.Rollback()
-	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", request.Source)
+	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", "", request.Source)
 	if err != nil {
 		return nil, err
 	}

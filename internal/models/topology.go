@@ -5,17 +5,19 @@ import (
 	"time"
 )
 
-// Site 是网络拓扑里的物理场所，物理局域网必须归属且只归属一个站点。
+// Site 是网络拓扑里的物理场所。地点可以多级嵌套，ParentID 为空表示根
+// 地点；同一上级下名字唯一，不同上级下可以同名。
 type Site struct {
 	ID        string
+	ParentID  string
 	Name      string
 	Note      string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
 
-// NetworkType 表示网络的登记类型：物理局域网必须归属一个站点，虚拟局域
-// 网不属于任何站点。类型登记后不可修改。
+// NetworkType 表示网络的登记类型：物理局域网必须登记它覆盖的一个地点
+// （可以是任意一级），虚拟局域网不属于任何地点。类型登记后不可修改。
 type NetworkType string
 
 const (
