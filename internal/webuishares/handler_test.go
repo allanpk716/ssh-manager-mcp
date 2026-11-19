@@ -1247,7 +1247,7 @@ func TestAuthorityShareMountScopeConfirmRequiresReverifyAndPreservesTarget(t *te
 	now := time.Date(2026, 11, 13, 11, 0, 0, 0, time.Local)
 	h := newShareAuthorityHandler(t, st, &now)
 	now = now.Add(6 * time.Minute)
-	csrf := authorityPageCSRF(t, h, "/ui/authorization/shares/"+datasetsID+"/servers")
+	csrf := authorityPageCSRF(t, h, "/ui/shares/"+datasetsID+"/edit")
 
 	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
 		"csrf_token":                            {csrf},
