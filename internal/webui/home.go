@@ -87,16 +87,16 @@ func (h *handler) buildHomeView(r *http.Request) (*homeView, error) {
 			view.Tasks = append([]HomeTask{{
 				Title:    homeCountText(len(pendingNames), "个配对请求待审批"),
 				Detail:   pendingNames[0] + " 请求接入，等待你确认",
-				Href:     "/ui/access/pairing",
+				Href:     "/ui/clients/pairing",
 				Priority: true,
 			}}, view.Tasks...)
 		}
-		devices, err := h.cfg.Access.ListDeviceCodes()
+		clients, err := h.cfg.Access.ListClients()
 		if err != nil {
 			return nil, err
 		}
-		for _, device := range devices {
-			if !device.Revoked() {
+		for _, client := range clients {
+			if !client.Revoked {
 				view.ClientCount++
 			}
 		}

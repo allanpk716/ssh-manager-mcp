@@ -163,6 +163,11 @@ func insertDeviceTx(tx *sql.Tx, device *models.Device) error {
 // EditDevice 按设备名字做部分更新。客户端实例关联既能换成另一个设备码，
 // 也能通过指向空字符串的 Client 字段解除。数据行与审计行同事务提交。
 func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, error) {
+	return s.EditDeviceWithSource(name, changes, WriteSource{})
+}
+
+// EditDeviceWithSource 与 EditDevice 相同，并把审计来源标为命令行或 Web UI。
+func (s *Store) EditDeviceWithSource(name string, changes DeviceChanges, source WriteSource) (*models.Device, error) {
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
@@ -233,7 +238,7 @@ func (s *Store) EditDevice(name string, changes DeviceChanges) (*models.Device, 
 	); err != nil {
 		return nil, err
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "device.edit", topologyEditSummary(name, editChanges)); err != nil {
+	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.edit", topologyEditSummary(name, editChanges), source); err != nil {
 		return nil, err
 	}
 	return device, tx.Commit()

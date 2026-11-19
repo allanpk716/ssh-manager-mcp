@@ -50,9 +50,25 @@ func (s AccessPairingSummary) KeepCompared(form AccessPairingForm) bool {
 // registerPairingRoutes 只在权威端注册配对路由：配对请求由客户端经主监听
 // 写入队列表，owner 在权威端 Web UI 裁决。
 func (h *handler) registerPairingRoutes() {
-	h.mux.HandleFunc(accessPairingPath, h.requireSession(h.handleAccessPairing))
-	h.mux.HandleFunc(accessPairingListPath, h.requireSession(h.handleAccessPairingList))
-	h.mux.HandleFunc(accessPairingPrefix, h.requireSession(h.handleAccessPairingAction))
+	h.mux.HandleFunc(clientPairingPath, h.requireSession(h.handleAccessPairing))
+	h.mux.HandleFunc(clientPairingListPath, h.requireSession(h.handleAccessPairingList))
+	h.mux.HandleFunc(clientPairingPrefix, h.requireSession(h.handleAccessPairingAction))
+	h.mux.HandleFunc(legacyAccessPairingPath, h.requireSession(h.redirectLegacyPairing))
+	h.mux.HandleFunc(legacyAccessPairingListPath, h.requireSession(h.redirectLegacyPairing))
+	h.mux.HandleFunc(legacyAccessPairingPrefix, h.requireSession(h.redirectLegacyPairing))
+}
+
+// redirectLegacyPairing 把旧访问区域的配对地址搬到客户端区，查询参数保持
+// 不变。旧地址只保留兼容读取，写表单一律指向新地址。
+func (h *handler) redirectLegacyPairing(w http.ResponseWriter, r *http.Request) {
+	target := clientPairingPath + strings.TrimPrefix(r.URL.Path, legacyAccessPairingPath)
+	if target == clientPairingPath+"/" {
+		target = clientPairingPath
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func applyPairingDoneNotice(data *pageData, r *http.Request) {
@@ -69,7 +85,7 @@ func applyPairingDoneNotice(data *pageData, r *http.Request) {
 }
 
 func (h *handler) handleAccessPairing(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != accessPairingPath {
+	if r.URL.Path != clientPairingPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -87,7 +103,7 @@ func (h *handler) handleAccessPairing(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) handleAccessPairingList(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != accessPairingListPath {
+	if r.URL.Path != clientPairingListPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -105,7 +121,7 @@ func (h *handler) handleAccessPairingList(w http.ResponseWriter, r *http.Request
 }
 
 func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Request) {
-	id, action, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, accessPairingPrefix), "/")
+	id, action, _ := strings.Cut(strings.TrimPrefix(r.URL.Path, clientPairingPrefix), "/")
 	if id == "" || strings.Contains(action, "/") {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
@@ -179,7 +195,7 @@ func (h *handler) handleAccessPairingAction(w http.ResponseWriter, r *http.Reque
 	if action == "approve" {
 		done = "approve"
 	}
-	http.Redirect(w, r, accessPairingPath+"?done="+done, http.StatusSeeOther)
+	http.Redirect(w, r, clientPairingPath+"?done="+done, http.StatusSeeOther)
 }
 
 // accessPairingByID 在配对列表里按标识符查找一行。
@@ -197,7 +213,7 @@ func (h *handler) accessPairingByID(id string) (*AccessPairingSummary, error) {
 }
 
 func pairingDetailPath(id string) string {
-	return accessPairingPath + "/" + url.PathEscape(id)
+	return clientPairingPath + "/" + url.PathEscape(id)
 }
 
 // pairingPageData 读取配对请求与 profile，并把 profile 提示换算成表单可选

@@ -123,6 +123,12 @@ type pageData struct {
 	AccessProjectIncludeRevoked       bool
 	AccessProjectNotice               string
 	AccessProjectFormName             string
+	Clients                           []ClientSummary
+	ClientPendingPairingCount         int
+	Client                            *ClientDetail
+	ClientProfilePreview              *ClientProfilePreview
+	ClientNotice                      string
+	ClientMachineChoices              []ClientMachineChoice
 	AccessProjectFormProfileID        string
 	AccessDeleteRefusal               *AccessProfileInUse
 	AccessGrant                       *AccessGrantView

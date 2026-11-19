@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 )
 
 // AccessProfileSummary 是 Profile 页的一行展示数据：profile 本身、授权服
@@ -27,6 +28,85 @@ type AccessServerRef struct {
 type AccessReference struct {
 	Name   string
 	Status string
+}
+
+// ClientSummary 是客户端列表的一行。设备码本体绝不出现；令牌前缀只在详
+// 情页作为凭据摘要展示。
+type ClientSummary struct {
+	ID            string
+	Name          string
+	ProfileName   string
+	ServerCount   int
+	LastPullAt    time.Time
+	ClientVersion string
+	// RecommendedVersion 是权威端推荐客户端使用的版本。
+	RecommendedVersion string
+	MachineName        string
+	// Paired 表示实例来自配对流程；否则是 owner 手动签发。
+	Paired bool
+	// Revoked 表示客户端已移除，只在历史数据需要回查时由来源给出。
+	Revoked bool
+	// Stale 与 UpgradeAvailable 由页面按当前时间和推荐版本计算。
+	Stale            bool
+	UpgradeAvailable bool
+}
+
+// ClientMachine 是客户端所在机器的展示数据。
+type ClientMachine struct {
+	ID       string
+	Name     string
+	SitePath string
+}
+
+// ClientSoftwareSummary 是客户端所在机器的软件清单摘要。
+type ClientSoftwareSummary struct {
+	LastCollectedAt      time.Time
+	ItemCount            int
+	PendingExposureCount int
+	TopItems             []string
+}
+
+// ClientResource 是客户端经 profile 服务器能拿到的一项资源。
+type ClientResource struct {
+	ID         string
+	Name       string
+	Note       string
+	ViaServers []string
+}
+
+// ClientDetail 是一个客户端实例的详情。
+type ClientDetail struct {
+	ClientSummary
+	ProfileID          string
+	RecommendedVersion string
+	TokenPrefix        string
+	Servers            []AccessServerRef
+	Machine            *ClientMachine
+	Software           *ClientSoftwareSummary
+	Secrets            []ClientResource
+	Shares             []ClientResource
+}
+
+type ClientProfilePreview struct {
+	ClientName         string
+	CurrentProfileID   string
+	CurrentProfileName string
+	DesiredProfileID   string
+	DesiredProfileName string
+	AddedServers       []AccessServerRef
+	LostServers        []AccessServerRef
+	AddedSecrets       []ClientResource
+	LostSecrets        []ClientResource
+	AddedShares        []ClientResource
+	LostShares         []ClientResource
+}
+
+type ClientMachineChoice struct {
+	ID       string
+	Name     string
+	SitePath string
+	// Available 为 false 表示这台机器已经关联另一个客户端实例。
+	Available bool
 }
 
 // AccessProfileInUse 是删除 profile 被拒绝时的引用者清单。
@@ -141,6 +221,14 @@ type AccessStore interface {
 	ListDeviceCodes() ([]AccessDeviceCodeSummary, error)
 	AddDeviceCode(name, profile, serveURL string, source AccessWriteSource) (AccessDeviceCodeResult, error)
 	RevokeDeviceCode(id string, source AccessWriteSource) error
+	ListClients() ([]ClientSummary, error)
+	ClientDetail(id string) (*ClientDetail, error)
+	PreviewClientProfileChange(id, profileID string) (*ClientProfilePreview, error)
+	ChangeClientProfile(id, expectedProfileID, desiredProfileID string, source AccessWriteSource) error
+	ListClientMachineChoices(id string) ([]ClientMachineChoice, error)
+	LinkClientMachine(id, machineID string, source AccessWriteSource) error
+	CreateAndLinkClientMachine(id, machineName, sitePath string, source AccessWriteSource) error
+	RemoveClient(id string, source AccessWriteSource) error
 	ListPairingRequests() ([]AccessPairingSummary, error)
 	ApprovePairing(id, profile string, compared bool, allowForeignTarget bool, source AccessWriteSource) error
 	RejectPairing(id string, source AccessWriteSource) error
@@ -154,17 +242,19 @@ type AccessWriteSource struct {
 
 const (
 	// accessRootPath 是「访问」区域的入口；客户端只有这里的提示页。
-	accessRootPath           = "/ui/access/"
-	accessProfilesPath       = "/ui/access/profiles"
-	accessProfileDeletePath  = "/ui/access/profiles/delete"
-	accessProfilesPrefix     = "/ui/access/profiles/"
-	serverProfilePreviewPath = "/ui/servers/profile-authorization/preview"
-	serverProfileConfirmPath = "/ui/servers/profile-authorization/confirm"
-	accessDeviceCodesPath    = "/ui/access/device-codes"
-	accessDeviceCodesPrefix  = "/ui/access/device-codes/"
-	accessPairingPath        = "/ui/access/pairing"
-	accessPairingListPath    = "/ui/access/pairing/list"
-	accessPairingPrefix      = "/ui/access/pairing/"
+	accessRootPath              = "/ui/access/"
+	accessProfilesPath          = "/ui/access/profiles"
+	accessProfileDeletePath     = "/ui/access/profiles/delete"
+	accessProfilesPrefix        = "/ui/access/profiles/"
+	serverProfilePreviewPath    = "/ui/servers/profile-authorization/preview"
+	serverProfileConfirmPath    = "/ui/servers/profile-authorization/confirm"
+	accessDeviceCodesPath       = "/ui/access/device-codes"
+	accessDeviceCodesPrefix     = "/ui/access/device-codes/"
+	clientPairingListPath       = "/ui/clients/pairing/list"
+	clientPairingPrefix         = "/ui/clients/pairing/"
+	legacyAccessPairingPath     = "/ui/access/pairing"
+	legacyAccessPairingListPath = "/ui/access/pairing/list"
+	legacyAccessPairingPrefix   = "/ui/access/pairing/"
 )
 
 // registerAccessRoutes 按本机角色注册访问区域路由。客户端只保留区域提示
@@ -180,12 +270,29 @@ func (h *handler) registerAccessRoutes() {
 	h.mux.HandleFunc(serverProfilePreviewPath, h.requireSession(h.handleServerProfileAuthorizationPreview))
 	h.mux.HandleFunc(serverProfileConfirmPath, h.requireSession(h.handleServerProfileAuthorizationConfirm))
 	h.mux.HandleFunc(accessProjectsPath, h.requireSession(h.handleAccessProjects))
+	for old, target := range map[string]string{
+		"/ui/access/projects":         accessProjectsPath,
+		"/ui/access/projects/rotate":  projectRotatePath,
+		"/ui/access/projects/disable": projectDisablePath,
+		"/ui/access/projects/enable":  projectEnablePath,
+		"/ui/access/projects/revoke":  projectRevokePath,
+		"/ui/access/projects/delete":  projectDeletePath,
+	} {
+		target := target
+		h.mux.HandleFunc(old, h.requireSession(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusSeeOther)
+		}))
+	}
 	h.mux.HandleFunc(projectRotatePath, h.requireSession(h.handleAccessProjectRotate))
 	h.mux.HandleFunc(projectDisablePath, h.requireSession(h.handleAccessProjectDisable))
 	h.mux.HandleFunc(projectEnablePath, h.requireSession(h.handleAccessProjectEnable))
 	h.mux.HandleFunc(projectRevokePath, h.requireSession(h.handleAccessProjectRevoke))
 	h.mux.HandleFunc(projectDeletePath, h.requireSession(h.handleAccessProjectDelete))
 	if h.cfg.Role == RoleServer {
+		h.registerClientRoutes()
 		h.registerPairingRoutes()
 		h.registerDeviceCodeRoutes()
 	}

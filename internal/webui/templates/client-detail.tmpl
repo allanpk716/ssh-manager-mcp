@@ -1,0 +1,62 @@
+{{define "content"}}
+<section class="client-detail-page">
+<p><a href="/ui/clients/">返回客户端列表</a></p>
+<h1>{{.Client.Name}}</h1>
+<p class="muted">{{.Client.SourceText}} · profile {{.Client.ProfileName}}</p>
+
+<section class="shared-card client-profile-card">
+<h2>profile</h2>
+<p>{{.Client.ProfileName}} · 它能看到 {{.Client.ServerCount}} 台服务器</p>
+<div class="client-server-list">
+{{range .Client.Servers}}<div class="client-server-row"><strong>{{.Name}}</strong></div>{{end}}
+</div>
+<a class="secondary-link" href="/ui/clients/{{.Client.ID}}/profile">更换</a>
+</section>
+
+<section class="shared-card client-status-card">
+<h2>状态</h2>
+<dl>
+<div><dt>最后同步</dt><dd>{{.Client.LastPullText}}</dd></div>
+<div><dt>客户端版本</dt><dd>{{if .Client.ClientVersion}}{{.Client.ClientVersion}}{{else}}未声明{{end}}</dd></div>
+<div><dt>推荐版本</dt><dd>{{if .Client.RecommendedVersion}}{{.Client.RecommendedVersion}}{{else}}未知{{end}}</dd></div>
+<div><dt>版本对比</dt><dd>{{.Client.VersionComparisonText}}</dd></div>
+<div><dt>设备码前缀</dt><dd>{{.Client.TokenPrefix}}…</dd></div>
+</dl>
+</section>
+
+<section class="shared-card client-machine-card">
+<h2>所在机器</h2>
+{{with .Client.Machine}}
+<p><strong>机器 {{.Name}}</strong>{{if .SitePath}} · {{.SitePath}}{{end}}</p>
+{{with $.Client.Software}}
+<p>最近采集 {{.LastCollectedAt.Format "2006-01-02 15:04:05"}} · {{.ItemCount}} 个软件 · {{.PendingExposureCount}} 个待确认暴露</p>
+<ul>{{range .TopItems}}<li>{{.}}</li>{{end}}</ul>
+<a href="/ui/software-inventory/devices?device={{$.Client.Machine.Name | urlquery}}">查看全部</a>
+<form method="post" action="/ui/software-inventory/collect?device={{$.Client.Machine.Name | urlquery}}">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<button type="submit">立即采集</button>
+</form>
+{{end}}
+{{else}}
+<p>还不知道这个客户端运行在哪台机器上。</p>
+<a class="secondary-link" href="/ui/clients/{{$.Client.ID}}/machine">选择机器</a>
+{{end}}
+</section>
+
+<section class="shared-card client-resource-card">
+<h2>它能用到的机密项与共享存储</h2>
+<ul class="client-resource-list">
+{{range .Client.Secrets}}<li><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}没有备注{{end}}</small><small>机密项 · 经 {{joinTags .ViaServers}}</small></li>{{end}}
+{{range .Client.Shares}}<li><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}没有备注{{end}}</small><small>共享存储 · 经 {{joinTags .ViaServers}}</small></li>{{end}}
+</ul>
+{{if not (or .Client.Secrets .Client.Shares)}}<p>当前 profile 没有可用的机密项或共享存储。</p>{{end}}
+<p class="muted">由 profile 中的服务器与各机密项、共享存储的授权共同决定。</p>
+</section>
+
+<section class="shared-card client-danger-card">
+<h2>危险区</h2>
+<p>移除后客户端无法再同步，本地已有的副本会在下次同步时失效。</p>
+<a class="danger-link" href="/ui/clients/{{.Client.ID}}/remove">移除客户端</a>
+</section>
+</section>
+{{end}}

@@ -261,6 +261,7 @@ func navigationArea(path string) string {
 		strings.HasPrefix(path, "/ui/devices/"):
 		return "servers"
 	case path == "/ui/access/pairing" || strings.HasPrefix(path, "/ui/access/pairing/") ||
+		path == "/ui/clients" || strings.HasPrefix(path, "/ui/clients/") ||
 		path == "/ui/ops/client" || strings.HasPrefix(path, "/ui/ops/client/"):
 		return "clients"
 	case strings.HasPrefix(path, "/ui/access/") || strings.HasPrefix(path, "/ui/secrets/") ||
@@ -371,7 +372,7 @@ func (c capabilities) ClientsTabPath() string {
 	if c.CanUseClientOps {
 		return "/ui/ops/client"
 	}
-	return "/ui/access/pairing"
+	return "/ui/clients/"
 }
 
 func (c capabilities) ShowAuthorizationTab() bool {

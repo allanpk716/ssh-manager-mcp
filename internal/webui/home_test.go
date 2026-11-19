@@ -60,7 +60,7 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		`aria-label="一级导航"`,
 		`href="/ui/"`,
 		`href="/ui/servers/"`,
-		`href="/ui/access/pairing"`,
+		`href="/ui/clients/"`,
 		`href="/ui/access/profiles"`,
 		`href="/ui/ops/"`,
 		"主页", "服务器", "客户端", "授权", "更多",

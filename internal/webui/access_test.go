@@ -37,16 +37,40 @@ type stubAccessStore struct {
 	serverProfileApplyConflict *ServerProfileAuthorizationConflict
 	serverProfileApplyErr      error
 
-	deviceCodes      []AccessDeviceCodeSummary
-	addDeviceName    string
-	addDeviceProfile string
-	addDeviceURL     string
-	addDeviceSrc     AccessWriteSource
-	addDeviceResult  AccessDeviceCodeResult
-	addDeviceErr     error
-	revokeDeviceID   string
-	revokeDeviceSrc  AccessWriteSource
-	revokeDeviceErr  error
+	deviceCodes           []AccessDeviceCodeSummary
+	addDeviceName         string
+	addDeviceProfile      string
+	addDeviceURL          string
+	addDeviceSrc          AccessWriteSource
+	addDeviceResult       AccessDeviceCodeResult
+	addDeviceErr          error
+	revokeDeviceID        string
+	revokeDeviceSrc       AccessWriteSource
+	revokeDeviceErr       error
+	clients               []ClientSummary
+	client                *ClientDetail
+	clientDetailID        string
+	clientProfilePreview  *ClientProfilePreview
+	previewClientID       string
+	previewProfileID      string
+	changeProfileClientID string
+	changeProfileExpected string
+	changeProfileDesired  string
+	changeProfileSrc      AccessWriteSource
+	changeProfileErr      error
+	machineChoices        []ClientMachineChoice
+	linkMachineClientID   string
+	linkMachineID         string
+	linkMachineSrc        AccessWriteSource
+	linkMachineErr        error
+	createMachineClientID string
+	createMachineName     string
+	createMachineSite     string
+	createMachineSrc      AccessWriteSource
+	createMachineErr      error
+	removeClientID        string
+	removeClientSrc       AccessWriteSource
+	removeClientErr       error
 
 	pairings            []AccessPairingSummary
 	approvePairingID    string
@@ -98,6 +122,66 @@ func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) 
 	s.revokeDeviceID = id
 	s.revokeDeviceSrc = source
 	return s.revokeDeviceErr
+}
+
+func (s *stubAccessStore) ListClients() ([]ClientSummary, error) {
+	if s.clients == nil {
+		return nil, nil
+	}
+	return s.clients, nil
+}
+
+func (s *stubAccessStore) ClientDetail(id string) (*ClientDetail, error) {
+	s.clientDetailID = id
+	if s.client == nil {
+		return nil, nil
+	}
+	return s.client, nil
+}
+
+func (s *stubAccessStore) PreviewClientProfileChange(id, profileID string) (*ClientProfilePreview, error) {
+	s.previewClientID = id
+	s.previewProfileID = profileID
+	if s.clientProfilePreview == nil {
+		return nil, nil
+	}
+	return s.clientProfilePreview, nil
+}
+
+func (s *stubAccessStore) ChangeClientProfile(id, expectedProfileID, desiredProfileID string, source AccessWriteSource) error {
+	s.changeProfileClientID = id
+	s.changeProfileExpected = expectedProfileID
+	s.changeProfileDesired = desiredProfileID
+	s.changeProfileSrc = source
+	return s.changeProfileErr
+}
+
+func (s *stubAccessStore) ListClientMachineChoices(id string) ([]ClientMachineChoice, error) {
+	if s.machineChoices == nil {
+		return nil, nil
+	}
+	return s.machineChoices, nil
+}
+
+func (s *stubAccessStore) LinkClientMachine(id, machineID string, source AccessWriteSource) error {
+	s.linkMachineClientID = id
+	s.linkMachineID = machineID
+	s.linkMachineSrc = source
+	return s.linkMachineErr
+}
+
+func (s *stubAccessStore) CreateAndLinkClientMachine(id, machineName, sitePath string, source AccessWriteSource) error {
+	s.createMachineClientID = id
+	s.createMachineName = machineName
+	s.createMachineSite = sitePath
+	s.createMachineSrc = source
+	return s.createMachineErr
+}
+
+func (s *stubAccessStore) RemoveClient(id string, source AccessWriteSource) error {
+	s.removeClientID = id
+	s.removeClientSrc = source
+	return s.removeClientErr
 }
 
 func (s *stubAccessStore) SetServerGrants(profileID string, expected, desired []string, source AccessWriteSource) (AccessGrantChange, *AccessGrantConflict, error) {
@@ -183,7 +267,7 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 
 	clientPage := doGetWithCookie(t, client, clientCookie, "/ui/access/")
 	clientBody := readResponseBody(t, clientPage)
-	if clientPage.StatusCode != http.StatusOK || !strings.Contains(clientBody, "profile、配对、设备码和项目令牌在权威端管理") {
+	if clientPage.StatusCode != http.StatusOK || !strings.Contains(clientBody, "profile、配对、客户端实例与 MCP 访问令牌在权威端管理") {
 		t.Fatalf("客户端访问区域应只有权威端提示，状态码=%d 页面：\n%s", clientPage.StatusCode, clientBody)
 	}
 	for _, target := range []string{

@@ -1,0 +1,17 @@
+{{define "content"}}
+<section class="manual-client-page">
+<h1>手动添加客户端</h1>
+<p class="muted">高级操作：不经配对流程直接生成一个客户端实例，并选择它绑定的 profile。</p>
+{{if .AccessDeviceIssue.NeedsReverify}}<div class="operation-refusal">手动添加客户端前需要重新验证管理员口令。<a href="{{.AccessDeviceIssue.ReverifyPath}}">先重新验证</a></div>{{end}}
+<form method="post" action="/ui/ops/clients/new" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label for="device-name">客户端名</label>
+<input type="text" id="device-name" name="name" required value="{{.AccessDeviceIssue.Name}}">
+<label for="device-profile">Profile</label>
+<select id="device-profile" name="profile" required>
+{{range .AccessProfiles}}<option value="{{.ID}}"{{if eq .ID $.AccessDeviceIssue.ProfileID}} selected{{end}}>{{.Name}}</option>{{end}}
+</select>
+<button type="submit">生成接入凭据</button>
+</form>
+</section>
+{{end}}

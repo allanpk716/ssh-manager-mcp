@@ -88,10 +88,11 @@ func seed(dir string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := st.AddServer(&models.Server{
+	dbID, err := st.AddServer(&models.Server{
 		Name: "db-1", Host: "192.0.2.11", Port: 22, User: "owner",
 		AuthMethod: models.AuthPassword, CredentialID: credentialID,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 	oldID, err := st.AddServerWithCredentials(&models.Server{
@@ -117,6 +118,21 @@ func seed(dir string) error {
 	}
 	if err := st.AllowSecrets([]string{"MATRIX_TOKEN"}, []string{"db-1"}, store.CLISource()); err != nil {
 		return err
+	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_CLIENTS")) == "1" {
+		databaseProfileID, err := st.AddProfile("数据库")
+		if err != nil {
+			return err
+		}
+		if err := st.GrantServers(databaseProfileID, []string{dbID}); err != nil {
+			return err
+		}
+		if err := st.AddSecret("WEB_TOKEN", "网站浏览器测试机密项", []byte("browser-test-web-secret"), store.CLISource()); err != nil {
+			return err
+		}
+		if err := st.AllowSecrets([]string{"WEB_TOKEN"}, []string{"web-1"}, store.CLISource()); err != nil {
+			return err
+		}
 	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SHARES")) == "1" {
 		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{

@@ -351,7 +351,7 @@ function reserveLocalPort(): Promise<number> {
 
 // startAuthorityUI 生成角色为权威端的临时加密库，设置管理员口令与随机
 // Web UI 端口，再启动 serve。发现服务显式关闭，测试不占用本机的 UDP 7878。
-async function startAuthorityUI(password: string, pairingMode = ""): Promise<authorityUI> {
+async function startAuthorityUI(password: string, pairingMode = "", clientsSeed = false): Promise<authorityUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-authority-"));
   const servePort = await reserveLocalPort();
   const webPort = await reserveLocalPort();
@@ -366,6 +366,7 @@ async function startAuthorityUI(password: string, pairingMode = ""): Promise<aut
       SSHMGR_VAULT_ROOT: runDir,
       SSHMGR_STORE: path.join(runDir, "store.db"),
       SSHMGR_FILEKEY_PATH: path.join(runDir, "master.key.plain"),
+      SSHMGR_E2E_CLIENTS: clientsSeed ? "1" : "",
     },
   });
   if (seed.status !== 0) {

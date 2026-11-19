@@ -1,0 +1,29 @@
+{{define "content"}}
+<section class="client-profile-page">
+<p><a href="/ui/clients/{{.Client.ID}}">返回客户端详情</a></p>
+<h1>更换 profile</h1>
+<p>选择 {{.Client.Name}} 要绑定的新 profile。确认前先核对它将新增与失去的访问范围。</p>
+<nav class="profile-choice-list">
+{{range .AccessProfiles}}{{if ne .ID $.Client.ProfileID}}<a class="profile-choice" href="/ui/clients/{{$.Client.ID}}/profile?profile={{.ID}}">{{.Name}} · {{len .Servers}} 台服务器</a>{{end}}{{end}}
+</nav>
+{{with .ClientProfilePreview}}
+<section class="shared-card profile-preview-card">
+<h2>变更摘要</h2>
+<p>{{.CurrentProfileName}} → {{.DesiredProfileName}}</p>
+<p>将新增可见 {{len .AddedServers}} 台：{{.AddedServerNames}}</p>
+<p>将失去可见 {{len .LostServers}} 台：{{.LostServerNames}}</p>
+<p>将新增可用机密项 {{len .AddedSecrets}} 项：{{.AddedSecretNames}}</p>
+<p>将失去可用机密项 {{len .LostSecrets}} 项：{{.LostSecretNames}}</p>
+<p>将新增可用共享存储 {{len .AddedShares}} 项：{{.AddedShareNames}}</p>
+<p>将失去可用共享存储 {{len .LostShares}} 项：{{.LostShareNames}}</p>
+<form method="post" action="/ui/clients/{{$.Client.ID}}/profile">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="expected_profile" value="{{.CurrentProfileID}}">
+<input type="hidden" name="profile" value="{{.DesiredProfileID}}">
+<button type="submit">确认更换</button>
+<a href="/ui/clients/{{$.Client.ID}}">取消</a>
+</form>
+</section>
+{{end}}
+</section>
+{{end}}

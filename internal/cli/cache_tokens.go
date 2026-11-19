@@ -126,17 +126,33 @@ func cacheTokensBindCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			summary := map[string]any{"name": args[0], "profile": args[1]}
-			defer func() {
-				if aerr := writeCacheTokenAudit(s, "cache-token.bind", summary, err); aerr != nil && err == nil {
-					err = aerr
-				}
-			}()
 			profileID, err := profileIDByName(s, args[1])
+			if err != nil {
+				if aerr := writeCacheTokenAudit(s, "cache-token.bind", map[string]any{"name": args[0], "profile": args[1]}, err); aerr != nil {
+					return aerr
+				}
+				return err
+			}
+			tokens, err := s.ListCacheTokens()
 			if err != nil {
 				return err
 			}
-			if err := s.BindCacheToken(args[0], profileID); err != nil {
+			var expectedProfileID string
+			found := false
+			for _, token := range tokens {
+				if token.Name == args[0] {
+					expectedProfileID, found = token.ProfileID, true
+					break
+				}
+			}
+			if !found {
+				notFound := fmt.Errorf("device code %q not found", args[0])
+				if aerr := writeCacheTokenAudit(s, "cache-token.bind", map[string]any{"name": args[0], "profile": args[1]}, notFound); aerr != nil {
+					return aerr
+				}
+				return notFound
+			}
+			if err := access.New(s).ChangeClientProfile(args[0], expectedProfileID, profileID, access.CLISource()); err != nil {
 				return err
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "bound cache token %s to profile %s — its next pull serves that profile's authorized servers\n", args[0], args[1])

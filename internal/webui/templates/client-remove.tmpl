@@ -1,0 +1,13 @@
+{{define "content"}}
+<section class="client-remove-page">
+<p><a href="/ui/clients/{{.Client.ID}}">返回客户端详情</a></p>
+<h1>移除客户端 {{.Client.Name}}</h1>
+<div class="operation-refusal">移除后 {{.Client.Name}} 将无法再同步，本地已有的副本会在下次同步时失效；它的接入凭据与配对时生成的访问身份会一并吊销。</div>
+<form method="post" action="/ui/clients/{{.Client.ID}}/remove">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<label><input type="checkbox" name="confirm" value="1" required>确认移除</label>
+<button type="submit">确认移除</button>
+<a href="/ui/clients/{{.Client.ID}}">取消</a>
+</form>
+</section>
+{{end}}

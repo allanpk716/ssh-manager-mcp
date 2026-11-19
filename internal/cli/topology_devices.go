@@ -17,8 +17,30 @@ import (
 
 func newDevicesCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "devices", Short: "Manage topology devices"}
-	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), devicesMoveServerCmd(), newDevicesMemberCmd(), newDevicesLocalCmd(), devicesProbeCmd())
+	cmd.AddCommand(devicesAddCmd(), devicesEditCmd(), devicesShowCmd(), devicesListCmd(), devicesRmCmd(), devicesMoveServerCmd(), newDevicesMemberCmd(), newDevicesLocalCmd(), devicesProbeCmd(), devicesLinkClientCmd())
 	return cmd
+}
+
+func devicesLinkClientCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "link-client MACHINE CLIENT",
+		Args:  cobra.ExactArgs(2),
+		Short: "Associate a client instance with a machine",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := requireTopologyVault()
+			if err != nil {
+				return err
+			}
+			defer s.Close()
+			client := args[1]
+			device, err := s.EditDevice(args[0], store.DeviceChanges{Client: &client})
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "已把客户端实例 %s 关联到机器 %s\n", client, device.Name)
+			return nil
+		},
+	}
 }
 
 func devicesListCmd() *cobra.Command {

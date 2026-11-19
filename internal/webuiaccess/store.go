@@ -184,6 +184,73 @@ func (s openerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource)
 	})
 }
 
+func (s openerStore) ListClients() ([]webui.ClientSummary, error) {
+	var rows []webui.ClientSummary
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.ListClients()
+		if err != nil {
+			return err
+		}
+		rows = got
+		return nil
+	})
+	return rows, err
+}
+
+func (s openerStore) ClientDetail(id string) (*webui.ClientDetail, error) {
+	var detail *webui.ClientDetail
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.ClientDetail(id)
+		detail = got
+		return err
+	})
+	return detail, err
+}
+
+func (s openerStore) PreviewClientProfileChange(id, profileID string) (*webui.ClientProfilePreview, error) {
+	var preview *webui.ClientProfilePreview
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.PreviewClientProfileChange(id, profileID)
+		preview = got
+		return err
+	})
+	return preview, err
+}
+
+func (s openerStore) ChangeClientProfile(id, expectedProfileID, desiredProfileID string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.ChangeClientProfile(id, expectedProfileID, desiredProfileID, source)
+	})
+}
+
+func (s openerStore) ListClientMachineChoices(id string) ([]webui.ClientMachineChoice, error) {
+	var rows []webui.ClientMachineChoice
+	err := s.withManager(func(manager *access.Manager) error {
+		got, err := managerStore{manager: manager}.ListClientMachineChoices(id)
+		rows = got
+		return err
+	})
+	return rows, err
+}
+
+func (s openerStore) LinkClientMachine(id, machineID string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.LinkClientMachine(id, machineID, source)
+	})
+}
+
+func (s openerStore) CreateAndLinkClientMachine(id, machineName, sitePath string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.CreateAndLinkClientMachine(id, machineName, sitePath, source)
+	})
+}
+
+func (s openerStore) RemoveClient(id string, source webui.AccessWriteSource) error {
+	return s.withManager(func(manager *access.Manager) error {
+		return managerStore{manager: manager}.RemoveClient(id, source)
+	})
+}
+
 func (s openerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error) {
 	var rows []webui.AccessPairingSummary
 	err := s.withManager(func(manager *access.Manager) error {
@@ -382,6 +449,106 @@ func (s managerStore) AddDeviceCode(name, profile, serveURL string, source webui
 
 func (s managerStore) RevokeDeviceCode(id string, source webui.AccessWriteSource) error {
 	return s.manager.RevokeDeviceCode(id, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) ListClients() ([]webui.ClientSummary, error) {
+	rows, err := s.manager.ListClients()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.ClientSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webui.ClientSummary{
+			ID: row.ID, Name: row.Name, ProfileName: row.ProfileName, ServerCount: row.ServerCount,
+			LastPullAt: row.LastPullAt, ClientVersion: row.ClientVersion,
+			RecommendedVersion: row.RecommendedVersion, MachineName: row.MachineName,
+			Paired: row.Paired, Revoked: row.Revoked,
+		})
+	}
+	return out, nil
+}
+
+func (s managerStore) ClientDetail(id string) (*webui.ClientDetail, error) {
+	detail, err := s.manager.ClientDetail(id)
+	if err != nil || detail == nil {
+		return nil, err
+	}
+	out := &webui.ClientDetail{
+		ClientSummary: webui.ClientSummary{
+			ID: detail.ID, Name: detail.Name, ProfileName: detail.ProfileName,
+			ServerCount: detail.ServerCount, LastPullAt: detail.LastPullAt,
+			ClientVersion: detail.ClientVersion, MachineName: detail.MachineName,
+			Paired: detail.Paired, Revoked: detail.Revoked,
+		},
+		ProfileID: detail.ProfileID, RecommendedVersion: detail.RecommendedVersion,
+		TokenPrefix: detail.TokenPrefix,
+	}
+	out.Servers = serverRefs(detail.Servers)
+	if detail.Machine != nil {
+		out.Machine = &webui.ClientMachine{ID: detail.Machine.ID, Name: detail.Machine.Name, SitePath: detail.Machine.SitePath}
+	}
+	if detail.Software != nil {
+		out.Software = &webui.ClientSoftwareSummary{
+			LastCollectedAt: detail.Software.LastCollectedAt, ItemCount: detail.Software.ItemCount,
+			PendingExposureCount: detail.Software.PendingExposureCount, TopItems: append([]string(nil), detail.Software.TopItems...),
+		}
+	}
+	out.Secrets = clientResources(detail.Secrets)
+	out.Shares = clientResources(detail.Shares)
+	return out, nil
+}
+
+func (s managerStore) PreviewClientProfileChange(id, profileID string) (*webui.ClientProfilePreview, error) {
+	preview, err := s.manager.PreviewClientProfileChange(id, profileID)
+	if err != nil || preview == nil {
+		return nil, err
+	}
+	return &webui.ClientProfilePreview{
+		ClientName: preview.ClientName, CurrentProfileID: preview.CurrentProfileID,
+		CurrentProfileName: preview.CurrentProfileName, DesiredProfileID: preview.DesiredProfileID,
+		DesiredProfileName: preview.DesiredProfileName,
+		AddedServers:       serverRefs(preview.AddedServers), LostServers: serverRefs(preview.LostServers),
+		AddedSecrets: clientResources(preview.AddedSecrets), LostSecrets: clientResources(preview.LostSecrets),
+		AddedShares: clientResources(preview.AddedShares), LostShares: clientResources(preview.LostShares),
+	}, nil
+}
+
+func (s managerStore) ChangeClientProfile(id, expectedProfileID, desiredProfileID string, source webui.AccessWriteSource) error {
+	return s.manager.ChangeClientProfile(id, expectedProfileID, desiredProfileID, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) ListClientMachineChoices(id string) ([]webui.ClientMachineChoice, error) {
+	rows, err := s.manager.ListClientMachineChoices(id)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.ClientMachineChoice, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webui.ClientMachineChoice{ID: row.ID, Name: row.Name, SitePath: row.SitePath, Available: row.Available})
+	}
+	return out, nil
+}
+
+func (s managerStore) LinkClientMachine(id, machineID string, source webui.AccessWriteSource) error {
+	return s.manager.LinkClientMachine(id, machineID, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) CreateAndLinkClientMachine(id, machineName, sitePath string, source webui.AccessWriteSource) error {
+	return s.manager.CreateAndLinkClientMachine(id, machineName, sitePath, access.WebUISource(source.RemoteAddress))
+}
+
+func (s managerStore) RemoveClient(id string, source webui.AccessWriteSource) error {
+	return s.manager.RemoveClient(id, access.WebUISource(source.RemoteAddress))
+}
+
+func clientResources(rows []access.ClientResource) []webui.ClientResource {
+	out := make([]webui.ClientResource, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, webui.ClientResource{
+			ID: row.ID, Name: row.Name, Note: row.Note, ViaServers: append([]string(nil), row.ViaServers...),
+		})
+	}
+	return out
 }
 
 func (s managerStore) ListPairingRequests() ([]webui.AccessPairingSummary, error) {

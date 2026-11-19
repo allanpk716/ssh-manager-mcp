@@ -15,6 +15,12 @@ import (
 // 程会用真实监听端口覆盖。
 const defaultServePort = 7878
 
+const (
+	manualClientPath        = "/ui/ops/clients/new"
+	legacyDeviceCodesPath   = "/ui/access/device-codes"
+	legacyDeviceCodesPrefix = "/ui/access/device-codes/"
+)
+
 // AccessDeviceCodeSummary 是设备码列表的一行展示数据：名称、令牌前缀、状
 // 态、绑定的 profile、最近拉取时间与最近客户端版本；令牌本体绝不出现。
 type AccessDeviceCodeSummary struct {
@@ -67,12 +73,25 @@ type AccessDeviceCodeResult struct {
 // registerDeviceCodeRoutes 只在权威端注册设备码路由：单机没有设备码，客
 // 户端的修改一律在权威端做。
 func (h *handler) registerDeviceCodeRoutes() {
-	h.mux.HandleFunc(accessDeviceCodesPath, h.requireSession(h.handleAccessDeviceCodes))
-	h.mux.HandleFunc(accessDeviceCodesPrefix, h.requireSession(h.handleAccessDeviceCodeRevoke))
+	h.mux.HandleFunc(manualClientPath, h.requireSession(h.handleAccessDeviceCodes))
+	h.mux.HandleFunc(legacyDeviceCodesPath, h.requireSession(h.redirectLegacyDeviceCodes))
+	h.mux.HandleFunc(legacyDeviceCodesPrefix, h.requireSession(h.redirectLegacyDeviceCodes))
+}
+
+func (h *handler) redirectLegacyDeviceCodes(w http.ResponseWriter, r *http.Request) {
+	target := manualClientPath
+	remaining := strings.TrimPrefix(r.URL.Path, legacyDeviceCodesPrefix)
+	if id, action, _ := strings.Cut(remaining, "/"); id != "" && action == "revoke" {
+		target = "/ui/clients/" + id + "/remove"
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (h *handler) handleAccessDeviceCodes(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != accessDeviceCodesPath {
+	if r.URL.Path != manualClientPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -81,12 +100,7 @@ func (h *handler) handleAccessDeviceCodes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "设备码页只接受 GET 与 POST 请求。")
-		return
-	}
-	devices, err := h.cfg.Access.ListDeviceCodes()
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取设备码列表失败", "读取设备码列表失败，请稍后重试。")
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "手动添加客户端页只接受 GET 与 POST 请求。")
 		return
 	}
 	profiles, err := h.cfg.Access.ListProfiles()
@@ -102,8 +116,8 @@ func (h *handler) handleAccessDeviceCodes(w http.ResponseWriter, r *http.Request
 		view.NeedsReverify = true
 		view.ReverifyPath = reverifyPath(deviceIssueResumePath(view.Name, view.ProfileID))
 	}
-	h.renderPage(w, r, http.StatusOK, "device-codes.tmpl", pageData{
-		Title: "设备码", AccessDeviceCodes: devices, AccessProfiles: profiles, AccessDeviceIssue: view,
+	h.renderPage(w, r, http.StatusOK, "manual-client.tmpl", pageData{
+		Title: "手动添加客户端", AccessProfiles: profiles, AccessDeviceIssue: view,
 	})
 }
 
@@ -111,7 +125,7 @@ func (h *handler) handleAccessDeviceCodeAdd(w http.ResponseWriter, r *http.Reque
 	name := strings.TrimSpace(r.PostFormValue("name"))
 	profileID := r.PostFormValue("profile")
 	if name == "" || profileID == "" {
-		h.renderError(w, r, http.StatusBadRequest, "签发设备码失败", "设备名与 profile 都不能为空。")
+		h.renderError(w, r, http.StatusBadRequest, "手动添加客户端失败", "客户端名与 profile 都不能为空。")
 		return
 	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
@@ -123,14 +137,14 @@ func (h *handler) handleAccessDeviceCodeAdd(w http.ResponseWriter, r *http.Reque
 		AccessWriteSource{RemoteAddress: remoteIP(r)},
 	)
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "签发设备码失败", "签发设备码失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "手动添加客户端失败", "手动添加客户端失败，请稍后重试。")
 		return
 	}
 	// 一次性页面必须不可缓存；设备码只出现在这次提交响应里，没有重新查
 	// 看的路由。
 	w.Header().Set("Cache-Control", "no-store")
-	h.renderPage(w, r, http.StatusOK, "device-code-issued.tmpl", pageData{
-		Title: "设备码已签发", AccessDeviceIssued: &result,
+	h.renderPage(w, r, http.StatusOK, "manual-client-issued.tmpl", pageData{
+		Title: "客户端接入凭据已生成", AccessDeviceIssued: &result,
 	})
 }
 
@@ -208,5 +222,5 @@ func deviceIssueResumePath(name, profileID string) string {
 	if profileID != "" {
 		query.Set("profile", profileID)
 	}
-	return accessDeviceCodesPath + "?" + query.Encode()
+	return manualClientPath + "?" + query.Encode()
 }
