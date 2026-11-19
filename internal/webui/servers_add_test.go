@@ -297,7 +297,7 @@ func TestAddFormsCanAppendVirtualNetworkMemberWithoutScript(t *testing.T) {
 	}
 	for _, want := range []string{
 		`id="add-virtual-network-3"`, `id="add-virtual-address-3"`,
-		`value="100.64.0.1"`, `value="100.64.0.3"`, "再添加一个虚拟局域网成员",
+		`value="100.64.0.1"`, `value="100.64.0.3"`, "再添加一个虚拟局域网地址",
 	} {
 		if !strings.Contains(serverBody, want) {
 			t.Fatalf("服务器表单应保留三个成员并显示第四行，缺少 %q：%s", want, serverBody)

@@ -190,7 +190,11 @@ type pageData struct {
 	NavCurrent string
 	Home       *homeView
 	// Authorization 承载「授权」标签三个子页与共用服务器勾选组件的数据。
-	Authorization *authorizationPage
+	Authorization     *authorizationPage
+	More              *moreView
+	LocationsNetworks *locationsNetworksView
+	LocationForm      *locationFormView
+	NetworkForm       *networkFormView
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染

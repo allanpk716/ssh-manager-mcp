@@ -26,15 +26,6 @@
 <div class="site-header-main">
 <p class="brand">sshmgr 管理界面</p>
 <p class="role">{{.Caps.RoleLabel}}{{if .Caps.CanWrite}} · 全功能可写{{end}}</p>
-{{if and .Caps.CanWrite .Authenticated}}
-<nav class="header-actions">
-{{if .Caps.ShowAuthorityActions}}
-<a href="/ui/password">修改口令</a>
-<form method="post" action="/ui/logout"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">注销</button></form>
-<form method="post" action="/ui/logout-all"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">注销全部会话</button></form>
-{{end}}
-</nav>
-{{end}}
 </div>
 <nav class="primary-nav" aria-label="一级导航">
 <a href="/ui/"{{if eq .NavCurrent "home"}} aria-current="page"{{end}}><svg viewBox="0 0 24 24" aria-hidden="true"><use href="#nav-home"/></svg>主页</a>

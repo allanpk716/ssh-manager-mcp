@@ -204,6 +204,34 @@ type TopologyWriteSource struct {
 	RemoteAddress string
 }
 
+// TopologyLocationChanges 表示地点的一次部分更新；指针为空的字段保持
+// 不变，Parent 指向空字符串表示改为根地点。
+type TopologyLocationChanges struct {
+	Name   *string
+	Parent *string
+	Note   *string
+}
+
+// TopologyNetworkInput 是地点与网络页提交的一个新网络。Type 是 physical
+// 或 virtual；Site 是物理局域网覆盖地点的完整路径。
+type TopologyNetworkInput struct {
+	Name          string
+	Type          string
+	Site          string
+	NetworkRange  string
+	BandwidthMbps int64
+	Metered       bool
+}
+
+// TopologyNetworkChanges 表示网络的一次部分更新；类型登记后不可修改。
+type TopologyNetworkChanges struct {
+	Name          *string
+	Site          *string
+	NetworkRange  *string
+	BandwidthMbps *int64
+	Metered       *bool
+}
+
 // ErrTopologyLayoutInvalid 表示布局请求引用了不存在的实体或内容非法；处理
 // 器把它换算成面向浏览器的客户端错误。
 var ErrTopologyLayoutInvalid = errors.New("布局请求内容无效")
@@ -224,6 +252,13 @@ type TopologyWriter interface {
 	// ResetTopologyLayout 清空一个视图保存的全部坐标并写一条来源为 Web UI
 	// 的审计。
 	ResetTopologyLayout(view string, source TopologyWriteSource) error
+	// 地点与网络管理页的写入；实现必须复用存储层的地点树与网络函数，
+	// 保证成环、删除守卫、审计与快照修订号行为一致。
+	AddLocation(name, parent, note string, source TopologyWriteSource) (string, error)
+	EditLocation(ref string, changes TopologyLocationChanges, source TopologyWriteSource) (string, error)
+	DeleteLocation(ref string, source TopologyWriteSource) (string, error)
+	AddManagedNetwork(input TopologyNetworkInput, source TopologyWriteSource) (string, error)
+	EditManagedNetwork(name string, changes TopologyNetworkChanges, source TopologyWriteSource) (string, error)
 }
 
 // registerTopologyRoutes 注册拓扑图页面与只读数据接口。没有拓扑来源的构

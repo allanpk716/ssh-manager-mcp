@@ -192,7 +192,7 @@ func TestOpsAuditPageFiltersAndOlderLink(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "<h1>审计</h1>") {
 		t.Fatalf("单机应打开审计页，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
-	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/ops/"`) {
+	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/more/"`) {
 		t.Fatalf("导航应显示更多标签：\n%s", body)
 	}
 

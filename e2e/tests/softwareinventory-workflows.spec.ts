@@ -6,7 +6,7 @@ test("从待办认领未识别进程后它从待办消失", async ({ page, stand
   await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "待办" }).click();
   await expect(page.getByRole("heading", { name: "未识别进程" })).toBeVisible();
-  const processRow = page.locator("tr", { hasText: "/opt/gateway/gateway" });
+  const processRow = page.locator(".record-card", { hasText: "/opt/gateway/gateway" });
   await expect(processRow).toContainText("0.0.0.0:8443/tcp");
   await processRow.getByRole("link", { name: "认领" }).click();
 
@@ -22,7 +22,7 @@ test("从待办认领未识别进程后它从待办消失", async ({ page, stand
 
   await expect(page.getByRole("heading", { name: "软件清单待办" })).toBeVisible();
   await expect(page.getByText("已登记软件声明。")).toBeVisible();
-  await expect(page.locator("tr", { hasText: "/opt/gateway/gateway" })).toHaveCount(0);
+  await expect(page.locator(".record-card", { hasText: "/opt/gateway/gateway" })).toHaveCount(0);
 });
 
 test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) => {
@@ -38,7 +38,7 @@ test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) =
   await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "工作站" }).click();
   await expect(page.getByRole("heading", { name: "工作站 · 软件清单" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "业务网关" }).first()).toBeVisible();
+  await expect(page.locator(".record-card", { hasText: "业务网关" }).first()).toBeVisible();
 });
 
 test("声明草稿驳回后消失", async ({ page, standaloneUI }) => {
@@ -77,6 +77,6 @@ test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({
   await expect(page.getByLabel("服务器条目", { exact: true })).toHaveValue("web-1");
   await expect(page.getByLabel("允许用 sudo 采集")).toBeChecked();
   await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
-  const serverRow = page.locator("tr", { hasText: "web-1" });
+  const serverRow = page.locator(".record-card", { hasText: "web-1" });
   await expect(serverRow).toContainText("已打开");
 });

@@ -4,6 +4,8 @@ test("审计页按来源过滤后可以继续翻页", async ({ page, standaloneU
   await openStandaloneUI(page, standaloneUI);
 
   await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "更多" }).click();
+  await page.getByRole("heading", { name: "更多" }).waitFor();
+  await page.getByRole("link", { name: "审计日志" }).click();
   await page.getByRole("heading", { name: "审计" }).waitFor();
   await page.getByLabel("来源", { exact: true }).selectOption("cli");
   await page.getByRole("button", { name: "查询" }).click();

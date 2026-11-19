@@ -407,7 +407,7 @@ func (c capabilities) ShowMoreTab() bool {
 }
 
 func (c capabilities) MoreTabPath() string {
-	return "/ui/ops/"
+	return morePath
 }
 
 // capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础
@@ -537,6 +537,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.registerShareRoutes()
 		h.registerSoftwareInventoryRoutes()
 		h.registerOpsRoutes()
+		h.registerMoreRoutes()
 	}
 	return newLoopbackHandler(cfg, registerRoutes)
 }

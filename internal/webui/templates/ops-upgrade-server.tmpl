@@ -6,11 +6,11 @@
 {{end}}
 {{if .OpsUpgradeServerSuccess}}
 <div class="notice notice-success">
-<p>本机已升级为权威端。已有服务器、Profile、项目令牌与机密项保持不变。</p>
+<p>本机已升级为权威端。已有服务器、Profile、MCP 访问令牌与机密项保持不变。</p>
 <p><code>sshmgr ui</code> 即将退出，再次运行它进入权威端初始化向导。</p>
 </div>
 {{else}}
-<p>升级会把本机从单机改为权威端。已有服务器、Profile、项目令牌与机密项保持不变，vault 数据不迁移也不清空。</p>
+<p>升级会把本机从单机改为权威端。已有服务器、Profile、MCP 访问令牌与机密项保持不变，vault 数据不迁移也不清空。</p>
 <p>升级后还需要设置管理员口令、提权安装 serve；正式 Web UI 改由 serve 提供。</p>
 <form class="confirm-form" method="post" action="/ui/ops/upgrade-server/confirm">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">

@@ -15,7 +15,7 @@ test("桌面从类型选择页新增有多个网络成员的其他设备", async
 
     await page.getByLabel("设备名", { exact: true }).fill("桌面网络存储");
     await page.getByLabel("备注", { exact: true }).fill("共享照片与备份");
-    await page.getByLabel("站点", { exact: true }).selectOption("家A");
+    await page.getByLabel("地点", { exact: true }).selectOption("家A");
     await page.getByLabel("物理局域网", { exact: true }).selectOption("家A局域网");
     await page.getByLabel("物理局域网地址").fill("192.168.1.80");
     await page.getByLabel("虚拟局域网", { exact: true }).first().selectOption("虚拟网");

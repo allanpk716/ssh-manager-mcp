@@ -477,12 +477,18 @@ func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
 	}
 	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 
-	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	home := authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	homeBody, _ := io.ReadAll(home.Body)
+	home.Body.Close()
+	if strings.Contains(string(homeBody), "注销全部会话") || strings.Contains(string(homeBody), "修改口令") {
+		t.Fatalf("账号操作应移入“更多”菜单，顶部条不应显示：\n%s", homeBody)
+	}
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/more/", cookie)
 	pageBody, _ := io.ReadAll(page.Body)
 	page.Body.Close()
-	for _, want := range []string{"权威端", "注销全部会话", "修改口令", "注销"} {
+	for _, want := range []string{"权威端", "注销全部会话", "修改管理员口令", "注销"} {
 		if !strings.Contains(string(pageBody), want) {
-			t.Fatalf("权威端页头应包含 %q：\n%s", want, pageBody)
+			t.Fatalf("权威端“更多”菜单应包含 %q：\n%s", want, pageBody)
 		}
 	}
 	match := regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)"`).FindStringSubmatch(string(pageBody))
@@ -508,12 +514,12 @@ func TestAuthorityHeaderAndLogoutActions(t *testing.T) {
 
 	cookie = authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 	otherCookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
-	page = authorityGet(t, handler, "127.0.0.1:7879", "/ui/", cookie)
+	page = authorityGet(t, handler, "127.0.0.1:7879", "/ui/more/", cookie)
 	pageBody, _ = io.ReadAll(page.Body)
 	page.Body.Close()
 	match = regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)"`).FindStringSubmatch(string(pageBody))
 	if match == nil {
-		t.Fatalf("服务器列表页应包含防跨站请求伪造令牌：\n%s", pageBody)
+		t.Fatalf("“更多”菜单应包含防跨站请求伪造令牌：\n%s", pageBody)
 	}
 	logoutAll := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/logout-all", url.Values{
 		"csrf_token": {match[1]},
