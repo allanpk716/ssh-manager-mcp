@@ -71,6 +71,12 @@ type SecretSource interface {
 	ListSecrets(instance, query, server string) ([]SecretRow, error)
 }
 
+// SecretMissingNoteSource 是机密项读取来源的可选扩展，只给可写角色实现。
+// 它直接复用存储层「备注为空」的查询，授权子页与主页待办共用。
+type SecretMissingNoteSource interface {
+	ListSecretsWithoutNote() ([]SecretRow, error)
+}
+
 // SecretDeliverySecretRow 是页面展示的一个下发记录机密项引用。
 type SecretDeliverySecretRow struct {
 	Name         string
@@ -264,7 +270,8 @@ func navigationArea(path string) string {
 		path == "/ui/clients" || strings.HasPrefix(path, "/ui/clients/") ||
 		path == "/ui/ops/client" || strings.HasPrefix(path, "/ui/ops/client/"):
 		return "clients"
-	case strings.HasPrefix(path, "/ui/access/") || strings.HasPrefix(path, "/ui/secrets/") ||
+	case strings.HasPrefix(path, "/ui/authorization/") || strings.HasPrefix(path, "/ui/access/") ||
+		strings.HasPrefix(path, "/ui/secrets/") ||
 		strings.HasPrefix(path, "/ui/shares/"):
 		return "authorization"
 	default:
@@ -380,6 +387,9 @@ func (c capabilities) ShowAuthorizationTab() bool {
 }
 
 func (c capabilities) AuthorizationTabPath() string {
+	if c.ShowAuthorizationTab() {
+		return authorizationRootPath
+	}
 	switch {
 	case c.CanManageProfiles:
 		return "/ui/access/profiles"
@@ -473,11 +483,13 @@ type session struct {
 	csrf           string
 	clientInstance string
 	accessFlash    *AccessFlash
-	opsBackupFlash *OpsBackupFlash
-	serverAddDraft *serverAddDraft
-	generation     int64
-	lastActive     time.Time
-	lastVerified   time.Time
+	// authorizationRefusal 保存删除 Profile 被拒绝的一次性提示。
+	authorizationRefusal *AccessProfileInUse
+	opsBackupFlash       *OpsBackupFlash
+	serverAddDraft       *serverAddDraft
+	generation           int64
+	lastActive           time.Time
+	lastVerified         time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。
@@ -517,6 +529,7 @@ func New(cfg Config) (http.Handler, Startup, error) {
 		h.mux.HandleFunc(startPath, h.handleStart)
 		h.mux.HandleFunc("/ui/assets/", h.handleAsset)
 		h.mux.HandleFunc(listPath, h.requireSession(h.handleUIRoot))
+		registerAuthorizationRoutes(h)
 		h.registerTopologyRoutes()
 		h.registerAccessRoutes()
 		h.registerServerRoutes()

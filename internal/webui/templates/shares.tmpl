@@ -1,43 +1,25 @@
 {{define "content"}}
-<section class="shares-page">
-<h1>共享存储</h1>
+{{if .Authorization}}{{template "authorization-subpage" .}}
+<section class="authorization-list-page">
+<header class="title-row"><h1>共享存储</h1>{{if .Caps.CanManageShares}}<a class="primary-action" href="/ui/shares/new">新建共享存储</a>{{end}}</header>
 {{if not .Caps.CanWrite}}<p class="readonly-notice">只显示本客户端可用的部分，修改请到权威端。</p>{{end}}
-<form class="filter-form" method="get" action="/ui/shares/">
-<label for="share-device">按提供方设备筛选</label>
-<select id="share-device" name="device">
-<option value="">全部提供方设备</option>
-{{range .ShareDeviceOptions}}<option value="{{.}}"{{if eq $.ShareFilterDevice .}} selected{{end}}>{{.}}</option>{{end}}
-</select>
-<label for="share-server">按服务器条目筛选</label>
-<select id="share-server" name="server">
-<option value="">全部服务器条目</option>
-{{range .ShareServerOptions}}<option value="{{.Name}}"{{if eq $.ShareFilterServer .Name}} selected{{end}}>{{.Name}}</option>{{end}}
-</select>
+<form class="filter-form authorization-filter" method="get" action="/ui/authorization/shares">
+<div class="form-field"><label for="share-device">按提供方设备筛选</label>
+<select id="share-device" name="device"><option value="">全部提供方设备</option>{{range .Authorization.DeviceOptions}}<option value="{{.}}"{{if eq $.Authorization.DeviceFilter .}} selected{{end}}>{{.}}</option>{{end}}</select></div>
+<div class="form-field"><label for="share-server">按服务器筛选</label>
+<select id="share-server" name="server"><option value="">全部服务器</option>{{range .Authorization.ServerOptions}}<option value="{{.Name}}"{{if eq $.Authorization.ServerFilter .Name}} selected{{end}}>{{.Name}}</option>{{end}}</select></div>
 <button type="submit">筛选</button>
 </form>
-<div class="inline-form">
-{{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/new">新增共享存储</a>{{end}}
-{{if .Caps.CanCheckShareResidue}}
-<form method="post" action="/ui/shares/residue">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<button type="submit">检查全部共享残留</button>
-</form>
-{{end}}
+<div class="list-meta"><span>{{len .Authorization.Shares}} 个共享存储</span><span>授权后，服务器可挂载使用</span></div>
+<div class="authorization-resource-list">
+{{range .Authorization.Shares}}
+<a class="resource-card resource-only" href="/ui/authorization/shares/{{.Share.ID}}">
+<span class="resource-icon">存</span>
+<span class="resource-copy"><strong>{{.Share.Name}}</strong><small class="resource-note">{{if .Share.Note}}{{.Share.Note}}{{else}}缺备注{{end}}</small><small>{{.Share.DeviceName}} 提供 · 可挂载 {{.Share.MountableCount}} 台 · {{.ClientCount}} 个客户端能拿到</small></span>
+<span class="chevron-icon">›</span>
+</a>
+{{else}}<div class="home-empty-card">没有共享存储。</div>{{end}}
 </div>
-<table class="server-table">
-<thead><tr><th>共享名</th><th>提供方设备</th><th>盘符</th><th>版本号</th><th>可挂载服务器数量</th><th>操作</th></tr></thead>
-<tbody>
-{{range .Shares}}
-<tr>
-<td><a href="/ui/shares/{{.ID}}">{{.Name}}</a></td>
-<td>{{.DeviceName}}</td>
-<td>{{.Drive}}:</td>
-<td>{{.Version}}</td>
-<td>{{.MountableCount}}</td>
-<td><a href="/ui/shares/{{.ID}}">详情</a></td>
-</tr>
-{{end}}
-</tbody>
-</table>
-</section>
+{{if .Caps.CanCheckShareResidue}}<form method="post" action="/ui/shares/residue"><input type="hidden" name="csrf_token" value="{{.CSRFToken}}"><button type="submit">检查全部共享残留</button></form>{{end}}
+</section>{{end}}
 {{end}}

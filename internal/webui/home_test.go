@@ -61,7 +61,7 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		`href="/ui/"`,
 		`href="/ui/servers/"`,
 		`href="/ui/clients/"`,
-		`href="/ui/access/profiles"`,
+		`href="/ui/authorization/"`,
 		`href="/ui/ops/"`,
 		"主页", "服务器", "客户端", "授权", "更多",
 		`href="/ui/add"`,
@@ -78,7 +78,7 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		}
 	}
 	if strings.Contains(body, "缺备注") {
-		t.Fatalf("备注待办依赖后续数据层查询，合入前不得显示：\n%s", body)
+		t.Fatalf("这个替身数据来源没有实现缺备注查询，主页不得显示缺备注待办：\n%s", body)
 	}
 	for _, oldNavigation := range []string{
 		`href="/ui/access/"`, `href="/ui/access/profiles">Profile`, `href="/ui/access/projects"`,

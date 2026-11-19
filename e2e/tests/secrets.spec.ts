@@ -4,12 +4,12 @@ test("新增机密项后列表不显示值", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
   await gotoUIPath(page, "/ui/secrets/");
-  await page.getByRole("link", { name: "新增机密项" }).click();
-  await page.getByLabel("名字").fill("BROWSER_TOKEN");
+  await page.getByRole("link", { name: "新建机密项" }).click();
+  await page.getByLabel("名称").fill("BROWSER_TOKEN");
   await page.getByLabel("备注").fill("浏览器新增");
   await page.getByLabel("环境变量名（可选）").fill("BROWSER_TOKEN_FILE");
   await page.getByLabel("值", { exact: true }).fill("browser-entered-secret-value");
-  await page.getByRole("button", { name: "新增" }).click();
+  await page.getByRole("button", { name: "创建" }).click();
 
   await expect(page.getByRole("heading", { name: "机密项" })).toBeVisible();
   await expect(page.getByRole("link", { name: "BROWSER_TOKEN" })).toBeVisible();

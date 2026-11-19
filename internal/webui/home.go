@@ -108,6 +108,20 @@ func (h *handler) buildHomeView(r *http.Request) (*homeView, error) {
 		}
 		view.ProfileCount = len(profiles)
 	}
+	if missingSecrets, missingShares := h.missingSecretNoteCount(), h.missingShareNoteCount(); missingSecrets > 0 || missingShares > 0 {
+		details := make([]string, 0, 2)
+		if missingSecrets > 0 {
+			details = append(details, homeCountText(missingSecrets, "个机密项"))
+		}
+		if missingShares > 0 {
+			details = append(details, homeCountText(missingShares, "个共享存储"))
+		}
+		view.Tasks = append(view.Tasks, HomeTask{
+			Title:  homeCountText(missingSecrets+missingShares, "个资源缺备注"),
+			Detail: strings.Join(details, "、") + "缺备注，agent 无法判断用途",
+			Href:   "/ui/authorization/",
+		})
+	}
 	if h.cfg.SoftwareInventory != nil && h.caps.ShowSoftwareInventoryArea {
 		todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos()
 		if err != nil {

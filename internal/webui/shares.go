@@ -83,6 +83,12 @@ type ShareSource interface {
 	ShareDetail(instance, identifier string) (*ShareRow, error)
 }
 
+// ShareMissingNoteSource 是共享存储读取来源的可选扩展，只给可写角色实现。
+// 它直接复用存储层「备注为空」的查询，授权子页与主页待办共用。
+type ShareMissingNoteSource interface {
+	ListSharedStoragesWithoutNote() ([]ShareRow, error)
+}
+
 // ShareNotFoundError 表示路径里的共享存储不存在。
 type ShareNotFoundError struct {
 	Identifier string
@@ -365,7 +371,7 @@ func shareServerByID(servers []ShareServerView, id string) *ShareServerView {
 }
 
 func (h *handler) handleSharesRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != sharesPath {
+	if r.URL.Path != sharesPath && r.URL.Path != authorizationSharesPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -391,10 +397,26 @@ func (h *handler) handleSharesRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sort.SliceStable(serverOptions, func(i, j int) bool { return serverOptions[i].Name < serverOptions[j].Name })
+	cards := make([]authorizationShareCard, 0, len(rows))
+	missingOnly := r.URL.Query().Get("missing_note") == "1"
+	for _, row := range rows {
+		if missingOnly && strings.TrimSpace(row.Note) != "" {
+			continue
+		}
+		cards = append(cards, authorizationShareCard{
+			Share:       row,
+			ClientCount: h.authorizationClientsForServers(shareServerRefs(row.MountableServers)),
+		})
+	}
 	h.renderPage(w, r, http.StatusOK, "shares.tmpl", pageData{
 		Title: "共享存储", Shares: rows,
 		ShareFilterDevice: device, ShareFilterServer: server,
 		ShareDeviceOptions: deviceOptions, ShareServerOptions: serverOptions,
+		Authorization: &authorizationPage{
+			Subpage: "shares", Shares: cards, DeviceFilter: device, ServerFilter: server,
+			DeviceOptions: deviceOptions, ServerOptions: serverOptions,
+			MissingShareCount: h.missingShareNoteCount(),
+		},
 	})
 }
 
@@ -465,7 +487,34 @@ func (h *handler) shareDetailData(r *http.Request, detail *ShareRow) (pageData, 
 	if h.caps.CanReselectShares {
 		data.ShareReselectEntries = shareReselectEntries(detail)
 	}
+	data.Authorization = h.authorizationShareDetail(detail)
 	return data, nil
+}
+
+// authorizationShareDetail 把共享存储详情组装成授权子页数据；挂载任务、
+// 撤销与残留入口仍由原有分区渲染。
+func (h *handler) authorizationShareDetail(detail *ShareRow) *authorizationPage {
+	servers := shareServerRefs(detail.MountableServers)
+	canAdjust := h.caps.CanManageShares && h.cfg.SecretsWriter != nil && h.cfg.Secrets != nil
+	selectionPath := ""
+	if canAdjust {
+		selectionPath = authorizationSharesPath + "/" + detail.ID + authorizationServersSuffix
+	}
+	return &authorizationPage{
+		Subpage: "shares",
+		Detail: &authorizationDetail{
+			Kind: authorizationResourceKindSharedStore, KindLabel: "共享存储", ID: detail.ID,
+			Name: detail.Name, Note: detail.Note, Servers: servers,
+			Clients: h.authorizationClientAccess(servers), SelectionPath: selectionPath, CanAdjust: canAdjust,
+			Fields: []authorizationField{
+				{Label: "提供方设备", Value: detail.DeviceName},
+				{Label: "挂载账号用户名", Value: detail.MountUser},
+				{Label: "挂载密码机密项", Value: detail.PasswordSecret},
+				{Label: "固定盘符", Value: detail.Drive + ":"},
+				{Label: "共享存储版本号", Value: strconv.FormatInt(detail.Version, 10)},
+			},
+		},
+	}
 }
 
 // shareAuthorizationView 读取全部服务器条目与挂载密码机密项的当前授权，
@@ -672,10 +721,14 @@ func (h *handler) handleShareEditPost(w http.ResponseWriter, r *http.Request, id
 	view.ChangeNote = r.PostFormValue("change_note")
 	changes, changed := shareEditChanges(view.Form, view.ChangeNote, detail)
 	if !changed {
-		h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", pageData{
-			Title: "共享存储 " + detail.Name, ShareDetail: detail,
-			ShareDetailNotice: "没有变化，未写入数据或审计。",
-		})
+		data, dataErr := h.shareDetailData(r, detail)
+		if dataErr != nil {
+			h.renderError(w, r, http.StatusInternalServerError, "读取共享存储详情失败",
+				"读取共享存储详情失败，请稍后重试。")
+			return
+		}
+		data.ShareDetailNotice = "没有变化，未写入数据或审计。"
+		h.renderPage(w, r, http.StatusOK, "share-detail.tmpl", data)
 		return
 	}
 	edited, err := h.cfg.SharesWriter.EditShare(identifier, changes, ShareWriteSource{RemoteAddress: remoteIP(r)})

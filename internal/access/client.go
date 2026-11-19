@@ -16,6 +16,7 @@ import (
 type ClientSummary struct {
 	ID            string
 	Name          string
+	ProfileID     string
 	ProfileName   string
 	ServerCount   int
 	LastPullAt    time.Time
@@ -126,6 +127,7 @@ func (m *Manager) ListClients() ([]ClientSummary, error) {
 	for _, token := range tokens {
 		out = append(out, ClientSummary{
 			ID: token.ID, Name: token.Name,
+			ProfileID:   token.ProfileID,
 			ProfileName: profileNames[token.ProfileID], ServerCount: serverCounts[token.ProfileID],
 			LastPullAt: token.LastPullAt, ClientVersion: token.ClientVersion,
 			RecommendedVersion: buildinfo.Version,

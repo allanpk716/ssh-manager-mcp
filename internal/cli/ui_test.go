@@ -162,7 +162,7 @@ func TestUICommandStandaloneOpensAccessProfilePage(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther || len(resp.Cookies()) == 0 {
 		t.Fatalf("启动网址应换取会话，状态码=%d cookie=%d", resp.StatusCode, len(resp.Cookies()))
 	}
-	profileRequest, err := http.NewRequest(http.MethodGet, "http://"+u.Host+"/ui/access/profiles", nil)
+	profileRequest, err := http.NewRequest(http.MethodGet, "http://"+u.Host+"/ui/authorization/profiles", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestUICommandStandaloneOpensAccessProfilePage(t *testing.T) {
 	body, _ := io.ReadAll(profileResponse.Body)
 	profileResponse.Body.Close()
 	if profileResponse.StatusCode != http.StatusOK || !strings.Contains(string(body), "Profile") {
-		t.Fatalf("单机 ui 应提供 Profile 页，状态码=%d 页面：\n%s", profileResponse.StatusCode, body)
+		t.Fatalf("单机 ui 应提供 Profile 子页，状态码=%d 页面：\n%s", profileResponse.StatusCode, body)
 	}
 
 	if err := finish(t); err != nil {

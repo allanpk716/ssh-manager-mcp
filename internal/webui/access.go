@@ -35,6 +35,7 @@ type AccessReference struct {
 type ClientSummary struct {
 	ID            string
 	Name          string
+	ProfileID     string
 	ProfileName   string
 	ServerCount   int
 	LastPullAt    time.Time
@@ -323,16 +324,8 @@ func (h *handler) handleAccessProfiles(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "Profile 页只接受 GET 与 POST 请求。")
 		return
 	}
-	deleteReverifyID := r.URL.Query().Get("reverify_delete")
-	profiles, err := h.cfg.Access.ListProfiles()
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取 profile 列表失败", "读取 profile 列表失败，请稍后重试。")
-		return
-	}
-	h.renderPage(w, r, http.StatusOK, "profiles.tmpl", pageData{
-		Title: "Profile", AccessProfiles: profiles, AccessFlash: h.takeAccessFlash(r),
-		AccessDeleteReverifyID: deleteReverifyID,
-	})
+	// 旧地址保持可用：列表读取一律进入新的授权子页。
+	http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
 }
 
 func (h *handler) handleAccessProfileAdd(w http.ResponseWriter, r *http.Request) {
@@ -342,14 +335,14 @@ func (h *handler) handleAccessProfileAdd(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath(accessProfilesPath), http.StatusSeeOther)
+		http.Redirect(w, r, reverifyPath(authorizationProfilesPath), http.StatusSeeOther)
 		return
 	}
 	if err := h.cfg.Access.AddProfile(name, AccessWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "新增 profile 失败", "新增 profile 失败，请稍后重试。")
 		return
 	}
-	http.Redirect(w, r, accessProfilesPath, http.StatusSeeOther)
+	http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
 }
 
 func (h *handler) handleAccessProfileDelete(w http.ResponseWriter, r *http.Request) {
@@ -364,7 +357,7 @@ func (h *handler) handleAccessProfileDelete(w http.ResponseWriter, r *http.Reque
 	}
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		next := url.Values{"reverify_delete": {id}}
-		http.Redirect(w, r, reverifyPath(accessProfilesPath+"?"+next.Encode()), http.StatusSeeOther)
+		http.Redirect(w, r, reverifyPath(authorizationProfilesPath+"?"+next.Encode()), http.StatusSeeOther)
 		return
 	}
 	inUse, err := h.cfg.Access.DeleteProfile(id, AccessWriteSource{RemoteAddress: remoteIP(r)})
@@ -373,17 +366,11 @@ func (h *handler) handleAccessProfileDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if inUse != nil {
-		profiles, listErr := h.cfg.Access.ListProfiles()
-		if listErr != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "读取 profile 列表失败", "删除被拒绝后读取 profile 列表失败，请稍后重试。")
-			return
-		}
-		h.renderPage(w, r, http.StatusConflict, "profiles.tmpl", pageData{
-			Title: "Profile", AccessProfiles: profiles, AccessDeleteRefusal: inUse,
-		})
+		h.setAuthorizationRefusal(r, inUse)
+		http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, accessProfilesPath, http.StatusSeeOther)
+	http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
 }
 
 func (h *handler) handleAccessProfileGrants(w http.ResponseWriter, r *http.Request) {
@@ -400,29 +387,19 @@ func (h *handler) handleAccessProfileGrants(w http.ResponseWriter, r *http.Reque
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "授权表单只接受 GET 与 POST 请求。")
 		return
 	}
-	profile, err := h.accessProfileByID(profileID)
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取 profile 失败", "读取 profile 失败，请稍后重试。")
-		return
+	// 旧授权表单地址保持可用：读取一律进入新的服务器勾选组件，并保留
+	// 重新验证跳转带回的候选集合。
+	query := url.Values{}
+	for _, id := range r.URL.Query()["server"] {
+		if id != "" {
+			query.Add("server", id)
+		}
 	}
-	if profile == nil {
-		h.renderError(w, r, http.StatusNotFound, "profile 不存在", "请求的 profile 不存在。")
-		return
+	target := authorizationProfilesPath + "/" + profileID + authorizationServersSuffix
+	if encoded := query.Encode(); encoded != "" {
+		target += "?" + encoded
 	}
-	servers, err := h.cfg.Servers.Servers("")
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
-		return
-	}
-	view := accessGrantView(*profile, servers)
-	h.applyDesiredGrantSelection(r, view)
-	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		view.NeedsReverify = true
-		view.ReverifyPath = reverifyPath(grantResumePath(profileID, selectedGrantIDs(view)))
-	}
-	h.renderPage(w, r, http.StatusOK, "profile-grants.tmpl", pageData{
-		Title: "调整 profile 授权", AccessGrant: view,
-	})
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (h *handler) handleAccessProfileGrantPost(w http.ResponseWriter, r *http.Request, profileID string) {
@@ -450,13 +427,15 @@ func (h *handler) handleAccessProfileGrantPost(w http.ResponseWriter, r *http.Re
 		return
 	}
 	if conflict != nil {
-		h.renderGrantConflict(w, r, http.StatusConflict, profileID, conflict)
+		http.Redirect(w, r,
+			authorizationProfilesPath+"/"+profileID+authorizationServersSuffix+"?conflict=1",
+			http.StatusSeeOther)
 		return
 	}
 	h.setAccessFlash(r, &AccessFlash{
 		ProfileName: profile.Name, Added: change.Added, Removed: change.Removed,
 	})
-	http.Redirect(w, r, accessProfilesPath, http.StatusSeeOther)
+	http.Redirect(w, r, authorizationProfilesPath, http.StatusSeeOther)
 }
 
 func grantAddsServer(expected, desired []string) bool {
@@ -477,7 +456,7 @@ func grantResumePath(profileID string, desired []string) string {
 	for _, id := range desired {
 		query.Add("server", id)
 	}
-	return accessProfilesPrefix + profileID + "/grants?" + query.Encode()
+	return authorizationProfilesPath + "/" + profileID + authorizationServersSuffix + "?" + query.Encode()
 }
 
 func reverifyPath(next string) string {

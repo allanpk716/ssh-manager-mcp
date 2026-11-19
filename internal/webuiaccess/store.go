@@ -459,8 +459,9 @@ func (s managerStore) ListClients() ([]webui.ClientSummary, error) {
 	out := make([]webui.ClientSummary, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, webui.ClientSummary{
-			ID: row.ID, Name: row.Name, ProfileName: row.ProfileName, ServerCount: row.ServerCount,
-			LastPullAt: row.LastPullAt, ClientVersion: row.ClientVersion,
+			ID: row.ID, Name: row.Name, ProfileID: row.ProfileID, ProfileName: row.ProfileName,
+			ServerCount: row.ServerCount,
+			LastPullAt:  row.LastPullAt, ClientVersion: row.ClientVersion,
 			RecommendedVersion: row.RecommendedVersion, MachineName: row.MachineName,
 			Paired: row.Paired, Revoked: row.Revoked,
 		})
@@ -475,7 +476,8 @@ func (s managerStore) ClientDetail(id string) (*webui.ClientDetail, error) {
 	}
 	out := &webui.ClientDetail{
 		ClientSummary: webui.ClientSummary{
-			ID: detail.ID, Name: detail.Name, ProfileName: detail.ProfileName,
+			ID: detail.ID, Name: detail.Name, ProfileID: detail.ProfileID,
+			ProfileName: detail.ProfileName,
 			ServerCount: detail.ServerCount, LastPullAt: detail.LastPullAt,
 			ClientVersion: detail.ClientVersion, MachineName: detail.MachineName,
 			Paired: detail.Paired, Revoked: detail.Revoked,

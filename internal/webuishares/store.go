@@ -178,6 +178,21 @@ func (s storeSource) ListShares(_, device, server string) ([]webui.ShareRow, err
 	return rows, err
 }
 
+// ListSharedStoragesWithoutNote 返回备注为空的共享存储，供授权子页与主
+// 页待办提示。
+func (s storeSource) ListSharedStoragesWithoutNote() ([]webui.ShareRow, error) {
+	var rows []webui.ShareRow
+	err := s.withStore(func(st *store.Store) error {
+		shares, listErr := st.ListSharedStoragesWithoutNote()
+		if listErr != nil {
+			return listErr
+		}
+		rows = shareRows(shares)
+		return nil
+	})
+	return rows, err
+}
+
 func (s storeSource) ShareDetail(_, identifier string) (*webui.ShareRow, error) {
 	var row *webui.ShareRow
 	err := s.withStore(func(st *store.Store) error {

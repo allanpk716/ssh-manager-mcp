@@ -1,0 +1,20 @@
+{{define "authorization-subpage"}}
+<nav class="segmented authorization-subpages" aria-label="授权子页">
+<a class="segment" href="/ui/authorization/profiles"{{if eq .Authorization.Subpage "profiles"}} aria-current="page"{{end}}>Profile</a>
+<a class="segment" href="/ui/authorization/secrets"{{if eq .Authorization.Subpage "secrets"}} aria-current="page"{{end}}>机密项</a>
+<a class="segment" href="/ui/authorization/shares"{{if eq .Authorization.Subpage "shares"}} aria-current="page"{{end}}>共享存储</a>
+</nav>
+{{if .Authorization.MissingSecretCount}}
+<a class="attention-card" href="/ui/authorization/secrets?missing_note=1">
+<span class="attention-copy">{{.Authorization.MissingSecretCount}} 个机密项缺备注，agent 无法判断用途 · 去补充</span>
+<span class="chevron-icon">›</span>
+</a>
+{{end}}
+{{if .Authorization.MissingShareCount}}
+<a class="attention-card" href="/ui/authorization/shares?missing_note=1">
+<span class="attention-copy">{{.Authorization.MissingShareCount}} 个共享存储缺备注，agent 无法判断用途 · 去补充</span>
+<span class="chevron-icon">›</span>
+</a>
+{{end}}
+{{if .Authorization.Notice}}<div class="operation-refusal">{{.Authorization.Notice}}</div>{{end}}
+{{end}}

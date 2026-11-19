@@ -189,6 +189,8 @@ type pageData struct {
 	// NavCurrent 标记一级导航中的当前区域；空串时按请求路径推导。
 	NavCurrent string
 	Home       *homeView
+	// Authorization 承载「授权」标签三个子页与共用服务器勾选组件的数据。
+	Authorization *authorizationPage
 }
 
 // renderPage 按请求渲染页面：带 HX-Request 请求头（htmx 局部刷新）时只渲染

@@ -5,13 +5,17 @@ test("调整 profile 授权后显示结果摘要", async ({ page, standaloneUI }
 
   await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "授权" }).click();
   await page.getByRole("heading", { name: "Profile" }).waitFor();
-  await page.getByRole("link", { name: "调整授权" }).click();
+  await page.getByRole("link", { name: "运维" }).click();
+  await page.getByRole("link", { name: "调整服务器" }).click();
   await page.getByRole("checkbox", { name: "db-1" }).check();
   await page.getByRole("checkbox", { name: "web-1" }).uncheck();
-  await page.getByRole("button", { name: "保存授权" }).click();
+  await expect(page.getByText("新增 1 台、移除 1 台")).toBeVisible();
+  await page.getByRole("button", { name: "下一步" }).click();
+  await expect(page.getByRole("heading", { name: "确认授权" })).toBeVisible();
+  await page.getByRole("button", { name: "确认保存授权" }).click();
 
   await expect(
-    page.getByText("已保存 运维 的授权：新增授权：db-1；撤销授权：web-1"),
+    page.getByText("已保存 运维 的授权：新增 1 台，移除 1 台"),
   ).toBeVisible();
 });
 

@@ -280,7 +280,7 @@ func TestSecretsPageListsFiltersAndNeverShowsValue(t *testing.T) {
 	if page.StatusCode != http.StatusOK {
 		t.Fatalf("机密项列表状态码 = %d，页面：\n%s", page.StatusCode, pageBody)
 	}
-	for _, want := range []string{"机密项", "DEPLOY_TOKEN", "部署网站", "DEPLOY_TOKEN_FILE", "web-1", "创建时间", "值最后更改"} {
+	for _, want := range []string{"机密项", "DEPLOY_TOKEN", "部署网站", "DEPLOY_TOKEN_FILE", "web-1"} {
 		if !strings.Contains(pageBody, want) {
 			t.Fatalf("列表缺少 %q：\n%s", want, pageBody)
 		}
@@ -294,7 +294,7 @@ func TestSecretsPageListsFiltersAndNeverShowsValue(t *testing.T) {
 	if filtered.StatusCode != http.StatusOK || strings.Contains(filteredBody, "DEPLOY_TOKEN") {
 		t.Fatalf("搜索与服务器筛选应过滤列表，状态码=%d 页面：\n%s", filtered.StatusCode, filteredBody)
 	}
-	if !strings.Contains(pageBody, `<a href="/ui/secrets/`) {
+	if !strings.Contains(pageBody, `href="/ui/authorization/secrets/`) {
 		t.Fatalf("列表应提供机密项详情链接：\n%s", pageBody)
 	}
 }
@@ -311,7 +311,7 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 		"value": {"web-secret-value"},
 	})
 	formBody := body(t, form)
-	if form.StatusCode != http.StatusSeeOther || form.Header.Get("Location") != "/ui/secrets/" {
+	if form.StatusCode != http.StatusSeeOther || form.Header.Get("Location") != "/ui/authorization/secrets" {
 		t.Fatalf("新增应跳回列表，状态码=%d 跳转=%q 页面：\n%s", form.StatusCode, form.Header.Get("Location"), formBody)
 	}
 	list := h.do(http.MethodGet, "/ui/secrets/", nil)
@@ -347,7 +347,7 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 	if invalid.StatusCode != http.StatusBadRequest {
 		t.Fatalf("校验失败状态码 = %d，页面：\n%s", invalid.StatusCode, invalidBody)
 	}
-	for _, want := range []string{"至少", `value="SHORT_TOKEN"`, `value="保留备注"`, `value="SHORT_TOKEN_FILE"`} {
+	for _, want := range []string{"至少", `value="SHORT_TOKEN"`, `>保留备注</textarea>`, `value="SHORT_TOKEN_FILE"`} {
 		if !strings.Contains(invalidBody, want) {
 			t.Fatalf("校验失败页面缺少 %q：\n%s", want, invalidBody)
 		}
@@ -356,7 +356,7 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 		t.Fatalf("校验失败页面不得回显值：\n%s", invalidBody)
 	}
 	if !strings.Contains(invalidBody, `<input type="password"`) ||
-		!strings.Contains(invalidBody, `autocomplete="off"`) {
+		!strings.Contains(invalidBody, `autocomplete="new-password"`) {
 		t.Fatalf("值输入应是关闭自动填充的隐藏输入框：\n%s", invalidBody)
 	}
 
@@ -392,7 +392,7 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	if detail.StatusCode != http.StatusOK {
 		t.Fatalf("详情页状态码 = %d：\n%s", detail.StatusCode, detailBody)
 	}
-	for _, want := range []string{"OLD_TOKEN", "旧备注", "OLD_TOKEN_FILE", "web-1", "修改元数据", "换值", "删除"} {
+	for _, want := range []string{"OLD_TOKEN", "旧备注", "OLD_TOKEN_FILE", "web-1", "保存基本信息", "换值", "删除"} {
 		if !strings.Contains(detailBody, want) {
 			t.Fatalf("详情页缺少 %q：\n%s", want, detailBody)
 		}
@@ -520,9 +520,9 @@ func TestSecretDetailShowsDeliveryRecords(t *testing.T) {
 	detail := body(t, h.do(http.MethodGet, "/ui/secrets/"+ids["API_TOKEN"], nil))
 	for _, want := range []string{
 		"下发记录", "登记失败的历史写入会缺漏，不承诺完整",
-		"web-1", "/etc/app/config.yml", "写入时间", "发起设备与实例", "office-laptop / agent-a",
+		"web-1", "/etc/app/config.yml", "office-laptop / agent-a",
 		"模板原文", "token: {{sshmgr-secret:API_TOKEN}}", "文件 SHA-256 哈希", fileHash,
-		"API_TOKEN：2", "RETIRED_TOKEN（已删除）：1",
+		"API_TOKEN · 值版本 2", "RETIRED_TOKEN（已删除） · 值版本 1",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("机密项详情页缺少 %q：\n%s", want, detail)
@@ -679,7 +679,7 @@ func TestAuthoritySecretWritesRequireReverifyAndPreserveSubmittedState(t *testin
 	}
 
 	addPage := body(t, h.do(http.MethodGet, addResume, nil))
-	for _, want := range []string{`value="NEW_TOKEN"`, `value="权威端"`, `value="AUTH_TOKEN_FILE"`} {
+	for _, want := range []string{`value="NEW_TOKEN"`, `>权威端</textarea>`, `value="AUTH_TOKEN_FILE"`} {
 		if !strings.Contains(addPage, want) {
 			t.Fatalf("新增回跳页应保留元数据 %q：\n%s", want, addPage)
 		}
@@ -981,9 +981,13 @@ func TestSecretAuthorizationScopeCoversOnlyVisibleMatrixAndDetailCells(t *testin
 
 	detail := h.do(http.MethodGet, "/ui/secrets/"+secretID, nil)
 	detailBody := body(t, detail)
-	if !strings.Contains(detailBody, "可写入服务器勾选清单") ||
-		!strings.Contains(detailBody, `name="cell__`+secretID+`__`+dbID+`"`) {
-		t.Fatalf("详情页应有单个机密项的勾选清单：\n%s", detailBody)
+	if !strings.Contains(detailBody, "调整服务器") {
+		t.Fatalf("详情页应有调整服务器入口：\n%s", detailBody)
+	}
+	selection := h.do(http.MethodGet, "/ui/authorization/secrets/"+secretID+"/servers", nil)
+	selectionBody := body(t, selection)
+	if !strings.Contains(selectionBody, `name="server" value="`+dbID+`"`) {
+		t.Fatalf("勾选页应列出服务器：\n%s", selectionBody)
 	}
 	preview := h.do(http.MethodPost, "/ui/secrets/authorization/preview", url.Values{
 		"csrf_token": {csrfToken(t, h)}, "return_to": {"/ui/secrets/" + secretID},
@@ -1011,7 +1015,7 @@ func TestSecretUploadExactlyAtLimitSucceedsOnNewAndValuePages(t *testing.T) {
 		"environment_name": "LIMIT_TOKEN_FILE", "value": "",
 	}, "value_file", longFileName, 64*1024)
 	addedBody := body(t, added)
-	if added.StatusCode != http.StatusSeeOther || added.Header.Get("Location") != "/ui/secrets/" {
+	if added.StatusCode != http.StatusSeeOther || added.Header.Get("Location") != "/ui/authorization/secrets" {
 		t.Fatalf("新增页上传恰好 64 KiB 应成功，状态码=%d 跳转=%q 页面：\n%s", added.StatusCode, added.Header.Get("Location"), addedBody)
 	}
 	manager := secretmanage.New(st)

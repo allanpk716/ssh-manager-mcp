@@ -100,7 +100,7 @@ func TestClientSharesPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testin
 
 	page := body(t, h.do(http.MethodGet, "/ui/shares/", nil))
 	for _, want := range []string{
-		"共享存储", "datasets", "NAS", "Z", "版本号", "可挂载服务器数量", "1",
+		"共享存储", "datasets", "NAS", "可挂载 1 台",
 		"只显示本客户端可用的部分，修改请到权威端。",
 	} {
 		if !strings.Contains(page, want) {
@@ -278,18 +278,26 @@ func TestShareDetailMountScopeChecklistPreviewsAndConfirmsAuthorization(t *testi
 
 	detail := body(t, h.do(http.MethodGet, "/ui/shares/"+datasetsID, nil))
 	for _, want := range []string{
-		"可挂载范围勾选清单", "linux-web", "web 服务器", "posix",
-		"linux-db", "windows-web", "powershell",
-		"同设备的其他条目可能也能读到挂载内容", "预览可挂载范围变更",
+		"授权的服务器", "linux-web", "web 服务器", "posix", "实际能拿到它的客户端",
+		`href="/ui/authorization/shares/` + datasetsID + `/servers"`, "调整服务器",
 	} {
 		if !strings.Contains(detail, want) {
 			t.Fatalf("共享存储详情的可挂载范围勾选清单缺少 %q：\n%s", want, detail)
 		}
 	}
-	if !strings.Contains(detail, `name="cell__`+secretID+`__`+linuxWebID+`" value="1" checked`) ||
-		strings.Contains(detail, `name="cell__`+secretID+`__`+linuxDBID+`" value="1" checked`) ||
-		strings.Contains(detail, `name="cell__`+secretID+`__`+windowsWebID+`" value="1" checked`) {
-		t.Fatalf("可挂载范围勾选清单的初始状态不正确：\n%s", detail)
+
+	selection := body(t, h.do(http.MethodGet, "/ui/authorization/shares/"+datasetsID+"/servers", nil))
+	for _, want := range []string{
+		"linux-web", "linux-db", "windows-web",
+		`name="server" value="` + linuxWebID + `" checked`,
+		`name="server" value="` + linuxDBID + `"`,
+		`name="server" value="` + windowsWebID + `"`,
+		"同一台机器上的其他条目可能也能读到挂载内容",
+		"全选当前筛选结果",
+	} {
+		if !strings.Contains(selection, want) {
+			t.Fatalf("共享存储勾选页缺少 %q：\n%s", want, selection)
+		}
 	}
 
 	cellPrefix := "cell__" + secretID + "__"
@@ -541,9 +549,9 @@ func TestSharesPageListsRowsAndFilters(t *testing.T) {
 		t.Fatalf("共享存储列表状态码 = %d，页面：\n%s", page.StatusCode, pageBody)
 	}
 	for _, want := range []string{
-		"共享存储", "datasets", "NAS", "Z", "备份NAS", "backup",
-		"版本号", "可挂载服务器数量", "新增共享存储",
-		`href="/ui/shares/` + datasetsID + `"`,
+		"共享存储", "datasets", "NAS", "备份NAS", "backup",
+		"datasets 的备注", "可挂载 1 台", "新建共享存储",
+		`href="/ui/authorization/shares/` + datasetsID + `"`,
 	} {
 		if !strings.Contains(pageBody, want) {
 			t.Fatalf("列表缺少 %q：\n%s", want, pageBody)

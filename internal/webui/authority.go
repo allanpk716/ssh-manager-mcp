@@ -86,6 +86,7 @@ func NewAuthority(cfg Config) (http.Handler, AuthorityController, error) {
 	h.mux.HandleFunc("/ui/reverify", h.requireSession(h.handleAuthorityReverify))
 	h.mux.HandleFunc("/ui/", h.requireSession(h.handleAuthorityRoot))
 	// 拓扑图页面与访问区域路由按权威端角色注册全部已实现的页面。
+	registerAuthorizationRoutes(h)
 	h.registerTopologyRoutes()
 	h.registerAccessRoutes()
 	h.registerServerRoutes()

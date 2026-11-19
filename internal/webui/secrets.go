@@ -158,7 +158,7 @@ func (h *handler) handleSecretReadRoutes(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *handler) handleSecretsRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != secretsPath {
+	if r.URL.Path != secretsPath && r.URL.Path != authorizationSecretsPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -184,9 +184,24 @@ func (h *handler) handleSecretsRoot(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	sort.SliceStable(servers, func(i, j int) bool { return servers[i].Name < servers[j].Name })
+	cards := make([]authorizationSecretCard, 0, len(rows))
+	missingOnly := r.URL.Query().Get("missing_note") == "1"
+	for _, row := range rows {
+		if missingOnly && strings.TrimSpace(row.Note) != "" {
+			continue
+		}
+		cards = append(cards, authorizationSecretCard{
+			Secret:      row,
+			ClientCount: h.authorizationClientsForServers(serverRefsByNames(servers, row.AllowedServers)),
+		})
+	}
 	h.renderPage(w, r, http.StatusOK, "secrets.tmpl", pageData{
 		Title: "机密项", Secrets: rows, SecretFilterQuery: query,
 		SecretFilterServer: server, SecretServerOptions: servers,
+		Authorization: &authorizationPage{
+			Subpage: "secrets", Secrets: cards, Query: query, ServerFilter: server,
+			ServerOptions: servers, MissingSecretCount: h.missingSecretNoteCount(),
+		},
 	})
 }
 
@@ -206,7 +221,7 @@ func secretServersFromRows(rows []SecretRow) []ServerRow {
 }
 
 func (h *handler) handleSecretNew(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != secretsNewPath {
+	if r.URL.Path != secretsNewPath && r.URL.Path != authorizationSecretsNewPath {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
@@ -222,6 +237,7 @@ func (h *handler) handleSecretNew(w http.ResponseWriter, r *http.Request) {
 		}
 		h.renderPage(w, r, http.StatusOK, "secret-new.tmpl", pageData{
 			Title: "新增机密项", SecretForm: view,
+			Authorization: &authorizationPage{Subpage: "secrets", MissingSecretCount: h.missingSecretNoteCount()},
 		})
 	case http.MethodPost:
 		h.handleSecretNewPost(w, r)
@@ -271,11 +287,14 @@ func (h *handler) handleSecretNewPost(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "新增机密项失败", "新增机密项失败，请稍后重试。")
 		return
 	}
-	http.Redirect(w, r, secretsPath, http.StatusSeeOther)
+	http.Redirect(w, r, authorizationSecretsPath, http.StatusSeeOther)
 }
 
 func (h *handler) renderSecretNewForm(w http.ResponseWriter, r *http.Request, status int, form secretFormView) {
-	h.renderPage(w, r, status, "secret-new.tmpl", pageData{Title: "新增机密项", SecretForm: form})
+	h.renderPage(w, r, status, "secret-new.tmpl", pageData{
+		Title: "新增机密项", SecretForm: form,
+		Authorization: &authorizationPage{Subpage: "secrets", MissingSecretCount: h.missingSecretNoteCount()},
+	})
 }
 
 func secretNewResumePath(form secretFormView) string {
@@ -758,7 +777,9 @@ func (h *handler) handleSecretDetail(w http.ResponseWriter, r *http.Request, ide
 		return
 	}
 	h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", pageData{
-		Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+		Title:         "机密项 " + detail.Row.Name,
+		SecretDetail:  detail,
+		Authorization: h.authorizationSecretDetail(detail),
 	})
 }
 
@@ -781,7 +802,37 @@ func (h *handler) renderSecretDetailWithMetadataResume(
 	if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		data.SecretDetailNotice = "修改机密项元数据前需要重新验证管理员口令；表单已保留上次提交内容。"
 	}
+	data.Authorization = h.authorizationSecretDetail(detail)
 	h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", data)
+}
+
+// authorizationSecretDetail 把机密项详情组装成授权子页数据：授权服务器、
+// 实际能拿到它的客户端与基础信息卡。
+func (h *handler) authorizationSecretDetail(detail *SecretDetailView) *authorizationPage {
+	servers := make([]AccessServerRef, 0, len(detail.Servers))
+	for _, choice := range detail.Servers {
+		if choice.Checked {
+			servers = append(servers, AccessServerRef{ID: choice.ID, Name: choice.Name})
+		}
+	}
+	canAdjust := h.caps.CanManageSecrets && h.cfg.SecretsWriter != nil
+	selectionPath := ""
+	if canAdjust {
+		selectionPath = authorizationSecretsPath + "/" + detail.Row.ID + authorizationServersSuffix
+	}
+	return &authorizationPage{
+		Subpage: "secrets",
+		Detail: &authorizationDetail{
+			Kind: authorizationResourceKindSecret, KindLabel: "机密项", ID: detail.Row.ID,
+			Name: detail.Row.Name, Note: detail.Row.Note, Servers: servers,
+			Clients: h.authorizationClientAccess(servers), SelectionPath: selectionPath, CanAdjust: canAdjust,
+			Fields: []authorizationField{
+				{Label: "环境变量名", Value: detail.Row.EnvironmentName},
+				{Label: "创建时间", Value: formatUnixTime(detail.Row.CreatedAt)},
+				{Label: "值最后更改", Value: formatUnixTime(detail.Row.ValueUpdatedAt)},
+			},
+		},
+	}
 }
 
 func (h *handler) renderSecretReadError(w http.ResponseWriter, r *http.Request, err error) {
@@ -814,10 +865,12 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 		if errors.Is(err, ErrSecretMetadataNoChange) {
 			detail, detailErr := h.secretDetail(identifier)
 			if detailErr == nil {
-				h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", pageData{
+				data := pageData{
 					Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+					Authorization:      h.authorizationSecretDetail(detail),
 					SecretDetailNotice: "没有变化，未写入数据或审计。",
-				})
+				}
+				h.renderPage(w, r, http.StatusOK, "secret-detail.tmpl", data)
 				return
 			}
 		}
@@ -825,6 +878,7 @@ func (h *handler) handleSecretMetadataEdit(w http.ResponseWriter, r *http.Reques
 		if message, ok := secretFormMessage(err); ok && detailErr == nil {
 			h.renderPage(w, r, http.StatusBadRequest, "secret-detail.tmpl", pageData{
 				Title: "机密项 " + detail.Row.Name, SecretDetail: detail,
+				Authorization:     h.authorizationSecretDetail(detail),
 				SecretDetailError: message, SecretDetailNote: note,
 				SecretDetailEnvironmentName: environmentName,
 			})

@@ -1,0 +1,37 @@
+{{define "content"}}
+{{if .Authorization}}{{template "authorization-subpage" .}}
+<section class="authorization-list-page">
+<header class="title-row"><h1>Profile</h1>{{if .Caps.CanWrite}}<a class="primary-action" href="#new-profile">新建</a>{{end}}</header>
+{{if .Authorization.Flash}}<div class="operation-result">已保存 {{.Authorization.Flash.ProfileName}} 的授权：新增 {{len .Authorization.Flash.Added}} 台，移除 {{len .Authorization.Flash.Removed}} 台。</div>{{end}}
+{{if .Authorization.DeleteRefusal}}
+<div class="operation-refusal"><strong>{{.Authorization.DeleteRefusal.ProfileName}} 仍被引用，不能删除。</strong>
+<p>被客户端实例或 MCP 访问令牌引用的 Profile 必须先解除引用。</p></div>
+{{end}}
+{{if .Authorization.DeleteReverifyID}}<div class="operation-refusal">删除 profile 前需要重新验证管理员口令；验证后本页会保留删除表单。</div>{{end}}
+<div class="list-meta"><span>{{len .Authorization.Profiles}} 个 Profile</span><span>点卡片查看授权的服务器与客户端</span></div>
+<div class="authorization-resource-list">
+{{range .Authorization.Profiles}}
+<div class="resource-card">
+<a class="resource-main" href="{{.DetailPath}}">
+<span class="resource-copy"><strong>{{.Profile.Name}}</strong><small>{{len .Profile.Servers}} 台服务器 · {{len .Clients}} 个客户端</small></span>
+<span class="chevron-icon">›</span>
+</a>
+{{if $.Caps.CanWrite}}
+<form method="post" action="/ui/access/profiles/delete" class="resource-delete-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="profile_id" value="{{.Profile.ID}}">
+<button type="submit" class="danger-link">删除</button>
+</form>
+{{end}}
+</div>
+{{else}}<div class="home-empty-card">还没有 Profile。</div>{{end}}
+</div>
+{{if .Caps.CanWrite}}
+<form id="new-profile" method="post" action="/ui/access/profiles" class="shared-card new-resource-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<div class="form-field"><label for="profile-name">名称</label><input type="text" id="profile-name" name="name" required></div>
+<button type="submit" class="primary-button">创建</button>
+</form>
+{{end}}
+</section>{{end}}
+{{end}}

@@ -1,0 +1,59 @@
+{{define "server-selection"}}
+<section class="server-selection-page" data-server-selection>
+<p><a href="{{.Authorization.Selection.Resource.CancelPath}}">返回详情</a></p>
+<h1>调整 {{.Authorization.Selection.Resource.Name}} 的服务器</h1>
+<p class="page-note">{{.Authorization.Selection.Resource.KindLabel}}当前授权 {{len .Authorization.Selection.Resource.CurrentServerIDs}} 台。搜索与筛选只影响当前可见行，不会丢失未显示服务器的勾选。</p>
+<form method="post" action="/ui/authorization/selection/preview" class="server-selection-form">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="resource_kind" value="{{.Authorization.Selection.Resource.Kind}}">
+<input type="hidden" name="resource_id" value="{{.Authorization.Selection.Resource.ID}}">
+<input type="hidden" name="return_to" value="{{.Authorization.Selection.Resource.CancelPath}}">
+{{range .Authorization.Selection.Resource.CurrentServerIDs}}<input type="hidden" name="expected" value="{{.}}">{{end}}
+<div class="server-selection-tools">
+<div class="form-field"><label for="server-selection-search">搜索服务器</label>
+<input type="search" id="server-selection-search" name="query" value="{{.Authorization.Selection.Query}}" data-selection-search autocomplete="off" placeholder="搜索服务器或地点"></div>
+<div class="form-field"><label for="server-selection-site">按地点筛选</label>
+<select id="server-selection-site" name="site" data-selection-site>
+<option value="">全部地点</option>
+{{range .Authorization.Selection.Sites}}<option value="{{.Value}}"{{if eq $.Authorization.Selection.SiteFilter .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+</select></div>
+<div class="form-field"><label for="server-selection-network">按网络筛选</label>
+<select id="server-selection-network" name="network" data-selection-network>
+<option value="">全部网络</option>
+{{range .Authorization.Selection.Networks}}<option value="{{.Value}}"{{if eq $.Authorization.Selection.NetworkFilter .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+</select></div>
+<div class="form-field"><label for="server-selection-profile">按 profile 筛选</label>
+<select id="server-selection-profile" name="profile" data-selection-profile>
+<option value="">全部 profile</option>
+{{range .Authorization.Selection.Profiles}}<option value="{{.Value}}"{{if eq $.Authorization.Selection.ProfileFilter .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+</select></div>
+</div>
+<div class="server-selection-list">
+<button type="button" class="selection-toggle" data-selection-toggle role="checkbox" aria-checked="false" data-selection-state="none">
+<span class="selection-box" aria-hidden="true"></span>
+全选当前筛选结果
+<span class="selection-visible-count" data-selection-visible-count>{{len .Authorization.Selection.Servers}} 台</span>
+</button>
+<div class="selection-rows">
+{{range .Authorization.Selection.Servers}}
+<label class="selection-row" data-selection-row data-server-id="{{.ID}}" data-server-site="{{.SiteID}}" data-server-network="{{joinTags .NetworkIDs}}" data-server-profile="{{joinTags .ProfileIDs}}" data-search-text="{{.SearchText}}"{{if .CurrentChecked}} data-current="1"{{end}}>
+<input type="checkbox" name="server" value="{{.ID}}"{{if .Checked}} checked{{end}}>
+<span class="selection-copy">
+<strong>{{.Name}}</strong>
+<small>{{.SitePath}}{{if .NetworkNames}} · {{joinTags .NetworkNames}}{{end}}{{if .ProfileNames}} · profile {{joinTags .ProfileNames}}{{end}}</small>
+{{if and (eq $.Authorization.Selection.Resource.Kind "share") .SharesDeviceWithOtherEntries}}<small class="selection-warning">同一台机器上的其他条目可能也能读到挂载内容。</small>{{end}}
+</span>
+</label>
+{{end}}
+{{if not .Authorization.Selection.Servers}}<p class="empty-inline">没有可选择的服务器。</p>{{end}}
+</div>
+</div>
+<footer class="selection-summary-bar">
+<div class="selection-summary-inner">
+<p data-selection-summary>新增 {{.Authorization.Selection.InitialAddedCount}} 台、移除 {{len .Authorization.Selection.InitialRemoved}} 台</p>
+<button type="submit" class="primary-button" data-selection-next{{if not .Authorization.Selection.InitialAddedCount}}{{if not .Authorization.Selection.InitialRemoved}} disabled{{end}}{{end}}>下一步</button>
+</div>
+</footer>
+</form>
+</section>
+{{end}}

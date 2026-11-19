@@ -1,88 +1,56 @@
 {{define "content"}}
-<section class="share-detail">
-<h1>共享存储 {{.ShareDetail.Name}}</h1>
+{{if .Authorization}}{{template "authorization-subpage" .}}
+<section class="authorization-detail-page share-detail-page">
+<p><a href="/ui/authorization/shares">返回共享存储</a></p>
 {{if .ShareDetailNotice}}<div class="operation-refusal">{{.ShareDetailNotice}}</div>{{end}}
 {{if .ShareDetailError}}<div class="operation-refusal">{{.ShareDetailError}}</div>{{end}}
-<dl class="detail-list">
-<dt>共享名</dt><dd>{{.ShareDetail.Name}}</dd>
-<dt>提供方设备</dt><dd>{{.ShareDetail.DeviceName}}</dd>
-<dt>挂载账号用户名</dt><dd>{{.ShareDetail.MountUser}}</dd>
-<dt>挂载密码机密项</dt><dd>{{.ShareDetail.PasswordSecret}}</dd>
-<dt>固定盘符</dt><dd>{{.ShareDetail.Drive}}:</dd>
-<dt>目录约定</dt>
-<dd>
+<header class="detail-title"><h1>{{.Authorization.Detail.Name}}</h1><span class="status-tag">可挂载 {{len .Authorization.Detail.Servers}} 台</span></header>
+<section class="shared-card">
+<div class="basic-identity"><p class="basic-name">{{.Authorization.Detail.Name}}</p><p class="basic-note">{{if .Authorization.Detail.Note}}{{.Authorization.Detail.Note}}{{else}}缺备注{{end}}</p></div>
+<dl class="info-list">{{range .Authorization.Detail.Fields}}<div class="info-row"><dt>{{.Label}}</dt><dd>{{if .Value}}{{.Value}}{{else}}（未设置）{{end}}</dd></div>{{end}}<div class="info-row"><dt>变更说明</dt><dd>{{or .ShareDetail.ChangeNote "（无）"}}</dd></div></dl>
 {{if .ShareDetail.Directories}}
-<ul>
-{{range .ShareDetail.Directories}}<li>{{.Purpose}}={{.Path}}</li>{{end}}
-</ul>
-{{else}}（无）{{end}}
-</dd>
-<dt>共享存储版本号</dt><dd>{{.ShareDetail.Version}}</dd>
-<dt>变更说明</dt><dd>{{or .ShareDetail.ChangeNote "（无）"}}</dd>
-<dt>备注</dt><dd>{{or .ShareDetail.Note "（无）"}}</dd>
-</dl>
-<section class="share-mountable-servers">
-<h2>可挂载服务器</h2>
+<div class="info-row"><dt>目录约定</dt><dd>{{range .ShareDetail.Directories}}{{.Purpose}}={{.Path}}；{{end}}</dd></div>
+{{end}}
+</section>
+<section class="shared-card wide-card">
+<div class="section-heading"><h2>授权的服务器</h2>{{if .Authorization.Detail.CanAdjust}}<a class="secondary-link" href="{{.Authorization.Detail.SelectionPath}}">调整服务器</a>{{end}}</div>
 {{if .ShareDetail.MountableServers}}
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th>{{if .ShareRemoteOperationsAvailable}}<th>现场操作</th>{{end}}</tr></thead>
-<tbody>
+<div class="row-list">
 {{range .ShareDetail.MountableServers}}
-<tr><td>{{.Name}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>{{if $.ShareRemoteOperationsAvailable}}<td>{{if isWindowsShell .ShellType}}<span>Windows 服务器不提供挂载按钮：盘符由每条命令执行前的会话内注入提供。</span>{{else}}<form method="post" action="/ui/shares/{{$.ShareDetail.ID}}/mount"><input type="hidden" name="csrf_token" value="{{$.CSRFToken}}"><input type="hidden" name="server_id" value="{{.ID}}"><button type="submit">挂载</button></form>{{end}}</td>{{end}}</tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<p>（无）</p>{{end}}
-{{if .ShareAuthorization}}
-<form method="post" action="/ui/secrets/authorization/preview" class="share-scope-form" data-share-scope-form>
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<input type="hidden" name="return_to" value="/ui/shares/{{.ShareDetail.ID}}">
-<input type="hidden" name="secret_id" value="{{.ShareAuthorization.SecretID}}">
-<input type="hidden" name="authorization_view" value="share-scope">
-<input type="hidden" name="share_id" value="{{.ShareDetail.ID}}">
-{{range .ShareAuthorization.Servers}}<input type="hidden" name="server_id" value="{{.ID}}">{{end}}
-<fieldset><legend>可挂载范围勾选清单</legend>
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th></tr></thead>
-<tbody>
-{{range .ShareAuthorization.Servers}}
-<tr data-share-scope-device="{{.DeviceName}}">
-<td>
-<label class="grant-choice"><input type="checkbox" name="cell__{{$.ShareAuthorization.SecretID}}__{{.ID}}" value="1"{{if .Checked}} checked{{end}}><span>{{.Name}}</span>
-{{if .SharesDeviceWithOtherEntries}}<small data-share-scope-warning hidden>同设备的其他条目可能也能读到挂载内容。</small>{{end}}
-</label>
-</td>
-<td>{{or .DeviceName "（未登记设备）"}}</td>
-<td>{{.ShellType}}</td>
-</tr>
-{{end}}
-</tbody>
-</table>
-<button type="submit">预览可挂载范围变更</button>
-</fieldset>
+<div class="record-row">
+<span class="row-icon">服</span>
+<span class="row-copy"><strong>{{.Name}}</strong><small>{{or .DeviceName "（未登记设备）"}} · {{.ShellType}}{{if .MountPoint}} · 挂载点 {{.MountPoint}}{{end}}</small></span>
+{{if and $.ShareRemoteOperationsAvailable (not (isWindowsShell .ShellType))}}
+<form method="post" action="/ui/shares/{{$.ShareDetail.ID}}/mount" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{.ID}}">
+<button type="submit" class="secondary-link">挂载</button>
 </form>
 {{end}}
-{{if .Caps.CanReselectShares}}
-<section class="share-reselect">
-<h2>重选地址</h2>
-<p>对仍可连通的 Linux 与 macOS 服务器优先切回物理局域网地址；已是更优地址时不做改动。</p>
-{{if .ShareReselectEntries}}
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th><th>操作</th></tr></thead>
-<tbody>
-{{range .ShareReselectEntries}}
-<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>
-<td>{{if .Windows}}<span class="share-reselect-windows">Windows 服务器不提供重选：每条命令执行前本来就会重新选址。</span>{{else}}<a class="button-link" href="{{.ConfirmPath}}">重选地址</a>{{end}}</td></tr>
+</div>
 {{end}}
-</tbody>
-</table>
-{{else}}<p>（无）</p>{{end}}
+</div>
+{{else}}<p class="empty-inline">尚未授权任何服务器。</p>{{end}}
+{{if .ShareRemoteOperationsAvailable}}<p class="section-note">Windows 服务器不提供挂载按钮：盘符由每条命令执行前的会话内注入提供。</p>{{end}}
+</section>
+{{if .Caps.CanWrite}}
+<section class="shared-card" aria-label="实际能拿到它的客户端">
+<h2>实际能拿到它的客户端</h2>
+<p class="section-note">客户端的 profile 中包含任一可挂载服务器，就能拿到这个共享存储。</p>
+{{if .Authorization.Detail.Clients}}<div class="row-list">{{range .Authorization.Detail.Clients}}<div class="client-row"><span class="row-icon">客</span><span class="row-copy"><a href="/ui/clients/{{.ClientID}}"><strong>{{.ClientName}}</strong></a><small>profile {{.Profile}} · {{.ViaText}}</small></span></div>{{end}}</div>{{else}}<p class="empty-inline">当前没有客户端能拿到它。</p>{{end}}
+</section>
+{{end}}
+{{if .Caps.CanReselectShares}}
+<section class="shared-card">
+<h2>重选地址</h2>
+<p class="section-note">对仍可连通的 Linux 与 macOS 服务器优先切回物理局域网地址；已是更优地址时不做改动。</p>
+{{if .ShareReselectEntries}}<div class="row-list">{{range .ShareReselectEntries}}<div class="record-row"><span class="row-icon">服</span><span class="row-copy"><strong>{{.ServerName}}</strong><small>{{or .DeviceName "（未登记设备）"}} · {{.ShellType}}{{if .MountPoint}} · 挂载点 {{.MountPoint}}{{end}}</small></span>{{if .Windows}}<small>Windows 服务器不提供重选：每条命令执行前本来就会重新选址。</small>{{else}}<a class="button-link" href="{{.ConfirmPath}}">重选地址</a>{{end}}</div>{{end}}</div>{{else}}<p class="empty-inline">没有可重选地址的服务器。</p>{{end}}
 </section>
 {{end}}
 {{if .Caps.CanCheckShareResidue}}
-<section class="share-residue">
+<section class="shared-card">
 <h2>残留检查</h2>
-<p>逐台检测不在可挂载范围内却仍留有凭据文件、挂载配置或挂载的服务器；仅有撤销标记属于撤销后的预期状态。</p>
+<p class="section-note">逐台检测不在可挂载范围内却仍留有凭据文件、挂载配置或挂载的服务器；仅有撤销标记属于撤销后的预期状态。</p>
 <div class="inline-form">
 <form method="post" action="/ui/shares/{{.ShareDetail.ID}}/residue">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
@@ -98,7 +66,7 @@
 </section>
 {{end}}
 {{if .ShareRemoteOperationsAvailable}}
-<section class="share-remote-operations">
+<section class="shared-card">
 <h2>现场运维</h2>
 <form method="post" action="/ui/shares/{{.ShareDetail.ID}}/check">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
@@ -108,66 +76,35 @@
 </section>
 {{end}}
 {{if .Caps.CanRevokeShares}}
-<section class="share-revoke-entries">
+<section class="shared-card">
 <h2>撤销授权</h2>
-<p>把服务器移出可挂载范围并按系统类型清理；安全撤销可在同一确认流程里更换共享密码。</p>
-{{if .ShareRevokeEntries}}
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>操作</th></tr></thead>
-<tbody>
-{{range .ShareRevokeEntries}}
-<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></td></tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<p>（无）</p>{{end}}
+<p class="section-note">把服务器移出可挂载范围并按系统类型清理；安全撤销可在同一确认流程里更换共享密码。</p>
+{{if .ShareRevokeEntries}}<div class="row-list">{{range .ShareRevokeEntries}}<div class="record-row"><span class="row-icon">服</span><span class="row-copy"><strong>{{.ServerName}}</strong><small>{{or .DeviceName "（未登记设备）"}} · {{.ShellType}}</small></span><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></div>{{end}}</div>{{else}}<p class="empty-inline">没有已授权的服务器。</p>{{end}}
 </section>
-{{end}}
-{{if .Caps.CanRevokeShares}}
-<section class="share-out-of-scope-revoke">
+<section class="shared-card">
 <h2>已移出范围、远端可能仍有配置</h2>
-<p>下列服务器条目不在可挂载范围内，但最近一次现场探测、成功挂载或残留检查留下的登记显示远端可能仍留有挂载配置、凭据文件或挂载点。「撤销授权」只清理远端持久配置与挂载点，不再修改登记。</p>
-{{if .ShareOutOfScopeRevokeEntries}}
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>登记依据</th><th>操作</th></tr></thead>
-<tbody>
-{{range .ShareOutOfScopeRevokeEntries}}
-<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.Evidence}}</td><td><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></td></tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<p>（无）</p>{{end}}
+<p class="section-note">下列服务器条目不在可挂载范围内，但最近一次现场探测、成功挂载或残留检查留下的登记显示远端可能仍留有挂载配置、凭据文件或挂载点。「撤销授权」只清理远端持久配置与挂载点，不再修改登记。</p>
+{{if .ShareOutOfScopeRevokeEntries}}<div class="row-list">{{range .ShareOutOfScopeRevokeEntries}}<div class="record-row"><span class="row-icon">服</span><span class="row-copy"><strong>{{.ServerName}}</strong><small>{{or .DeviceName "（未登记设备）"}} · {{.ShellType}} · {{.Evidence}}</small></span><a class="button-link danger" href="{{.ConfirmPath}}">撤销授权</a></div>{{end}}</div>{{else}}<p class="empty-inline">没有范围外的残留登记。</p>{{end}}
 </section>
 {{end}}
 {{if .Caps.CanUnmountShares}}
-<section class="share-unmount">
+<section class="shared-card">
 <h2>单台卸载</h2>
-<p>对 Linux 与 macOS 服务器先删除远端持久挂载配置，再卸载挂载点；Windows 服务器没有持久改动需要清理。</p>
-{{if .ShareUnmountEntries}}
-<table class="server-table">
-<thead><tr><th>服务器条目</th><th>所属设备</th><th>系统类型</th><th>挂载点</th><th>操作</th></tr></thead>
-<tbody>
-{{range .ShareUnmountEntries}}
-<tr><td>{{.ServerName}}</td><td>{{or .DeviceName "（未登记设备）"}}</td><td>{{.ShellType}}</td><td>{{.MountPoint}}</td>
-<td>{{if .Windows}}<span class="share-unmount-windows">Windows 服务器不提供卸载：sshmgr 不在其上留下任何持久改动。</span>{{else}}<a class="button-link" href="{{.ConfirmPath}}">卸载</a>{{end}}</td></tr>
-{{end}}
-</tbody>
-</table>
-{{else}}<p>（无）</p>{{end}}
+<p class="section-note">对 Linux 与 macOS 服务器先删除远端持久挂载配置，再卸载挂载点；Windows 服务器没有持久改动需要清理。</p>
+{{if .ShareUnmountEntries}}<div class="row-list">{{range .ShareUnmountEntries}}<div class="record-row"><span class="row-icon">服</span><span class="row-copy"><strong>{{.ServerName}}</strong><small>{{or .DeviceName "（未登记设备）"}} · {{.ShellType}}{{if .MountPoint}} · 挂载点 {{.MountPoint}}{{end}}</small></span>{{if .Windows}}<small>Windows 服务器不提供卸载：sshmgr 不在其上留下任何持久改动。</small>{{else}}<a class="button-link" href="{{.ConfirmPath}}">卸载</a>{{end}}</div>{{end}}</div>{{else}}<p class="empty-inline">没有可卸载的服务器。</p>{{end}}
 </section>
 {{end}}
 {{if .Caps.CanUseShareDesktopGuide}}
-<section class="share-desktop-guide-entry">
+<section class="shared-card">
 <h2>桌面手动添加</h2>
-<p>给 owner 自己的 Windows 或 macOS 电脑推算地址并查看手动映射步骤；页面不会显示共享密码。</p>
+<p class="section-note">给 owner 自己的 Windows 或 macOS 电脑推算地址并查看手动映射步骤；页面不会显示共享密码。</p>
 <a class="button-link" href="/ui/shares/{{.ShareDetail.ID}}/desktop">打开桌面手动添加引导</a>
 </section>
 {{end}}
-</section>
 <div class="inline-form share-actions">
 {{if .Caps.CanManageShares}}<a class="button-link" href="/ui/shares/{{.ShareDetail.ID}}/edit">编辑</a>
 <a class="button-link danger" href="/ui/shares/{{.ShareDetail.ID}}/delete">删除</a>{{end}}
-<a class="button-link" href="/ui/shares/">返回共享存储列表</a>
+<a class="button-link" href="/ui/authorization/shares">返回共享存储</a>
 </div>
-</section>
+</section>{{end}}
 {{end}}
