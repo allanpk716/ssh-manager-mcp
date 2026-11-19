@@ -256,6 +256,14 @@ func (b *BridgeIO) WaitCopierPhase1(d time.Duration) bool {
 // 无法由桥侧取消,Close 不等待,避免悬挂——返回后桥不再访问真实输入
 // 文件句柄,调用方可以随即关闭它。只在进程将退时调用;真实句柄不由
 // 此侧关闭(随进程回收)。
+//
+// 输出侧管道的关闭次序是死的:输出读端(sdkOutR)的 Close 在 Windows 上
+// 要等 copier 排干阶段挂起的读返回,而那次读只有输出写端(sdkOutW)关闭、
+// 读到 EOF 才会返回。因此先关写端、等 copier 结束排干(排干信号在它的
+// 最后一次读返回之后才关闭),再关读端;先关读端则在 Windows 上永等
+// (2026-11-19 持续集成 Windows 车道 TestBridgeIOCloseThenHostClosesInputRepeatedly
+// 卡满 10 分钟即此)。已退位交割的场合排干早已结束,等待即刻通过;此后
+// copier 即使还活着,读的也是泵侧数据源,sdkOutR 上已无挂起的读。
 func (b *BridgeIO) Close() {
 	b.closeOnce.Do(func() {
 		close(b.copierQuit)
@@ -266,8 +274,9 @@ func (b *BridgeIO) Close() {
 			b.sdkInR.Close()
 		}
 		b.sdkInW.Close()
-		b.sdkOutR.Close()
 		b.sdkOutW.Close()
+		<-b.copierPhase1Done
+		b.sdkOutR.Close()
 	})
 }
 
