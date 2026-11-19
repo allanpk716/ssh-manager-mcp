@@ -22,6 +22,7 @@ import (
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/webui"
 	"ssh-manager-mcp/internal/webuiaccess"
+	"ssh-manager-mcp/internal/webuitopology"
 )
 
 // newIntegrationHandler 用真实 vault 构造完整的单机 Web UI：读取来源、写来
@@ -34,6 +35,7 @@ func newIntegrationHandler(t *testing.T) (*servermanage.Manager, *store.Store, s
 		Role:         webui.RoleStandalone,
 		Servers:      FromManager(manager),
 		ServerWriter: WriterFromManager(manager),
+		Topology:     webuitopology.FromStore(st),
 		Access:       webuiaccess.FromManager(access.New(st)),
 		Port:         18081,
 	})
@@ -237,16 +239,15 @@ func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 	keyPEM := writeIntegrationKey(t, keyPath)
 
 	typePage := h.do(http.MethodGet, "/ui/add", nil)
-	typeBody := integrationBody(t, typePage)
-	if typePage.StatusCode != http.StatusOK || !strings.Contains(typeBody, ">服务器</strong>") {
-		t.Fatalf("类型选择页应先提供服务器类型，状态码=%d：\n%s", typePage.StatusCode, typeBody)
+	if typePage.StatusCode != http.StatusSeeOther || !strings.Contains(typePage.Header.Get("Location"), "/ui/servers/new") {
+		t.Fatalf("旧新增入口应进入服务器分步新增，状态码=%d 跳转=%s", typePage.StatusCode, typePage.Header.Get("Location"))
 	}
 
 	formPage := h.do(http.MethodGet, "/ui/servers/new", nil)
 	formBody := integrationBody(t, formPage)
 	if formPage.StatusCode != http.StatusOK || !strings.Contains(formBody, "保存后自动探测") ||
-		!strings.Contains(formBody, "粘贴私钥") || !strings.Contains(formBody, "profile 授权") ||
-		!strings.Contains(formBody, "保存并进入待连接测试") {
+		!strings.Contains(formBody, "改为粘贴私钥") ||
+		!strings.Contains(formBody, "测试连接并下一步") {
 		t.Fatalf("新增表单缺少关键字段，状态码=%d：\n%s", formPage.StatusCode, formBody)
 	}
 	csrf := regexp.MustCompile(`<input type="hidden" name="csrf_token" value="([^"]+)"`).FindStringSubmatch(formBody)
@@ -257,25 +258,36 @@ func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 	resp := h.do(http.MethodPost, "/ui/servers/new", url.Values{
 		"csrf_token": {csrf[1]},
 		"name":       {"web"}, "user": {"deploy"}, "port": {"2202"},
-		"host": {"192.168.1.10"}, "shell": {"auto"},
+		"shell":             {"auto"},
 		"credential_action": {"key"}, "key_source": {"paste"}, "key": {string(keyPEM)},
 		"sudo_password": {"sudo-secret"}, "description": {"网站服务器"},
 		"hardware": {"2 核 4GB"}, "services": {"nginx"},
 		"role": {"网站"}, "special_handling": {"维护窗口每周三"}, "tags": {"prod,web"},
-		"expose_host": {"1"}, "device_choice": {"new"}, "device_name": {"工作站"},
-		"physical_network": {"家A局域网"}, "physical_address": {"192.168.1.10"},
-		"virtual_network": {"虚拟网"}, "virtual_address": {"100.64.0.10"},
-		"profile_id": {profileID},
+		"expose_host": {"1"}, "address_network": {"家A局域网", "虚拟网"},
+		"address": {"192.168.1.10", "100.64.0.10"},
 	})
 	integrationBody(t, resp)
-	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/ui/servers/new/result?") ||
+	if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(resp.Header.Get("Location"), "/ui/servers/new/test?") ||
 		!strings.Contains(resp.Header.Get("Location"), "server=") {
-		t.Fatalf("新增成功应进入结果页，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
+		t.Fatalf("新增成功应先进入连接测试，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
 	}
-	result := h.do(http.MethodGet, resp.Header.Get("Location"), nil)
+	serverQuery := regexp.MustCompile(`server=([^&]+)`).FindStringSubmatch(resp.Header.Get("Location"))
+	if len(serverQuery) != 2 {
+		t.Fatalf("连接测试跳转应带服务器标识：%s", resp.Header.Get("Location"))
+	}
+	serverID := serverQuery[1]
+	profileTarget := "/ui/servers/new/profile?server=" + serverID
+	finish := h.do(http.MethodPost, "/ui/servers/new/profile", url.Values{
+		"csrf_token": {integrationFormCSRF(t, h, profileTarget)}, "server_id": {serverID},
+		"site_action": {"skip"}, "profile_id": {profileID},
+	})
+	if finish.StatusCode != http.StatusSeeOther || !strings.HasPrefix(finish.Header.Get("Location"), "/ui/servers/new/result?") {
+		t.Fatalf("Profile 步骤完成后应进入结果页，状态码=%d 跳转=%s", finish.StatusCode, finish.Header.Get("Location"))
+	}
+	result := h.do(http.MethodGet, finish.Header.Get("Location"), nil)
 	resultBody := integrationBody(t, result)
 	if result.StatusCode != http.StatusOK || !strings.Contains(resultBody, "未验证") ||
-		!strings.Contains(resultBody, "工作站") || strings.Contains(resultBody, string(keyPEM)) ||
+		!strings.Contains(resultBody, "web") || strings.Contains(resultBody, string(keyPEM)) ||
 		strings.Contains(resultBody, "sudo-secret") {
 		t.Fatalf("结果页应待连接测试且不回显凭据，状态码=%d：\n%s", result.StatusCode, resultBody)
 	}
@@ -288,11 +300,11 @@ func TestHandlerAddServerSavesDeviceMembershipAndAuthorization(t *testing.T) {
 		srv.ShellType != models.ShellPOSIX || srv.Role != "网站" {
 		t.Fatalf("服务器字段保存不正确：%+v", srv)
 	}
-	device, err := st.GetDevice("工作站")
+	device, err := st.GetDeviceByID(srv.DeviceID)
 	if err != nil || device == nil {
 		t.Fatalf("新设备应落库：%v %+v", err, device)
 	}
-	memberships, err := st.ListNetworkMemberships("工作站")
+	memberships, err := st.ListNetworkMemberships(device.Name)
 	if err != nil || len(memberships) != 2 {
 		t.Fatalf("新设备应有物理与虚拟网络成员：%v %+v", err, memberships)
 	}
@@ -324,17 +336,15 @@ func TestHandlerAddServerShowsConflictAndKeepsFields(t *testing.T) {
 		"csrf_token": {integrationCSRF(t, h)},
 		"name":       {"conflict"}, "user": {"deploy"}, "port": {"22"}, "shell": {"auto"},
 		"credential_action": {"password"}, "password": {"login-secret"},
-		"description": {"页面保留说明"}, "role": {"网站"},
-		"physical_network": {"家A局域网"}, "physical_address": {"192.168.1.30"},
+		"address_network": {"家A局域网"}, "address": {"192.168.1.30"},
 	})
 	body := integrationBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(body, "已被设备 占用设备 占用") ||
 		!strings.Contains(body, "家A局域网") {
 		t.Fatalf("地址冲突应显示占用设备与网络，状态码=%d：\n%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(body, `value="conflict"`) || !strings.Contains(body, `value="页面保留说明"`) ||
-		strings.Contains(body, "login-secret") {
-		t.Fatalf("校验失败页面应保留非凭据字段且不回显凭据：\n%s", body)
+	if !strings.Contains(body, `value="conflict"`) || strings.Contains(body, "login-secret") {
+		t.Fatalf("校验失败页面应保留名称且不回显凭据：\n%s", body)
 	}
 	if servers, _ := st.ListServers(); len(servers) != 0 {
 		t.Fatalf("校验失败不得写入服务器条目：%v", servers)

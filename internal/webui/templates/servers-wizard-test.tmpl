@@ -1,0 +1,17 @@
+{{define "content"}}
+<section class="server-wizard-test"{{if and .ServerWizard.ConnectionTest (eq .ServerWizard.ConnectionTest.State "running")}} hx-get="{{.ServerWizard.TestPollPath}}" hx-trigger="every 1s" hx-swap="outerHTML"{{end}}>
+<h1>{{if .ServerWizard.ConnectionTest}}{{if eq .ServerWizard.ConnectionTest.State "running"}}连接测试进行中{{else if eq .ServerWizard.ConnectionTest.State "succeeded"}}连接测试完成{{else}}连接测试未通过{{end}}{{end}}</h1>
+<p>{{.ServerWizard.Detail.Name}} 的连接测试在进入下一步前执行。</p>
+{{if ne .ServerWizard.ConnectionTest.State "succeeded"}}<p>状态：未验证。</p>{{end}}
+{{if .ServerWizard.TestNotice}}<div class="notice notice-warning"><p>{{.ServerWizard.TestNotice}}</p></div>{{end}}
+{{if .ServerWizard.ConnectionTest.Message}}<div class="notice notice-error"><p>{{.ServerWizard.ConnectionTest.Message}}</p></div>{{end}}
+{{if and .ServerWizard.ConnectionTest.ProbeShell (ne .ServerWizard.ConnectionTest.State "succeeded")}}<p>shell 未验证，条目保持默认 POSIX。</p>{{end}}
+{{if .ServerWizard.ConnectionTest.AnchorFingerprint}}<div class="notice notice-success"><p>{{.ServerWizard.ConnectionTest.AnchorResult}}。主机密钥指纹：{{.ServerWizard.ConnectionTest.AnchorFingerprint}}</p></div>{{end}}
+<div class="inline-form">
+{{if and .ServerWizard.ConnectionTest (eq .ServerWizard.ConnectionTest.State "succeeded")}}<a class="primary-button" href="{{.ServerWizard.NextPath}}">继续{{if .ServerWizard.SameMachine}}选择 Profile{{else}}选择地点{{end}}</a>{{end}}
+{{if ne .ServerWizard.ConnectionTest.State "succeeded"}}<a class="button-link" href="/ui/servers/new">返回修改连接信息</a>{{end}}
+<a class="button-link" href="/ui/servers/{{.ServerWizard.Detail.ID}}">先看服务器详情</a>
+{{if .ServerWizard.ReturnTo}}<a class="button-link" href="{{.ServerWizard.ReturnTo}}">返回网络拓扑</a>{{end}}
+</div>
+</section>
+{{end}}

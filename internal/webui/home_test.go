@@ -64,7 +64,7 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		`href="/ui/authorization/"`,
 		`href="/ui/ops/"`,
 		"主页", "服务器", "客户端", "授权", "更多",
-		`href="/ui/add"`,
+		`href="/ui/servers/new"`,
 		"1 个配对请求待审批",
 		"macbook-air 请求接入",
 		"2 台服务器需要注意",
@@ -177,7 +177,7 @@ func TestServerListMovesToServersPathAndOldAttentionPathRedirects(t *testing.T) 
 
 	newList := doGetWithCookie(t, handler, cookie, "/ui/servers/")
 	newListBody := readResponseBody(t, newList)
-	if newList.StatusCode != http.StatusOK || !strings.Contains(newListBody, "<h1>服务器</h1>") ||
+	if newList.StatusCode != http.StatusOK || !strings.Contains(newListBody, "<h1>服务器") ||
 		!strings.Contains(newListBody, "web-1") || !strings.Contains(newListBody, "db-1") {
 		t.Fatalf("服务器页应在 /ui/servers/ 保持可用，状态码=%d 页面：\n%s", newList.StatusCode, newListBody)
 	}

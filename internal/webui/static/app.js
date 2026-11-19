@@ -57,6 +57,216 @@
     });
   }
 
+  // 服务器列表多选：勾选卡片后打开底部批量操作栏。资源链接把选中标识符
+  // 带到 #301 的共用服务器勾选页，仍由既有确认流程执行写入。
+  function initServerListBatch(root) {
+    var cards = Array.prototype.slice.call(root.querySelectorAll("[data-server-card]"));
+    var bar = document.querySelector("[data-server-selection-bar]");
+    var drawer = document.querySelector("[data-server-batch-drawer]");
+    var count = document.querySelector("[data-server-selected-count]");
+    if (cards.length === 0 || bar === null || drawer === null) {
+      return;
+    }
+    var panels = Array.prototype.slice.call(drawer.querySelectorAll("[data-batch-panel]"));
+    var resources = Array.prototype.slice.call(drawer.querySelectorAll("[data-batch-resource]"));
+
+    function selectedIDs() {
+      return cards.filter(function (card) {
+        var box = card.querySelector('input[type="checkbox"]');
+        return box !== null && box.checked;
+      }).map(function (card) {
+        return card.querySelector('input[type="checkbox"]').value;
+      });
+    }
+
+    function refresh() {
+      var selected = selectedIDs();
+      if (count !== null) {
+        count.textContent = "已选 " + selected.length + " 台";
+      }
+      bar.hidden = selected.length === 0;
+      drawer.querySelectorAll("[data-batch-button-disabled]").forEach(function (element) {
+        element.disabled = selected.length === 0;
+      });
+    }
+
+    cards.forEach(function (card) {
+      var box = card.querySelector('input[type="checkbox"]');
+      if (box !== null) {
+        box.addEventListener("change", refresh);
+      }
+    });
+
+    bar.querySelectorAll("[data-batch-button]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        panels.forEach(function (panel) {
+          panel.hidden = panel.getAttribute("data-batch-panel") !== button.getAttribute("data-batch-button");
+        });
+        drawer.hidden = false;
+      });
+    });
+
+    drawer.querySelectorAll("[data-close-batch]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        drawer.hidden = true;
+      });
+    });
+
+    resources.forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        var target = new URL(link.getAttribute("href"), window.location.origin);
+        selectedIDs().forEach(function (id) {
+          target.searchParams.append("server", id);
+        });
+        window.location.href = target.pathname + target.search;
+      });
+    });
+    refresh();
+  }
+
+  // 服务器分步新增：地址行、同机识别、认证方式切换、地点搜索与 Profile
+  //可见数都在浏览器内实时更新；写入仍由表单提交给服务器。
+  function initServerWizard(root) {
+    var addressList = root.querySelector("[data-address-list]");
+    var addressTemplate = addressList === null ? null : addressList.querySelector("[data-address-row]");
+    if (addressTemplate !== null) {
+      var removeButton = addressTemplate.querySelector("[data-remove-address]");
+      if (removeButton !== null) {
+        removeButton.hidden = true;
+      }
+      root.querySelectorAll("[data-remove-address]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var row = button.closest("[data-address-row]");
+          if (row !== null && row.parentNode !== null && row.parentNode.children.length > 1) {
+            row.remove();
+            detectSameMachine();
+          }
+        });
+      });
+      var addAddress = root.querySelector('button[name="add_address"]');
+      if (addAddress !== null) {
+        addAddress.addEventListener("click", function (event) {
+          event.preventDefault();
+          var row = addressTemplate.cloneNode(true);
+          row.querySelectorAll("input, select").forEach(function (input) {
+            if (input.type === "select-one") {
+              input.value = "other";
+            } else {
+              input.value = "";
+            }
+          });
+          var button = row.querySelector("[data-remove-address]");
+          if (button !== null) {
+            button.hidden = false;
+          }
+          addressList.appendChild(row);
+        });
+      }
+    }
+
+    var machineData = root.getAttribute("data-machine-addresses") || "";
+    var machinesByAddress = {};
+    machineData.split(";").forEach(function (item) {
+      var parts = item.split("=");
+      if (parts.length === 2 && parts[0] !== "" && parts[1] !== "") {
+        machinesByAddress[parts[0].toLowerCase()] = parts[1];
+      }
+    });
+    var samePanel = root.querySelector("[data-same-machine]");
+    var sameName = root.querySelector("[data-same-machine-name]");
+    var sameField = root.querySelector("[data-same-machine-field]");
+    function detectSameMachine() {
+      if (samePanel === null) {
+        return;
+      }
+      var found = "";
+      root.querySelectorAll("[data-address-input]").forEach(function (input) {
+        var address = input.value.trim().toLowerCase();
+        if (address !== "" && machinesByAddress[address] !== undefined) {
+          found = machinesByAddress[address];
+        }
+      });
+      samePanel.hidden = found === "";
+      if (found !== "") {
+        if (sameName !== null) {
+          sameName.textContent = found;
+        }
+        if (sameField !== null) {
+          sameField.value = found;
+        }
+      }
+    }
+    root.addEventListener("input", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-address-input")) {
+        detectSameMachine();
+      }
+    });
+    detectSameMachine();
+
+    var keyPasteButton = root.querySelector("[data-toggle-paste-key]");
+    var keyPaste = root.querySelector("[data-paste-key]");
+    var keySource = root.querySelector('input[name="key_source"]');
+    if (keyPasteButton !== null && keyPaste !== null) {
+      keyPasteButton.addEventListener("click", function () {
+        keyPaste.hidden = false;
+        if (keySource !== null) {
+          keySource.value = "paste";
+        }
+        keyPasteButton.hidden = true;
+      });
+    }
+
+    var credentialRadios = Array.prototype.slice.call(root.querySelectorAll('input[name="credential_action"]'));
+    var keyPanel = root.querySelector("[data-credential-key]");
+    var passwordPanel = root.querySelector("[data-credential-password]");
+    credentialRadios.forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        if (keyPanel !== null) {
+          keyPanel.hidden = radio.value !== "key" || !radio.checked;
+        }
+        if (passwordPanel !== null) {
+          passwordPanel.hidden = radio.value !== "password" || !radio.checked;
+        }
+      });
+    });
+
+    var siteSearch = root.querySelector("[data-site-search]");
+    if (siteSearch !== null) {
+      siteSearch.addEventListener("input", function () {
+        var keyword = siteSearch.value.trim().toLowerCase();
+        root.querySelectorAll("[data-site-row]").forEach(function (row) {
+          row.hidden = keyword !== "" && row.getAttribute("data-site-text").toLowerCase().indexOf(keyword) < 0;
+        });
+      });
+    }
+
+    var profileStep = root.querySelector("[data-profile-step]");
+    if (profileStep !== null) {
+      var summary = profileStep.querySelector("[data-profile-client-summary]");
+      function updateProfileVisibility() {
+        var clients = {};
+        profileStep.querySelectorAll('input[name="profile_id"]').forEach(function (box) {
+          if (!box.checked) {
+            return;
+          }
+          (box.getAttribute("data-client-ids") || "").split(",").forEach(function (id) {
+            if (id !== "") {
+              clients[id] = true;
+            }
+          });
+        });
+        if (summary !== null) {
+          summary.textContent = "当前勾选将对 " + Object.keys(clients).length + " 个客户端可见";
+        }
+      }
+      profileStep.querySelectorAll('input[name="profile_id"]').forEach(function (box) {
+        box.addEventListener("change", updateProfileVisibility);
+      });
+      updateProfileVisibility();
+    }
+  }
+
   // 共用服务器勾选组件：搜索与三类筛选、三态全选与底部实时差异统计。
   // 隐藏行仍留在文档里，勾选值随表单提交，因此筛选不会丢选择。
   function initServerSelection(root) {
@@ -213,5 +423,7 @@
   });
   updateAllShareScopeWarnings();
   initRequiredNoteForms();
+  document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
+  document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);
 })();

@@ -312,7 +312,7 @@ func (s *Store) AddServerWithCredentialsToDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, deviceName == "", CLISource())
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, "", deviceName == "", CLISource())
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (s *Store) addServerWithCredentialsToNewDevice(
 		return nil, err
 	}
 	defer tx.Rollback()
-	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, true, source)
+	added, err := s.addServerWithCredentialsToDeviceTx(tx, srv, cred, sudo, deviceName, "", true, source)
 	if err != nil {
 		return nil, err
 	}
@@ -361,7 +361,8 @@ func (s *Store) addServerWithCredentialsToNewDevice(
 // 凭据、所属设备、条目与锚复制共用一个事务。deviceName 为空时自动生成
 // 同名设备（重名追加数字后缀），非空时关联已有设备。
 func (s *Store) addServerWithCredentialsToDeviceTx(
-	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName string, createDevice bool, source WriteSource,
+	tx *sql.Tx, srv *models.Server, cred, sudo *models.Credential, deviceName, siteName string,
+	createDevice bool, source WriteSource,
 ) (*AddServerDeviceResult, error) {
 	srv.CredentialID, srv.AuthMethod = "", ""
 	if cred != nil {
@@ -408,16 +409,8 @@ func (s *Store) addServerWithCredentialsToDeviceTx(
 		}
 	}
 	if created {
-		device.ID = newID()
-		device.CreatedAt, device.UpdatedAt = time.Unix(now(), 0), time.Unix(now(), 0)
-		if err := insertDeviceTx(tx, device); err != nil {
-			return nil, err
-		}
-		auditSummary, auditErr := deviceAuditSummaryTx(tx, device)
-		if auditErr != nil {
-			return nil, auditErr
-		}
-		if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.add", auditSummary, source); err != nil {
+		device, err = s.addDeviceTx(tx, device.Name, "", "", siteName, source)
+		if err != nil {
 			return nil, err
 		}
 	}

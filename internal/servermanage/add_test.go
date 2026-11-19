@@ -196,8 +196,8 @@ func TestManagerAddServerValidatesBeforeWriting(t *testing.T) {
 		DeviceName: other.Name, ExistingDevice: true,
 	}, CLISource())
 	var missingHostErr *FieldError
-	if !errors.As(err, &missingHostErr) || !strings.Contains(missingHostErr.Page, "兜底主机") || !strings.Contains(missingHostErr.Page, "网络成员地址") {
-		t.Fatalf("已有设备没有成员且未给兜底主机应拒绝：%v", err)
+	if !errors.As(err, &missingHostErr) || !strings.Contains(missingHostErr.Page, "至少填写一个网络地址") || !strings.Contains(missingHostErr.Page, "其他（公网或未登记网络）地址") {
+		t.Fatalf("已有设备没有成员且未给其他地址应拒绝：%v", err)
 	}
 	if servers, _ := m.st.ListServers(); len(servers) != 0 {
 		t.Fatalf("校验失败不得写入服务器条目：%v", servers)

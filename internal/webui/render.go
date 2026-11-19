@@ -35,8 +35,11 @@ type pageData struct {
 	Authenticated                     bool
 	Servers                           []ServerRow
 	ServerList                        []ServerListEntry
+	ServerCards                       []ServerCard
+	ServerListFilter                  *ServerListFilterView
+	ServerBatch                       *ServerBatchView
 	ServerAdd                         *serverAddView
-	AddTypeChoice                     *addTypeChoiceView
+	ServerWizard                      *serverWizardView
 	ServerAddResult                   *ServerAddResultView
 	OtherDeviceAddResult              *OtherDeviceAddResultView
 	NextSteps                         []NextStep

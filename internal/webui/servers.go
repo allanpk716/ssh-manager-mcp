@@ -25,6 +25,48 @@ type ServerListEntry struct {
 	AttentionReasons []string
 }
 
+// ServerCard 是服务器列表的一张卡片。它在列表行的基础上补充拓扑、授权与
+// 同机账号数；字段名由模板逐项展示。
+type ServerCard struct {
+	ServerListEntry
+	SiteID           string
+	SitePath         string
+	NetworkIDs       []string
+	NetworkNames     []string
+	SameMachineCount int
+	ClientCount      int
+	SecretCount      int
+	SharedStoreCount int
+	SearchText       string
+}
+
+// ServerListFilterView 是服务器列表搜索与筛选的当前值与可选项。
+type ServerListFilterView struct {
+	Query       string
+	Site        string
+	Network     string
+	Attention   bool
+	Sites       []ServerSelectionOption
+	Networks    []ServerSelectionOption
+	HasTopology bool
+}
+
+// ServerBatchResourceView 是批量操作抽屉里一个可继续选择的资源；Path 指向
+// #301 的共用服务器勾选页。
+type ServerBatchResourceView struct {
+	ID   string
+	Name string
+	Note string
+	Path string
+}
+
+// ServerBatchView 是服务器列表多选后可继续的批量授权入口。
+type ServerBatchView struct {
+	Profiles     []ServerBatchResourceView
+	Secrets      []ServerBatchResourceView
+	SharedStores []ServerBatchResourceView
+}
+
 // ServerDetailView 是服务器详情页的展示数据，只含凭据状态，绝不含凭据内
 // 容；AttentionReasons 携带注意原因代号，模板负责换成文案。
 type ServerDetailView struct {
@@ -217,6 +259,8 @@ type ServerAddForm struct {
 	SiteName            string
 	DeviceName          string
 	ExistingDeviceName  string
+	AddressNetworks     []string
+	AddressValues       []string
 	PhysicalNetwork     string
 	PhysicalAddress     string
 	VirtualNetworkNames []string
@@ -232,7 +276,7 @@ type ServerAddForm struct {
 	StagedCredential bool
 }
 
-// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与站点信息，
+// OtherDeviceAddForm 是新增不受管设备的提交值；只包含设备备注与地点信息，
 // 不携带 SSH、凭据、profile、shell 或连接测试字段。
 type OtherDeviceAddForm struct {
 	Name                string
@@ -264,6 +308,19 @@ type ServerAddResultView struct {
 	AnchorCopyFromServerName string
 	AnchorCopyConflict       bool
 	ReturnTo                 string
+}
+
+// ServerAddFinishForm 是分步新增第 2、3 步的提交值。地点与 profile 都可
+// 跳过；新地点在第 3 步最终提交时随授权一并保存。
+type ServerAddFinishForm struct {
+	ServerID      string
+	SiteAction    string
+	SiteID        string
+	NewSiteParent string
+	NewSiteName   string
+	NewSiteNote   string
+	ProfileIDs    []string
+	ReturnTo      string
 }
 
 // ServerEditForm 是编辑提交。指针字段为 nil 表示这个字段没有变化；凭据动
@@ -436,6 +493,7 @@ type ServerCompleteResultView struct {
 // 理模块适配实现；客户端不注册写路由，也不实现这个接口。
 type ServerWriter interface {
 	AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error)
+	FinishServerAdd(form ServerAddFinishForm, source ServerWriteSource) error
 	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
@@ -454,11 +512,14 @@ type ServerWriter interface {
 }
 
 const (
-	serversPrefix       = "/ui/servers/"
-	serverAddTypePath   = "/ui/add"
-	serverAddFormPath   = "/ui/servers/new"
-	serverAddResultPath = "/ui/servers/new/result"
-	deviceAddFormPath   = "/ui/devices/new"
+	serversPrefix           = "/ui/servers/"
+	serverAddTypePath       = "/ui/add"
+	serverAddFormPath       = "/ui/servers/new"
+	serverWizardTestPath    = serverAddFormPath + "/test"
+	serverWizardSitePath    = serverAddFormPath + "/site"
+	serverWizardProfilePath = serverAddFormPath + "/profile"
+	serverAddResultPath     = "/ui/servers/new/result"
+	deviceAddFormPath       = "/ui/devices/new"
 	// serverAddFormMaxRequestBody 是服务器与其他设备新增表单自己的请求体
 	// 上限；机密项上传沿用更小的机密值上限与专属错误说明。
 	serverAddFormMaxRequestBody = 128 * 1024
@@ -479,6 +540,9 @@ func (h *handler) registerServerRoutes() {
 	}
 	h.mux.HandleFunc(serverAddTypePath, h.requireSession(h.handleServerAddType))
 	h.mux.HandleFunc(serverAddFormPath, h.requireSession(h.handleServerAddForm))
+	h.mux.HandleFunc(serverWizardTestPath, h.requireSession(h.handleServerWizardTest))
+	h.mux.HandleFunc(serverWizardSitePath, h.requireSession(h.handleServerWizardSite))
+	h.mux.HandleFunc(serverWizardProfilePath, h.requireSession(h.handleServerWizardProfile))
 	h.mux.HandleFunc(serverAddResultPath, h.requireSession(h.handleServerAddResult))
 	h.mux.HandleFunc(deviceAddFormPath, h.requireSession(h.handleOtherDeviceAddForm))
 	h.mux.HandleFunc(deviceAddResultPath, h.requireSession(h.handleOtherDeviceAddResult))
@@ -492,26 +556,258 @@ func (h *handler) registerServerRoutes() {
 // handleServerList 渲染服务器列表；attention=1 时只显示需要注意的服务器并
 // 置顶。
 func (h *handler) handleServerList(w http.ResponseWriter, r *http.Request) {
-	attentionOnly := r.URL.Query().Get("attention") == "1"
-	rows, err := h.cfg.Servers.ServerList(h.requestClientInstance(r), attentionOnly)
+	rows, err := h.cfg.Servers.ServerList(h.requestClientInstance(r), false)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取服务器列表失败，请稍后重试。")
 		return
 	}
 	nextSteps, err := h.standaloneNextSteps(r)
 	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取下一步引导失败", "读取服务器、Profile 与项目令牌失败，请稍后重试。")
+		h.renderError(w, r, http.StatusInternalServerError, "读取下一步引导失败", "读取服务器、Profile 与 MCP 访问令牌失败，请稍后重试。")
 		return
 	}
+	cards, filter, batch, err := h.serverListViews(r, rows)
+	if err != nil {
+		h.logError(r, "组装服务器列表", err)
+		h.renderError(w, r, http.StatusInternalServerError, "读取服务器列表失败", "读取地点、授权或客户端失败，请稍后重试。")
+		return
+	}
+	cards = sortServerCardsAttentionFirst(cards)
 	h.renderPage(w, r, http.StatusOK, "servers.tmpl", pageData{
-		Title: "服务器", ServerList: sortServerAttentionFirst(rows), NextSteps: nextSteps,
-		AttentionFilter: attentionOnly,
+		Title: "服务器", ServerList: rows, ServerCards: cards,
+		ServerListFilter: filter, ServerBatch: batch, NextSteps: nextSteps,
+		AttentionFilter: filter.Attention,
 	})
 }
 
 // sortServerAttentionFirst 稳定地把需要注意的服务器排到最前。
 func sortServerAttentionFirst(rows []ServerListEntry) []ServerListEntry {
 	sorted := append([]ServerListEntry(nil), rows...)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return len(sorted[i].AttentionReasons) > 0 && len(sorted[j].AttentionReasons) == 0
+	})
+	return sorted
+}
+
+func (h *handler) serverListViews(
+	r *http.Request, rows []ServerListEntry,
+) ([]ServerCard, *ServerListFilterView, *ServerBatchView, error) {
+	query := r.URL.Query()
+	filter := &ServerListFilterView{
+		Query: strings.TrimSpace(query.Get("query")), Site: strings.TrimSpace(query.Get("site")),
+		Network: strings.TrimSpace(query.Get("network")), Attention: query.Get("attention") == "1",
+	}
+	var topology *TopologyData
+	if h.cfg.Topology != nil {
+		var err error
+		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), "")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		filter.HasTopology = true
+	}
+	deviceByServer, networkIndexes, options := serverListTopologyIndexes(topology)
+	filter.Sites, filter.Networks = options.sites, options.networks
+	profiles, clients, secrets, shares, err := h.serverListAuthorizationRows(r)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	profileIDsByServer, clientCountByProfile := serverProfileAuthorizationIndexes(profiles, clients)
+	secretCounts, shareCounts := serverResourceCounts(secrets, shares)
+	cards := make([]ServerCard, 0, len(rows))
+	for _, row := range rows {
+		card := ServerCard{
+			ServerListEntry: row, SecretCount: secretCounts[row.Name],
+			SharedStoreCount: shareCounts[row.ID],
+		}
+		if device, ok := deviceByServer[row.ID]; ok {
+			card.SiteID, card.SitePath = device.SiteID, device.LocationPath
+			card.NetworkIDs = networkIndexes.idsByDevice[device.ID]
+			card.NetworkNames = networkIndexes.namesByDevice[device.ID]
+			card.SameMachineCount = len(device.Servers)
+		}
+		for _, profileID := range profileIDsByServer[row.ID] {
+			card.ClientCount += clientCountByProfile[profileID]
+		}
+		card.SearchText = strings.ToLower(strings.Join([]string{
+			row.Name, row.User, row.Host, strconv.Itoa(row.Port), card.SitePath,
+			strings.Join(card.NetworkNames, " "), strings.Join(row.AttentionReasons, " "),
+		}, " "))
+		if serverCardMatches(card, filter) {
+			cards = append(cards, card)
+		}
+	}
+	return cards, filter, h.serverBatchView(profiles, secrets, shares), nil
+}
+
+type serverListNetworkIndexes struct {
+	idsByDevice   map[string][]string
+	namesByDevice map[string][]string
+}
+
+type serverListTopologyOptions struct {
+	sites    []ServerSelectionOption
+	networks []ServerSelectionOption
+}
+
+func serverListTopologyIndexes(topology *TopologyData) (
+	map[string]TopologyDevice, serverListNetworkIndexes, serverListTopologyOptions,
+) {
+	deviceByServer := map[string]TopologyDevice{}
+	networks := map[string]TopologyNetwork{}
+	indexes := serverListNetworkIndexes{
+		idsByDevice: map[string][]string{}, namesByDevice: map[string][]string{},
+	}
+	var options serverListTopologyOptions
+	if topology == nil {
+		return deviceByServer, indexes, options
+	}
+	for _, site := range topology.Sites {
+		if site.ID != "" {
+			options.sites = append(options.sites, ServerSelectionOption{Value: site.ID, Label: site.LocationPath})
+		}
+	}
+	for _, network := range topology.Networks {
+		networks[network.ID] = network
+		if network.ID != "" {
+			options.networks = append(options.networks, ServerSelectionOption{Value: network.ID, Label: network.Name})
+		}
+	}
+	for _, membership := range topology.Memberships {
+		if network, ok := networks[membership.NetworkID]; ok {
+			indexes.idsByDevice[membership.DeviceID] = append(indexes.idsByDevice[membership.DeviceID], network.ID)
+			indexes.namesByDevice[membership.DeviceID] = append(indexes.namesByDevice[membership.DeviceID], network.Name)
+		}
+	}
+	for _, device := range topology.Devices {
+		deviceByServer[device.ID] = device
+		for _, server := range device.Servers {
+			deviceByServer[server.ID] = device
+		}
+	}
+	sort.Slice(options.sites, func(i, j int) bool { return options.sites[i].Label < options.sites[j].Label })
+	sort.Slice(options.networks, func(i, j int) bool { return options.networks[i].Label < options.networks[j].Label })
+	return deviceByServer, indexes, options
+}
+
+func (h *handler) serverListAuthorizationRows(
+	r *http.Request,
+) ([]AccessProfileSummary, []ClientSummary, []SecretRow, []ShareRow, error) {
+	if h.cfg.Access == nil {
+		return nil, nil, nil, nil, nil
+	}
+	profiles, err := h.cfg.Access.ListProfiles()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	clients, err := h.cfg.Access.ListClients()
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	var secrets []SecretRow
+	if h.cfg.Secrets != nil {
+		if secrets, err = h.cfg.Secrets.ListSecrets(h.requestClientInstance(r), "", ""); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	var shares []ShareRow
+	if h.cfg.Shares != nil {
+		if shares, err = h.cfg.Shares.ListShares(h.requestClientInstance(r), "", ""); err != nil {
+			return nil, nil, nil, nil, err
+		}
+	}
+	return profiles, clients, secrets, shares, nil
+}
+
+func serverProfileAuthorizationIndexes(profiles []AccessProfileSummary, clients []ClientSummary) (
+	map[string][]string, map[string]int,
+) {
+	profileIDsByServer := map[string][]string{}
+	for _, profile := range profiles {
+		for _, server := range profile.Servers {
+			profileIDsByServer[server.ID] = append(profileIDsByServer[server.ID], profile.ID)
+		}
+	}
+	clientCountByProfile := map[string]int{}
+	for _, client := range clients {
+		if !client.Revoked {
+			clientCountByProfile[client.ProfileID]++
+		}
+	}
+	return profileIDsByServer, clientCountByProfile
+}
+
+func serverResourceCounts(secrets []SecretRow, shares []ShareRow) (map[string]int, map[string]int) {
+	secretCounts := map[string]int{}
+	for _, secret := range secrets {
+		for _, name := range secret.AllowedServers {
+			secretCounts[name]++
+		}
+	}
+	shareCounts := map[string]int{}
+	for _, share := range shares {
+		for _, server := range share.MountableServers {
+			shareCounts[server.ID]++
+		}
+	}
+	return secretCounts, shareCounts
+}
+
+func serverCardMatches(card ServerCard, filter *ServerListFilterView) bool {
+	if filter.Attention && len(card.AttentionReasons) == 0 {
+		return false
+	}
+	if filter.Query != "" && !strings.Contains(card.SearchText, strings.ToLower(filter.Query)) {
+		return false
+	}
+	if filter.Site != "" && card.SiteID != filter.Site {
+		return false
+	}
+	if filter.Network != "" && !serverCardContains(card.NetworkIDs, filter.Network) {
+		return false
+	}
+	return true
+}
+
+func serverCardContains(values []string, wanted string) bool {
+	for _, value := range values {
+		if value == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func (h *handler) serverBatchView(
+	profiles []AccessProfileSummary, secrets []SecretRow, shares []ShareRow,
+) *ServerBatchView {
+	if !h.caps.CanWrite {
+		return nil
+	}
+	view := &ServerBatchView{}
+	for _, profile := range profiles {
+		view.Profiles = append(view.Profiles, ServerBatchResourceView{
+			ID: profile.ID, Name: profile.Name,
+			Path: authorizationProfilesPath + "/" + profile.ID + authorizationServersSuffix,
+		})
+	}
+	for _, secret := range secrets {
+		view.Secrets = append(view.Secrets, ServerBatchResourceView{
+			ID: secret.ID, Name: secret.Name, Note: secret.Note,
+			Path: authorizationSecretsPath + "/" + secret.ID + authorizationServersSuffix,
+		})
+	}
+	for _, share := range shares {
+		view.SharedStores = append(view.SharedStores, ServerBatchResourceView{
+			ID: share.ID, Name: share.Name, Note: share.Note,
+			Path: authorizationSharesPath + "/" + share.ID + authorizationServersSuffix,
+		})
+	}
+	return view
+}
+
+func sortServerCardsAttentionFirst(cards []ServerCard) []ServerCard {
+	sorted := append([]ServerCard(nil), cards...)
 	sort.SliceStable(sorted, func(i, j int) bool {
 		return len(sorted[i].AttentionReasons) > 0 && len(sorted[j].AttentionReasons) == 0
 	})

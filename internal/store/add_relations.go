@@ -21,6 +21,7 @@ type AddServerRelationsRequest struct {
 	LoginCredential *models.Credential
 	SudoCredential  *models.Credential
 	DeviceName      string
+	SiteName        string
 	ExistingDevice  bool
 	Memberships     []NetworkMembershipWrite
 	ProfileIDs      []string
@@ -64,7 +65,7 @@ func (s *Store) AddServerWithRelations(
 	defer tx.Rollback()
 	added, err := s.addServerWithCredentialsToDeviceTx(
 		tx, &request.Server, request.LoginCredential, request.SudoCredential,
-		request.DeviceName, !request.ExistingDevice, request.Source,
+		request.DeviceName, request.SiteName, !request.ExistingDevice, request.Source,
 	)
 	if err != nil {
 		return nil, err

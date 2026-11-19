@@ -208,13 +208,13 @@ func TestTopologyPageShowsTrayAddOnlyForWritableRoles(t *testing.T) {
 			page := authorityGet(t, handler, host, "/ui/topology/", cookie)
 			body := readResponseBody(t, page)
 			if tc.wantAdd {
-				want := `href="/ui/add?return_to=%2Fui%2Ftopology%2F"`
+				want := `href="/ui/servers/new?return_to=%2Fui%2Ftopology%2F"`
 				if !strings.Contains(body, want) || !strings.Contains(body, "data-topology-add") {
 					t.Fatalf("可写角色拓扑托盘应提供新增入口，缺少 %q：\n%s", want, body)
 				}
 				return
 			}
-			if strings.Contains(body, "data-topology-add") || strings.Contains(body, `href="/ui/add`) {
+			if strings.Contains(body, "data-topology-add") || strings.Contains(body, `href="/ui/servers/new?return_to=`) {
 				t.Fatalf("客户端拓扑页不应提供新增入口：\n%s", body)
 			}
 		})

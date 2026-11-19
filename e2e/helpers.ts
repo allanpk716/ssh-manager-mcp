@@ -12,6 +12,58 @@ export const repoRoot = path.resolve(e2eDir, "..");
 const artifactsDir = path.join(e2eDir, ".artifacts");
 const binaryPath = path.join(artifactsDir, `sshmgr${process.platform === "win32" ? ".exe" : ""}`);
 
+export type testSSHServer = {
+  address: string;
+  privateKeyPath: string;
+  close: () => Promise<void>;
+};
+
+// startTestSSHServer 编译并启动 e2e/tools/testsshd。它只监听本机随机端
+// 口，并把配套私钥写入测试指定的临时路径。
+export async function startTestSSHServer(privateKeyPath: string): Promise<testSSHServer> {
+  const server = spawn("go", ["run", "./e2e/tools/testsshd", privateKeyPath], {
+    cwd: repoRoot,
+    stdio: ["pipe", "pipe", "pipe"],
+    env: {
+      ...process.env,
+      ...goCacheEnvironment,
+    },
+  });
+  let output = "";
+  server.stdout.on("data", (chunk) => (output += chunk));
+  server.stderr.on("data", (chunk) => (output += chunk));
+  const address = await new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`等待 SSH 测试服务启动超时：\n${output}`)), 15_000);
+    const poll = setInterval(() => {
+      const match = output.match(/^127\.0\.0\.1:\d+$/m);
+      if (match) {
+        clearTimeout(timer);
+        clearInterval(poll);
+        resolve(match[0]);
+      }
+    }, 50);
+    server.on("exit", (code) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      reject(new Error(`SSH 测试服务提前退出（${code}）：\n${output}`));
+    });
+  });
+  return {
+    address,
+    privateKeyPath,
+    close: async () => {
+      server.kill("SIGTERM");
+      await new Promise<void>((resolve) => {
+        if (server.exitCode !== null) {
+          resolve();
+          return;
+        }
+        server.on("exit", () => resolve());
+      });
+    },
+  };
+}
+
 // goCacheEnvironment 保留本机 Go 构建缓存路径。客户端种子进程把 HOME 指
 // 到临时目录来隔离配置；不带上这几个变量时，go 会认为工具链缓存为空而重
 // 新下载，客户端用例会慢到超时。

@@ -419,7 +419,7 @@ test("视图切换有平滑过渡并尊重减少动态效果设置", async ({ pa
   }
 });
 
-test("桌面托盘新增设备后返回画布并刷新托盘", async ({ page, isMobile }, testInfo) => {
+test("桌面托盘在此新增服务器后返回画布并刷新托盘", async ({ page, isMobile }, testInfo) => {
   testInfo.skip(isMobile, "桌面入口用例只在桌面视口运行");
   const ui = await startStandaloneUIWithTopology();
   try {
@@ -427,22 +427,25 @@ test("桌面托盘新增设备后返回画布并刷新托盘", async ({ page, is
     const tray = page.getByRole("complementary", { name: "未归类设备" });
     await expect(tray).toHaveAttribute("data-count", "2");
 
-    await tray.getByRole("link", { name: "新增", exact: true }).click();
-    await page.getByRole("link", { name: /其他设备/ }).click();
-    await page.getByLabel("设备名", { exact: true }).fill("托盘新增设备");
-    await page.getByRole("button", { name: "保存设备" }).click();
-    await expect(page.getByRole("heading", { name: "已保存其他设备" })).toBeVisible();
+    await tray.getByRole("link", { name: "在此新增", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "新增服务器" })).toBeVisible();
+    await page.getByLabel("名称", { exact: true }).fill("托盘新增服务器");
+    await page.getByLabel("用户", { exact: true }).fill("deploy");
+    await page.locator(".address-row select").selectOption("other");
+    await page.locator(".address-row input[name='address']").fill("127.0.0.1");
+    await page.getByRole("button", { name: "测试连接并下一步" }).click();
+    await expect(page.getByRole("heading", { name: /连接测试/ })).toBeVisible();
     await page.getByRole("link", { name: "返回网络拓扑" }).click();
 
     await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
     await expect(tray).toHaveAttribute("data-count", "3");
-    await expect(tray.getByRole("button", { name: /托盘新增设备/ })).toBeVisible();
+    await expect(tray.getByRole("button", { name: /托盘新增服务器/ })).toBeVisible();
   } finally {
     await ui.close();
   }
 });
 
-test("网络框新增保留物理与虚拟网络预选并刷新成员", async ({ page, isMobile }, testInfo) => {
+test("网络框在此新增保留物理与虚拟网络预选并刷新成员", async ({ page, isMobile }, testInfo) => {
   testInfo.skip(isMobile, "网络入口用例只在桌面视口运行");
   const ui = await startStandaloneUIWithTopology();
   try {
@@ -451,36 +454,38 @@ test("网络框新增保留物理与虚拟网络预选并刷新成员", async ({
 
     await selectTopologyEntity(page, "topology:select-network", "家A局域网");
     await detail.getByRole("link", { name: "在此新增" }).click();
-    await page.getByRole("link", { name: /其他设备/ }).click();
-    await expect(page.getByLabel("站点", { exact: true })).toHaveValue("家A");
-    await expect(page.getByLabel("物理局域网", { exact: true })).toHaveValue("家A局域网");
-    await page.getByLabel("设备名", { exact: true }).fill("物理入口设备");
-    await page.getByLabel("物理局域网地址").fill("192.168.1.81");
-    await page.getByRole("button", { name: "保存设备" }).click();
+    await expect(page.getByRole("heading", { name: "新增服务器" })).toBeVisible();
+    await expect(page.locator(".address-row select")).toHaveValue("家A局域网");
+    await page.getByLabel("名称", { exact: true }).fill("物理入口服务器");
+    await page.getByLabel("用户", { exact: true }).fill("deploy");
+    await page.locator(".address-row input[name='address']").fill("192.168.1.81");
+    await page.getByRole("button", { name: "测试连接并下一步" }).click();
+    await expect(page.getByRole("heading", { name: /连接测试/ })).toBeVisible();
     await page.getByRole("link", { name: "返回网络拓扑" }).click();
     await selectTopologyEntity(page, "topology:select-network", "家A局域网");
-    await expect(detail).toContainText("物理入口设备 · 192.168.1.81");
+    await expect(detail).toContainText("物理入口服务器 · 192.168.1.81");
 
     await page.getByRole("button", { name: "虚拟视图" }).click();
     await waitForCanvasSettled(page);
     await selectTopologyEntity(page, "topology:select-network", "虚拟网B");
     await detail.getByRole("link", { name: "在此新增" }).click();
-    await page.getByRole("link", { name: /其他设备/ }).click();
-    await expect(page.getByLabel("虚拟局域网", { exact: true }).first()).toHaveValue("虚拟网B");
-    await page.getByLabel("设备名", { exact: true }).fill("虚拟入口设备");
-    await page.getByLabel("地址", { exact: true }).first().fill("100.65.0.81");
-    await page.getByRole("button", { name: "保存设备" }).click();
+    await expect(page.locator(".address-row select")).toHaveValue("虚拟网B");
+    await page.getByLabel("名称", { exact: true }).fill("虚拟入口服务器");
+    await page.getByLabel("用户", { exact: true }).fill("deploy");
+    await page.locator(".address-row input[name='address']").fill("100.65.0.81");
+    await page.getByRole("button", { name: "测试连接并下一步" }).click();
+    await expect(page.getByRole("heading", { name: /连接测试/ })).toBeVisible();
     await page.getByRole("link", { name: "返回网络拓扑" }).click();
     await page.getByRole("button", { name: "虚拟视图" }).click();
     await waitForCanvasSettled(page);
     await selectTopologyEntity(page, "topology:select-network", "虚拟网B");
-    await expect(detail).toContainText("虚拟入口设备 · 100.65.0.81");
+    await expect(detail).toContainText("虚拟入口服务器 · 100.65.0.81");
   } finally {
     await ui.close();
   }
 });
 
-test("设备详情新增服务器条目沿用设备并刷新角标与锚状态", async ({ page, isMobile }, testInfo) => {
+test("设备详情在此新增服务器条目沿用设备并刷新角标与锚状态", async ({ page, isMobile }, testInfo) => {
   testInfo.skip(isMobile, "设备入口用例只在桌面视口运行");
   const ui = await startStandaloneUIWithTopology();
   try {
@@ -490,14 +495,14 @@ test("设备详情新增服务器条目沿用设备并刷新角标与锚状态",
     await selectTopologyEntity(page, "topology:select-device", "工作站");
     await detail.getByRole("link", { name: "在此设备上新增服务器条目" }).click();
 
-    await expect(page.getByRole("radio", { name: "已有设备" })).toBeChecked();
-    await expect(page.locator("#add-existing-device")).toHaveValue("工作站");
-    await expect(page.getByLabel("站点", { exact: true })).toBeHidden();
-    await expect(page.getByLabel("物理局域网", { exact: true })).toBeHidden();
+    await expect(page.getByText("将新增到机器 工作站 上的另一个账号")).toBeVisible();
     await page.getByLabel("名称", { exact: true }).fill("device-detail-web");
     await page.getByLabel("用户", { exact: true }).fill("deploy");
-    await page.getByRole("button", { name: "保存并进入待连接测试" }).click();
-    await expect(page.getByRole("heading", { name: /已保存，连接测试/ })).toBeVisible();
+    await page.locator(".address-row select").selectOption("other");
+    await page.locator(".address-row input[name='address']").fill("127.0.0.1");
+    await page.getByRole("button", { name: "测试连接并下一步" }).click();
+    await expect(page.getByRole("heading", { name: /连接测试/ })).toBeVisible();
+    await expect(page).toHaveURL(/same_machine=true/);
     await page.getByRole("link", { name: "返回网络拓扑" }).click();
 
     await page.getByRole("heading", { name: "网络拓扑" }).waitFor();

@@ -57,6 +57,8 @@ func serversAddCmd() *cobra.Command {
 		exposeHost                                                              bool
 		shell                                                                   string
 		device                                                                  string
+		site                                                                    string
+		addresses                                                               []string
 	)
 	c := &cobra.Command{
 		Use:   "add",
@@ -67,19 +69,6 @@ func serversAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			if host == "" && device != "" {
-				memberships, err := s.ListNetworkMembershipsByRegistration(device)
-				if err != nil {
-					return err
-				}
-				if len(memberships) == 0 {
-					return errors.New("指定已有设备但没有网络成员时，必须提供兜底主机")
-				}
-				host, _ = servermanage.FallbackHostFromMemberships(memberships)
-			}
-			if host == "" && device == "" {
-				return errors.New("必须提供 --host，或提供 --device 并确保该设备已有网络成员")
-			}
 			// Audit summary (owner whitelist: name/host/port/user only —
 			// credential values are excluded by construction). Built once from
 			// the flags so the success and the failure rows share one shape.
@@ -108,6 +97,28 @@ func serversAddCmd() *cobra.Command {
 				ExposeHost:  exposeHost,
 				ShellType:   models.ShellType(shell),
 			}
+			memberships, addressErr := serverAddressMemberships(addresses)
+			if addressErr != nil {
+				writeOwnerAuditError(s, "server.add", summary)
+				return addressErr
+			}
+			if host == "" && device != "" && len(memberships) == 0 {
+				existingMemberships, listErr := s.ListNetworkMembershipsByRegistration(device)
+				if listErr != nil {
+					writeOwnerAuditError(s, "server.add", summary)
+					return listErr
+				}
+				if len(existingMemberships) == 0 {
+					writeOwnerAuditError(s, "server.add", summary)
+					return errors.New("指定已有设备但没有网络成员时，必须提供其他（公网或未登记网络）地址")
+				}
+				host, _ = servermanage.FallbackHostFromMemberships(existingMemberships)
+				srv.Host = host
+			}
+			if host == "" && device == "" && len(memberships) == 0 {
+				writeOwnerAuditError(s, "server.add", summary)
+				return errors.New("必须提供 --host，至少一条 --address，或提供 --device 并确保该设备已有网络成员")
+			}
 			// Suspected-secret hint (Plan 28 T2): advisory, non-blocking scan
 			// of the free-text metadata this add is about to persist, in its
 			// final (trimmed / JSON-raw tags) form. A hit never fails the add
@@ -135,17 +146,20 @@ func serversAddCmd() *cobra.Command {
 			if sudoPassword != "" {
 				sudoCred = &models.Credential{Type: models.CredPassword, Secret: []byte(sudoPassword)}
 			}
-			added, err := s.AddServerWithCredentialsToDevice(srv, cred, sudoCred, device)
+			added, err := servermanage.New(s).Add(servermanage.AddRequest{
+				Server:          *srv,
+				LoginCredential: cred,
+				SudoCredential:  sudoCred,
+				DeviceName:      device,
+				SiteName:        site,
+				ExistingDevice:  device != "",
+				Memberships:     memberships,
+			}, servermanage.CLISource())
 			if err != nil {
-				writeOwnerAuditError(s, "server.add", summary)
 				return err
 			}
-			// Success row (projects.go precedent: a mutation's audit write
-			// failure fails the command — the row is mandatory, not advisory).
-			if err := s.WriteOwnerAudit("server.add", summary); err != nil {
-				return err
-			}
-			fmt.Fprintf(cmd.OutOrStdout(), "added server %s id=%s device=%s\n", name, added.ServerID, added.Device.Name)
+			summary["host"] = host
+			fmt.Fprintf(cmd.OutOrStdout(), "added server %s id=%s device=%s\n", name, added.ServerID, added.DeviceName)
 			printServerAnchorCopyResult(cmd.OutOrStdout(), added.AnchorCopy)
 			return nil
 		},
@@ -167,9 +181,24 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().BoolVar(&exposeHost, "expose-host", false, "return the plaintext host in list_servers (default: masked as \"hidden\")")
 	c.Flags().StringVar(&shell, "shell", "posix", "shell type for command-policy judging (posix, powershell, cmd)")
 	c.Flags().StringVar(&device, "device", "", "关联的已有拓扑设备；不给时自动生成同名设备，兜底主机可从它的物理局域网地址生成")
+	c.Flags().StringVar(&site, "site", "", "新机器的地点；用完整路径或全库唯一的地点名")
+	c.Flags().StringArrayVar(&addresses, "address", nil, "网络 + 地址，格式为 网络名=地址；可重复")
 	_ = c.MarkFlagRequired("name")
 	_ = c.MarkFlagRequired("user")
 	return c
+}
+
+func serverAddressMemberships(values []string) ([]servermanage.NetworkMembershipInput, error) {
+	out := make([]servermanage.NetworkMembershipInput, 0, len(values))
+	for _, value := range values {
+		network, address, ok := strings.Cut(value, "=")
+		network, address = strings.TrimSpace(network), strings.TrimSpace(address)
+		if !ok || network == "" || address == "" {
+			return nil, fmt.Errorf("--address 格式为 网络名=地址，实际 %q", value)
+		}
+		out = append(out, servermanage.NetworkMembershipInput{Network: network, Address: address})
+	}
+	return out, nil
 }
 
 // serversProbeShellCmd:`sshmgr servers probe-shell [<name>...]`——探测服

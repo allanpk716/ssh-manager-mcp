@@ -1,6 +1,11 @@
 {{define "content"}}
-<section class="server-list">
-<h1>服务器</h1>
+<section class="server-list-page" data-server-list-page>
+<div class="title-row">
+<h1>服务器<span class="title-count">{{len .ServerCards}}</span></h1>
+{{if .Caps.CanWrite}}<div class="title-actions">
+<a class="primary-button" href="/ui/servers/new">新增服务器</a>
+</div>{{end}}
+</div>
 {{if .NextSteps}}
 <section class="notice notice-info next-steps" aria-labelledby="next-steps-title">
 <h2 id="next-steps-title">下一步引导</h2>
@@ -10,29 +15,103 @@
 </section>
 {{end}}
 <div class="inline-form server-actions">
-{{if .AttentionFilter}}<a class="button-link" href="/ui/servers/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/servers/?attention=1">只看需要注意</a>{{end}}
 {{if .Caps.CanWrite}}
-<a class="button-link primary" href="/ui/servers/new">新增服务器</a>
-<a class="button-link" href="/ui/servers/import">导入 SSH 配置</a>
-<a class="button-link" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
+<a class="secondary-button" href="/ui/servers/import">导入 SSH 配置</a>
+<a class="secondary-button" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
 {{end}}
 </div>
-<table class="server-table">
-<thead>
-<tr><th scope="col">名称</th><th scope="col">登录</th><th scope="col">端口</th><th scope="col">注意原因</th><th scope="col">操作</th></tr>
-</thead>
-<tbody>
-{{range .ServerList}}<tr class="{{if .AttentionReasons}}needs-attention{{end}}">
-<td data-field-name="名称">{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong> {{end}}<a href="/ui/servers/{{.ID}}">{{.Name}}</a></td>
-<td data-field-name="登录">{{.User}}@{{.Host}}</td>
-<td data-field-name="端口">{{.Port}}</td>
-<td data-field-name="注意原因">{{if .AttentionReasons}}{{joinReasons .AttentionReasons}}{{else}}-{{end}}</td>
-<td data-field-name="操作" class="server-row-actions">
+<form class="server-filter-form" method="get" action="/ui/servers/" aria-label="搜索与筛选服务器">
+<div class="form-field search-field">
+<label for="server-search">搜索</label>
+<input id="server-search" name="query" value="{{.ServerListFilter.Query}}" type="search" autocomplete="off" aria-label="搜索服务器" placeholder="名称、地址、地点或网络">
+</div>
+{{if .ServerListFilter.HasTopology}}
+<div class="form-field">
+<label for="server-site-filter">地点</label>
+<select id="server-site-filter" name="site" aria-label="按地点筛选">
+<option value="">全部地点</option>
+{{range .ServerListFilter.Sites}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Site .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+</div>
+<div class="form-field">
+<label for="server-network-filter">网络</label>
+<select id="server-network-filter" name="network" aria-label="按网络筛选">
+<option value="">全部网络</option>
+{{range .ServerListFilter.Networks}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Network .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+</div>
+{{end}}
+<label class="switch-control attention-switch"><input type="checkbox" name="attention" value="1"{{if .ServerListFilter.Attention}} checked{{end}}><span class="switch-track" aria-hidden="true"></span><span>只看需要注意</span></label>
+<button type="submit">应用筛选</button>
+</form>
+<p class="section-note">需要注意的排在最前。</p>
+<div class="server-card-list" aria-label="服务器卡片">
+{{range .ServerCards}}
+<article class="shared-card server-card{{if .AttentionReasons}} attention-card{{end}}" data-server-card data-card-site="{{.SiteID}}" data-card-network="{{joinTags .NetworkIDs}}" data-card-search="{{.SearchText}}">
+<div class="server-card-main">
+{{if $.Caps.CanWrite}}<label class="switch-control server-select-control"><input type="checkbox" value="{{.ID}}" aria-label="选择 {{.Name}}"><span class="switch-track" aria-hidden="true"></span><span>多选</span></label>{{end}}
+<div>
+<h2><a href="/ui/servers/{{.ID}}">{{.Name}}</a></h2>
+<p class="server-address">{{.User}}@{{.Host}}:{{.Port}}</p>
+</div>
+</div>
+<dl class="server-card-fields">
+<div><dt data-field-name="名称">{{.Name}}</dt><dd data-field-name="名称">{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong>{{end}}</dd></div>
+<div><dt data-field-name="地址">{{.User}}@{{.Host}}:{{.Port}}</dt><dd data-field-name="地址">{{if .SitePath}}{{.SitePath}}{{else}}地点未登记{{end}}{{if .NetworkNames}} · {{joinTags .NetworkNames}}{{end}}</dd></div>
+<div><dt data-field-name="客户端">{{.ClientCount}} 个</dt><dd data-field-name="客户端">能看见</dd></div>
+<div><dt data-field-name="机密项">{{.SecretCount}} 个</dt><dd data-field-name="机密项">已授权</dd></div>
+<div><dt data-field-name="共享存储">{{.SharedStoreCount}} 个</dt><dd data-field-name="共享存储">可挂载</dd></div>
+{{if gt .SameMachineCount 1}}<div><dt data-field-name="同机">同机 {{.SameMachineCount}} 个账号</dt><dd data-field-name="同机">共用地址与地点</dd></div>{{end}}
+{{if .AttentionReasons}}<div><dt data-field-name="需要注意的原因">{{joinReasons .AttentionReasons}}</dt><dd data-field-name="需要注意的原因">请先处理</dd></div>{{end}}
+</dl>
+<div class="server-row-actions">
 <a href="/ui/servers/{{.ID}}">详情</a>
 {{if $.Caps.CanWrite}}<a href="/ui/servers/{{.ID}}/edit">编辑</a><a href="/ui/servers/{{.ID}}/delete">删除</a>{{end}}
-</td>
-</tr>{{end}}
-</tbody>
-</table>
+</div>
+</article>
+{{else}}
+<section class="empty-inline">没有符合条件的服务器。</section>
+{{end}}
+</div>
 </section>
+{{if and .Caps.CanWrite .ServerBatch}}
+<section class="server-selection-bar" data-server-selection-bar hidden aria-label="批量操作">
+<strong data-server-selected-count>已选 0 台</strong>
+<button type="button" data-batch-button="profiles">加入 profile</button>
+<button type="button" data-batch-button="secrets">授权机密项</button>
+<button type="button" data-batch-button="shares">授权共享存储</button>
+</section>
+<div class="drawer-shell" data-server-batch-drawer hidden>
+<button class="drawer-backdrop" type="button" data-close-batch aria-label="关闭批量操作"></button>
+<section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-batch-title">
+<div class="drawer-handle" aria-hidden="true"></div>
+<h2 id="server-batch-title">选择要批量调整的资源</h2>
+<p>已选服务器会带入下一页的共用勾选组件，确认后才写入授权。</p>
+{{if .ServerBatch.Profiles}}
+<section data-batch-panel="profiles">
+<h3>Profile</h3>
+<div class="row-list">
+{{range .ServerBatch.Profiles}}<a class="resource-card" href="{{.Path}}" data-batch-resource><span class="resource-copy"><strong>{{.Name}}</strong><small>加入选中的服务器</small></span></a>{{end}}
+</div>
+</section>
+{{end}}
+{{if .ServerBatch.Secrets}}
+<section data-batch-panel="secrets">
+<h3>机密项</h3>
+<div class="row-list">
+{{range .ServerBatch.Secrets}}<a class="resource-card" href="{{.Path}}" data-batch-resource><span class="resource-copy"><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}缺备注{{end}}</small></span></a>{{end}}
+</div>
+</section>
+{{end}}
+{{if .ServerBatch.SharedStores}}
+<section data-batch-panel="shares">
+<h3>共享存储</h3>
+<div class="row-list">
+{{range .ServerBatch.SharedStores}}<a class="resource-card" href="{{.Path}}" data-batch-resource><span class="resource-copy"><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}缺备注{{end}}</small></span></a>{{end}}
+</div>
+</section>
+{{end}}
+</section>
+</div>
+{{end}}
 {{end}}

@@ -29,10 +29,8 @@ func TestHandlerOtherDeviceAddTypeSwitchAndFieldVisibility(t *testing.T) {
 	_, _, h := newIntegrationHandler(t)
 
 	typePage := h.do(http.MethodGet, "/ui/add", nil)
-	typeBody := integrationBody(t, typePage)
-	if typePage.StatusCode != http.StatusOK || !strings.Contains(typeBody, ">服务器</strong>") ||
-		!strings.Contains(typeBody, ">其他设备</strong>") {
-		t.Fatalf("类型选择页应同时提供服务器与其他设备，状态码=%d：\n%s", typePage.StatusCode, typeBody)
+	if typePage.StatusCode != http.StatusSeeOther || !strings.Contains(typePage.Header.Get("Location"), "/ui/servers/new") {
+		t.Fatalf("旧类型选择页应重定向到服务器分步新增，状态码=%d 跳转=%s", typePage.StatusCode, typePage.Header.Get("Location"))
 	}
 
 	formPage := h.do(http.MethodGet, "/ui/devices/new", nil)

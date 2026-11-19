@@ -129,6 +129,12 @@ func sitePathTx(q siteQueryer, siteID string) (string, error) {
 	return models.NewSiteTree(sites).PathString(siteID), nil
 }
 
+// ResolveSite 把完整路径或全库唯一的裸名字解析成地点。Web UI 与命令行组
+// 装新增请求时用它保证把同一个地点引用交给存储事务。
+func (s *Store) ResolveSite(ref string) (*models.Site, error) {
+	return resolveSiteRef(s.db, ref)
+}
+
 // ensureSiteParentAllowedTx 校验新的上级不会形成地点循环：上级不能是地
 // 点自己，也不能是它任意一级下级。
 func ensureSiteParentAllowedTx(q siteQueryer, siteID, parentID string) error {

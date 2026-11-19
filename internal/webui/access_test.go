@@ -124,7 +124,7 @@ func (s *stubAccessStore) RevokeDeviceCode(id string, source AccessWriteSource) 
 	return s.revokeDeviceErr
 }
 
-func (s *stubAccessStore) ListClients() ([]ClientSummary, error) {
+func (s stubAccessStore) ListClients() ([]ClientSummary, error) {
 	if s.clients == nil {
 		return nil, nil
 	}

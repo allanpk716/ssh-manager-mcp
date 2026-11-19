@@ -131,6 +131,10 @@ func (s *nextStepAccessStore) ListProfiles() ([]AccessProfileSummary, error) {
 	return s.profiles, nil
 }
 
+func (s *nextStepAccessStore) ListClients() ([]ClientSummary, error) {
+	return nil, nil
+}
+
 func (s *nextStepAccessStore) ListProjects(bool) ([]AccessProjectSummary, error) {
 	return s.projects, nil
 }

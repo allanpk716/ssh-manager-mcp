@@ -1962,7 +1962,7 @@
       html += "<li>" + escapeHTML(name) + " · " + escapeHTML(membership.address) + "</li>";
     });
     html += "</ul>";
-    html += detailAddLinkHTML("在此新增", "/ui/add", { network: network.name });
+    html += detailAddLinkHTML("在此新增", "/ui/servers/new", { network: network.name });
     showDetailHTML(html);
   }
 

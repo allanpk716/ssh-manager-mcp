@@ -36,14 +36,6 @@ type serverAddDraft struct {
 	createdAt time.Time
 }
 
-// addTypeChoiceView 是新增类型选择页的两个入口地址。拓扑画布带上下文进入
-// 时，两个地址都保留网络与返回位置，保证选择服务器或其他设备后仍使用同一
-// 份预选内容。
-type addTypeChoiceView struct {
-	ServerHref      string
-	OtherDeviceHref string
-}
-
 const topologyReturnPath = "/ui/topology/"
 
 func normalizeAddReturnPath(value string) string {
@@ -69,43 +61,61 @@ func addFormHref(path, network, returnTo string) string {
 
 func (h *handler) handleServerAddType(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增类型选择页只接受 GET 请求。")
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "旧新增入口只接受 GET 请求。")
 		return
 	}
-	network := strings.TrimSpace(r.URL.Query().Get("network"))
-	returnTo := normalizeAddReturnPath(r.URL.Query().Get("return_to"))
-	h.renderPage(w, r, http.StatusOK, "servers-add-type.tmpl", pageData{
-		Title: "新增", AddTypeChoice: &addTypeChoiceView{
-			ServerHref:      addFormHref(serverAddFormPath, network, returnTo),
-			OtherDeviceHref: addFormHref(deviceAddFormPath, network, returnTo),
-		},
-	})
+	query := url.Values{}
+	for _, name := range []string{"network", "device", "return_to"} {
+		if value := strings.TrimSpace(r.URL.Query().Get(name)); value != "" {
+			query.Set(name, value)
+		}
+	}
+	target := serverAddFormPath
+	if len(query) > 0 {
+		target += "?" + query.Encode()
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 func (h *handler) handleServerAddForm(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost {
-		h.handleServerAddFormPost(w, r)
+		h.handleServerWizardStartPost(w, r)
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "新增服务器页只接受 GET 与 POST 请求。")
 		return
 	}
-	var submitted *ServerAddForm
-	notice := ""
-	resume := r.URL.Query().Get("resume") == "1"
-	if resume {
+	if r.URL.Query().Get("resume") == "1" {
 		if draft := h.peekServerAddDraft(r); draft != nil {
 			draft.StagedCredential = true
-			submitted = draft
-			notice = "已保留表单状态，请检查后再次提交。"
-		} else {
-			notice = "暂存的登录凭据已超过五分钟，请重新填写。"
+			var topology *TopologyData
+			if h.cfg.Topology != nil {
+				var err error
+				if topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), ""); err != nil {
+					h.renderError(w, r, http.StatusInternalServerError, "读取新增选项失败", "读取地点与网络失败，请稍后重试。")
+					return
+				}
+			}
+			h.renderServerWizardStart(w, r, draft, "已保留表单状态，请检查后再次提交。", http.StatusOK, topology)
+			return
 		}
-	} else if sess := h.currentSession(r); sess != nil {
-		h.setServerAddDraft(sess, nil)
+		var topology *TopologyData
+		if h.cfg.Topology != nil {
+			var err error
+			if topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), ""); err != nil {
+				h.renderError(w, r, http.StatusInternalServerError, "读取新增选项失败", "读取地点与网络失败，请稍后重试。")
+				return
+			}
+		}
+		form := defaultServerAddForm()
+		form.AddressNetworks = []string{"other"}
+		form.AddressValues = []string{""}
+		applyServerWizardContext(form, r.URL.Query(), topology)
+		h.renderServerWizardStart(w, r, form, "暂存的登录凭据已超过五分钟，请重新填写。", http.StatusOK, topology)
+		return
 	}
-	h.renderAddForm(w, r, submitted, notice, http.StatusOK, false)
+	h.handleServerWizardStartGet(w, r)
 }
 
 func (h *handler) handleOtherDeviceAddForm(w http.ResponseWriter, r *http.Request) {
@@ -226,101 +236,6 @@ func defaultServerAddForm() *ServerAddForm {
 
 func defaultOtherDeviceAddForm() *ServerAddForm {
 	return &ServerAddForm{DeviceChoice: "new"}
-}
-
-func (h *handler) handleServerAddFormPost(w http.ResponseWriter, r *http.Request) {
-	form := h.parseServerAddForm(r)
-	if r.PostFormValue("add_virtual_member") == "1" {
-		if serverAddFormWritesCredential(form) {
-			if sess := h.currentSession(r); sess != nil {
-				h.setServerAddDraft(sess, &form)
-			}
-			form.StagedCredential = true
-		} else if draft := h.peekServerAddDraft(r); draft != nil {
-			form.StagedCredential = true
-		}
-		h.renderAddForm(w, r, &form, "已追加一个虚拟局域网成员，请继续填写。", http.StatusOK, false)
-		return
-	}
-	if r.PostFormValue("clear_staged_credentials") == "1" {
-		if sess := h.currentSession(r); sess != nil {
-			h.setServerAddDraft(sess, nil)
-		}
-		clearServerAddCredentialFields(&form)
-		h.renderAddForm(w, r, &form, "已清除暂存的登录凭据，请重新填写后再保存。", http.StatusOK, false)
-		return
-	}
-	var fieldErrors []string
-	resumeCredentials := r.PostFormValue("resume_credentials") == "1"
-	if resumeCredentials {
-		draft := h.takeServerAddDraft(r)
-		if draft == nil {
-			fieldErrors = append(fieldErrors, "暂存的登录凭据已超过五分钟，请重新填写。")
-		} else {
-			if form.Password == "" {
-				form.Password = draft.Password
-			}
-			if form.KeyContent == "" {
-				form.KeyContent, form.KeySource = draft.KeyContent, draft.KeySource
-			}
-			if form.KeyPassphrase == "" {
-				form.KeyPassphrase = draft.KeyPassphrase
-			}
-			if form.SudoPassword == "" {
-				form.SudoPassword = draft.SudoPassword
-			}
-		}
-	}
-	if form.KeyFileError != nil {
-		h.logError(r, "读取新增服务器私钥文件", form.KeyFileError)
-		fieldErrors = append(fieldErrors, "读取私钥文件失败，请重新选择文件。")
-	}
-	switch form.CredentialAction {
-	case "none", "password", "key":
-	default:
-		fieldErrors = append(fieldErrors, "登录凭据类型无效。")
-	}
-	if form.Port < 1 || form.Port > 65535 {
-		fieldErrors = append(fieldErrors, "端口必须在 1 到 65535 之间。")
-	}
-	fieldErrors = append(fieldErrors, deviceFieldErrors(form)...)
-	if len(fieldErrors) > 0 {
-		h.renderAddForm(w, r, &form, strings.Join(fieldErrors, " "), http.StatusBadRequest, false)
-		return
-	}
-	if serverAddFormWritesCredential(form) && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		if sess := h.currentSession(r); sess != nil {
-			h.setServerAddDraft(sess, &form)
-		}
-		http.Redirect(w, r, reverifyPath(serverAddFormPath+"?resume=1"), http.StatusSeeOther)
-		return
-	}
-	result, err := h.cfg.ServerWriter.AddServer(form, ServerWriteSource{RemoteAddress: remoteIP(r)})
-	if err != nil {
-		if isServerFormError(err) {
-			h.renderAddForm(w, r, &form, err.Error(), http.StatusBadRequest, false)
-			return
-		}
-		h.renderError(w, r, http.StatusInternalServerError, "新增服务器失败", "新增服务器失败，请稍后重试。")
-		return
-	}
-	if sess := h.currentSession(r); sess != nil {
-		h.setServerAddDraft(sess, nil)
-	}
-	taskID := ""
-	probeShell := form.Shell == "" || form.Shell == "auto"
-	if h.cfg.ServerConnectionTester != nil {
-		taskID, _ = h.cfg.ServerConnectionTester.StartServerTest(
-			result.Detail.ID, probeShell,
-			ServerWriteSource{RemoteAddress: remoteIP(r)},
-			ServerConnectionAnchor{
-				Copied: result.AnchorCopied, FromServerName: result.AnchorCopyFromServerName,
-				Conflict: result.AnchorCopyConflict,
-			},
-		)
-	}
-	result.ReturnTo = form.ReturnTo
-	http.Redirect(w, r, serverAddResultPath+"?"+serverAddResultQuery(result, taskID).Encode(), http.StatusSeeOther)
 }
 
 func isServerFormError(err error) bool {

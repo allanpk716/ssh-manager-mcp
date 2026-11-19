@@ -204,6 +204,7 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 
 type stubServerWriter struct {
 	adds           []ServerAddForm
+	finishes       []stubFinishServerAdd
 	otherAdds      []OtherDeviceAddForm
 	edits          []ServerEditForm
 	deletes        []string
@@ -229,6 +230,11 @@ type stubHostKeyWrite struct {
 	source      ServerWriteSource
 }
 
+type stubFinishServerAdd struct {
+	form   ServerAddFinishForm
+	source ServerWriteSource
+}
+
 func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSource) (*ServerAddResultView, error) {
 	w.adds = append(w.adds, form)
 	return &ServerAddResultView{
@@ -238,6 +244,11 @@ func (w *stubServerWriter) AddServer(form ServerAddForm, source ServerWriteSourc
 		AnchorCopied: w.anchorCopied, AnchorCopyFromServerName: w.anchorFrom,
 		AnchorCopyConflict: w.anchorConflict,
 	}, nil
+}
+
+func (w *stubServerWriter) FinishServerAdd(form ServerAddFinishForm, source ServerWriteSource) error {
+	w.finishes = append(w.finishes, stubFinishServerAdd{form: form, source: source})
+	return nil
 }
 
 func (w *stubServerWriter) AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error) {

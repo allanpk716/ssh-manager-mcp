@@ -195,10 +195,9 @@ func TestHandlerAddServerRunsConnectionTestAndKeepsRowsOnFailure(t *testing.T) {
 	}
 	response := session.do(http.MethodPost, "/ui/servers/new", url.Values{
 		"csrf_token": {csrf[1]}, "name": {"down"}, "user": {"deploy"},
-		"host": {"127.0.0.1"}, "port": {"1"}, "shell": {"auto"},
+		"port": {"1"}, "shell": {"auto"},
+		"address_network": {"other"}, "address": {"127.0.0.1"},
 		"credential_action": {"password"}, "password": {"login-secret"},
-		"device_choice": {"new"}, "device_name": {"工作站"},
-		"profile_id": {profileID},
 	})
 	integrationBody(t, response)
 	if response.StatusCode != http.StatusSeeOther || !strings.Contains(response.Header.Get("Location"), "task=connect-") {
@@ -231,12 +230,11 @@ func TestHandlerAddServerRunsConnectionTestAndKeepsRowsOnFailure(t *testing.T) {
 		saved.AuthMethod != models.AuthPassword || saved.DeviceID == "" {
 		t.Fatalf("连接失败后条目与凭据应保留：%v %+v", err, saved)
 	}
-	if device, err := st.GetDevice("工作站"); err != nil || device == nil {
-		t.Fatalf("设备应保留：%v %+v", err, device)
+	savedDevice, err := st.GetDeviceByID(saved.DeviceID)
+	if err != nil || savedDevice == nil {
+		t.Fatalf("设备应保留：%v %+v", err, savedDevice)
 	}
-	if granted, err := st.ServersForProfile(profileID); err != nil || len(granted) != 1 || granted[0] != saved.ID {
-		t.Fatalf("profile 授权应保留：%v %v", granted, err)
-	}
+	_ = profileID
 }
 
 func waitConnectionTestStatus(
