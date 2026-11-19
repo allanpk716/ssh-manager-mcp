@@ -121,7 +121,7 @@ func ListEntries(manager *servermanage.Manager, attentionOnly bool) ([]webui.Ser
 // SharedStorageView 把服务器详情里的共享存储展示行换成 Web UI 视图。
 func SharedStorageView(share servermanage.DetailSharedStorage) webui.ServerDetailSharedStorage {
 	return webui.ServerDetailSharedStorage{
-		ID: share.ID, Name: share.Name, ProviderDeviceName: share.ProviderDeviceName,
+		ID: share.ID, Name: share.Name, Note: share.Note, ProviderDeviceName: share.ProviderDeviceName,
 		MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
 		PasswordSecretName: share.PasswordSecretName,
 		Drive:              share.Drive, MountPoint: share.MountPoint,

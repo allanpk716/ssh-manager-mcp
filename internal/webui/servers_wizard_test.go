@@ -384,6 +384,24 @@ func TestServerWizardContextRejectsUnknownNetworkOrDevice(t *testing.T) {
 	}
 }
 
+func TestServerWizardFailedTestReturnsToSavedEntryEditor(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "wizard", User: "deploy", Host: "192.0.2.20", Port: 22}
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-new",
+	}}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+	page := serversGet(t, h, cookie, "/ui/servers/new/test?server=srv-new&task=task-1")
+	want := `href="/ui/servers/srv-new?tab=connection&amp;edit=1"`
+	if !strings.Contains(page, want) {
+		t.Fatalf("连接测试失败后应返回已保存服务器条目的编辑入口，缺少 %q：%s", want, page)
+	}
+	if strings.Contains(page, `href="/ui/servers/new"`) {
+		t.Fatalf("连接测试失败后不得再进入会重复新建的入口：%s", page)
+	}
+}
+
 func TestServerAddResultReportsStorageReadFailure(t *testing.T) {
 	store := newStubServerStore()
 	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "web", User: "deploy"}

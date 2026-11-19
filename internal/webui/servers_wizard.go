@@ -439,28 +439,12 @@ func wizardSiteNodes(topology *TopologyData, selected string) []serverWizardSite
 	if topology == nil {
 		return nil
 	}
-	byID := map[string]TopologySite{}
-	children := map[string][]TopologySite{}
-	for _, site := range topology.Sites {
-		byID[site.ID] = site
-		children[site.ParentID] = append(children[site.ParentID], site)
-	}
 	out := make([]serverWizardSiteNode, 0, len(topology.Sites))
-	seen := map[string]bool{}
-	var walk func(parent string, depth int)
-	walk = func(parent string, depth int) {
-		for _, site := range children[parent] {
-			if seen[site.ID] || site.ParentID == site.ID {
-				continue
-			}
-			seen[site.ID] = true
-			out = append(out, serverWizardSiteNode{
-				ID: site.ID, Name: site.Name, Path: site.LocationPath, Depth: depth, Selected: site.ID == selected,
-			})
-			walk(site.ID, depth+1)
-		}
-	}
-	walk("", 0)
+	eachSiteTreeNode(topology.Sites, func(site TopologySite, depth int) {
+		out = append(out, serverWizardSiteNode{
+			ID: site.ID, Name: site.Name, Path: site.LocationPath, Depth: depth, Selected: site.ID == selected,
+		})
+	})
 	return out
 }
 

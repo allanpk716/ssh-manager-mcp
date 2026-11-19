@@ -48,6 +48,13 @@ type locationOptionView struct {
 	Disabled bool
 }
 
+// locationOptionsView 是共用地点树单选片段的渲染数据。
+type locationOptionsView struct {
+	Options   []locationOptionView
+	InputName string
+	Selected  string
+}
+
 // locationsNetworksView 是地点与网络管理页的展示数据。
 type locationsNetworksView struct {
 	Tab              string
@@ -183,7 +190,8 @@ func (h *handler) buildLocationsNetworksView(r *http.Request, tab string) (*loca
 			node.DescendantMachineCount += childNode.MachineCount() + childNode.DescendantMachineCount
 			node.Children = append(node.Children, childNode)
 		}
-		node.DeleteReason = locationDeleteReason(node, children[site.ID])
+		siteForReason := site
+		node.DeleteReason = locationDeleteReason(data, &siteForReason)
 		return node
 	}
 	for _, site := range children[""] {
@@ -222,27 +230,39 @@ func depthClass(depth int) string {
 
 // locationDeleteReason 与存储层删除守卫同一顺序：先下级地点，再直接机
 // 器，最后物理局域网；返回空串表示可以删除。
-func locationDeleteReason(node *locationNodeView, children []TopologySite) string {
+func locationDeleteReason(data *TopologyData, site *TopologySite) string {
 	var blockers []string
-	if len(children) > 0 {
-		names := make([]string, 0, len(children))
-		for _, child := range children {
-			names = append(names, child.Name)
+	var childNames, machineNames, networkNames []string
+	for _, candidate := range data.Sites {
+		if candidate.ParentID == site.ID {
+			childNames = append(childNames, candidate.Name)
 		}
-		blockers = append(blockers, fmt.Sprintf("还有下级地点：%s；请先删除或改上级", strings.Join(names, "、")))
 	}
-	if len(node.MachineNames) > 0 {
-		blockers = append(blockers, fmt.Sprintf(
-			"还有机器登记在这个地点：%s；请先改机器地点", strings.Join(node.MachineNames, "、")))
+	for _, device := range data.Devices {
+		if device.SiteID == site.ID {
+			machineNames = append(machineNames, device.Name)
+		}
 	}
-	if len(node.PhysicalNetworkNames) > 0 {
+	for _, network := range data.Networks {
+		if network.Type == networkTypePhysical && network.SiteID == site.ID {
+			networkNames = append(networkNames, network.Name)
+		}
+	}
+	if len(childNames) > 0 {
+		blockers = append(blockers, fmt.Sprintf("还有下级地点：%s；请先删除或改上级", strings.Join(childNames, "、")))
+	}
+	if len(machineNames) > 0 {
 		blockers = append(blockers, fmt.Sprintf(
-			"还有物理局域网覆盖这个地点：%s；请先删除或改覆盖地点", strings.Join(node.PhysicalNetworkNames, "、")))
+			"还有机器登记在这个地点：%s；请先改机器地点", strings.Join(machineNames, "、")))
+	}
+	if len(networkNames) > 0 {
+		blockers = append(blockers, fmt.Sprintf(
+			"还有物理局域网覆盖这个地点：%s；请先删除或改覆盖地点", strings.Join(networkNames, "、")))
 	}
 	if len(blockers) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("地点 %s 不能删除：%s", node.Site.Name, strings.Join(blockers, "；"))
+	return fmt.Sprintf("地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；"))
 }
 
 // topologyData 读取一次完整拓扑数据；地点与网络页的读与写共用。
@@ -259,23 +279,11 @@ func locationTreeOptions(data *TopologyData, includeRoot bool, disabledPaths map
 			Site: TopologySite{ID: "", Name: "无上级（顶级地点）", LocationPath: ""},
 		})
 	}
-	children := map[string][]TopologySite{}
-	for _, site := range data.Sites {
-		children[site.ParentID] = append(children[site.ParentID], site)
-	}
-	for _, list := range children {
-		sort.Slice(list, func(i, j int) bool { return list[i].Name < list[j].Name })
-	}
-	var add func(sites []TopologySite, depth int)
-	add = func(sites []TopologySite, depth int) {
-		for _, site := range sites {
-			options = append(options, locationOptionView{
-				Site: site, Depth: depth, Disabled: disabledPaths[site.LocationPath],
-			})
-			add(children[site.ID], depth+1)
-		}
-	}
-	add(children[""], 0)
+	eachSiteTreeNode(data.Sites, func(site TopologySite, depth int) {
+		options = append(options, locationOptionView{
+			Site: site, Depth: depth, Disabled: disabledPaths[site.LocationPath],
+		})
+	})
 	return options
 }
 
@@ -305,7 +313,7 @@ func (h *handler) handleLocationCreate(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusInternalServerError, "读取地点失败", "读取地点失败，请稍后重试。")
 		return
 	}
-	returnTo := safeServerDetailReturnPath(formOrQuery(r, "return_to"))
+	returnTo := safeReturnPath(formOrQuery(r, "return_to"), "", "/ui/servers/")
 	view := &locationFormView{Mode: "create", Options: locationTreeOptions(data, true, nil), ReturnTo: returnTo}
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		view.Parent = strings.TrimSpace(r.URL.Query().Get("parent"))
@@ -335,15 +343,6 @@ func (h *handler) handleLocationCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.redirectLocationsNetworksWithNotice(w, r, "location-created", message)
-}
-
-// safeServerDetailReturnPath 只接受服务器详情地址，供地点新建后回到详情页
-// 的地点选择器。
-func safeServerDetailReturnPath(path string) string {
-	if strings.HasPrefix(path, "/ui/servers/") && !strings.Contains(path, "//") {
-		return path
-	}
-	return ""
 }
 
 // handleLocationRename 渲染与处理地点改名表单。
@@ -463,7 +462,7 @@ func (h *handler) handleLocationDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	view := &locationFormView{Mode: "delete", Site: site}
-	view.DeleteReason, view.Error = h.locationDeleteReason(data, site)
+	view.DeleteReason = locationDeleteReason(data, site)
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		status := http.StatusOK
 		if view.DeleteReason != "" {
@@ -484,41 +483,6 @@ func (h *handler) handleLocationDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.redirectLocationsNetworksWithNotice(w, r, "location-deleted", message)
-}
-
-// locationDeleteReason 直接按拓扑数据计算删除守卫原因，供列表与删除页
-// 展示；真正删除仍由存储层最终判定。
-func (h *handler) locationDeleteReason(data *TopologyData, site *TopologySite) (string, string) {
-	var childNames, machineNames, networkNames []string
-	for _, candidate := range data.Sites {
-		if candidate.ParentID == site.ID {
-			childNames = append(childNames, candidate.Name)
-		}
-	}
-	for _, device := range data.Devices {
-		if device.SiteID == site.ID {
-			machineNames = append(machineNames, device.Name)
-		}
-	}
-	for _, network := range data.Networks {
-		if network.Type == networkTypePhysical && network.SiteID == site.ID {
-			networkNames = append(networkNames, network.Name)
-		}
-	}
-	var blockers []string
-	if len(childNames) > 0 {
-		blockers = append(blockers, fmt.Sprintf("还有下级地点：%s；请先删除或改上级", strings.Join(childNames, "、")))
-	}
-	if len(machineNames) > 0 {
-		blockers = append(blockers, fmt.Sprintf("还有机器登记在这个地点：%s；请先改机器地点", strings.Join(machineNames, "、")))
-	}
-	if len(networkNames) > 0 {
-		blockers = append(blockers, fmt.Sprintf("还有物理局域网覆盖这个地点：%s；请先删除或改覆盖地点", strings.Join(networkNames, "、")))
-	}
-	if len(blockers) == 0 {
-		return "", ""
-	}
-	return fmt.Sprintf("地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；")), ""
 }
 
 // handleNetworkCreate 渲染与处理新建网络表单。

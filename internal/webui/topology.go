@@ -460,7 +460,7 @@ func (h *handler) handleTopologyWriteOperation(
 // handleTopologyMembershipAdd 把设备加入网络并登记地址。
 func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员新增接口只接受 POST 请求。",
+		methodNotAllowed: "地址新增接口只接受 POST 请求。",
 		missingFields:    "设备、网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
@@ -474,7 +474,7 @@ func (h *handler) handleTopologyMembershipAdd(w http.ResponseWriter, r *http.Req
 // handleTopologyMembershipEdit 修改设备在一个网络里的地址。
 func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员地址修改接口只接受 POST 请求。",
+		methodNotAllowed: "地址修改接口只接受 POST 请求。",
 		missingFields:    "设备、网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != "" && request.Address != ""
@@ -488,7 +488,7 @@ func (h *handler) handleTopologyMembershipEdit(w http.ResponseWriter, r *http.Re
 // handleTopologyMembershipRemove 把设备移出一个网络。
 func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员退出接口只接受 POST 请求。",
+		methodNotAllowed: "地址退出接口只接受 POST 请求。",
 		missingFields:    "设备与网络都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.Network != ""
@@ -503,7 +503,7 @@ func (h *handler) handleTopologyMembershipRemove(w http.ResponseWriter, r *http.
 // 络并登记新地址；「同时加入」走新增接口，不经过这里。
 func (h *handler) handleTopologyMembershipMove(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
-		methodNotAllowed: "网络成员移动接口只接受 POST 请求。",
+		methodNotAllowed: "地址移动接口只接受 POST 请求。",
 		missingFields:    "设备、原网络、目标网络与地址都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Device != "" && request.FromNetwork != "" && request.ToNetwork != "" && request.Address != ""
@@ -533,7 +533,7 @@ func (h *handler) handleTopologyMembershipRemovePhysical(w http.ResponseWriter, 
 func (h *handler) handleTopologyNetworkAdd(w http.ResponseWriter, r *http.Request) {
 	h.handleTopologyWriteOperation(w, r, topologyWriteOperation{
 		methodNotAllowed: "物理局域网新建接口只接受 POST 请求。",
-		missingFields:    "网络名与所属站点都不能为空。",
+		missingFields:    "网络名与覆盖地点都不能为空。",
 		hasFields: func(request *topologyWriteRequest) bool {
 			return request.Name != "" && request.Site != ""
 		},
@@ -634,15 +634,15 @@ func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Reques
 	}
 	for _, coordinate := range request.Containers {
 		if coordinate.EntityType != store.LayoutEntitySite && coordinate.EntityType != store.LayoutEntityNetwork {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标只能是站点或网络。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的地点区域或网络分组框坐标只能是地点或网络。")
 			return
 		}
 		if strings.TrimSpace(coordinate.EntityID) == "" {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的站点区域或网络分组框坐标缺少站点或网络标识。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局里的地点区域或网络分组框坐标缺少地点或网络标识。")
 			return
 		}
 		if coordinate.X == nil || coordinate.Y == nil {
-			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的站点区域或网络分组框坐标必须同时给出横坐标与纵坐标。")
+			h.writeTopologyJSONError(w, http.StatusBadRequest, "布局里的地点区域或网络分组框坐标必须同时给出横坐标与纵坐标。")
 			return
 		}
 		save.Containers = append(save.Containers, TopologyContainerLayoutCoordinate{
@@ -654,7 +654,7 @@ func (h *handler) handleTopologyLayoutSave(w http.ResponseWriter, r *http.Reques
 		RemoteAddress: remoteIP(r),
 	}); err != nil {
 		if errors.Is(err, ErrTopologyLayoutInvalid) {
-			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局引用的站点、网络或设备不存在，请刷新页面后重试。")
+			h.writeTopologyJSONError(w, http.StatusUnprocessableEntity, "布局引用的地点、网络或设备不存在，请刷新页面后重试。")
 			return
 		}
 		h.writeTopologyJSONError(w, http.StatusInternalServerError, "保存布局失败，请稍后重试。")

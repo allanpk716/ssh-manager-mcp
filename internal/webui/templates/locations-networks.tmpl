@@ -19,7 +19,7 @@
 
 {{if eq .LocationsNetworks.Tab "locations"}}
 <section aria-label="地点树">
-<p class="list-meta">{{.LocationsNetworks.SiteCount}} 个地点 · 点地点展开下级与机器</p>
+<p class="locations-meta">{{.LocationsNetworks.SiteCount}} 个地点 · 点地点展开下级与机器</p>
 {{if .LocationsNetworks.CanWrite}}
 <div class="other-device-entry">
 <p>不跑 SSH 的机器（交换机、路由器、NAS 等）在这里登记。</p>
@@ -32,7 +32,7 @@
 </section>
 {{else}}
 <section aria-label="网络列表">
-<p class="list-meta">{{.LocationsNetworks.NetworkCount}} 个网络 · 点一行查看字段{{if .LocationsNetworks.CanWrite}}，点编辑修改{{end}}</p>
+<p class="locations-meta">{{.LocationsNetworks.NetworkCount}} 个网络 · 点一行查看字段{{if .LocationsNetworks.CanWrite}}，点编辑修改{{end}}</p>
 <h2>物理局域网</h2>
 <div class="network-card">
 {{range .LocationsNetworks.PhysicalNetworks}}{{template "networkRow" .}}{{else}}<p class="empty-text">还没有物理局域网。</p>{{end}}

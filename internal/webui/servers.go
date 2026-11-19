@@ -180,6 +180,7 @@ type ServerDetailSecretChoice struct {
 type ServerDetailSharedStorage struct {
 	ID                 string
 	Name               string
+	Note               string
 	ProviderDeviceName string
 	MountUser          string
 	PasswordSecretID   string
@@ -308,6 +309,9 @@ type ServerAddResultView struct {
 	AnchorCopyFromServerName string
 	AnchorCopyConflict       bool
 	ReturnTo                 string
+	FromServerDetail         bool
+	ConnectionNetwork        string
+	ConnectionAddress        string
 }
 
 // ServerAddFinishForm 是分步新增第 2、3 步的提交值。地点与 profile 都可

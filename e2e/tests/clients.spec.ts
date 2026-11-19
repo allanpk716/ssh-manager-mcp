@@ -43,10 +43,10 @@ test("390 视口完成更换 profile、选择机器与状态展示", async ({ pa
     await page.getByRole("link", { name: "更换" }).click();
     await page.getByRole("link", { name: /数据库 · 1 台服务器/ }).click();
     await expect(page.getByText("运维 → 数据库")).toBeVisible();
-    await expect(page.getByText("将新增可见 1 台：db-1")).toBeVisible();
-    await expect(page.getByText("将失去可见 2 台：old-1、web-1")).toBeVisible();
-    await expect(page.getByText("将新增可用机密项 1 项：MATRIX_TOKEN")).toBeVisible();
-    await expect(page.getByText("将失去可用机密项 1 项：WEB_TOKEN")).toBeVisible();
+    await expect(page.getByText("将新增可见：1 台 · db-1")).toBeVisible();
+    await expect(page.getByText("将失去可见：2 台 · old-1、web-1")).toBeVisible();
+    await expect(page.getByText("将新增可用机密项：1 项 · MATRIX_TOKEN")).toBeVisible();
+    await expect(page.getByText("将失去可用机密项：1 项 · WEB_TOKEN")).toBeVisible();
     await mkdir(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "client-profile-preview-390x844.png"), fullPage: true });
     await submitAfterReverify(page, "确认更换", ui.password);

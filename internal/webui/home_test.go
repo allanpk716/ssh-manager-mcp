@@ -12,10 +12,6 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
 	access := &stubAccessStore{
 		profiles: []AccessProfileSummary{{ID: "profile-1", Name: "全部"}, {ID: "profile-2", Name: "训练机"}},
-		deviceCodes: []AccessDeviceCodeSummary{
-			{ID: "device-1", Name: "mini6-claude", Status: "active"},
-			{ID: "device-2", Name: "old-client", Status: "revoked"},
-		},
 		pairings: []AccessPairingSummary{
 			{ID: "pair-1", Name: "macbook-air", State: "pending"},
 			{ID: "pair-2", Name: "old-request", State: "completed"},
@@ -31,6 +27,8 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 	ops := &stubOpsStore{rows: []OpsAuditRow{
 		{ID: 12, TS: time.Unix(1800000120, 0), Action: "cache.pull", Command: "客户端 mini6-claude 完成同步", Status: "ok"},
 		{ID: 11, TS: time.Unix(1800000060, 0), Action: "secret.grant", Command: "机密项 HF_TOKEN 授权给 3090x2", Status: "ok"},
+		{ID: 10, TS: time.Unix(1800000000, 0), Action: "server.edit", Status: "ok"},
+		{ID: 9, TS: time.Unix(1799999940, 0), Action: "future.action", Status: "ok"},
 	}}
 	handler, _, err := NewAuthority(Config{
 		Role: RoleServer,
@@ -72,10 +70,15 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		"3", "服务器", "1", "客户端", "2", "profile",
 		"客户端 mini6-claude 完成同步",
 		"机密项 HF_TOKEN 授权给 3090x2",
+		"编辑服务器条目",
+		"系统操作",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("权威端主页缺少 %q：\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "future.action") {
+		t.Fatalf("主页不得把未知审计动作标识原样显示：\n%s", body)
 	}
 	if strings.Contains(body, "缺备注") {
 		t.Fatalf("这个替身数据来源没有实现缺备注查询，主页不得显示缺备注待办：\n%s", body)
@@ -147,7 +150,7 @@ func TestClientHomePageIsReadOnlyAndUsesClientAudit(t *testing.T) {
 	for _, want := range []string{
 		"<h1>状态总览</h1>",
 		`href="/ui/ops/client"`,
-		"client.sync · web-1",
+		"客户端同步 · web-1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("客户端主页应包含 %q：\n%s", want, body)

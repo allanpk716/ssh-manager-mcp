@@ -10,7 +10,7 @@
 {{if .ServerWizard.ConnectionTest.AnchorCopied}}<div class="notice notice-info"><p>已从服务器条目 {{.ServerWizard.ConnectionTest.AnchorCopyFromServerName}} 复制同端口主机密钥锚。</p></div>{{end}}
 <div class="inline-form">
 {{if and .ServerWizard.ConnectionTest (eq .ServerWizard.ConnectionTest.State "succeeded")}}<a class="primary-button" href="{{.ServerWizard.NextPath}}">继续{{if .ServerWizard.SameMachine}}选择 Profile{{else}}选择地点{{end}}</a>{{end}}
-{{if ne .ServerWizard.ConnectionTest.State "succeeded"}}<a class="button-link" href="/ui/servers/new">返回修改连接信息</a>{{end}}
+{{if ne .ServerWizard.ConnectionTest.State "succeeded"}}<a class="button-link" href="/ui/servers/{{.ServerWizard.ServerID}}?tab=connection&amp;edit=1">返回修改连接信息</a>{{end}}
 <a class="button-link" href="/ui/servers/{{.ServerWizard.Detail.ID}}">先看服务器详情</a>
 {{if .ServerWizard.ReturnTo}}<a class="button-link" href="{{.ServerWizard.ReturnTo}}">返回网络拓扑</a>{{end}}
 </div>

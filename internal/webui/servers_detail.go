@@ -42,18 +42,6 @@ type serverDetailAddressRow struct {
 	Address     string
 }
 
-// locationOptionsView 是共用地点树单选片段的渲染数据。
-type locationOptionsView struct {
-	Options   []locationOptionView
-	InputName string
-	Selected  string
-}
-
-// locationOptions 组装共用地点树单选片段。
-func locationOptions(options []locationOptionView, name, selected string) locationOptionsView {
-	return locationOptionsView{Options: options, InputName: name, Selected: selected}
-}
-
 // serverDetailSiblingAccount 是同一台机器上的另一个登录账号。
 type serverDetailSiblingAccount struct {
 	Name string
@@ -77,7 +65,7 @@ type serverDetailTopologyView struct {
 	Mismatches        []TopologyLocationMismatch
 	SiblingAccounts   []serverDetailSiblingAccount
 	MoveChoices       []serverDetailDeviceOption
-	LocationOptions   []locationOptionView
+	LocationOptions   locationOptionsView
 	CanWrite          bool
 	LocationOpen      bool
 	FallbackAddress   string
@@ -87,12 +75,29 @@ type serverDetailTopologyView struct {
 // serverDetailSoftwareView 是软件块的数据；实测与声明两份清单在服务端分
 // 好，模板只负责展示。
 type serverDetailSoftwareView struct {
-	Available  bool
-	Reason     string
-	DeviceName string
-	Status     SoftwareInventoryStatus
-	Measured   []SoftwareInventoryGroup
-	Declared   []SoftwareInventoryGroup
+	Available    bool
+	Reason       string
+	DeviceName   string
+	Status       SoftwareInventoryStatus
+	Measured     []SoftwareInventoryGroup
+	Declared     []SoftwareInventoryGroup
+	Pending      []serverDetailPendingExposureRow
+	Unidentified []serverDetailUnidentifiedProcessRow
+}
+
+type serverDetailPendingExposureRow struct {
+	Address    string
+	Port       int
+	Protocol   string
+	Exposure   string
+	ActionPath string
+}
+
+type serverDetailUnidentifiedProcessRow struct {
+	Name           string
+	ExecutablePath string
+	ActionPath     string
+	HasAction      bool
 }
 
 // serverDetailSecretRow 是授权块里一个机密项的完整展示行。
@@ -213,6 +218,12 @@ func (h *handler) serverDetailPage(r *http.Request, detail *ServerDetailView) (*
 		view.Topology = h.serverDetailTopologyView(detail, data, r)
 	}
 	view.Software = h.serverDetailSoftwareView(r, detail)
+	if view.Software.Available && h.cfg.SoftwareInventory != nil {
+		if todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos(); err == nil {
+			view.Software.Pending = serverDetailPendingExposureRows(todos, detail.DeviceName)
+			view.Software.Unidentified = serverDetailUnidentifiedProcessRows(todos, detail.DeviceName)
+		}
+	}
 	view.SecretRows = serverDetailSecretRows(detail)
 	view.ProfileRows = h.serverDetailProfileRows(r, detail)
 	view.ShareRows = detail.SharedStorageChoices
@@ -292,10 +303,13 @@ func (h *handler) serverDetailTopologyView(
 		})
 	}
 	if view.CanWrite {
-		view.LocationOptions = append(view.LocationOptions, locationOptionView{
+		options := []locationOptionView{{
 			Site: TopologySite{ID: "", Name: "不登记地点", LocationPath: ""},
-		})
-		view.LocationOptions = append(view.LocationOptions, locationTreeOptions(data, false, nil)...)
+		}}
+		options = append(options, locationTreeOptions(data, false, nil)...)
+		view.LocationOptions = locationOptionsView{
+			Options: options, InputName: "site", Selected: device.LocationPath,
+		}
 		view.NewLocationHref = locationCreatePath + "?" + url.Values{
 			"parent":    {device.LocationPath},
 			"return_to": {serverDetailTabPath(detail.ID, serverDetailTabAddresses) + "&location=1"},
@@ -351,6 +365,49 @@ func (h *handler) serverDetailSoftwareView(r *http.Request, detail *ServerDetail
 		}
 	}
 	return view
+}
+
+func serverDetailPendingExposureRows(todos SoftwareInventoryTodos, deviceName string) []serverDetailPendingExposureRow {
+	rows := make([]serverDetailPendingExposureRow, 0, 3)
+	for _, device := range todos.PendingExposure {
+		if device.DeviceName != deviceName {
+			continue
+		}
+		for _, port := range device.Ports {
+			if len(rows) == 3 {
+				return rows
+			}
+			rows = append(rows, serverDetailPendingExposureRow{
+				Address: port.Address, Port: port.Port, Protocol: port.Protocol, Exposure: port.ExposureLabel,
+				ActionPath: declarationFormPath(deviceName, port.ObservedStableKey, port.Address, port.Port, port.Protocol, "all_addresses"),
+			})
+		}
+	}
+	return rows
+}
+
+func serverDetailUnidentifiedProcessRows(todos SoftwareInventoryTodos, deviceName string) []serverDetailUnidentifiedProcessRow {
+	rows := make([]serverDetailUnidentifiedProcessRow, 0, 3)
+	for _, process := range todos.UnidentifiedProcesses {
+		if process.DeviceName != deviceName || len(rows) == 3 {
+			continue
+		}
+		row := serverDetailUnidentifiedProcessRow{
+			Name: process.Name, ExecutablePath: process.ExecutablePath,
+		}
+		if process.ProcessName != "" {
+			row.Name = process.ProcessName
+		}
+		if len(process.ListeningPorts) > 0 {
+			port := process.ListeningPorts[0]
+			row.HasAction = true
+			row.ActionPath = declarationFormPath(
+				deviceName, process.ObservedStableKey, port.Address, port.Port, port.Protocol, "all_addresses",
+			)
+		}
+		rows = append(rows, row)
+	}
+	return rows
 }
 
 // serverDetailSecretRows 把机密项选择与最近写入记录拼成展示行；客户端没
@@ -555,7 +612,7 @@ func (h *handler) handleServerDetailTest(w http.ResponseWriter, r *http.Request,
 		h.renderServerDetailWriteError(w, r, detail, http.StatusInternalServerError, "连接测试未启动，请稍后重试。")
 		return
 	}
-	target := url.Values{"server": {detail.ID}, "task": {taskID}}
+	target := url.Values{"server": {detail.ID}, "task": {taskID}, "source": {"detail"}}
 	http.Redirect(w, r, serverAddResultPath+"?"+target.Encode(), http.StatusSeeOther)
 }
 
@@ -631,6 +688,14 @@ func (h *handler) mergeServerEditUpload(w http.ResponseWriter, r *http.Request) 
 
 // NoteFirstLine 返回备注首行，供授权块的名称下方说明使用。
 func (s ServerDetailSecret) NoteFirstLine() string {
+	if line, _, found := strings.Cut(s.Note, "\n"); found {
+		return strings.TrimSpace(line)
+	}
+	return strings.TrimSpace(s.Note)
+}
+
+// NoteFirstLine 返回共享存储备注首行，供授权块的名称下方说明使用。
+func (s ServerDetailSharedStorage) NoteFirstLine() string {
 	if line, _, found := strings.Cut(s.Note, "\n"); found {
 		return strings.TrimSpace(line)
 	}

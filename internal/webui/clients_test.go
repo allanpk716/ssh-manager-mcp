@@ -105,9 +105,9 @@ func TestAuthorityClientProfileChangeShowsPreviewBeforeWrite(t *testing.T) {
 		t.Fatalf("更换 profile 预览状态码=%d 页面：\n%s", page.StatusCode, body)
 	}
 	for _, want := range []string{
-		"<h1>更换 profile</h1>", "运维 → 开发", "新增可见 1 台：db-1", "失去可见 1 台：web-1",
-		"新增可用机密项 1 项：DB_TOKEN", "失去可用机密项 1 项：WEB_TOKEN",
-		"新增可用共享存储 1 项：datasets", "失去可用共享存储 1 项：backups",
+		"<h1>更换 profile</h1>", "运维 → 开发", "将新增可见：1 台 · db-1", "将失去可见：1 台 · web-1",
+		"将新增可用机密项：1 项 · DB_TOKEN", "将失去可用机密项：1 项 · WEB_TOKEN",
+		"将新增可用共享存储：1 项 · datasets", "将失去可用共享存储：1 项 · backups",
 		`name="expected_profile" value="profile-ops"`, `action="/ui/clients/client-1/profile"`, "确认更换",
 	} {
 		if !strings.Contains(body, want) {
@@ -126,6 +126,34 @@ func TestAuthorityClientProfileChangeShowsPreviewBeforeWrite(t *testing.T) {
 	if store.changeProfileClientID != "client-1" || store.changeProfileExpected != "profile-ops" ||
 		store.changeProfileDesired != "profile-dev" || store.changeProfileSrc.RemoteAddress != "198.51.100.9" {
 		t.Fatalf("更换 profile 参数不正确：%+v", store)
+	}
+}
+
+func TestAuthorityClientProfilePreviewUsesCommonControlsAndEmptyState(t *testing.T) {
+	store := pairingTestStore()
+	store.client = &ClientDetail{
+		ClientSummary: ClientSummary{ID: "client-1", Name: "笔记本", ProfileName: "运维"},
+		ProfileID:     "profile-ops",
+	}
+	store.clientProfilePreview = &ClientProfilePreview{
+		ClientName: "笔记本", CurrentProfileID: "profile-ops", CurrentProfileName: "运维",
+		DesiredProfileID: "profile-dev", DesiredProfileName: "开发",
+	}
+	handler, _ := newAuthorityForPairingTest(t, store)
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	page := authorityGet(t, handler, "192.0.2.50:7879", "/ui/clients/client-1/profile?profile=profile-dev", cookie)
+	body := readResponseBody(t, page)
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("空变更预览状态码=%d 页面：\n%s", page.StatusCode, body)
+	}
+	if strings.Contains(body, "0 项：") || strings.Contains(body, "0 台：") {
+		t.Fatalf("空增减项不得显示“0 项：”：\n%s", body)
+	}
+	for _, want := range []string{"无", `class="primary-button"`, `class="secondary-button"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("更换 profile 预览应包含 %q：\n%s", want, body)
+		}
 	}
 }
 

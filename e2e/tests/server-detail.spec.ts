@@ -78,7 +78,7 @@ test("服务器详情四块可切换并走通地点、地址与机密项授权",
     await page.getByRole("button", { name: "添加", exact: true }).click();
     await expect(page.getByText("已保存地址。")).toBeVisible();
     await expect(
-      page.locator(".address-row", { hasText: "机房局域网" }).getByText("10.0.0.99"),
+      page.locator(".address-card-row", { hasText: "机房局域网" }).getByText("10.0.0.99"),
     ).toBeVisible();
 
     // 授权机密项：开关先进入确认页，并显示客户端实际取得途径变化。

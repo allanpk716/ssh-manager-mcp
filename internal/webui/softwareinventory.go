@@ -238,7 +238,7 @@ func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.
 	if result.Requested {
 		state = "requested"
 	}
-	if returnTo := safeServerDetailReturnPath(r.PostFormValue("return_to")); returnTo != "" {
+	if returnTo := safeReturnPath(r.PostFormValue("return_to"), "", "/ui/servers/"); returnTo != "" {
 		separator := "&"
 		if !strings.Contains(returnTo, "?") {
 			separator = "?"

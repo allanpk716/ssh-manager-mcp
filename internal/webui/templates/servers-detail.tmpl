@@ -117,7 +117,7 @@
 <form method="post" action="/ui/servers/{{.ServerDetail.ID}}/location" class="location-tree-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <div class="location-tree" role="radiogroup" aria-label="选择地点">
-{{template "location-options" (locationOptions $topology.LocationOptions "site" $topology.LocationPath)}}
+{{template "location-options" $topology.LocationOptions}}
 </div>
 <div class="form-actions">
 <button type="submit">保存地点</button>
@@ -131,9 +131,9 @@
 <article class="shared-card address-card">
 <div class="card-heading"><h2>地址</h2></div>
 <p class="card-help">sshmgr 连接时会按自己所在的网络自动选择地址。</p>
-<div class="address-list">
+<div class="address-card-list">
 {{range $topology.Addresses}}
-<div class="address-row">
+<div class="address-card-row">
 <span class="address-network">{{.NetworkName}}</span>
 <span class="type-tag">{{.TypeLabel}}</span>
 <span class="address-value mono">{{.Address}}</span>
@@ -152,7 +152,7 @@
 {{end}}
 </div>
 {{end}}
-<div class="address-row fallback-address">
+<div class="address-card-row fallback-address">
 <span class="address-network">其他（公网或未登记网络）</span>
 <span class="type-tag">条目地址</span>
 <span class="address-value mono">{{$topology.FallbackAddress}}</span>
@@ -262,6 +262,7 @@
 <div class="auth-row">
 <div class="auth-copy">
 <strong class="resource-name">{{range .SharedStorages}}{{.Name}} {{end}}</strong>
+<span class="resource-note">{{range .SharedStorages}}{{.NoteFirstLine}} {{end}}</span>
 <span class="resource-detail">{{range .SharedStorages}}由 {{or .ProviderDeviceName "-"}} 提供 · 挂载于 {{.MountPoint}}；{{end}}共用同一个挂载密码机密项，一起变化</span>
 </div>
 <input type="hidden" name="secret_id" value="{{.PasswordSecretID}}">
@@ -351,6 +352,26 @@
 <button type="submit">立即采集</button>
 </form>
 {{end}}
+<div class="software-todo-preview">
+<section aria-labelledby="server-pending-exposure-title">
+<h3 id="server-pending-exposure-title">本机待确认暴露</h3>
+{{if $software.Pending}}
+<ul>
+{{range $software.Pending}}<li>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.Exposure}} <a href="{{.ActionPath}}">进入声明表单</a></li>{{end}}
+</ul>
+{{else}}<p class="empty-inline">没有。</p>{{end}}
+<a class="secondary-link" href="/ui/software-inventory/todos">查看全部待确认暴露</a>
+</section>
+<section aria-labelledby="server-unidentified-process-title">
+<h3 id="server-unidentified-process-title">本机未识别进程</h3>
+{{if $software.Unidentified}}
+<ul>
+{{range $software.Unidentified}}<li>{{.Name}} · {{.ExecutablePath}}{{if .HasAction}} <a href="{{.ActionPath}}">认领</a>{{end}}</li>{{end}}
+</ul>
+{{else}}<p class="empty-inline">没有。</p>{{end}}
+<a class="secondary-link" href="/ui/software-inventory/todos">查看全部未识别进程</a>
+</section>
+</div>
 <div class="header-actions-row">
 <a class="secondary-link" href="/ui/software-inventory/todos">待确认暴露</a>
 <a class="secondary-link" href="/ui/software-inventory/drafts">未识别进程与认领</a>

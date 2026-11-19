@@ -164,12 +164,47 @@ func (h *handler) buildHomeView(r *http.Request) (*homeView, error) {
 
 // homeRecentChanges 把审计行换算成主页时间线；优先展示写入时留下的摘要，
 // 没有摘要时退回「动作 · 服务器 · 状态」。
+var homeAuditActionNames = map[string]string{
+	"server.add":          "新增服务器条目",
+	"server.edit":         "编辑服务器条目",
+	"server.delete":       "删除服务器条目",
+	"server.rm":           "删除服务器条目",
+	"server.import":       "导入服务器条目",
+	"server.connect-test": "测试服务器连接",
+	"profile.add":         "新增 Profile",
+	"profile.grant":       "调整 Profile 授权",
+	"profile.revoke":      "调整 Profile 授权",
+	"profile.rm":          "删除 Profile",
+	"secret.grant":        "调整机密项授权",
+	"secret.allow":        "调整机密项授权",
+	"secret-disallow":     "调整机密项授权",
+	"share-revoke":        "撤销共享存储",
+	"pair.approve":        "批准配对",
+	"pair.reject":         "拒绝配对",
+	"client.remove":       "移除客户端实例",
+	"client.sync":         "客户端同步",
+	"cache-token.add":     "添加客户端实例",
+	"cache-token.revoke":  "吊销客户端拉取凭据",
+	"cache-token.bind":    "绑定客户端实例",
+	"admin.password_set":  "设置管理员口令",
+	"backup.create":       "创建备份",
+	"backup.verify":       "校验备份",
+	"backup.config":       "修改备份设置",
+}
+
+func homeAuditActionName(action string) string {
+	if name, ok := homeAuditActionNames[action]; ok {
+		return name
+	}
+	return "系统操作"
+}
+
 func homeRecentChanges(rows []OpsAuditRow) []HomeRecentChange {
 	changes := make([]HomeRecentChange, 0, len(rows))
 	for _, row := range rows {
 		summary := row.Command
 		if summary == "" {
-			summary = row.Action
+			summary = homeAuditActionName(row.Action)
 			if server := row.ServerDisplay(); server != "无" {
 				summary += " · " + server
 			}

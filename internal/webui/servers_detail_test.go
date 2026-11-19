@@ -275,6 +275,7 @@ func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
 		PasswordSecretID: "secret-share", PasswordSecretName: "DATASET_PASSWORD",
 		SharedStorages: []ServerDetailSharedStorage{{
 			ID: "share-1", Name: "datasets", ProviderDeviceName: "NAS",
+			Note:             "数据集备份第一行\n第二行",
 			PasswordSecretID: "secret-share", PasswordSecretName: "DATASET_PASSWORD",
 			MountPoint: "/mnt/sshmgr/datasets",
 		}},
@@ -303,6 +304,7 @@ func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
 		"能看到这台服务器的客户端", "laptop-client",
 		`action="/ui/servers/profile-authorization/preview"`, `name="profile" value="profile-1"`,
 		"由 NAS 提供", "/mnt/sshmgr/datasets",
+		"数据集备份第一行",
 		`name="authorization_view" value="server-shares"`,
 		`name="cell__secret-share__srv-fine"`,
 		"下发记录", "/srv/app/.env",
@@ -343,6 +345,27 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 				{Name: "内部工具", Version: "2.0", Source: "声明", ConfirmedAt: &lastSuccess},
 			},
 		}},
+	}, todos: SoftwareInventoryTodos{
+		PendingExposure: []SoftwareInventoryPendingExposureDevice{{
+			DeviceName: "工作站",
+			Ports: []SoftwareInventoryPendingPort{
+				{Address: "192.0.2.10", Port: 8080, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-web"},
+				{Address: "192.0.2.10", Port: 9090, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-metrics"},
+			},
+		}, {
+			DeviceName: "NAS",
+			Ports: []SoftwareInventoryPendingPort{{
+				Address: "192.0.2.30", Port: 445, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-nas",
+			}},
+		}},
+		UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{{
+			DeviceName: "工作站", ProcessName: "legacy-agent", ExecutablePath: "/opt/legacy/agent",
+			ObservedStableKey: "stable-legacy",
+			ListeningPorts:    []SoftwareInventoryPort{{Address: "192.0.2.10", Port: 9100, Protocol: "tcp", ExposureLabel: "未确认"}},
+		}, {
+			DeviceName: "NAS", ProcessName: "nas-agent", ExecutablePath: "/opt/nas/agent",
+			ObservedStableKey: "stable-nas-agent",
+		}},
 	}}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
@@ -355,6 +378,10 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 		`action="/ui/software-inventory/collect?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`,
 		`name="return_to" value="/ui/servers/srv-fine?tab=software"`, "立即采集",
 		"实测清单", "nginx", "声明清单", "内部工具",
+		"本机待确认暴露", "192.0.2.10:8080/tcp", "192.0.2.10:9090/tcp",
+		"observed_key=stable-web", "observed_key=stable-metrics", "进入声明表单",
+		"本机未识别进程", "legacy-agent", "/opt/legacy/agent", "认领",
+		"查看全部待确认暴露", "查看全部未识别进程",
 		`href="/ui/software-inventory/todos"`, "待确认暴露",
 		`href="/ui/software-inventory/drafts"`, "未识别进程与认领",
 		`href="/ui/software-inventory/devices?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`, "完整软件清单",
@@ -362,6 +389,9 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("服务器详情软件块缺少 %q：\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "192.0.2.30:445") || strings.Contains(body, "nas-agent") {
+		t.Fatalf("服务器详情软件块只应显示本机前几条待办，不应显示其他机器：%s", body)
 	}
 
 	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=software")
@@ -371,22 +401,41 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 }
 
 // TestServerDetailTestConnectionStartsTask 校验详情页测试连接启动任务并进
-// 入既有结果页。
+// 入独立结果页。
 func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 	tester := &stubServerConnectionTester{}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{}, tester: tester,
+		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
 	})
 	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/test", url.Values{})
 	if response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("测试连接状态码 = %d，应为 303", response.StatusCode)
 	}
 	location := response.Header.Get("Location")
-	if !strings.HasPrefix(location, "/ui/servers/new/result?server=srv-fine&task=") {
+	if !strings.HasPrefix(location, "/ui/servers/new/result?server=srv-fine") ||
+		!strings.Contains(location, "source=detail") {
 		t.Fatalf("测试连接跳转地址 = %q", location)
 	}
 	if len(tester.starts) != 1 || tester.starts[0].serverID != "srv-fine" {
 		t.Fatalf("测试连接应启动 srv-fine 任务，实际 %v", tester.starts)
+	}
+
+	tester.status = &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestSucceeded, ServerID: "srv-fine",
+		HandshakeAddress: "192.0.2.10:22",
+	}
+	page := serversGet(t, handler, cookie, location)
+	for _, want := range []string{
+		"连接测试完成", "走的网络", "办公网", "地址", "192.0.2.10:22",
+		`href="/ui/servers/srv-fine?tab=connection"`, "返回服务器详情",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("详情页连接测试结果缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "已保存，") || strings.Contains(page, "服务器条目已保存") {
+		t.Fatalf("详情页连接测试结果不得沿用新增结果页的已保存文案：\n%s", page)
 	}
 }
 

@@ -39,7 +39,7 @@ func (h *handler) standaloneNextSteps(r *http.Request) ([]NextStep, error) {
 	if len(profiles) == 0 {
 		steps = append(steps, NextStep{
 			Title:       "建 Profile 并授权",
-			Description: "把服务器分配给 Profile，后续项目令牌按 Profile 取得访问范围。",
+			Description: "把服务器分配给 Profile，后续 MCP 访问令牌按 Profile 取得访问范围。",
 			Href:        "/ui/access/profiles",
 		})
 	}

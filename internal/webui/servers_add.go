@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -493,6 +494,7 @@ func (h *handler) handleServerAddResult(w http.ResponseWriter, r *http.Request) 
 		Detail: detail, DeviceName: detail.DeviceName,
 		ConnectionTestPollPath: r.URL.RequestURI(),
 		ReturnTo:               normalizeAddReturnPath(r.URL.Query().Get("return_to")),
+		FromServerDetail:       r.URL.Query().Get("source") == "detail",
 	}
 	if h.cfg.Access == nil {
 		view.ProfileNamesUnavailable = true
@@ -525,9 +527,56 @@ func (h *handler) handleServerAddResult(w http.ResponseWriter, r *http.Request) 
 			State: ServerConnectionTestFailed, ServerID: identifier,
 		}
 	}
+	view.ConnectionNetwork, view.ConnectionAddress = h.serverConnectionRoute(r, detail, view.ConnectionTest)
+	title := "新增结果 · " + detail.Name
+	if view.FromServerDetail {
+		title = "连接测试结果 · " + detail.Name
+	}
 	h.renderPage(w, r, http.StatusOK, "servers-add-result.tmpl", pageData{
-		Title: "新增结果 · " + detail.Name, ServerAddResult: view,
+		Title: title, ServerAddResult: view,
 	})
+}
+
+func (h *handler) serverConnectionRoute(
+	r *http.Request, detail *ServerDetailView, status *ServerConnectionTestStatus,
+) (networkName, address string) {
+	address = status.HandshakeAddress
+	if address == "" {
+		address = detail.Host
+	}
+	host := address
+	if withoutPort, _, err := net.SplitHostPort(address); err == nil {
+		host = withoutPort
+	}
+	networkName = "兜底地址"
+	if host != detail.Host {
+		networkName = "未识别网络"
+	}
+	if h.cfg.Topology == nil {
+		return networkName, address
+	}
+	data, err := h.cfg.Topology.Topology(h.requestClientInstance(r), "")
+	if err != nil {
+		return networkName, address
+	}
+	networkByID := make(map[string]TopologyNetwork, len(data.Networks))
+	for _, network := range data.Networks {
+		networkByID[network.ID] = network
+	}
+	for _, device := range data.Devices {
+		if device.Name != detail.DeviceName {
+			continue
+		}
+		for _, membership := range data.Memberships {
+			if membership.DeviceID != device.ID || membership.Address != host {
+				continue
+			}
+			if network, ok := networkByID[membership.NetworkID]; ok {
+				return network.Name, address
+			}
+		}
+	}
+	return networkName, address
 }
 
 // serverAddResultDetail 读取刚保存条目的详情；读取错误交给调用方记录并返

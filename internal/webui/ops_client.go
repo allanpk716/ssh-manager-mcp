@@ -61,7 +61,7 @@ func (e *OpsClientSyncError) Text() string {
 	case "unreachable":
 		return "无法连接权威端：" + e.Message
 	case "device_code_revoked":
-		return "设备码被撤销，请重新配对后拉取：" + e.Message
+		return "客户端实例的拉取凭据被撤销，请重新配对后拉取：" + e.Message
 	case "certificate_fingerprint":
 		return "证书公钥指纹不符，拒绝连接：" + e.Message
 	default:
