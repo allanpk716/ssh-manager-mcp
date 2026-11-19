@@ -291,10 +291,10 @@ func TestMaskingBackgroundChangesStoreForLaterWrites(t *testing.T) {
 
 	storeA := newStore(t)
 	storeB := newStore(t)
-	if err := storeA.AddSecret("STORE_A", "", []byte(storeAValue), store.CLISource()); err != nil {
+	if err := storeA.AddSecret("STORE_A", "测试备注", []byte(storeAValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := storeB.AddSecret("STORE_B", "", []byte(storeBValue), store.CLISource()); err != nil {
+	if err := storeB.AddSecret("STORE_B", "测试备注", []byte(storeBValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{
@@ -359,7 +359,7 @@ func newBackgroundMaskingEnv(t *testing.T, secretName, secretValue string, execS
 	t.Helper()
 	st := newStore(t)
 	if secretName != "" {
-		if err := st.AddSecret(secretName, "", []byte(secretValue), store.CLISource()); err != nil {
+		if err := st.AddSecret(secretName, "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}

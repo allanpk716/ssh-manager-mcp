@@ -12,10 +12,10 @@ func TestSecretEnvironmentValuesForInjectionReportsPerVariableReadFailure(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecretWithEnvironmentName("GOOD_SECRET", "", []byte("good-secret-value"), "GOOD_TOKEN", CLISource()); err != nil {
+	if err := s.AddSecretWithEnvironmentName("GOOD_SECRET", "测试备注", []byte("good-secret-value"), "GOOD_TOKEN", CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecretWithEnvironmentName("BAD_SECRET", "", []byte("bad-secret-value"), "BAD_TOKEN", CLISource()); err != nil {
+	if err := s.AddSecretWithEnvironmentName("BAD_SECRET", "测试备注", []byte("bad-secret-value"), "BAD_TOKEN", CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.AllowSecrets([]string{"GOOD_SECRET", "BAD_SECRET"}, []string{"target"}, CLISource()); err != nil {

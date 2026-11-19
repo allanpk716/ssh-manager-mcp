@@ -102,7 +102,7 @@ sshmgr servers add \
 
 - `--password` 和 `--key` **互斥**（最多给一个）。也可以**都不给**——先录机器、凭据后补（「无凭据服务器」，见 [managing-servers.md](./managing-servers.md#无凭据服务器)）。
 - `--name` 全局唯一，后续命令都用这个名字（或它的 id）引用这台机器。
-- `--hardware` / `--role` / `--services` / `--location` / `--special-handling`（Caveats）是结构化字段，`--description` / `--tags` 是补充——**全部会通过 `list_servers` 给 agent 看到**（agent 需要机器全貌才能安全操作）。⚠️ **别在这些字段里放任何敏感信息**（密钥 / token / PII）：它们每次都进入 agent 上下文并上行到 LLM 提供方；机密只走凭据保险柜（`--password` / `--key`）。完整字段表见 [managing-servers.md](./managing-servers.md#structured-server-metadata)。
+- `--hardware` / `--role` / `--services` / `--special-handling`（Caveats）是结构化字段，`--description` / `--tags` 是补充——**全部会通过 `list_servers` 给 agent 看到**（agent 需要机器全貌才能安全操作）。⚠️ **别在这些字段里放任何敏感信息**（密钥 / token / PII）：它们每次都进入 agent 上下文并上行到 LLM 提供方；机密只走凭据保险柜（`--password` / `--key`）。完整字段表见 [managing-servers.md](./managing-servers.md#structured-server-metadata)。
 - `--sudo-password` 只是个“额外的密码”，专门喂给 `sudo -S`；它决定了 agent 看到的 `has_sudo=true/false`。
 
 预期输出：`added server gpu id=<uuid>`

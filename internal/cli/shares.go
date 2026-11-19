@@ -43,7 +43,7 @@ func sharesAddCmd() *cobra.Command {
 	var device, user, passwordSecret, drive, note string
 	var directories []string
 	c := &cobra.Command{
-		Use:   "add NAME --device 设备 --user 用户名 --password-secret 机密项 --drive 盘符 [--dir 用途=子路径 ...] [--note 文本]",
+		Use:   "add NAME --device 设备 --user 用户名 --password-secret 机密项 --drive 盘符 --note 文本 [--dir 用途=子路径 ...]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Register an SMB shared storage",
 		Long: `在 vault 里登记一处供多台服务器共用的网络共享。
@@ -84,11 +84,12 @@ func sharesAddCmd() *cobra.Command {
 	c.Flags().StringVar(&passwordSecret, "password-secret", "", "挂载密码所在机密项的名字")
 	c.Flags().StringVar(&drive, "drive", "", "Windows 固定盘符，取值 D 到 Z")
 	c.Flags().StringArrayVar(&directories, "dir", nil, "目录约定，格式为 用途=子路径，可重复")
-	c.Flags().StringVar(&note, "note", "", "备注")
+	c.Flags().StringVar(&note, "note", "", "备注（必填；agent 靠备注判断用途）")
 	_ = c.MarkFlagRequired("device")
 	_ = c.MarkFlagRequired("user")
 	_ = c.MarkFlagRequired("password-secret")
 	_ = c.MarkFlagRequired("drive")
+	_ = c.MarkFlagRequired("note")
 	return c
 }
 
@@ -193,7 +194,7 @@ func sharesEditCmd() *cobra.Command {
 	c.Flags().StringVar(&drive, "drive", "", "新的 Windows 固定盘符")
 	c.Flags().StringArrayVar(&directories, "dir", nil, "新的目录约定，格式为 用途=子路径，可重复；给出时整体替换")
 	c.Flags().BoolVar(&clearDirectories, "clear-dirs", false, "清空目录约定（与 --dir 互斥）")
-	c.Flags().StringVar(&note, "note", "", "新的备注；传空字符串清空")
+	c.Flags().StringVar(&note, "note", "", "新的备注（必填；不能改成空白）")
 	c.Flags().StringVar(&changeNote, "change-note", "", "本次修改的变更说明；不给则清空旧说明")
 	return c
 }

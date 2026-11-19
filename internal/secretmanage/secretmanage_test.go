@@ -260,7 +260,7 @@ func TestAuthorizationApplyRejectsStaleSummary(t *testing.T) {
 	m, st := newTestManager(t)
 	web1 := mustServer(t, st, "web1")
 	web2 := mustServer(t, st, "web2")
-	if err := m.AddSecret("DEPLOY_TOKEN", "", "", []byte("deploy-secret-value"), CLISource()); err != nil {
+	if err := m.AddSecret("DEPLOY_TOKEN", "测试备注", "", []byte("deploy-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	views, err := m.List(ListFilter{})
@@ -333,7 +333,7 @@ func TestAuthorizationApplyRejectsStaleSummary(t *testing.T) {
 func TestAllowAndDisallowKeepMergedMissingErrors(t *testing.T) {
 	m, st := newTestManager(t)
 	web1 := mustServer(t, st, "web1")
-	if err := m.AddSecret("DEPLOY_TOKEN", "", "", []byte("deploy-secret-value"), CLISource()); err != nil {
+	if err := m.AddSecret("DEPLOY_TOKEN", "测试备注", "", []byte("deploy-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	err := m.AllowSecrets([]string{"DEPLOY_TOKEN", "GHOST_TOKEN"}, []string{"web1", "no-such"}, CLISource())
@@ -375,7 +375,7 @@ func TestApplyAuthorizationTreatsDeletedCellEntriesAsConflict(t *testing.T) {
 	web1 := mustServer(t, st, "web1")
 	db1 := mustServer(t, st, "db1")
 	for _, name := range []string{"DEPLOY_TOKEN", "BACKUP_TOKEN"} {
-		if err := m.AddSecret(name, "", "", []byte(name+"-secret-value"), CLISource()); err != nil {
+		if err := m.AddSecret(name, "测试备注", "", []byte(name+"-secret-value"), CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}

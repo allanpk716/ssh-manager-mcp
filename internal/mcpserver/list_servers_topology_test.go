@@ -36,6 +36,9 @@ func TestListServersTopologySurvivesProfileSnapshotRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := source.AddSiteWithParent("3号楼", "服务器机房", "公司B"); err != nil {
+		t.Fatal(err)
+	}
 	networks := []models.Network{
 		{Name: "家里物理网", Type: models.NetworkPhysical, SiteName: "家A"},
 		{Name: "公司物理网", Type: models.NetworkPhysical, SiteName: "公司B"},
@@ -48,7 +51,7 @@ func TestListServersTopologySurvivesProfileSnapshotRoundTrip(t *testing.T) {
 		}
 	}
 
-	authorizedDevice, err := source.AddDevice("授权机器", "", "phone")
+	authorizedDevice, err := source.AddDeviceAtSite("授权机器", "", "phone", "公司B / 3号楼")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +236,8 @@ func TestListServersTopologySurvivesProfileSnapshotRoundTrip(t *testing.T) {
 		if gpu.Device != "授权机器" {
 			t.Fatalf("gpu device = %q, want 授权机器", gpu.Device)
 		}
-		if gpu.Site != "公司B、家A" {
-			t.Fatalf("gpu site = %q, want 公司B、家A", gpu.Site)
+		if gpu.Site != "公司B / 3号楼" {
+			t.Fatalf("gpu site = %q, want 公司B / 3号楼", gpu.Site)
 		}
 		wantNetworks := []string{"公司物理网", "家里物理网", "虚拟A", "虚拟B"}
 		if !reflect.DeepEqual(gpu.Networks, wantNetworks) {
@@ -257,6 +260,9 @@ func TestListServersTopologySurvivesProfileSnapshotRoundTrip(t *testing.T) {
 				t.Fatalf("list_servers must not leak topology addresses: %s", encoded)
 			}
 		}
+		if strings.Contains(string(encoded), `"location"`) {
+			t.Fatalf("list_servers must not output the cancelled location field: %s", encoded)
+		}
 		return servers
 	}
 	assertTopologyList(t, source)
@@ -267,7 +273,7 @@ func TestListServersTopologySurvivesProfileSnapshotRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(clientServerInfos["gpu"], ServerInfo{
 		ID: gpuResult.ServerID, Name: "gpu", Host: "hidden", User: "deploy",
-		Device: "授权机器", Site: "公司B、家A",
+		Device: "授权机器", Site: "公司B / 3号楼",
 		Networks: []string{"公司物理网", "家里物理网", "虚拟A", "虚拟B"},
 		Tags:     []string{},
 	}) {

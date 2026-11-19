@@ -71,13 +71,13 @@ func TestSecretEnvironmentInjectionExecCommand(t *testing.T) {
 	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "Deploy token", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("SECOND_TOKEN", "", []byte(secondSecretValue), "SECOND_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("SECOND_TOKEN", "测试备注", []byte(secondSecretValue), "SECOND_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("NO_ENV_TOKEN", "", []byte("not-an-environment-secret"), store.CLISource()); err != nil {
+	if err := st.AddSecret("NO_ENV_TOKEN", "测试备注", []byte("not-an-environment-secret"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("OTHER_SERVER_TOKEN", "", []byte("other-server-secret"), "OTHER_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("OTHER_SERVER_TOKEN", "测试备注", []byte("other-server-secret"), "OTHER_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddServer(&models.Server{Name: "other-server", Host: "192.0.2.20", Port: 22, User: "u"}); err != nil {
@@ -251,10 +251,10 @@ func TestSecretEnvironmentInjectionExecBackground(t *testing.T) {
 
 func TestSecretEnvironmentInjectionBackgroundWarnings(t *testing.T) {
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("GOOD_TOKEN", "", []byte("background-good-secret"), "GOOD_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("GOOD_TOKEN", "测试备注", []byte("background-good-secret"), "GOOD_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "", []byte("background-zero-byte-value\x00"), "ZERO_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "测试备注", []byte("background-zero-byte-value\x00"), "ZERO_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
@@ -303,7 +303,7 @@ func TestSecretEnvironmentInjectionBackgroundSurvivesStoreRevocation(t *testing.
 	const userCommand = `printf '%s\n' "$HF_TOKEN"`
 
 	storeA := newStore(t)
-	if err := storeA.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
+	if err := storeA.AddSecretWithEnvironmentName("API_TOKEN", "测试备注", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	firstStarted := make(chan struct{})
@@ -399,13 +399,13 @@ func TestSecretEnvironmentInjectionBackgroundSurvivesStoreRevocation(t *testing.
 func TestSecretEnvironmentInjectionScopeAndRevocation(t *testing.T) {
 	const secretValue = "authorized-secret-value"
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "API_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "测试备注", []byte(secretValue), "API_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("NO_ENV_TOKEN", "", []byte("no-environment-secret-value"), store.CLISource()); err != nil {
+	if err := st.AddSecret("NO_ENV_TOKEN", "测试备注", []byte("no-environment-secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("OTHER_SERVER_TOKEN", "", []byte("other-server-secret"), "OTHER_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("OTHER_SERVER_TOKEN", "测试备注", []byte("other-server-secret"), "OTHER_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddServer(&models.Server{Name: "other-server", Host: "192.0.2.20", Port: 22, User: "u"}); err != nil {
@@ -503,7 +503,7 @@ func TestSecretEnvironmentInjectionPowerShell(t *testing.T) {
 	// 改写成别的字节。用户命令自己切到 UTF-8 后，遮蔽逻辑才能按原值比对。
 	const userCommand = `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Write-Output $env:HF_TOKEN`
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "测试备注", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -611,7 +611,7 @@ func TestSecretEnvironmentInjectionWindowsCmd(t *testing.T) {
 	const secretValue = `cmd-secret-%-中文`
 	const userCommand = `chcp 65001 >NUL & echo %HF_TOKEN% "quoted" ^& echo second & exit 42`
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("API_TOKEN", "测试备注", []byte(secretValue), "HF_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -738,7 +738,7 @@ func TestSecretEnvironmentInjectionWindowsValueWarningsDoNotStopCommand(t *testi
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			st := newStore(t)
-			if err := st.AddSecretWithEnvironmentName("WINDOWS_SECRET", "", test.value, "WINDOWS_TOKEN", store.CLISource()); err != nil {
+			if err := st.AddSecretWithEnvironmentName("WINDOWS_SECRET", "测试备注", test.value, "WINDOWS_TOKEN", store.CLISource()); err != nil {
 				t.Fatal(err)
 			}
 			var commandMu sync.Mutex
@@ -808,10 +808,10 @@ func setRealServerShell(t *testing.T, st *store.Store, serverID string, shell mo
 func TestSecretEnvironmentInjectionWarningsDoNotStopCommand(t *testing.T) {
 	const zeroByteValue = "zero-byte-secret-value\x00"
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "", []byte(zeroByteValue), "ZERO_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "测试备注", []byte(zeroByteValue), "ZERO_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("UNKNOWN_SHELL_TOKEN", "", []byte("unknown-shell-secret-value"), "UNKNOWN_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("UNKNOWN_SHELL_TOKEN", "测试备注", []byte("unknown-shell-secret-value"), "UNKNOWN_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{
@@ -895,10 +895,10 @@ func TestSecretEnvironmentInjectionReadFailureWarnsOnlyFailedVariable(t *testing
 	requirePOSIXRemoteSimulation(t)
 	dbPath := filepath.Join(t.TempDir(), "secrets.db")
 	st := newStoreAt(t, dbPath)
-	if err := st.AddSecretWithEnvironmentName("GOOD_SECRET", "", []byte("read-failure-good-value"), "GOOD_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("GOOD_SECRET", "测试备注", []byte("read-failure-good-value"), "GOOD_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecretWithEnvironmentName("BAD_SECRET", "", []byte("read-failure-bad-value"), "BAD_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("BAD_SECRET", "测试备注", []byte("read-failure-bad-value"), "BAD_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -947,7 +947,7 @@ func TestSecretEnvironmentInjectionReadFailureWarnsOnlyFailedVariable(t *testing
 func TestSecretEnvironmentInjectionSkipsFileTransfer(t *testing.T) {
 	const secretValue = "file-transfer-secret-value"
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("FILE_TOKEN", "", []byte(secretValue), "FILE_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("FILE_TOKEN", "测试备注", []byte(secretValue), "FILE_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	var commandMu sync.Mutex
@@ -1006,7 +1006,7 @@ func TestSecretEnvironmentInjectionSkipsFileTransfer(t *testing.T) {
 
 func TestSecretEnvironmentInjectionWarningIsNotTruncated(t *testing.T) {
 	st := newStore(t)
-	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "", []byte("truncation-zero-byte-value\x00"), "ZERO_TOKEN", store.CLISource()); err != nil {
+	if err := st.AddSecretWithEnvironmentName("ZERO_TOKEN", "测试备注", []byte("truncation-zero-byte-value\x00"), "ZERO_TOKEN", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	clientSession, serverID := newMaskingSSHToolClient(t, st, testsshd.Options{

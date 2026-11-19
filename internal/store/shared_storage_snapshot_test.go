@@ -83,6 +83,7 @@ func TestExportSnapshotForProfileScopesSharedStorages(t *testing.T) {
 	datasets, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -90,6 +91,7 @@ func TestExportSnapshotForProfileScopesSharedStorages(t *testing.T) {
 	if _, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "other-user",
 		PasswordSecret: "OTHER_MOUNT_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +109,7 @@ func TestExportSnapshotForProfileScopesSharedStorages(t *testing.T) {
 	managedShare, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "models", Device: "文件服务器", User: "model-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)

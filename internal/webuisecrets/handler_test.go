@@ -959,7 +959,7 @@ func TestSecretAuthorizationScopeCoversOnlyVisibleMatrixAndDetailCells(t *testin
 	webID := mustServer(t, st, "web-1")
 	dbID := mustServer(t, st, "db-1")
 	manager := secretmanage.New(st)
-	if err := manager.AddSecret("API_TOKEN", "", "", []byte("api-secret-value"), secretmanage.CLISource()); err != nil {
+	if err := manager.AddSecret("API_TOKEN", "测试备注", "", []byte("api-secret-value"), secretmanage.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	views, err := manager.List(secretmanage.ListFilter{})
@@ -1069,7 +1069,7 @@ func TestSecretAuthorizationConfirmDeletedSecretReturnsConflictWithLatestPreview
 	dbID := mustServer(t, st, "db-1")
 	manager := secretmanage.New(st)
 	for _, name := range []string{"WEB_TOKEN", "DB_TOKEN"} {
-		if err := manager.AddSecret(name, "", "", []byte(name+"-secret-value"), secretmanage.CLISource()); err != nil {
+		if err := manager.AddSecret(name, "测试备注", "", []byte(name+"-secret-value"), secretmanage.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1206,4 +1206,42 @@ func TestSecretMetadataEditWithoutChangeWritesNothing(t *testing.T) {
 // 命令行写入的审计。
 func webUISecretAuditRows(st *store.Store, actions ...string) ([]store.AuditRow, error) {
 	return st.QueryAudit(store.AuditFilter{OwnerOnly: true, Source: store.AuditSourceWebUI, Actions: actions})
+}
+
+// TestSecretNoteRequiredWebUI 校验 Web UI 的新增与元数据编辑都拒绝空白备
+// 注，并把存储层文案直接显示在表单页上。
+func TestSecretNoteRequiredWebUI(t *testing.T) {
+	st := newIntegrationStore(t)
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	blankAdd := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
+		"csrf_token": {csrf}, "name": {"API_TOKEN"},
+		"note": {" "}, "environment_name": {""}, "value": {"web-secret-value"},
+	})
+	blankAddBody := body(t, blankAdd)
+	if blankAdd.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankAddBody, "机密项备注不能为空") {
+		t.Fatalf("空白备注新增应被拒绝并显示原因，状态码=%d：\n%s", blankAdd.StatusCode, blankAddBody)
+	}
+	if !strings.Contains(blankAddBody, `value="API_TOKEN"`) {
+		t.Fatalf("被拒绝的新增页应保留名字输入：\n%s", blankAddBody)
+	}
+
+	if err := st.AddSecret("EXISTING_TOKEN", "接口令牌", []byte("existing-secret-value"), store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := st.ListSecretsInScope(store.ScopeAllServers())
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("读取机密项失败：%v %+v", err, rows)
+	}
+	detailTarget := "/ui/secrets/" + rows[0].ID
+	blankEdit := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
+		"csrf_token": {csrf}, "note": {" "}, "environment_name": {""},
+	})
+	blankEditBody := body(t, blankEdit)
+	if blankEdit.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankEditBody, "机密项备注不能为空") {
+		t.Fatalf("编辑成空白备注应被拒绝并显示原因，状态码=%d：\n%s", blankEdit.StatusCode, blankEditBody)
+	}
 }

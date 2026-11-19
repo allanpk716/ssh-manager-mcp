@@ -106,7 +106,7 @@ func TestUploadContentRecordsSecretDeliveryOnSingleMachine(t *testing.T) {
 func TestUploadContentRecordsWindowsSFTPRealPath(t *testing.T) {
 	const secretValue = "windows-delivery-secret-40a23c"
 	vaultStore := newStore(t)
-	if err := vaultStore.AddSecret("WINDOWS_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := vaultStore.AddSecret("WINDOWS_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	hostRoot := t.TempDir()
@@ -161,7 +161,7 @@ func TestUploadContentRecordsWindowsSFTPRealPath(t *testing.T) {
 func TestFileUploadsDoNotClearSecretDeliveryRecord(t *testing.T) {
 	const secretValue = "delivery-preserve-secret-82af30"
 	vaultStore := newStore(t)
-	if err := vaultStore.AddSecret("PRESERVE_TOKEN", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := vaultStore.AddSecret("PRESERVE_TOKEN", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	address, hostKey, cleanupServer := testsshd.Start(t, testsshd.Options{Password: "pw"})

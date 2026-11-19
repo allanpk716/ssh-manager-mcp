@@ -108,9 +108,9 @@ func (c CredentialType) AuthMethodForServer() AuthMethod {
 }
 
 // Server is an SSH target. Credential holds the login secret; SudoCredential (optional) holds a password for sudo when the target asks for one.
-// Structured metadata fields (Location/Hardware/Services/Role/Caveats) plus Tags and Description are surfaced to
-// the agent via list_servers (full-open, reversing Plan-8's owner-only rule — see
-// docs/superpowers/specs/2026-08-11-server-structured-metadata-design.md).
+// Structured metadata fields (Hardware/Services/Role/Caveats) plus Tags and Description are surfaced to
+// the agent via list_servers; the old Location field was cancelled by ADR 0021 —
+// "where" is expressed solely by the topology device's site.
 type Server struct {
 	ID   string
 	Name string
@@ -127,7 +127,6 @@ type Server struct {
 	ShellType   ShellType
 	Tags        []string
 	Description string // owner free-text notes; surfaced to agent (supplementary to structured fields below)
-	Location    string // where deployed: datacenter/region/rack/tenant
 	Hardware    string // hardware config: CPU/RAM/disk/GPU
 	Services    string // what is deployed/running here
 	Role        string // this server's purpose (e.g. "prod pg primary")

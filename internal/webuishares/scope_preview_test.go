@@ -29,6 +29,7 @@ func TestShareScopePreviewListsImpactByShareName(t *testing.T) {
 	datasets, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -36,6 +37,7 @@ func TestShareScopePreviewListsImpactByShareName(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

@@ -202,6 +202,12 @@ func Open(path string, masterKey []byte) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// 票 #296：取消服务器元数据的 Location 字段。旧文本并入说明后删除
+	// 该列；必须排在修订号触发器更新之后，删列才不被旧触发器阻塞。
+	if err := migrateServerLocationIntoDescription(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	// HardenACL ONLY on first creation (Plan 16 F1 fix, spec §5.2 xcheck codex
 	// P6). On an existing store.db the ACL was set at creation time by whoever
 	// first created it (interactive user or service account); re-running it
@@ -385,9 +391,6 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "servers", "description", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
-	if err := addColumnIfMissing(db, "servers", "location", "TEXT DEFAULT ''"); err != nil {
-		return err
-	}
 	if err := addColumnIfMissing(db, "servers", "hardware", "TEXT DEFAULT ''"); err != nil {
 		return err
 	}
@@ -419,7 +422,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if serversExists {
-		for _, col := range []string{"description", "location", "hardware", "services", "role", "caveats"} {
+		for _, col := range []string{"description", "hardware", "services", "role", "caveats"} {
 			if _, err := db.Exec(fmt.Sprintf("UPDATE servers SET %s = '' WHERE %s IS NULL", col, col)); err != nil {
 				return err
 			}
@@ -525,6 +528,11 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 		if !nullable {
+			// 触发这次重建的旧库可能早于 location 列；重建的复制语句仍读
+			// 该列，先补上空列，升级迁移随后把非空文本并入说明并删列。
+			if err := addColumnIfMissing(db, "servers", "location", "TEXT DEFAULT ''"); err != nil {
+				return err
+			}
 			if err := rebuildServersNullable(db); err != nil {
 				return err
 			}
@@ -948,7 +956,6 @@ CREATE TABLE IF NOT EXISTS servers (
   shell_type TEXT NOT NULL DEFAULT 'posix',
   tags TEXT,
   description TEXT DEFAULT '',
-  location TEXT DEFAULT '',
   hardware TEXT DEFAULT '',
   services TEXT DEFAULT '',
   role TEXT DEFAULT '',

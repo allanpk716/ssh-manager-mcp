@@ -140,7 +140,7 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 		Shell:          string(models.NormalizeShellType(string(detail.Server.ShellType))),
 		CredentialType: string(detail.CredentialType), HasKeyPassphrase: detail.HasKeyPassphrase,
 		HasSudoPassword: detail.HasSudoPassword, Description: detail.Server.Description,
-		Location: detail.Server.Location, Hardware: detail.Server.Hardware,
+		Hardware: detail.Server.Hardware,
 		Services: detail.Server.Services, Role: detail.Server.Role, Caveats: detail.Server.Caveats,
 		Tags: detail.Server.Tags, ExposeHost: detail.Server.ExposeHost,
 		DeviceName: detail.DeviceName, HasDevice: detail.HasDevice,
@@ -308,7 +308,7 @@ func AddServerView(manager *servermanage.Manager, form webui.ServerAddForm, sour
 		Server: models.Server{
 			Name: form.Name, User: form.User, Host: form.Host, Port: form.Port,
 			ShellType: models.ShellType(shell), Tags: form.Tags,
-			Description: form.Description, Location: form.Location, Hardware: form.Hardware,
+			Description: form.Description, Hardware: form.Hardware,
 			Services: form.Services, Role: form.Role, Caveats: form.Caveats,
 			ExposeHost: form.ExposeHost,
 		},
@@ -388,7 +388,7 @@ func EditServer(manager *servermanage.Manager, id string, form webui.ServerEditF
 	req := servermanage.EditRequest{
 		Identifier: id, ExpectedRevision: form.ExpectedRevision, CheckRevision: true,
 		Name: form.Name, Host: form.Host, Port: form.Port, User: form.User, Shell: form.Shell,
-		Description: form.Description, Location: form.Location, Hardware: form.Hardware,
+		Description: form.Description, Hardware: form.Hardware,
 		Services: form.Services, Role: form.Role, Caveats: form.Caveats,
 		ExposeHost: form.ExposeHost, SudoPassword: stringPointer(form.SudoPassword),
 	}
@@ -704,7 +704,6 @@ func CompleteServerView(manager *servermanage.Manager, id string, form webui.Ser
 	// 段；与当前值相同时由服务器管理模块跳过写入。sudo 密码与条件凭据仍
 	// 然是空值表示不变。
 	req.Description = &form.Description
-	req.Location = &form.Location
 	req.Hardware = &form.Hardware
 	req.Services = &form.Services
 	req.Role = &form.Role

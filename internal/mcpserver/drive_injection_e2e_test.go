@@ -660,7 +660,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		}
 	}
 	if settings.environmentSecret {
-		if err := st.AddSecretWithEnvironmentName("API_TOKEN", "", []byte(networkDriveEnvironmentValue), "HF_TOKEN", store.CLISource()); err != nil {
+		if err := st.AddSecretWithEnvironmentName("API_TOKEN", "测试备注", []byte(networkDriveEnvironmentValue), "HF_TOKEN", store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -694,6 +694,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: mountUser,
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "S",
+		Note: "模型数据集共享",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -701,6 +702,7 @@ func seedNetworkDriveVault(t *testing.T, setup func(*networkDriveSeedSetup)) net
 		if _, err := st.AddSharedStorage(store.SharedStorageInput{
 			Name: "reports", Device: "NAS", User: "mount-user",
 			PasswordSecret: "REPORTS_MOUNT_PASSWORD", Drive: "T",
+			Note: "报表输出共享",
 		}, store.CLISource()); err != nil {
 			t.Fatal(err)
 		}

@@ -194,6 +194,7 @@ func TestDetailViewIncludesReverseGroups(t *testing.T) {
 	addedShare, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "workstation", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource())
 	if err != nil {
 		t.Fatal(err)

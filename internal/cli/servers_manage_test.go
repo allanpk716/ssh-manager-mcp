@@ -98,7 +98,6 @@ func TestServersShowDetail(t *testing.T) {
 	}
 	fine.SudoCredentialID = sudoID
 	fine.Tags = []string{"gpu"}
-	fine.Location = "机房 A"
 	fine.ExposeHost = true
 	fine.Description = "说明文字"
 	if err := st.UpdateServer(fine); err != nil {
@@ -110,7 +109,7 @@ func TestServersShowDetail(t *testing.T) {
 
 	out := runCli(t, "servers", "show", "fine")
 	for _, want := range []string{
-		"fine", "root@192.0.2.1:22", "密码", "已设 sudo 密码", "机房 A", "说明文字", "gpu",
+		"fine", "root@192.0.2.1:22", "密码", "已设 sudo 密码", "说明文字", "gpu",
 		"向 agent 展示主机地址", "完整角色",
 	} {
 		if !strings.Contains(out, want) {
@@ -281,12 +280,14 @@ func TestServersShowReverseGroups(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "workstation", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "worker-data", Device: "workstation", User: "mount-user",
 		PasswordSecret: "WORKER_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -588,7 +589,7 @@ func TestServersCompleteSkipAndEnd(t *testing.T) {
 	seedAttentionServers(t, dbPath, mk)
 	before := serverRevisions(t, dbPath, mk, "bare", "enc")
 
-	blank := "\n\n\n\n\n\n\n\n"
+	blank := "\n\n\n\n\n\n\n"
 	input := blank + "k\n" + blank + "e\n"
 	out, err := runCliWithInput(t, input, "servers", "complete")
 	if err != nil {
@@ -612,7 +613,7 @@ func TestServersCompleteSkipAndEnd(t *testing.T) {
 func TestServersCompleteSavesMetadata(t *testing.T) {
 	dbPath, mk := newVaultEnvNoRun(t)
 	seedAttentionServers(t, dbPath, mk)
-	input := "\n\n\n\n裸机计算节点\n\nnew-login-pass\ns\n" + "\n\n\n\n\n\n\n\n" + "e\n"
+	input := "\n\n\n裸机计算节点\n\nnew-login-pass\ns\n" + "\n\n\n\n\n\n\n" + "e\n"
 	out, err := runCliWithInput(t, input, "servers", "complete", "bare")
 	if err != nil {
 		t.Fatalf("complete: %v\n%s", err, out)
@@ -683,7 +684,7 @@ func TestServersListSharedCredentialBeforeWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runCliWithInput(t, "\n\n\n\n\n\n\nsecret-pass\ns\ne\n", "servers", "complete")
+	out, err := runCliWithInput(t, "\n\n\n\n\n\nsecret-pass\ns\ne\n", "servers", "complete")
 	if err != nil {
 		t.Fatalf("complete: %v\n%s", err, out)
 	}
@@ -735,8 +736,8 @@ func TestServersRmPreviewListsSharedStorageAndDeliveryRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []store.SharedStorageInput{
-		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y", Note: "共享数据集"},
 	} {
 		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
 			t.Fatal(err)

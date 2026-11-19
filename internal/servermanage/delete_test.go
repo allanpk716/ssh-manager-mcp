@@ -36,7 +36,7 @@ func seedDeleteFixture(t *testing.T, m *Manager) (serverID, sharedCredID string)
 	}, &models.Credential{ID: sharedCredID, Type: models.CredPrivateKey}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.st.AddSecret("deploy_note", "", []byte("secret-value-123"), store.CLISource()); err != nil {
+	if err := m.st.AddSecret("deploy_note", "测试备注", []byte("secret-value-123"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := m.st.AllowSecrets([]string{"deploy_note"}, []string{"alpha"}, store.CLISource()); err != nil {
@@ -171,8 +171,8 @@ func TestDeletePreviewSeparatesSharedStorageFromSecrets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []store.SharedStorageInput{
-		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y", Note: "共享数据集"},
 	} {
 		if _, err := m.st.AddSharedStorage(input, store.CLISource()); err != nil {
 			t.Fatal(err)
@@ -195,6 +195,7 @@ func TestDeletePreviewSeparatesSharedStorageFromSecrets(t *testing.T) {
 	if _, err := m.st.AddSharedStorage(store.SharedStorageInput{
 		Name: "models", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

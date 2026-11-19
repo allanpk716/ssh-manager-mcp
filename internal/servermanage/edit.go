@@ -34,7 +34,6 @@ type EditRequest struct {
 	User        *string
 	Shell       *string
 	Description *string
-	Location    *string
 	Hardware    *string
 	Services    *string
 	Role        *string
@@ -113,9 +112,6 @@ func (m *Manager) Edit(req EditRequest, src Source) (*EditResult, error) {
 		}
 		if req.Tags != nil {
 			apply("tags", func() { target.Tags = *req.Tags })
-		}
-		if req.Location != nil {
-			apply("location", func() { target.Location = strings.TrimSpace(*req.Location) })
 		}
 		if req.Hardware != nil {
 			apply("hardware", func() { target.Hardware = strings.TrimSpace(*req.Hardware) })
@@ -299,7 +295,6 @@ func (r EditRequest) attemptedFields() []string {
 	add(r.User != nil, "user")
 	add(r.Shell != nil, "shell")
 	add(r.Description != nil, "description")
-	add(r.Location != nil, "location")
 	add(r.Hardware != nil, "hardware")
 	add(r.Services != nil, "services")
 	add(r.Role != nil, "role")

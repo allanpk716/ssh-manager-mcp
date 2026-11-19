@@ -117,7 +117,7 @@ FOR EACH ROW WHEN
   OLD.credential_id IS NOT NEW.credential_id OR OLD.sudo_credential_id IS NOT NEW.sudo_credential_id OR
   OLD.device_id IS NOT NEW.device_id OR
   OLD.shell_type IS NOT NEW.shell_type OR OLD.tags IS NOT NEW.tags OR
-  OLD.description IS NOT NEW.description OR OLD.location IS NOT NEW.location OR
+  OLD.description IS NOT NEW.description OR
   OLD.hardware IS NOT NEW.hardware OR OLD.services IS NOT NEW.services OR
   OLD.role IS NOT NEW.role OR OLD.caveats IS NOT NEW.caveats OR
   OLD.expose_host IS NOT NEW.expose_host OR OLD.created_at IS NOT NEW.created_at OR

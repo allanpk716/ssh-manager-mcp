@@ -27,7 +27,7 @@ func seedSharesCommandVault(t *testing.T) (string, []byte) {
 	if _, err := s.AddDevice("NAS", "存放共享数据", ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.AddSecret("NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource()); err != nil {
+	if err := s.AddSecret("NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.AddServer(&models.Server{
@@ -153,6 +153,7 @@ func seedSharesClientCacheWithRecommendedVersion(t *testing.T, declaredClientVer
 	if _, err := source.AddSharedStorage(store.SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "other-user",
 		PasswordSecret: "OTHER_MOUNT_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -439,7 +440,7 @@ func TestSharesEditUsesPartialUpdateSemantics(t *testing.T) {
 func TestSharesRemoveRequiresConfirmationAndExplainsScope(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	previous := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return false }
@@ -486,9 +487,9 @@ func TestSharesRemoveRequiresConfirmationAndExplainsScope(t *testing.T) {
 func TestSecretsRemoveRefusesSharedStoragePassword(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "模型数据集")
 	runCli(t, "shares", "add", "scratch", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Y")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Y", "--note", "临时数据")
 
 	errText := runCliErr(t, "secrets", "rm", "NAS_MOUNT_PASSWORD")
 	for _, text := range []string{"仍被共享存储引用", "datasets", "scratch"} {
@@ -508,7 +509,7 @@ func TestSharesClientRefusesWrites(t *testing.T) {
 	seedTopologyClientCacheFixture(t)
 	writes := [][]string{
 		{"shares", "add", "datasets", "--device", "工作站", "--user", "mount-user",
-			"--password-secret", "secret", "--drive", "Z"},
+			"--password-secret", "secret", "--drive", "Z", "--note", "共享数据集"},
 		{"shares", "edit", "datasets", "--note", "新备注"},
 		{"shares", "rm", "datasets", "--yes"},
 	}
@@ -523,7 +524,7 @@ func TestSharesClientRefusesWrites(t *testing.T) {
 
 func TestSharesAddRejectsMissingReferencesAndDuplicates(t *testing.T) {
 	seedSharesCommandVault(t)
-	base := []string{"shares", "add", "datasets", "--user", "mount-user", "--drive", "Z"}
+	base := []string{"shares", "add", "datasets", "--user", "mount-user", "--drive", "Z", "--note", "共享数据集"}
 	missingDevice := append(append([]string{}, base...), "--device", "missing", "--password-secret", "NAS_MOUNT_PASSWORD")
 	if errText := runCliErr(t, missingDevice...); !strings.Contains(errText, "请先执行 sshmgr devices add 登记设备") {
 		t.Fatalf("缺失提供方设备时应给出登记设备指引，实际：\n%s", errText)
@@ -534,7 +535,7 @@ func TestSharesAddRejectsMissingReferencesAndDuplicates(t *testing.T) {
 	}
 
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	duplicate := append(append([]string{}, base...), "--device", "NAS", "--password-secret", "NAS_MOUNT_PASSWORD")
 	duplicate[2] = "DATASETS"
 	if errText := runCliErr(t, duplicate...); !strings.Contains(errText, "共享名已存在") {
@@ -553,5 +554,26 @@ func TestSharesAddRejectsMissingReferencesAndDuplicates(t *testing.T) {
 	withProtocol := append(append([]string{}, invalidDrive...), "--protocol", "SMB")
 	if errText := runCliErr(t, withProtocol...); !strings.Contains(errText, "unknown flag: --protocol") {
 		t.Fatalf("首版不应提供协议选择参数，实际：\n%s", errText)
+	}
+}
+
+// TestSharesNoteRequired 校验命令行的新增与编辑都拒绝空白备注；帮助文案
+// 同步说明备注必填。
+func TestSharesNoteRequired(t *testing.T) {
+	seedSharesCommandVault(t)
+	help := runCli(t, "shares", "add", "--help")
+	if !strings.Contains(help, "备注（必填") {
+		t.Fatalf("新增帮助应说明备注必填：\n%s", help)
+	}
+	errText := runCliErr(t, "shares", "add", "blank", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", " ")
+	if !strings.Contains(errText, "备注") {
+		t.Fatalf("空白备注新增共享存储应被拒绝，实际：\n%s", errText)
+	}
+	runCli(t, "shares", "add", "noted", "--device", "NAS", "--user", "mount-user",
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "模型数据集")
+	errText = runCliErr(t, "shares", "edit", "noted", "--note", "")
+	if !strings.Contains(errText, "备注") {
+		t.Fatalf("编辑成空白备注应被拒绝，实际：\n%s", errText)
 	}
 }

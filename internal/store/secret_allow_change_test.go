@@ -63,7 +63,7 @@ func TestChangeSecretAllowsForNamesSurvivesConcurrentDelete(t *testing.T) {
 		names = append(names, fmt.Sprintf("FILLER_TOKEN_%04d", i))
 	}
 	for _, name := range names {
-		if err := main.AddSecret(name, "", []byte("filler-secret-value"), CLISource()); err != nil {
+		if err := main.AddSecret(name, "填充机密项备注", []byte("filler-secret-value"), CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -146,7 +146,6 @@ func TestServersAddNoWarningOnCleanMetadata(t *testing.T) {
 		"--name", "clean", "--host", "h", "--user", "u",
 		"--tags", "prod,gpu",
 		"--description", "ml training box",
-		"--location", "dc1 rack 4",
 		"--hardware", "64c/512G/8xA100",
 		"--services", "postgres primary",
 		"--role", "prod pg primary",

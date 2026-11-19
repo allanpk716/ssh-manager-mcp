@@ -122,6 +122,7 @@ func seedListSharesVault(t *testing.T) listSharesFixture {
 	if _, err := source.AddSharedStorage(store.SharedStorageInput{
 		Name: "scratch", Device: "NAS", User: "scratch-user",
 		PasswordSecret: "SCRATCH_MOUNT_PASSWORD", Drive: "Y",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

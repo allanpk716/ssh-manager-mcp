@@ -114,7 +114,7 @@ func TestDetailShowsNonSensitiveFacts(t *testing.T) {
 	id := mustAddServer(t, m, &models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 2222, User: "deploy",
 		CredentialID: cid, SudoCredentialID: sudoID, Role: "网站", Tags: []string{"gpu"},
-		Location: "机房 A", ExposeHost: true, ShellType: models.ShellPOSIX,
+		ExposeHost: true, ShellType: models.ShellPOSIX,
 	})
 
 	detail, err := m.Detail(id)
@@ -160,7 +160,6 @@ func TestEditPartialUpdateAndRevisionLock(t *testing.T) {
 	m := newTestManager(t)
 	id := mustAddServer(t, m, &models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", Role: "旧角色",
-		Location: "机房 A",
 	})
 	before, err := m.st.GetServer(id)
 	if err != nil {
@@ -175,7 +174,7 @@ func TestEditPartialUpdateAndRevisionLock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Server.Role != "网站前端" || result.Server.Location != "机房 A" {
+	if result.Server.Role != "网站前端" || result.Server.Hardware != "" {
 		t.Fatalf("部分更新不得清空未提交字段：%+v", result.Server)
 	}
 	if result.Server.Revision != before.Revision+1 {

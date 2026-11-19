@@ -95,6 +95,7 @@ func newResidueWebFixture(t *testing.T) *residueWebFixture {
 		if _, err := st.AddSharedStorage(store.SharedStorageInput{
 			Name: name, Device: "NAS", User: "mount-user",
 			PasswordSecret: name + "_MOUNT_PASSWORD", Drive: drive,
+			Note: "共享数据集",
 		}, store.CLISource()); err != nil {
 			t.Fatal(err)
 		}

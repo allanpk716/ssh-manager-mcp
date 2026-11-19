@@ -18,7 +18,7 @@ import (
 func TestSharesRevokeWindowsServerDoesNotConnectAndExplainsInjection(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	output := runCli(t, "shares", "revoke", "datasets", "windows-web", "--yes")
 	for _, want := range []string{
@@ -95,6 +95,7 @@ func TestSharesRevokeOutOfScopeServerOnlyCleansRemote(t *testing.T) {
 	share, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -146,7 +147,7 @@ func TestSharesRevokeOutOfScopeServerOnlyCleansRemote(t *testing.T) {
 func TestSharesRevokeNewPasswordFromStdinListsRemainingServers(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	root := NewRootCmd()
 	out := &bytes.Buffer{}
 	root.SetOut(out)
@@ -213,7 +214,7 @@ func TestSharesRevokeNewPasswordFromStdinListsRemainingServers(t *testing.T) {
 func TestSharesRevokeRemoteFailureStillPrintsPasswordReminder(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	s, err := store.Open(databasePath, masterKey)
 	if err != nil {
 		t.Fatal(err)
@@ -269,7 +270,7 @@ func TestSharesRevokeRemoteFailureStillPrintsPasswordReminder(t *testing.T) {
 func TestSharesRevokeNewPasswordFromFileChangesStoredPassword(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	passwordPath := filepath.Join(t.TempDir(), "new-password")
 	if err := os.WriteFile(passwordPath, []byte("file-mount-password"), 0600); err != nil {
 		t.Fatal(err)
@@ -307,7 +308,7 @@ func TestSharesRevokeNewPasswordFromFileChangesStoredPassword(t *testing.T) {
 func TestSharesRevokeDoesNotAcceptPasswordAsArgument(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	errText := runCliErr(t, "shares", "revoke", "datasets", "windows-web",
 		"argument-mount-password", "--yes")
@@ -337,7 +338,7 @@ func TestSharesRevokeDoesNotAcceptPasswordAsArgument(t *testing.T) {
 func TestSharesRevokeNewPasswordValidationErrorDoesNotEchoPassword(t *testing.T) {
 	databasePath, masterKey := seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	passwordPath := filepath.Join(t.TempDir(), "short-password")
 	if err := os.WriteFile(passwordPath, []byte("short"), 0600); err != nil {
 		t.Fatal(err)
@@ -365,7 +366,7 @@ func TestSharesRevokeNewPasswordValidationErrorDoesNotEchoPassword(t *testing.T)
 func TestSharesRevokeRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return false }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })
@@ -381,7 +382,7 @@ func TestSharesRevokeRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 func TestSharesRevokeShowsPreviewAndAcceptsInteractiveCancellation(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return true }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })

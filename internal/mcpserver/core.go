@@ -48,6 +48,11 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 	if err != nil {
 		return nil, err
 	}
+	sites, err := st.ListSites()
+	if err != nil {
+		return nil, err
+	}
+	siteTree := models.NewSiteTree(sites)
 	devicesByID := make(map[string]*models.Device, len(devices))
 	for _, device := range devices {
 		devicesByID[device.ID] = device
@@ -75,7 +80,7 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 		if srv.ExposeHost {
 			host = srv.Host
 		}
-		deviceName, site, networkNames := topologyFieldsForServer(devicesByID[srv.DeviceID])
+		deviceName, site, networkNames := topologyFieldsForServer(devicesByID[srv.DeviceID], siteTree)
 		out = append(out, ServerInfo{
 			ID:          srv.ID,
 			Name:        srv.Name,
@@ -85,7 +90,6 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 			Role:        srv.Role,
 			Services:    srv.Services,
 			Caveats:     srv.Caveats,
-			Location:    srv.Location,
 			Hardware:    srv.Hardware,
 			Tags:        tags,
 			Description: srv.Description,
@@ -98,24 +102,24 @@ func ListServersForProfile(st *store.Store, profileID string) ([]ServerInfo, err
 	return out, nil
 }
 
-// topologyFieldsForServer 从设备与网络成员算出 list_servers 的三个拓扑名
-// 字字段。单机部署的本机 vault 与多机客户端的缓存 Store 都先经 ListDevices
-// 读出同一形态，再进入这里，保证两个角色的输出一致。
-func topologyFieldsForServer(device *models.Device) (deviceName, site string, networks []string) {
+// topologyFieldsForServer 从设备、机器直接登记的地点与网络成员算出
+// list_servers 的三个拓扑名字字段。地点是「从根到该机器地点的完整路
+// 径」；物理局域网覆盖地点与机器地点不一致时只在拓扑查询里提示，不改
+// 变这里的输出。单机部署的本机 vault 与多机客户端的缓存 Store 都先经
+// ListDevices 与 ListSites 读出同一形态，再进入这里，保证两个角色的输
+// 出一致。
+func topologyFieldsForServer(device *models.Device, siteTree *models.SiteTree) (deviceName, site string, networks []string) {
 	networks = []string{}
 	if device == nil {
 		return "", "", networks
 	}
+	site = siteTree.PathString(device.SiteID)
 	physicalNetworks := make([]string, 0, len(device.Memberships))
 	virtualNetworks := make([]string, 0, len(device.Memberships))
-	siteSet := make(map[string]bool)
 	for _, membership := range device.Memberships {
 		switch membership.NetworkType {
 		case models.NetworkPhysical:
 			physicalNetworks = append(physicalNetworks, membership.NetworkName)
-			if membership.SiteName != "" {
-				siteSet[membership.SiteName] = true
-			}
 		case models.NetworkVirtual:
 			virtualNetworks = append(virtualNetworks, membership.NetworkName)
 		}
@@ -124,12 +128,7 @@ func topologyFieldsForServer(device *models.Device) (deviceName, site string, ne
 	sort.Strings(virtualNetworks)
 	networks = append(networks, physicalNetworks...)
 	networks = append(networks, virtualNetworks...)
-	sites := make([]string, 0, len(siteSet))
-	for name := range siteSet {
-		sites = append(sites, name)
-	}
-	sort.Strings(sites)
-	return device.Name, strings.Join(sites, "、"), networks
+	return device.Name, site, networks
 }
 
 // ExecCommandForProfile runs command on serverID iff serverID is in profileID (iron rule).

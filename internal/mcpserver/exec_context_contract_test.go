@@ -102,7 +102,7 @@ func TestExecContextProbeFailureKeepsSchemaValidOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := st.AddSecretWithEnvironmentName(
-		"CONTEXT_TOKEN", "", []byte("context-value"), "CONTEXT_TOKEN", store.CLISource(),
+		"CONTEXT_TOKEN", "测试备注", []byte("context-value"), "CONTEXT_TOKEN", store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -279,7 +279,7 @@ func addExecContextDrivePreview(t *testing.T, st *store.Store, server *models.Se
 		t.Fatal(err)
 	}
 	if err := st.AddSecret(
-		"EXEC_CONTEXT_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"EXEC_CONTEXT_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -291,6 +291,7 @@ func addExecContextDrivePreview(t *testing.T, st *store.Store, server *models.Se
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "exec-context-NAS", User: "mount-user",
 		PasswordSecret: "EXEC_CONTEXT_MOUNT_PASSWORD", Drive: "S",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

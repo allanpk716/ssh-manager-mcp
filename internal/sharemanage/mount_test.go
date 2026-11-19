@@ -24,6 +24,7 @@ func TestMountIsIdempotentAndReportsSafeResult(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -82,6 +83,7 @@ func TestMountReportsSupplementedOwnerMapping(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +104,7 @@ func TestMountReportsSupplementedOwnerMapping(t *testing.T) {
 func TestMountRejectsWindowsWithoutConnecting(t *testing.T) {
 	st := newCheckTestStore(t)
 	if err := st.AddSecret(
-		"NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +117,7 @@ func TestMountRejectsWindowsWithoutConnecting(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +224,7 @@ func seedMountTopology(t *testing.T, st *store.Store) {
 		}
 	}
 	if err := st.AddSecret(
-		"NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}

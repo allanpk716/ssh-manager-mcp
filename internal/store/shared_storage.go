@@ -157,6 +157,9 @@ func (s *Store) AddSharedStorage(input SharedStorageInput, source WriteSource) (
 		return nil, err
 	}
 	note := strings.TrimSpace(input.Note)
+	if note == "" {
+		return nil, &SharedStorageValidationError{Err: errors.New("共享存储备注不能为空：agent 靠备注判断用途")}
+	}
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -287,6 +290,22 @@ func (s *Store) sharedStoragesByIDs(db dbtx, ids []string) ([]*models.SharedStor
 	return out, nil
 }
 
+// ListSharedStoragesWithoutNote 返回备注为空的共享存储，供主页的待处理
+// 清单使用。存量空备注不强制迁移；这里按去掉首尾空白后的空值判断。
+func (s *Store) ListSharedStoragesWithoutNote() ([]*models.SharedStorage, error) {
+	shares, err := s.ListSharedStorages(SharedStorageFilter{})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*models.SharedStorage, 0)
+	for _, share := range shares {
+		if strings.TrimSpace(share.Note) == "" {
+			out = append(out, share)
+		}
+	}
+	return out, nil
+}
+
 // EditSharedStorage 按共享名做部分更新。每次成功修改都让共享存储版本号
 // 加一；带 ChangeNote 就写入新说明，不带就清空旧说明。数据行与审计行在
 // 同一个事务提交。
@@ -364,7 +383,11 @@ func (s *Store) EditSharedStorage(name string, changes SharedStorageChanges, sou
 		editedFields["directories"] = directoryAuditValue(share.Directories)
 	}
 	if changes.Note != nil {
-		share.Note = strings.TrimSpace(*changes.Note)
+		note := strings.TrimSpace(*changes.Note)
+		if note == "" {
+			return nil, &SharedStorageValidationError{Err: errors.New("共享存储备注不能为空：agent 靠备注判断用途")}
+		}
+		share.Note = note
 		editedFields["note"] = share.Note
 	}
 	changeNote := ""
