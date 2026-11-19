@@ -3,8 +3,6 @@ package mcpserver
 import (
 	"context"
 	"io"
-	"net"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -23,16 +21,8 @@ func TestOutputDoesNotExposeTerminalBeforeAuditEnd(t *testing.T) {
 
 	server, hostKey, closeServer := testsshd.Start(t, testsshd.Options{Password: "pw"})
 	defer closeServer()
-	host, portText, err := net.SplitHostPort(server)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		t.Fatal(err)
-	}
 	client, _, err := sshbroker.ConnectServerEntry(context.Background(), sshbroker.ServerDialRequest{
-		Server:   &models.Server{Host: host, Port: port, User: "u"},
+		Server:   &models.Server{Host: hostOfAddr(server), Port: portOfAddr(server), User: "u"},
 		Auth:     sshbroker.PasswordAuth("pw"),
 		HostKeys: fixedHostKeys(hostKey),
 	})
@@ -78,7 +68,7 @@ func TestOutputDoesNotExposeTerminalBeforeAuditEnd(t *testing.T) {
 	}
 	outputDone := make(chan outputResult, 1)
 	go func() {
-		view, ok, err := m.Output(id, 0, 0, 5*time.Second, context.Background())
+		view, ok, err := m.Output(id, 0, 0, 10*time.Second, context.Background())
 		outputDone <- outputResult{view: view, ok: ok, err: err}
 	}()
 	waitParked(t, task, 1)
@@ -103,16 +93,22 @@ func TestOutputDoesNotExposeTerminalBeforeAuditEnd(t *testing.T) {
 		early = &result
 	case <-time.After(500 * time.Millisecond):
 	}
+	select {
+	case result := <-outputDone:
+		t.Fatalf("审计回调阻塞期间最先发出的长轮询提前返回：%+v", result)
+	default:
+	}
 	releaseOnce.Do(func() { close(releaseAudit) })
 
-	var final outputResult
 	if early != nil {
-		final = *early
-	} else {
-		final = <-outputDone
+		t.Fatalf("审计回调阻塞期间零等待读取提前返回：%+v", *early)
 	}
-	if early != nil {
-		t.Fatalf("审计回调阻塞期间长轮询提前返回：%+v", *early)
+
+	var final outputResult
+	select {
+	case final = <-outputDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("审计回调放行后长轮询没有在 5 秒内返回")
 	}
 	if final.err != nil || !final.ok {
 		t.Fatalf("长轮询返回错误或未知任务：结果=%+v", final)

@@ -724,10 +724,12 @@ type RelayTaskSpec struct {
 	ProgressNotice string
 }
 
-// runRelay 是 relay 任务的 BgTaskSpec.Run 闭包体 (T3 终态纪律零复制): 挂双连接
-// 槽后交 runTask——stopReq/timeout/failed/done→ok 锁内映射、closed 抑制、
-// relay-bg-end 结束审计、终态 notify、cancel 释放 WithTimeout、锁外关双连接
-// 全继承。
+// runRelay 是中继传输后台任务的执行函数：它把目标端连接放入主连接槽、源端连接
+// 放入辅助连接槽，再把实际传输交给任务管理器的共用执行与收尾函数。停止请求
+// 映射为 stopped、超时映射为 timeout、失败映射为 failed、成功映射为 done（结束
+// 审计状态为 ok），这些终态字段都在任务管理器互斥锁内更新。任务管理器已关闭并
+// 移除任务时不补写终态与结束审计；写 relay-bg-end 审计行、唤醒等待输出的调用方、
+// 释放任务超时上下文，以及释放互斥锁后关闭两条连接，都复用共用收尾函数。
 func (tm *TaskManager) runRelay(ctx context.Context, t *bgTask, spec *RelayTaskSpec) {
 	tm.mu.Lock()
 	t.client, t.auxClient = spec.DstCli, spec.SrcCli

@@ -1096,18 +1096,7 @@ func TestRelayForProfileReturnValueAndAudit(t *testing.T) {
 	if start.Command != wantStart {
 		t.Fatalf("start Command = %q, want %q", start.Command, wantStart)
 	}
-	var end *store.AuditRow
-	endCount := 0
-	for index := range rows {
-		row := &rows[index]
-		if row.Action == "relay-bg-end" && row.Command == out.TaskID {
-			end = row
-			endCount++
-		}
-	}
-	if endCount != 1 || end == nil || end.Status != "ok" {
-		t.Fatalf("relay end rows for task %s = %d, want exactly one ok row; rows=%+v", out.TaskID, endCount, rows)
-	}
+	end := requireOneEndRow(t, rows, "relay-bg-end", out.TaskID, "ok")
 	if end.TS.Before(start.TS) {
 		t.Fatalf("end row (%v) predates start row (%v) — start must be written inside the insert lock first", end.TS, start.TS)
 	}

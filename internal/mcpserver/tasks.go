@@ -141,10 +141,12 @@ type BgTaskSpec struct {
 	// AuditAction 是 AuditEnd 落行的 action 词 (Plan 47 spec §6): 空 = "exec-bg-end"
 	// (缺省字面量钉死——exec 路径零行为变化); relay 传 "relay-bg-end"。
 	AuditAction string
-	// AuditEnd 回写终态审计行 (T4: Start 传 st.WriteAudit 闭包;
-	// nil 时零终态审计)。Insert 绑定为 t.auditEnd——行由闭包调用方从 task 字段
-	// 组装 (Command=taskID, Status, ExitCode, DurationMS), 引擎在同一任务管理器
-	// 互斥区间内先写审计、后广播终态。
+	// AuditEnd 回写结束审计行；后台命令与中继传输的启动代码传入存储层的
+	// 写审计函数，字段为空则不写结束审计。任务入表时把该函数包装成本任务的
+	// 结束审计函数：审计行从任务字段组装，Command 字段写任务标识，Status
+	// 字段写终态（done 使用审计状态 ok），并携带退出码与运行毫秒数。共用
+	// 收尾逻辑在同一任务管理器互斥锁内先写结束审计，再唤醒等待任务输出的
+	// 调用方。
 	AuditEnd func(row store.AuditRow) error
 }
 
@@ -802,9 +804,14 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 	writeEnd := t.status != bgStatusRunning && !m.closed // 终态行由本 goroutine 落笔 (同点同锁)
 	aux := t.auxClient                                   // 第二连接槽锁内取引用 (引擎 Run 闭包持锁挂槽)
 	if writeEnd && t.auditEnd != nil {
-		_ = t.auditEnd(m.now()) // 尽力而为: 审计失败不阻止终态; 先于终态广播
+		// 结束审计失败仍按既有尽力而为语义忽略，不阻止任务进入终态。这里的
+		// 一次生产数据库审计写入发生在任务管理器互斥锁内；SQLite 数据库繁忙
+		// 时可按当前忙碌等待上限等待约 5 秒，期间其他需要这把锁的调用会被
+		// 阻塞。这与开始审计在任务入表阶段持锁写入的做法一致，是为先写结束
+		// 审计、后发布任务终态而有意接受的代价。
+		_ = t.auditEnd(m.now())
 	}
-	m.notify(t) // 终态广播 (spec §2.3 触发点②; 零等待者短路)
+	m.notify(t) // 任务进入终态：唤醒等待任务输出的长轮询；无人等待时直接返回
 	t.cancel()  // 释放 WithTimeout 资源
 	m.mu.Unlock()
 	_ = cli.Close() // 终态即关 Client (锁外关, 幂等)

@@ -30,7 +30,6 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/sshbroker"
-	"ssh-manager-mcp/internal/store"
 )
 
 // relayBigChunk 是引擎时序类测试的块网格: 真实网络搬运毫秒到百毫秒级, 给
@@ -324,20 +323,8 @@ func TestRelayEngineZeroByteStartBeforeEndAudit(t *testing.T) {
 	// end 行 action=relay-bg-end, Command=taskID。终态经长轮询观察到以后，
 	// 这里单次查询审计，不等待异步落笔。
 	rows := relayAuditRows(t, e.st, 30)
-	var startRow, endRow *store.AuditRow
-	endCount := 0
-	for i := range rows {
-		if rows[i].Action == "relay-bg-start" && rows[i].Status == "ok" {
-			startRow = &rows[i]
-		}
-		if rows[i].Action == "relay-bg-end" && rows[i].Status == "ok" && rows[i].Command == out.TaskID {
-			endRow = &rows[i]
-			endCount++
-		}
-	}
-	if startRow == nil || endRow == nil || endCount != 1 {
-		t.Fatalf("relay end audit rows for task %s = %d, want exactly one; rows=%+v", out.TaskID, endCount, rows)
-	}
+	startRow := relayAuditFind(t, rows, "relay-bg-start", "ok")
+	endRow := requireOneEndRow(t, rows, "relay-bg-end", out.TaskID, "ok")
 	if endRow.TS.Before(startRow.TS) {
 		t.Fatalf("end row (%v) predates start row (%v) — start must be written in the insert lock first", endRow.TS, startRow.TS)
 	}
