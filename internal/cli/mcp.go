@@ -12,6 +12,7 @@ import (
 
 	"ssh-manager-mcp/internal/clientops"
 	"ssh-manager-mcp/internal/mcpserver"
+	"ssh-manager-mcp/internal/mcpserver/hotswap"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 )
@@ -25,6 +26,31 @@ func resolveToken(flagVal string) string {
 		return flagVal
 	}
 	return os.Getenv("SSHMGR_TOKEN")
+}
+
+// dropInheritedCacheDirOverride 剥除热升级继任领养启动时遗传下来的
+// SSHMGR_CACHE_DIR:父桥进程（mcp 命令按 --instance 启动）在运行态给自己
+// 设置过这个变量（把解析好的实例目录固定给本进程，供深处组件读取），
+// 自动换手经 os.Environ() 把它原样传给继任，而继任继承的命令行又带
+// --instance，两者互斥会让继任在启动校验处被拒绝退出，换代永远失败。
+// 领养环境里的这个值不是用户配置——用户显式同时配置时父桥当初就起不来
+// （同一互斥校验），所以领养启动一律剥除，以命令行为准。返回是否剥除过。
+func dropInheritedCacheDirOverride(instance string) (bool, error) {
+	if instance == "" {
+		return false, nil
+	}
+	if os.Getenv("SSHMGR_CACHE_DIR") == "" {
+		return false, nil
+	}
+	if _, _, adopted := hotswap.ParseEnv(os.Environ()); !adopted {
+		return false, nil
+	}
+	fmt.Fprintln(os.Stderr,
+		"sshmgr: adopted start: dropping inherited SSHMGR_CACHE_DIR (the parent bridge set it for its own resolution; the --instance flag wins)")
+	if err := os.Unsetenv("SSHMGR_CACHE_DIR"); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // cacheForwarderFor resolves the instance's pull credential into the pin
@@ -105,6 +131,9 @@ func newMCPCmd() *cobra.Command {
 				return fmt.Errorf("--token or SSHMGR_TOKEN is required")
 			}
 			if useCache {
+				if _, err := dropInheritedCacheDirOverride(instance); err != nil {
+					return err
+				}
 				if err := checkInstanceFlag(instance); err != nil {
 					return err
 				}
