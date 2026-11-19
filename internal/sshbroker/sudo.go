@@ -400,13 +400,24 @@ func (c *Client) SudoRunsWithoutPassword(ctx context.Context, sudoPassword []byt
 // `wrapped` as one SSH exec, feeds pass (a single line, then close) to the
 // session's stdin when non-empty — the password feed for password-reading sudo
 // — then writes each standard input frame, and honors timeout and cancellation
-// exactly like runSession. It imposes NO wrapper and NO stderr processing:
-// callers compose (runSudoSession adds the marker wrapper and the stderr
-// processor; ExecSudoWrapped passes a caller-prebuilt command through).
+// exactly like runSession：timeout > 0 时，同一段期限在开会话之前派生，覆
+// 盖「开会话 + 执行」全程——开会话完成后不重新计时；开会话阶段复用
+// openSessionBounded，同样受超时与调用方取消约束。It imposes NO wrapper and
+// NO stderr processing: callers compose (runSudoSession adds the marker wrapper
+// and the stderr processor; ExecSudoWrapped passes a caller-prebuilt command
+// through).
 func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeout time.Duration, stdout, stderr io.Writer, frames ...[]byte) (exitCode int, timedOut bool, err error) {
-	sess, err := c.c.NewSession()
-	if err != nil {
-		return 0, false, err
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	sess, openTimedOut, openErr := c.openSessionBounded(ctx)
+	if openTimedOut {
+		return 0, true, nil
+	}
+	if openErr != nil {
+		return 0, false, openErr
 	}
 	defer sess.Close()
 
@@ -417,11 +428,6 @@ func (c *Client) runSessionRaw(ctx context.Context, wrapped, pass string, timeou
 	sess.Stdout = stdout
 	sess.Stderr = stderr
 
-	if timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
-	}
 	done := make(chan struct{})
 	defer close(done)
 	// The shared three-stage watchdog (killWatchdog in exec.go), started BEFORE
