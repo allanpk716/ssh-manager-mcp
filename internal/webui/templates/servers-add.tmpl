@@ -73,7 +73,7 @@
 </select></div>
 <div class="form-field"><label for="add-physical-address">物理局域网地址</label><input id="add-physical-address" name="physical_address" value="{{.ServerAdd.Form.PhysicalAddress}}"></div>
 <fieldset>
-<legend>虚拟局域网成员</legend>
+<legend>虚拟局域网地址</legend>
 {{$form := .ServerAdd.Form}}
 {{range $index, $count := $.ServerAdd.VirtualMembers}}
 <div class="membership-row">
@@ -85,7 +85,7 @@
 <div class="form-field"><label for="add-virtual-address-{{$index}}">地址</label><input id="add-virtual-address-{{$index}}" name="virtual_address" value="{{($form.VirtualAddressValue $index)}}"></div>
 </div>
 {{end}}
-<div class="inline-form"><button type="submit" name="add_virtual_member" value="1">再添加一个虚拟局域网成员</button></div>
+<div class="inline-form"><button type="submit" name="add_virtual_member" value="1">再添加一个虚拟局域网地址</button></div>
 </fieldset>
 </fieldset>
 {{if not .ServerAdd.DeviceOnly}}
