@@ -3,9 +3,9 @@ package mcpserver
 import "time"
 
 // ServerInfo is a Profile-scoped server as seen by the agent (no credentials).
-// Structured metadata fields (Role/Services/Caveats/Location/Hardware) plus Tags and
+// Structured metadata fields (Role/Services/Caveats/Hardware) plus Tags and
 // Description are surfaced so the agent grasps each server's full picture. Caveats is
-// placed before Location/Hardware so it reads prominently; empty strings mean "none".
+// placed before Hardware so it reads prominently; empty strings mean "none".
 // Plan 31: Host="hidden" is the ONE deliberate exception to the
 // "empty string means explicitly none" invariant — host is never empty, and
 // the literal lets the agent distinguish "owner withheld it" from "absent".

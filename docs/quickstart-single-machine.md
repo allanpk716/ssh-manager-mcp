@@ -55,7 +55,7 @@ sshmgr servers add --name gpu \
     --password '你的SSH密码'          # 或: --key ~/.ssh/id_ed25519
 ```
 
-可选：加 sudo 密码让 agent 能跑 `sudo`（`--sudo-password '...'`）。还可以挂结构化备注给 agent 看（`--role` / `--hardware` / `--location` 等，**别放机密**）。
+可选：加 sudo 密码让 agent 能跑 `sudo`（`--sudo-password '...'`）。还可以挂结构化备注给 agent 看（`--role` / `--hardware` 等，**别放机密**）。
 
 ```bash
 sshmgr servers ls                 # 看已录入的服务器
