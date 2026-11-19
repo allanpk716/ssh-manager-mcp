@@ -71,6 +71,7 @@ type DetailSecretChoice struct {
 type DetailSharedStorage struct {
 	ID                 string
 	Name               string
+	Note               string
 	ProviderDeviceName string
 	MountUser          string
 	PasswordSecretID   string
@@ -307,7 +308,7 @@ func (m *Manager) fillReverseView(detail *Detail) error {
 
 func detailSharedStorage(share *models.SharedStorage, mountPoint string) DetailSharedStorage {
 	return DetailSharedStorage{
-		ID: share.ID, Name: share.Name, ProviderDeviceName: share.DeviceName,
+		ID: share.ID, Name: share.Name, Note: share.Note, ProviderDeviceName: share.DeviceName,
 		MountUser: share.MountUser, PasswordSecretID: share.PasswordSecretID,
 		PasswordSecretName: share.PasswordSecretName,
 		Drive:              share.Drive, MountPoint: mountPoint,

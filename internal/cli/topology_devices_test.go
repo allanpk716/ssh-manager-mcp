@@ -123,7 +123,7 @@ func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
 	runCli(t, "devices", "member", "add", "命令行网络存储", "--network", "虚拟网", "--address", "100.64.0.71")
 
 	out := runCli(t, "devices", "show", "Web 网络存储")
-	for _, want := range []string{"备注：共享照片与备份", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
+	for _, want := range []string{"备注：共享照片与备份", "地点：家A", "家A局域网", "192.168.1.70", "虚拟网", "100.64.0.70"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("devices show 应显示 Web UI 保存的同一份数据，缺少 %q：\n%s", want, out)
 		}
@@ -138,6 +138,9 @@ func TestOtherDeviceWebUIAndCLICreateSameTopologyData(t *testing.T) {
 		device, err := st.GetDevice(name)
 		if err != nil || device == nil || device.Note != "共享照片与备份" || device.ClientName != "" {
 			t.Fatalf("两条入口应保存同样的设备字段：%v %+v", err, device)
+		}
+		if name == "Web 网络存储" && (device.SiteID == "" || device.SiteName != "家A") {
+			t.Fatalf("Web UI 登记的其他设备应保存地点，实际：%+v", device)
 		}
 		memberships, err := st.ListNetworkMembershipsByRegistration(name)
 		if err != nil || len(memberships) != 2 ||

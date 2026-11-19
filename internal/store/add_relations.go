@@ -43,6 +43,7 @@ type AddServerRelationsResult struct {
 type AddOtherDeviceRequest struct {
 	Name        string
 	Note        string
+	SiteName    string
 	Memberships []NetworkMembershipWrite
 	Source      WriteSource
 }
@@ -99,7 +100,7 @@ func (s *Store) AddOtherDeviceWithMemberships(request AddOtherDeviceRequest) (*m
 		return nil, err
 	}
 	defer tx.Rollback()
-	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", "", request.Source)
+	device, err := s.addDeviceTx(tx, request.Name, request.Note, "", request.SiteName, request.Source)
 	if err != nil {
 		return nil, err
 	}

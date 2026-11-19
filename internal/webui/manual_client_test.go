@@ -77,3 +77,16 @@ func TestAuthorityManualClientOldRouteRedirects(t *testing.T) {
 			response.StatusCode, response.Header.Get("Location"))
 	}
 }
+
+func TestAuthorityManualClientOldRevokeRouteRedirects(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password", now: time.Unix(1800000000, 0)}
+	handler := newAuthorityForManualClientTest(t, auth, manualClientTestStore())
+	cookie := authoritySuccessfulLogin(t, handler, "192.0.2.50:7879", "correct-password")
+
+	response := authorityGet(t, handler, "192.0.2.50:7879", "/ui/access/device-codes/client-1/revoke?return_to=x", cookie)
+	response.Body.Close()
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/ui/clients/client-1/remove?return_to=x" {
+		t.Fatalf("旧撤销路由应跳转移除客户端页，状态码=%d Location=%q",
+			response.StatusCode, response.Header.Get("Location"))
+	}
+}

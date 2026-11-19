@@ -6,9 +6,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
-
-	"ssh-manager-mcp/internal/clientfeatures"
 )
 
 // defaultServePort 是权威端主监听的默认端口；拉取命令按它兜底，serve 进
@@ -17,40 +14,8 @@ const defaultServePort = 7878
 
 const (
 	manualClientPath        = "/ui/ops/clients/new"
-	legacyDeviceCodesPath   = "/ui/access/device-codes"
 	legacyDeviceCodesPrefix = "/ui/access/device-codes/"
 )
-
-// AccessDeviceCodeSummary 是设备码列表的一行展示数据：名称、令牌前缀、状
-// 态、绑定的 profile、最近拉取时间与最近客户端版本；令牌本体绝不出现。
-type AccessDeviceCodeSummary struct {
-	ID            string
-	Name          string
-	TokenPrefix   string
-	Status        string
-	ProfileName   string
-	LastPullAt    time.Time
-	ClientVersion string
-}
-
-// Revoked 表示设备码是否已撤销，模板据此显示状态与操作入口。
-func (s AccessDeviceCodeSummary) Revoked() bool {
-	return s.Status == "revoked"
-}
-
-// LastPullText 返回最近拉取时间的展示文字；从未拉取过时显示「从未拉取」。
-func (s AccessDeviceCodeSummary) LastPullText() string {
-	if s.LastPullAt.IsZero() {
-		return "从未拉取"
-	}
-	return s.LastPullAt.Format("2006-01-02 15:04:05")
-}
-
-// ClientVersionText 返回最近客户端版本的展示文字；空值与低于功能起始支
-// 持版本的值都会带出缺失功能清单。
-func (s AccessDeviceCodeSummary) ClientVersionText() string {
-	return clientfeatures.ClientVersionLabel(s.ClientVersion)
-}
 
 // AccessDeviceIssueView 是设备码签发表单的渲染数据；Name 与 ProfileID 在
 // 重新验证回来时保留提交时的填写。
@@ -74,7 +39,7 @@ type AccessDeviceCodeResult struct {
 // 户端的修改一律在权威端做。
 func (h *handler) registerDeviceCodeRoutes() {
 	h.mux.HandleFunc(manualClientPath, h.requireSession(h.handleAccessDeviceCodes))
-	h.mux.HandleFunc(legacyDeviceCodesPath, h.requireSession(h.redirectLegacyDeviceCodes))
+	h.mux.HandleFunc(accessDeviceCodesPath, h.requireSession(h.redirectLegacyDeviceCodes))
 	h.mux.HandleFunc(legacyDeviceCodesPrefix, h.requireSession(h.redirectLegacyDeviceCodes))
 }
 
@@ -146,56 +111,6 @@ func (h *handler) handleAccessDeviceCodeAdd(w http.ResponseWriter, r *http.Reque
 	h.renderPage(w, r, http.StatusOK, "manual-client-issued.tmpl", pageData{
 		Title: "客户端接入凭据已生成", AccessDeviceIssued: &result,
 	})
-}
-
-func (h *handler) handleAccessDeviceCodeRevoke(w http.ResponseWriter, r *http.Request) {
-	id, action, ok := strings.Cut(strings.TrimPrefix(r.URL.Path, accessDeviceCodesPrefix), "/")
-	if !ok || action != "revoke" || id == "" {
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
-		return
-	}
-	device, err := h.accessDeviceCodeByID(id)
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取设备码失败", "读取设备码失败，请稍后重试。")
-		return
-	}
-	if device == nil {
-		h.renderError(w, r, http.StatusNotFound, "设备码不存在", "请求的设备码不存在。")
-		return
-	}
-	if r.Method == http.MethodPost {
-		if h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-			http.Redirect(w, r, reverifyPath(r.URL.Path), http.StatusSeeOther)
-			return
-		}
-		if err := h.cfg.Access.RevokeDeviceCode(id, AccessWriteSource{RemoteAddress: remoteIP(r)}); err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "撤销设备码失败", "撤销设备码失败，请稍后重试。")
-			return
-		}
-		http.Redirect(w, r, accessDeviceCodesPath, http.StatusSeeOther)
-		return
-	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "撤销设备码页面只接受 GET 与 POST 请求。")
-		return
-	}
-	h.renderPage(w, r, http.StatusOK, "device-code-revoke.tmpl", pageData{
-		Title: "撤销设备码", AccessDeviceRevoke: device,
-	})
-}
-
-// accessDeviceCodeByID 在设备码列表里按标识符查找一行。
-func (h *handler) accessDeviceCodeByID(id string) (*AccessDeviceCodeSummary, error) {
-	devices, err := h.cfg.Access.ListDeviceCodes()
-	if err != nil {
-		return nil, err
-	}
-	for i := range devices {
-		if devices[i].ID == id {
-			return &devices[i], nil
-		}
-	}
-	return nil, nil
 }
 
 // devicePullServeURL 按浏览器访问权威端 Web UI 的主机名和权威端主监听端

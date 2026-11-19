@@ -73,6 +73,90 @@ func TestCacheTokens_AddLsRevoke(t *testing.T) {
 	}
 }
 
+func TestCacheTokensRemoveClientRequiresConfirmAndRemovesWholeClient(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "test.db")
+	mk, _ := store.GenerateMasterKey()
+	withEnv(t, map[string]string{
+		"SSHMGR_STORE":         storePath,
+		"SSHMGR_MASTERKEY_HEX": hex.EncodeToString(mk),
+		"SSHMGR_SERVE_CERT":    filepath.Join(dir, "serve-cert.pem"),
+		"SSHMGR_SERVE_KEY":     filepath.Join(dir, "serve-key.pem"),
+	})
+	run := func(args ...string) (*bytes.Buffer, error) {
+		root := NewRootCmd()
+		out := &bytes.Buffer{}
+		root.SetOut(out)
+		root.SetErr(out)
+		root.SetArgs(args)
+		err := root.Execute()
+		return out, err
+	}
+	if _, err := run("profiles", "add", "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("cache-tokens", "add", "--name", "laptop", "--profile", "team-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run("devices", "add", "workstation", "--client", "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	seeded, err := store.Open(storePath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionBefore, err := seeded.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := seeded.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := cacheTokensStdinIsInteractive
+	cacheTokensStdinIsInteractive = func() bool { return false }
+	t.Cleanup(func() { cacheTokensStdinIsInteractive = previous })
+	refused, err := run("cache-tokens", "remove-client", "laptop")
+	if err == nil || !strings.Contains(refused.String(), "--yes") {
+		t.Fatalf("非交互终端移除客户端必须要求 --yes：%v\n%s", err, refused.String())
+	}
+
+	removed, err := run("cache-tokens", "remove-client", "laptop", "--yes")
+	if err != nil {
+		t.Fatalf("remove-client --yes 失败：%v\n%s", err, removed.String())
+	}
+	for _, want := range []string{"移除客户端：解除机器关联、吊销它的设备码以及配对时生成的 MCP 访问令牌", "laptop", "workstation"} {
+		if !strings.Contains(removed.String(), want) {
+			t.Fatalf("remove-client 输出缺少 %q：\n%s", want, removed.String())
+		}
+	}
+
+	verified, err := store.Open(storePath, mk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer verified.Close()
+	tokens, err := verified.ListCacheTokens()
+	if err != nil || len(tokens) != 1 || tokens[0].Status != "revoked" {
+		t.Fatalf("移除后设备码应已吊销：%v %+v", err, tokens)
+	}
+	machine, err := verified.GetDevice("workstation")
+	if err != nil || machine == nil || machine.ClientName != "" {
+		t.Fatalf("移除后机器关联应被解除：%v %+v", err, machine)
+	}
+	auditRows, err := verified.QueryAudit(store.AuditFilter{OwnerOnly: true, Actions: []string{"client.remove"}})
+	if err != nil || len(auditRows) != 1 {
+		t.Fatalf("移除客户端应写一条审计行：%v %+v", err, auditRows)
+	}
+	revisionAfter, err := verified.SnapshotRevision()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter <= revisionBefore {
+		t.Fatalf("移除客户端应推进快照修订号：%d -> %d", revisionBefore, revisionAfter)
+	}
+}
+
 // TestCacheTokensAdd_EmitsFingerprint asserts `cache-tokens add` prints the
 // server's SPKI fingerprint next to the one-time code, plus a cache-pull
 // invocation showing how to pass the pin (--pin or SSHMGR_SERVE_PIN).

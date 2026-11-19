@@ -203,7 +203,7 @@ func (m *Manager) AddOtherDevice(req OtherDeviceAddRequest, src Source) (*OtherD
 		})
 	}
 	device, err := m.st.AddOtherDeviceWithMemberships(store.AddOtherDeviceRequest{
-		Name: req.DeviceName, Note: req.Note,
+		Name: req.DeviceName, Note: req.Note, SiteName: req.SiteName,
 		Memberships: membershipWrites, Source: storeWriteSource(src),
 	})
 	if err != nil {
