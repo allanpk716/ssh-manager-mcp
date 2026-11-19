@@ -14,12 +14,12 @@ func TestSitesLifecycle(t *testing.T) {
 	withCliStoreEnv(t)
 
 	out := runCli(t, "sites", "add", "家A", "--note", "家里的物理场所")
-	if !strings.Contains(out, "已登记站点 家A") {
+	if !strings.Contains(out, "已登记地点 家A") {
 		t.Fatalf("add output must confirm the site:\n%s", out)
 	}
 
 	errText := runCliErr(t, "sites", "add", "家A")
-	if !strings.Contains(errText, "站点名字已存在") {
+	if !strings.Contains(errText, "地点名字已存在") {
 		t.Fatalf("duplicate site name must be refused with the reason, got:\n%s", errText)
 	}
 
@@ -29,7 +29,7 @@ func TestSitesLifecycle(t *testing.T) {
 	}
 
 	out = runCli(t, "sites", "edit", "家A", "--name", "家B", "--note", "改名后的场所")
-	if !strings.Contains(out, "已修改站点 家A") {
+	if !strings.Contains(out, "已修改地点 家A") {
 		t.Fatalf("edit output must name the original site:\n%s", out)
 	}
 	out = runCli(t, "sites", "list")
@@ -43,7 +43,7 @@ func TestSitesLifecycle(t *testing.T) {
 	}
 
 	out = runCli(t, "sites", "rm", "家B")
-	if !strings.Contains(out, "已删除站点 家B") {
+	if !strings.Contains(out, "已删除地点 家B") {
 		t.Fatalf("remove output must confirm deletion:\n%s", out)
 	}
 	out = runCli(t, "sites", "list")

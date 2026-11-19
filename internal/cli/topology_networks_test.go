@@ -24,11 +24,11 @@ func TestNetworksRegistrationAndFilters(t *testing.T) {
 	seedTopologySites(t, "家A", "公司A")
 
 	errText := runCliErr(t, "networks", "add", "家A局域网", "--type", "physical", "--cidr", "192.168.1.0/24")
-	if !strings.Contains(errText, "物理局域网必须归属一个站点") {
+	if !strings.Contains(errText, "物理局域网必须登记覆盖的地点") {
 		t.Fatalf("physical network without a site must explain the reason, got:\n%s", errText)
 	}
 	errText = runCliErr(t, "networks", "add", "虚拟网", "--type", "virtual", "--site", "家A")
-	if !strings.Contains(errText, "虚拟局域网不属于站点") {
+	if !strings.Contains(errText, "虚拟局域网不覆盖地点") {
 		t.Fatalf("virtual network with a site must explain the reason, got:\n%s", errText)
 	}
 	errText = runCliErr(t, "networks", "add", "家A局域网", "--type", "unknown")
@@ -85,8 +85,8 @@ func TestNetworksRegistrationAndFilters(t *testing.T) {
 	}
 
 	out = runCli(t, "sites", "list")
-	if !strings.Contains(out, "家A主网") || !strings.Contains(out, "公司局域网") || !strings.Contains(out, "站点 家A") {
-		t.Fatalf("sites list must group physical networks under sites:\n%s", out)
+	if !strings.Contains(out, "家A主网") || !strings.Contains(out, "公司局域网") || !strings.Contains(out, "地点 家A") {
+		t.Fatalf("sites list must group physical networks under locations:\n%s", out)
 	}
 	if strings.Contains(out, "虚拟网") {
 		t.Fatalf("sites list must not attach virtual networks to a site:\n%s", out)
@@ -101,7 +101,7 @@ func TestTopologyDeleteGuards(t *testing.T) {
 	runCli(t, "networks", "add", "家A局域网", "--type", "physical", "--site", "家A")
 
 	errText := runCliErr(t, "sites", "rm", "家A")
-	if !strings.Contains(errText, "站点 家A 下还有物理局域网") || !strings.Contains(errText, "家A局域网") {
+	if !strings.Contains(errText, "地点 家A 不能删除：还有物理局域网覆盖这个地点") || !strings.Contains(errText, "家A局域网") {
 		t.Fatalf("non-empty site deletion must list blocking networks, got:\n%s", errText)
 	}
 	runCli(t, "sites", "rm", "公司A")
@@ -122,7 +122,7 @@ func TestTopologyDeleteGuards(t *testing.T) {
 		t.Fatalf("--yes must delete the network:\n%s", out)
 	}
 	out = runCli(t, "sites", "rm", "家A")
-	if !strings.Contains(out, "已删除站点 家A") {
+	if !strings.Contains(out, "已删除地点 家A") {
 		t.Fatalf("site with its network removed must be deletable:\n%s", out)
 	}
 }

@@ -717,7 +717,7 @@ func TestDevicesNetworkMembers(t *testing.T) {
 
 	out := runCli(t, "devices", "show", "工作站")
 	for _, want := range []string{
-		"家A局域网（物理局域网，站点 家A）：192.168.1.20",
+		"家A局域网（物理局域网，地点 家A）：192.168.1.20",
 		"虚拟网（虚拟局域网）：Workstation.Example",
 	} {
 		if !strings.Contains(out, want) {
@@ -751,7 +751,14 @@ func TestDevicesListFilters(t *testing.T) {
 	runCli(t, "networks", "add", "公司局域网", "--type", "physical", "--site", "公司A")
 	runCli(t, "networks", "add", "虚拟网", "--type", "virtual")
 	for _, device := range []string{"工作站", "NAS", "公司机器", "未归类设备"} {
-		runCli(t, "devices", "add", device)
+		var site string
+		switch device {
+		case "工作站", "NAS":
+			site = "家A"
+		case "公司机器":
+			site = "公司A"
+		}
+		runCli(t, "devices", "add", device, "--site", site)
 	}
 	runCli(t, "devices", "member", "add", "工作站", "--network", "家A局域网", "--address", "192.168.1.20")
 	runCli(t, "devices", "member", "add", "工作站", "--network", "虚拟网", "--address", "100.64.0.5")
@@ -766,7 +773,7 @@ func TestDevicesListFilters(t *testing.T) {
 	out = runCli(t, "devices", "list", "--site", "家A")
 	if !strings.Contains(out, "工作站") || !strings.Contains(out, "NAS") ||
 		strings.Contains(out, "公司机器") || strings.Contains(out, "未归类设备") {
-		t.Fatalf("site filter must return devices in that site's physical networks:\n%s", out)
+		t.Fatalf("site filter must return devices registered in that location:\n%s", out)
 	}
 	out = runCli(t, "devices", "list", "--network", "虚拟网")
 	if !strings.Contains(out, "工作站") || strings.Contains(out, "NAS") ||
@@ -807,7 +814,7 @@ func TestTopologyNamesTrimSurroundingWhitespace(t *testing.T) {
 	withCliStoreEnv(t)
 
 	out := runCli(t, "sites", "add", " 家A ")
-	if !strings.Contains(out, "已登记站点 家A\n") {
+	if !strings.Contains(out, "已登记地点 家A\n") {
 		t.Fatalf("site registration must trim the stored name:\n%s", out)
 	}
 	out = runCli(t, "networks", "add", " 家A局域网 ", "--type", "physical", "--site", " 家A ")

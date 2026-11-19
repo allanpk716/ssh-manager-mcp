@@ -25,7 +25,7 @@ func devicesListCmd() *cobra.Command {
 	var site, network, instance string
 	var unassigned bool
 	c := &cobra.Command{
-		Use:   "list [--site 站点] [--network 网络] [--unassigned] [--instance <name>]",
+		Use:   "list [--site 地点路径] [--network 网络] [--unassigned] [--instance <name>]",
 		Args:  cobra.NoArgs,
 		Short: "List topology devices, optionally filtered",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -48,6 +48,10 @@ func devicesListCmd() *cobra.Command {
 				fmt.Fprintln(out, "没有匹配的设备")
 				return nil
 			}
+			tree, err := cliSiteTree(s)
+			if err != nil {
+				return err
+			}
 			if site == "" && network == "" && !unassigned {
 				categorized := make([]*models.Device, 0, len(devices))
 				withoutMembership := make([]*models.Device, 0, len(devices))
@@ -59,31 +63,31 @@ func devicesListCmd() *cobra.Command {
 					}
 				}
 				fmt.Fprintln(out, "已归类设备：")
-				printDeviceSection(out, categorized)
+				printDeviceSection(out, categorized, tree)
 				fmt.Fprintln(out, "未归类设备：")
-				printDeviceSection(out, withoutMembership)
+				printDeviceSection(out, withoutMembership, tree)
 				return nil
 			}
 			for _, device := range devices {
-				printDevice(out, device, nil, device.Memberships)
+				printDevice(out, device, nil, device.Memberships, tree)
 			}
 			return nil
 		},
 	}
-	c.Flags().StringVar(&site, "site", "", "只显示在这个站点的物理局域网里的设备")
+	c.Flags().StringVar(&site, "site", "", "只显示直接登记在该地点及其下级的设备")
 	c.Flags().StringVar(&network, "network", "", "只显示在这个网络里的设备")
 	c.Flags().BoolVar(&unassigned, "unassigned", false, "只显示没有任何网络成员的设备")
 	c.Flags().StringVar(&instance, "instance", "", topologyInstanceFlagHelp)
 	return c
 }
 
-func printDeviceSection(out io.Writer, devices []*models.Device) {
+func printDeviceSection(out io.Writer, devices []*models.Device, tree *models.SiteTree) {
 	if len(devices) == 0 {
 		fmt.Fprintln(out, "  无")
 		return
 	}
 	for _, device := range devices {
-		printDevice(out, device, nil, device.Memberships)
+		printDevice(out, device, nil, device.Memberships, tree)
 	}
 }
 
@@ -450,9 +454,9 @@ func devicesMemberRmCmd() *cobra.Command {
 }
 
 func devicesAddCmd() *cobra.Command {
-	var note, client string
+	var note, client, site string
 	c := &cobra.Command{
-		Use:   "add NAME [--note 文本] [--client 设备码]",
+		Use:   "add NAME [--site 地点路径] [--note 文本] [--client 设备码]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Register a topology device",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -461,7 +465,7 @@ func devicesAddCmd() *cobra.Command {
 				return err
 			}
 			defer s.Close()
-			device, err := s.AddDevice(args[0], note, client)
+			device, err := s.AddDeviceAtSite(args[0], note, client, site)
 			if err != nil {
 				return err
 			}
@@ -469,16 +473,17 @@ func devicesAddCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().StringVar(&site, "site", "", "机器地点；传完整路径（如 公司 / 一厂区 / 3 号楼），可空")
 	c.Flags().StringVar(&note, "note", "", "备注")
 	c.Flags().StringVar(&client, "client", "", "关联的客户端实例设备码名字（不是设备码本体）")
 	return c
 }
 
 func devicesEditCmd() *cobra.Command {
-	var name, note, client string
+	var name, note, client, site string
 	var noClient bool
 	c := &cobra.Command{
-		Use:   "edit NAME [--name 新名字] [--note 新备注] [--client 设备码 | --no-client]",
+		Use:   "edit NAME [--name 新名字] [--site 地点路径] [--note 新备注] [--client 设备码 | --no-client]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Edit a topology device with partial-update semantics",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -498,6 +503,9 @@ func devicesEditCmd() *cobra.Command {
 			if cmd.Flags().Changed("note") {
 				changes.Note = &note
 			}
+			if cmd.Flags().Changed("site") {
+				changes.Site = &site
+			}
 			if changedClient {
 				changes.Client = &client
 			} else if noClient {
@@ -513,6 +521,7 @@ func devicesEditCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&name, "name", "", "新名字")
+	c.Flags().StringVar(&site, "site", "", "新的机器地点；传完整路径，空字符串表示清空")
 	c.Flags().StringVar(&note, "note", "", "新备注；传空字符串清空")
 	c.Flags().StringVar(&client, "client", "", "新的客户端实例设备码名字（不是设备码本体）")
 	c.Flags().BoolVar(&noClient, "no-client", false, "解除客户端实例关联")
@@ -546,7 +555,11 @@ func devicesShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			printDevice(cmd.OutOrStdout(), device, entries, memberships)
+			tree, err := cliSiteTree(s)
+			if err != nil {
+				return err
+			}
+			printDevice(cmd.OutOrStdout(), device, entries, memberships, tree)
 			return nil
 		},
 	}
@@ -554,12 +567,17 @@ func devicesShowCmd() *cobra.Command {
 	return c
 }
 
-// printDevice 输出设备详情；网络成员由网络成员命令补上。
-func printDevice(w io.Writer, device *models.Device, entries []*models.DeviceServer, memberships []*models.NetworkMembership) {
+// printDevice 输出设备详情；机器地点与网络成员的地点都显示完整路径。
+func printDevice(w io.Writer, device *models.Device, entries []*models.DeviceServer, memberships []*models.NetworkMembership, tree *models.SiteTree) {
 	fmt.Fprintf(w, "设备 %s\n", device.Name)
 	if device.Note != "" {
 		fmt.Fprintf(w, "  备注：%s\n", device.Note)
 	}
+	location := tree.PathString(device.SiteID)
+	if location == "" {
+		location = "未登记"
+	}
+	fmt.Fprintf(w, "  地点：%s\n", location)
 	client := device.ClientName
 	if client == "" {
 		client = "无"
@@ -582,8 +600,8 @@ func printDevice(w io.Writer, device *models.Device, entries []*models.DeviceSer
 	}
 	for _, membership := range memberships {
 		network := membership.NetworkName + "（" + networkTypeLabel(membership.NetworkType)
-		if membership.SiteName != "" {
-			network += "，站点 " + membership.SiteName
+		if membership.SiteID != "" {
+			network += "，地点 " + tree.PathString(membership.SiteID)
 		}
 		network += "）"
 		fmt.Fprintf(w, "  网络成员：%s：%s\n", network, membership.Address)

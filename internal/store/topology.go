@@ -143,6 +143,7 @@ func (s *Store) EditSite(ref string, changes SiteChanges) (*models.Site, error) 
 	if err != nil {
 		return nil, err
 	}
+	originalName := site.Name
 	parentChanged := false
 	if changes.Parent != nil {
 		newParent := strings.TrimSpace(*changes.Parent)
@@ -196,7 +197,7 @@ func (s *Store) EditSite(ref string, changes SiteChanges) (*models.Site, error) 
 		}
 		editChanges["parent"] = parentPath
 	}
-	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.edit", topologyEditSummary(site.Name, editChanges)); err != nil {
+	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.edit", topologyEditSummary(originalName, editChanges)); err != nil {
 		return nil, err
 	}
 	return site, tx.Commit()
@@ -529,6 +530,10 @@ func (s *Store) DeleteSite(ref string) error {
 	if len(blockers) > 0 {
 		return fmt.Errorf("地点 %s 不能删除：%s", site.Name, strings.Join(blockers, "；"))
 	}
+	sitePath, err := sitePathTx(tx, site.ID)
+	if err != nil {
+		return err
+	}
 	if _, err := tx.Exec(
 		`DELETE FROM container_layout_coordinates WHERE entity_type=? AND entity_id=?`,
 		LayoutEntitySite, site.ID,
@@ -536,10 +541,6 @@ func (s *Store) DeleteSite(ref string) error {
 		return err
 	}
 	if _, err := tx.Exec(`DELETE FROM sites WHERE id=?`, site.ID); err != nil {
-		return err
-	}
-	sitePath, err := sitePathTx(tx, site.ID)
-	if err != nil {
 		return err
 	}
 	if err := writeTopologyAuditTx(tx, s.nowTime(), "site.rm", map[string]any{"name": sitePath}); err != nil {
