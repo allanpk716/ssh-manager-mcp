@@ -87,7 +87,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	}
 	ackKey, credentialsKey := pairClient.learnServer(t, enrollBody, certPub)
 
-	pairingPage := integrationGet(t, client, webURL+"/ui/access/pairing")
+	pairingPage := integrationGet(t, client, webURL+"/ui/clients/pairing")
 	pairingBody := integrationBody(t, pairingPage)
 	if pairingPage.StatusCode != http.StatusOK || !strings.Contains(string(pairingBody), "integration-laptop") {
 		t.Fatalf("配对页状态码=%d 页面：\n%s", pairingPage.StatusCode, pairingBody)
@@ -96,7 +96,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	approveForm := url.Values{
 		"csrf_token": {csrfToken}, "profile": {profileID}, "compared": {"1"},
 	}
-	approveResponse, err := postAuthorityForm(client, webURL+"/ui/access/pairing/"+hex.EncodeToString(pairClient.id[:])+"/approve", approveForm)
+	approveResponse, err := postAuthorityForm(client, webURL+"/ui/clients/pairing/"+hex.EncodeToString(pairClient.id[:])+"/approve", approveForm)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,24 +142,24 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	}
 
 	deviceID := deviceCodeIDByName(t, st, "integration-laptop")
-	devicePage := integrationGet(t, client, webURL+"/ui/access/device-codes")
+	devicePage := integrationGet(t, client, webURL+"/ui/clients/"+deviceID+"/remove")
 	devicePageBody := integrationBody(t, devicePage)
 	csrfToken = hiddenCSRFValue(string(devicePageBody))
-	revokeResponse, err := postAuthorityForm(client, webURL+"/ui/access/device-codes/"+deviceID+"/revoke", url.Values{
-		"csrf_token": {csrfToken},
+	revokeResponse, err := postAuthorityForm(client, webURL+"/ui/clients/"+deviceID+"/remove", url.Values{
+		"csrf_token": {csrfToken}, "confirm": {"1"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	revokeBody := integrationBody(t, revokeResponse)
 	if revokeResponse.StatusCode != http.StatusSeeOther {
-		t.Fatalf("Web UI 撤销设备码状态码=%d 页面：\n%s", revokeResponse.StatusCode, revokeBody)
+		t.Fatalf("Web UI 移除客户端状态码=%d 页面：\n%s", revokeResponse.StatusCode, revokeBody)
 	}
 
 	revokedSnapshot := integrationAuthorizedGet(t, client, mainURL+"/snapshot", credentials.DeviceCode)
 	revokedSnapshotBody := integrationBody(t, revokedSnapshot)
 	if revokedSnapshot.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("撤销后的设备码再次拉取应返回 401，状态码=%d 正文：\n%s", revokedSnapshot.StatusCode, revokedSnapshotBody)
+		t.Fatalf("移除后的客户端凭据再次拉取应返回 401，状态码=%d 正文：\n%s", revokedSnapshot.StatusCode, revokedSnapshotBody)
 	}
 
 	foreignClient := newPairClient(t, "integration-foreign-laptop", "https://203.0.113.9:7878")
@@ -169,7 +169,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	if foreignEnroll.StatusCode != http.StatusOK {
 		t.Fatalf("异常地址配对登记状态码=%d 正文：\n%s", foreignEnroll.StatusCode, foreignEnrollBody)
 	}
-	foreignPage := integrationGet(t, client, webURL+"/ui/access/pairing")
+	foreignPage := integrationGet(t, client, webURL+"/ui/clients/pairing")
 	foreignPageBody := string(integrationBody(t, foreignPage))
 	if !strings.Contains(foreignPageBody, "integration-foreign-laptop") ||
 		!strings.Contains(foreignPageBody, "这条请求连接的地址不是本机") ||
@@ -180,7 +180,7 @@ func TestRunServeWebUIPairApprovalToDeviceCodeRevocation(t *testing.T) {
 	foreignApprove := url.Values{
 		"csrf_token": {foreignCSRF}, "profile": {profileID}, "compared": {"1"},
 	}
-	foreignResponse, err := postAuthorityForm(client, webURL+"/ui/access/pairing/"+hex.EncodeToString(foreignClient.id[:])+"/approve", foreignApprove)
+	foreignResponse, err := postAuthorityForm(client, webURL+"/ui/clients/pairing/"+hex.EncodeToString(foreignClient.id[:])+"/approve", foreignApprove)
 	if err != nil {
 		t.Fatal(err)
 	}

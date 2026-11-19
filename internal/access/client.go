@@ -442,6 +442,7 @@ func (m *Manager) clientServers(profileID string) ([]ServerRef, error) {
 			out = append(out, ServerRef{ID: server.ID, Name: server.Name})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
 

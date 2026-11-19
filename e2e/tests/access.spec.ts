@@ -15,11 +15,11 @@ test("调整 profile 授权后显示结果摘要", async ({ page, standaloneUI }
   ).toBeVisible();
 });
 
-test("签发项目令牌只在提交响应里显示一次", async ({ page, standaloneUI }) => {
+test("签发 MCP 访问令牌只在提交响应里显示一次", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await gotoUIPath(page, "/ui/access/projects");
-  await page.getByLabel("签发新项目令牌").fill("e2e-agent");
+  await gotoUIPath(page, "/ui/ops/access-tokens");
+  await page.getByLabel("签发新 MCP 访问令牌").fill("e2e-agent");
   await page.getByLabel("绑定 profile").selectOption({ label: "运维" });
   await page.getByRole("button", { name: "签发", exact: true }).click();
 
@@ -33,7 +33,7 @@ test("签发项目令牌只在提交响应里显示一次", async ({ page, stand
   await expect(page.getByText("离开本页后不能再查看")).toBeVisible();
 
   await page.reload();
-  await expect(page.getByRole("heading", { name: "项目令牌" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "MCP 访问令牌" })).toBeVisible();
   await expect(page.locator("#project-token-value")).toHaveCount(0);
   expect(await page.content()).not.toContain(token);
 });

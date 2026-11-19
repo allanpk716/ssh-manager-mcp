@@ -10,13 +10,19 @@ async function prepareMobilePage(page: Page): Promise<void> {
   await page.setViewportSize({ width: 390, height: 844 });
 }
 
-async function submitAfterReverify(page: Page, buttonName: string, password: string): Promise<void> {
+async function submitAfterReverify(
+  page: Page,
+  buttonName: string,
+  password: string,
+  prepare?: () => Promise<void>,
+): Promise<void> {
   await page.waitForTimeout(1100);
   await page.getByRole("button", { name: buttonName }).click();
   await expect(page).toHaveURL(/\/ui\/reverify/);
   await page.getByLabel("管理员口令").fill(password);
-  await page.getByRole("button", { name: "重新验证" }).click();
+  await page.getByRole("button", { name: "验证并继续" }).click();
   await expect(page).not.toHaveURL(/\/ui\/reverify/);
+  await prepare?.();
   await page.getByRole("button", { name: buttonName }).click();
 }
 
@@ -38,23 +44,25 @@ test("390 视口完成更换 profile、选择机器与状态展示", async ({ pa
     await page.getByRole("link", { name: /数据库 · 1 台服务器/ }).click();
     await expect(page.getByText("运维 → 数据库")).toBeVisible();
     await expect(page.getByText("将新增可见 1 台：db-1")).toBeVisible();
-    await expect(page.getByText("将失去可见 2 台：web-1、old-1")).toBeVisible();
+    await expect(page.getByText("将失去可见 2 台：old-1、web-1")).toBeVisible();
     await expect(page.getByText("将新增可用机密项 1 项：MATRIX_TOKEN")).toBeVisible();
     await expect(page.getByText("将失去可用机密项 1 项：WEB_TOKEN")).toBeVisible();
     await mkdir(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "client-profile-preview-390x844.png"), fullPage: true });
     await submitAfterReverify(page, "确认更换", ui.password);
     await expect(page.getByText("数据库 · 它能看到 1 台服务器")).toBeVisible();
-    await expect(page.getByText("db-1")).toBeVisible();
+    await expect(page.locator(".client-server-row", { hasText: "db-1" })).toBeVisible();
 
     await page.getByRole("link", { name: "选择机器" }).click();
     await expect(page.getByRole("heading", { name: "选择机器" })).toBeVisible();
     await page.getByRole("radio", { name: /工作站/ }).check();
     await mkdir(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "client-machine-390x844.png"), fullPage: true });
-    await submitAfterReverify(page, "确认选择", ui.password);
+    await submitAfterReverify(page, "确认选择", ui.password, async () => {
+      await page.getByRole("radio", { name: /工作站/ }).check();
+    });
     await expect(page.getByText("机器 工作站")).toBeVisible();
-    await expect(page.getByText(/最近采集 .* · 3 个软件/)).toBeVisible();
+    await expect(page.getByText(/最近采集 .* · 5 个软件/)).toBeVisible();
   } finally {
     await ui.close();
   }
@@ -72,7 +80,9 @@ test("390 视口确认移除客户端", async ({ page }) => {
     await page.getByRole("checkbox", { name: "确认移除" }).check();
     await mkdir(screenshotDirectory, { recursive: true });
     await page.screenshot({ path: path.join(screenshotDirectory, "client-remove-390x844.png"), fullPage: true });
-    await submitAfterReverify(page, "确认移除", ui.password);
+    await submitAfterReverify(page, "确认移除", ui.password, async () => {
+      await page.getByRole("checkbox", { name: "确认移除" }).check();
+    });
     await expect(page).toHaveURL(/\/ui\/clients\/\?notice=removed$/);
     await expect(page.locator(".client-card", { hasText: "laptop-client" })).toHaveCount(0);
   } finally {

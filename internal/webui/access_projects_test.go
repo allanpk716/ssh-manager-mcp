@@ -222,7 +222,7 @@ func TestProjectPageIssuesTokenOnceWithSnippetAndNoStore(t *testing.T) {
 	})
 	body := readResponseBody(t, response)
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("签发MCP 访问令牌应直接返回一次性页面，状态码=%d 页面：\n%s", response.StatusCode, body)
+		t.Fatalf("签发 MCP 访问令牌应直接返回一次性页面，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
 	if cacheControl := response.Header.Get("Cache-Control"); cacheControl != "no-store" {
 		t.Fatalf("一次性令牌页面应带 Cache-Control: no-store，实际 %q", cacheControl)
@@ -278,7 +278,7 @@ func TestProjectPageRotatesTokenOnce(t *testing.T) {
 	})
 	body := readResponseBody(t, response)
 	if response.StatusCode != http.StatusOK {
-		t.Fatalf("轮换MCP 访问令牌应直接返回一次性页面，状态码=%d 页面：\n%s", response.StatusCode, body)
+		t.Fatalf("轮换 MCP 访问令牌应直接返回一次性页面，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
 	if cacheControl := response.Header.Get("Cache-Control"); cacheControl != "no-store" {
 		t.Fatalf("轮换结果页面应带 Cache-Control: no-store，实际 %q", cacheControl)
@@ -471,7 +471,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	addResume := "/ui/ops/access-tokens?add_name=agent&add_profile=profile-1&reverify_add=1"
 	wantAddRedirect := `/ui/reverify?next=` + url.QueryEscape(addResume)
 	if addRejected.StatusCode != http.StatusSeeOther || addRejected.Header.Get("Location") != wantAddRedirect || store.addName != "" {
-		t.Fatalf("签发MCP 访问令牌应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+		t.Fatalf("签发 MCP 访问令牌应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
 			addRejected.StatusCode, addRejected.Header.Get("Location"), store.addName, addRejectedBody)
 	}
 
@@ -482,7 +482,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	rotateResume := "/ui/ops/access-tokens?reverify_rotate=project-1"
 	wantRotateRedirect := `/ui/reverify?next=` + url.QueryEscape(rotateResume)
 	if rotateRejected.StatusCode != http.StatusSeeOther || rotateRejected.Header.Get("Location") != wantRotateRedirect || store.rotateID != "" {
-		t.Fatalf("轮换MCP 访问令牌应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
+		t.Fatalf("轮换 MCP 访问令牌应先重新验证，状态码=%d 跳转=%q 调用=%q 页面：\n%s",
 			rotateRejected.StatusCode, rotateRejected.Header.Get("Location"), store.rotateID, rotateRejectedBody)
 	}
 
@@ -532,7 +532,7 @@ func TestAuthorityProjectSensitiveActionsRequireReverify(t *testing.T) {
 	}
 	resumed := authorityGet(t, handler, "127.0.0.1:7879", addResume, cookie)
 	resumedBody := readResponseBody(t, resumed)
-	if !strings.Contains(resumedBody, "签发MCP 访问令牌前需要重新验证管理员口令") ||
+	if !strings.Contains(resumedBody, "签发 MCP 访问令牌前需要重新验证管理员口令") ||
 		!strings.Contains(resumedBody, `value="agent"`) ||
 		!strings.Contains(resumedBody, `<option value="profile-1" selected>`) {
 		t.Fatalf("重新验证返回页应提示并保留签发表单内容：\n%s", resumedBody)

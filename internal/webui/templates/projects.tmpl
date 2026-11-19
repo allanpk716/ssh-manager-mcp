@@ -5,7 +5,7 @@
 {{if .AccessProjectIncludeRevoked}}<a href="/ui/ops/access-tokens">隐藏已吊销</a>{{else}}<a href="/ui/ops/access-tokens?include_revoked=1">显示已吊销</a>{{end}}
 <form method="post" action="/ui/ops/access-tokens" class="inline-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<label for="project-name">签发新MCP 访问令牌</label>
+<label for="project-name">签发新 MCP 访问令牌</label>
 <input type="text" id="project-name" name="name" value="{{.AccessProjectFormName}}" required>
 <label for="project-profile">绑定 profile</label>
 <select id="project-profile" name="profile_id" required>
