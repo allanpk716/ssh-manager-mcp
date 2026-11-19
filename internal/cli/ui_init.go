@@ -19,6 +19,11 @@ func (machineInitializer) ReadSnapshot() (webui.InitializationSnapshot, error) {
 	if err != nil {
 		return webui.InitializationSnapshot{}, err
 	}
+	return initializationSnapshotView(snapshot, destination), nil
+}
+
+// initializationSnapshotView 把机器初始化快照与去向转换成向导需要的视图。
+func initializationSnapshotView(snapshot machineinit.StateSnapshot, destination machineinit.UIDestination) webui.InitializationSnapshot {
 	out := webui.InitializationSnapshot{}
 	out.VaultReady = snapshot.VaultExists && snapshot.VaultOpenable
 	if destination.Kind == machineinit.UIDestinationStandaloneWebUI {
@@ -43,7 +48,7 @@ func (machineInitializer) ReadSnapshot() (webui.InitializationSnapshot, error) {
 	case roles.RoleClient:
 		out.Role = webui.InitializationRoleClient
 	}
-	return out, nil
+	return out
 }
 
 func (machineInitializer) SelectRoleWithoutVault(role webui.InitializationRole) error {

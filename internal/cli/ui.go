@@ -33,6 +33,16 @@ import (
 // 不真正打开浏览器。
 var uiOpenBrowser = openURLInBrowser
 
+// uiReadSnapshot 是 ui 命令入口读取机器初始化快照的可替换依赖；测试注入
+// 替身，把默认 Web UI 端口上的 serve 探测结果固定为未运行（真实探测对
+// 回环固定端口发 HTTPS 请求，本机常驻 serve 时未隔离的测试会读到真实
+// 状态），其余仍走真实读取。
+var uiReadSnapshot = machineinit.ReadSnapshot
+
+// uiWizardInitializer 是初始化向导依赖的机器初始化器；测试注入替身，同样
+// 固定默认 Web UI 端口上的 serve 探测结果，其余行为仍走真实实现。
+var uiWizardInitializer webui.Initializer = machineInitializer{}
+
 // newUICmd 构造 `sshmgr ui` 命令：单机与客户端角色在本机回环地址的随机端口
 // 上按需启动 Web UI，命令退出即停止。
 func newUICmd() *cobra.Command {
@@ -52,7 +62,7 @@ func newUICmd() *cobra.Command {
 // 未完成初始化的权威端进入初始化向导，单机与客户端构造正式 Web UI 并监听
 // 回环随机端口，已运行 serve 的权威端只打印独立监听的状态。
 func runUICommand(cmd *cobra.Command, instance string) error {
-	snapshot, err := machineinit.ReadSnapshot()
+	snapshot, err := uiReadSnapshot()
 	if err != nil {
 		return err
 	}
@@ -236,7 +246,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 	var handler http.Handler
 	var startup webui.Startup
 	if initializing {
-		handler, startup, err = webui.NewInitializationWizard(config, machineInitializer{})
+		handler, startup, err = webui.NewInitializationWizard(config, uiWizardInitializer)
 	} else {
 		handler, startup, err = webui.New(config)
 	}

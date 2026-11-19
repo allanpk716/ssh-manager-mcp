@@ -15,8 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"ssh-manager-mcp/internal/machineinit"
+	"ssh-manager-mcp/internal/mcpserver"
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
+	"ssh-manager-mcp/internal/webui"
 )
 
 // startUICommand 在独立 goroutine 里运行 ui 命令，把注入的打开浏览器函数
@@ -84,6 +87,77 @@ func prepareUninitializedUIEnv(t *testing.T) {
 	t.Setenv("SSHMGR_CONFIG_ROOT", userDir)
 	t.Setenv("SSHMGR_STORE", filepath.Join(t.TempDir(), "store.db"))
 	t.Setenv("SSHMGR_CACHE_DIR", filepath.Join(t.TempDir(), "cache"))
+}
+
+// injectServeProbeIgnoredOnDefaultPort 让 ui 命令与初始化向导忽略默认
+// Web UI 端口上的真实服务：本机常驻 serve 时，未隔离的探测会读到真实
+// 状态，测试结果就依赖本机。其余端口的探测保持真实结果；测试结束还原。
+func injectServeProbeIgnoredOnDefaultPort(t *testing.T) {
+	t.Helper()
+	prevSnapshot := uiReadSnapshot
+	uiReadSnapshot = func() (machineinit.StateSnapshot, error) {
+		snapshot, err := machineinit.ReadSnapshot()
+		if err != nil {
+			return machineinit.StateSnapshot{}, err
+		}
+		if snapshot.ServeWebUI.Port == mcpserver.DefaultWebUIPort {
+			snapshot.ServeWebUI.Running = false
+		}
+		return snapshot, nil
+	}
+	prevInitializer := uiWizardInitializer
+	uiWizardInitializer = defaultPortBlindInitializer{}
+	t.Cleanup(func() {
+		uiReadSnapshot = prevSnapshot
+		uiWizardInitializer = prevInitializer
+	})
+}
+
+// defaultPortBlindInitializer 只把默认 Web UI 端口上的 serve 探测改为
+// 未运行，其余探测端口与初始化行为保持真实实现。
+type defaultPortBlindInitializer struct {
+	machineInitializer
+}
+
+func (defaultPortBlindInitializer) ReadSnapshot() (webui.InitializationSnapshot, error) {
+	snapshot, err := machineinit.ReadSnapshot()
+	if err != nil {
+		return webui.InitializationSnapshot{}, err
+	}
+	if snapshot.ServeWebUI.Port == mcpserver.DefaultWebUIPort {
+		snapshot.ServeWebUI.Running = false
+	}
+	destination, err := machineinit.DecideUIDestination(snapshot)
+	if err != nil {
+		return webui.InitializationSnapshot{}, err
+	}
+	return initializationSnapshotView(snapshot, destination), nil
+}
+
+func (defaultPortBlindInitializer) ProbeServeWebUI() (webui.ServeWebUIProbe, error) {
+	state, err := machineinit.ProbeServeWebUI()
+	if err != nil {
+		return webui.ServeWebUIProbe{}, err
+	}
+	if state.Port == mcpserver.DefaultWebUIPort {
+		state.Running = false
+	}
+	return webui.ServeWebUIProbe{
+		Port:              state.Port,
+		Addresses:         state.Addresses,
+		NeedsManualListen: state.NeedsManualListen,
+		Running:           state.Running,
+	}, nil
+}
+
+// alwaysRunningInitializer 把向导内的 serve 探测固定为已在运行（默认
+// 端口），其余初始化行为保持真实实现。
+type alwaysRunningInitializer struct {
+	machineInitializer
+}
+
+func (alwaysRunningInitializer) ProbeServeWebUI() (webui.ServeWebUIProbe, error) {
+	return webui.ServeWebUIProbe{Port: mcpserver.DefaultWebUIPort, Running: true}, nil
 }
 
 // createVaultStore 在测试环境里真实创建 vault 数据库文件，让角色判定的
@@ -306,6 +380,7 @@ func TestUICommandServerRolePrintsServeListenerWithoutStartingServer(t *testing.
 
 func TestUICommandServerWizardRunsLoopbackThreeSteps(t *testing.T) {
 	prepareUninitializedUIEnv(t)
+	injectServeProbeIgnoredOnDefaultPort(t)
 	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(t.TempDir(), "master.key.plain"))
 	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: false}); err != nil {
 		t.Fatal(err)
@@ -423,7 +498,74 @@ func serverWizardSetPassword(t *testing.T, client *http.Client, host string, coo
 	return setResponse.StatusCode == http.StatusSeeOther && setResponse.Header.Get("Location") == "/ui/init/server/install"
 }
 
+func TestUICommandServerWizardRefusesWhenServeRunning(t *testing.T) {
+	prepareUninitializedUIEnv(t)
+	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(t.TempDir(), "master.key.plain"))
+	if err := roles.Save(roles.State{Role: roles.RoleServer, SetupComplete: false}); err != nil {
+		t.Fatal(err)
+	}
+	// 入口按「serve 未运行」正常进入向导；向导内的探测固定为已在运行。
+	injectServeProbeIgnoredOnDefaultPort(t)
+	uiWizardInitializer = alwaysRunningInitializer{}
+
+	urlCh, _, _, finish := startUICommand(t, nil)
+	startupURL := waitUIStartupURL(t, urlCh)
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		Transport:     &http.Transport{DisableKeepAlives: true},
+	}
+	start, err := client.Get(startupURL.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start.Body.Close()
+	if start.StatusCode != http.StatusSeeOther || len(start.Cookies()) != 1 {
+		t.Fatalf("权威端向导启动链接应换会话，状态码=%d cookie=%d", start.StatusCode, len(start.Cookies()))
+	}
+	cookie := start.Cookies()[0]
+	vaultRequest, err := http.NewRequest(http.MethodGet, "http://"+startupURL.Host+"/ui/init/server/vault", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultRequest.AddCookie(cookie)
+	vaultPage, err := client.Do(vaultRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vaultBody, _ := io.ReadAll(vaultPage.Body)
+	vaultPage.Body.Close()
+	if vaultPage.StatusCode != http.StatusOK {
+		t.Fatalf("建 vault 页应正常显示，状态码=%d 页面：\n%s", vaultPage.StatusCode, vaultBody)
+	}
+	token := hiddenInputValueForUITest(t, string(vaultBody))
+	form := url.Values{"csrf_token": {token}}
+	createRequest, err := http.NewRequest(
+		http.MethodPost, "http://"+startupURL.Host+"/ui/init/server/vault/create", strings.NewReader(form.Encode()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRequest.AddCookie(cookie)
+	createRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	createRequest.Header.Set("Origin", "http://"+startupURL.Host)
+	created, err := client.Do(createRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdBody, _ := io.ReadAll(created.Body)
+	created.Body.Close()
+	if created.StatusCode != http.StatusConflict || created.Header.Get("Location") != "" ||
+		!strings.Contains(string(createdBody), "serve 已在运行") {
+		t.Fatalf("serve 已在运行时建 vault 应被拒绝，状态码=%d 跳转=%q 页面：\n%s",
+			created.StatusCode, created.Header.Get("Location"), createdBody)
+	}
+	if err := finish(t); err != nil {
+		t.Fatalf("权威端向导应可优雅退出：%v", err)
+	}
+}
+
 func TestUICommandServerWizardFinishPrintsAddressesAndExits(t *testing.T) {
+	injectServeProbeIgnoredOnDefaultPort(t)
 	probeServer := httptest.NewTLSServer(http.NotFoundHandler())
 	defer probeServer.Close()
 	_, portText, err := net.SplitHostPort(probeServer.Listener.Addr().String())
@@ -498,6 +640,7 @@ func TestUICommandServerWizardFinishPrintsAddressesAndExits(t *testing.T) {
 
 func TestUICommandServerWizardFromRoleChoicePrintsAddresses(t *testing.T) {
 	prepareUninitializedUIEnv(t)
+	injectServeProbeIgnoredOnDefaultPort(t)
 	t.Setenv("SSHMGR_FILEKEY_PATH", filepath.Join(t.TempDir(), "master.key.plain"))
 
 	urlCh, stdout, stderr, finish := startUICommand(t, nil)
