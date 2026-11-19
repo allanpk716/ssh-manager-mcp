@@ -11,6 +11,7 @@ const e2eDir = __dirname;
 export const repoRoot = path.resolve(e2eDir, "..");
 const artifactsDir = path.join(e2eDir, ".artifacts");
 const binaryPath = path.join(artifactsDir, `sshmgr${process.platform === "win32" ? ".exe" : ""}`);
+const testSSHServerPath = path.join(artifactsDir, `testsshd${process.platform === "win32" ? ".exe" : ""}`);
 
 export type testSSHServer = {
   address: string;
@@ -18,17 +19,44 @@ export type testSSHServer = {
   close: () => Promise<void>;
 };
 
+let testSSHServerBuild: Promise<void> | undefined;
+
+// buildTestSSHServer 每轮浏览器测试只编译一次 testsshd，之后直接启动这个
+// 二进制而不是用 go run 代理启动：go run 收到 SIGTERM 不会把信号转发给
+// 它编译出的子进程，测试结束后子进程会孤儿化常驻并继续监听端口（#318）。
+// 直接启动后 close() 的信号命中服务本体，服务自身还监视标准输入管道关闭
+// 自行退出，测试进程崩溃也能自清理。
+function buildTestSSHServer(): Promise<void> {
+  if (!testSSHServerBuild) {
+    testSSHServerBuild = (async () => {
+      await mkdir(artifactsDir, { recursive: true });
+      await new Promise<void>((resolve, reject) => {
+        const build = spawn("go", ["build", "-o", testSSHServerPath, "./e2e/tools/testsshd"], {
+          cwd: repoRoot,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        let output = "";
+        build.stdout.on("data", (chunk) => (output += chunk));
+        build.stderr.on("data", (chunk) => (output += chunk));
+        build.on("error", reject);
+        build.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`编译 testsshd 失败：${output}`))));
+      });
+    })();
+  }
+  return testSSHServerBuild;
+}
+
 // startTestSSHServer 编译并启动 e2e/tools/testsshd。它只监听本机随机端
 // 口，并把配套私钥写入测试指定的临时路径。
 export async function startTestSSHServer(privateKeyPath: string): Promise<testSSHServer> {
-  const server = spawn("go", ["run", "./e2e/tools/testsshd", privateKeyPath], {
+  await buildTestSSHServer();
+  const server = spawn(testSSHServerPath, [privateKeyPath], {
     cwd: repoRoot,
     stdio: ["pipe", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      ...goCacheEnvironment,
-    },
   });
+  // 关闭标准输入时进程若已退出，写端管道可能已坏；挂空错误处理，避免未
+  // 处理的错误事件把测试进程打崩。
+  server.stdin.on("error", () => {});
   let output = "";
   server.stdout.on("data", (chunk) => (output += chunk));
   server.stderr.on("data", (chunk) => (output += chunk));
@@ -52,14 +80,21 @@ export async function startTestSSHServer(privateKeyPath: string): Promise<testSS
     address,
     privateKeyPath,
     close: async () => {
-      server.kill("SIGTERM");
-      await new Promise<void>((resolve) => {
+      const exited = new Promise<void>((resolve) => {
         if (server.exitCode !== null) {
           resolve();
           return;
         }
-        server.on("exit", () => resolve());
+        server.once("exit", () => resolve());
       });
+      if (server.exitCode === null) {
+        // 先关标准输入让服务自行关监听退出；两秒内没退再直接发 SIGTERM
+        // 兜底，此时信号命中服务本体，不存在 go run 不转发的问题（#318）。
+        server.stdin.end();
+        const fallbackSignal = setTimeout(() => server.kill("SIGTERM"), 2_000);
+        fallbackSignal.unref();
+      }
+      await exited;
     },
   };
 }

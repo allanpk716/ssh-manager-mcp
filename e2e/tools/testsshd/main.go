@@ -1,5 +1,6 @@
 // testsshd 启动只接受指定私钥的本机 SSH 测试服务。它把私钥写到命令行指
-// 定路径，向标准输出打印实际监听地址，供 Playwright 测试进程读取。
+// 定路径，向标准输出打印实际监听地址，供 Playwright 测试进程读取；标准
+// 输入管道关闭或收到 SIGINT/SIGTERM 时关监听退出，不会脱离管理常驻。
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"syscall"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -63,11 +65,12 @@ func run(keyPath string) error {
 	_ = os.Stdout.Sync()
 
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-stop
 		_ = listener.Close()
 	}()
+	watchStandardInputClose(listener)
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
@@ -75,6 +78,21 @@ func run(keyPath string) error {
 		}
 		go serve(connection, configuration)
 	}
+}
+
+// watchStandardInputClose 在标准输入是管道时监视它关闭：测试助手直接拉起
+// 本工具并把标准输入接在自己的管道上，测试进程退出（无论正常收尾还是崩
+// 溃）后管道关闭，这里立即关监听让本工具自行退出。没有这条路径，测试进
+// 程意外终止时本工具会脱离管理常驻并继续监听端口（#318）。
+func watchStandardInputClose(listener net.Listener) {
+	information, err := os.Stdin.Stat()
+	if err != nil || information.Mode()&os.ModeNamedPipe == 0 {
+		return
+	}
+	go func() {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		_ = listener.Close()
+	}()
 }
 
 func serve(connection net.Conn, configuration *ssh.ServerConfig) {
