@@ -1,10 +1,10 @@
-import { expect, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, test } from "../helpers";
 
 test("调整 profile 授权后显示结果摘要", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "访问" }).click();
-  await page.getByRole("link", { name: "Profile" }).click();
+  await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "授权" }).click();
+  await page.getByRole("heading", { name: "Profile" }).waitFor();
   await page.getByRole("link", { name: "调整授权" }).click();
   await page.getByRole("checkbox", { name: "db-1" }).check();
   await page.getByRole("checkbox", { name: "web-1" }).uncheck();
@@ -18,7 +18,7 @@ test("调整 profile 授权后显示结果摘要", async ({ page, standaloneUI }
 test("签发项目令牌只在提交响应里显示一次", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "项目令牌" }).click();
+  await gotoUIPath(page, "/ui/access/projects");
   await page.getByLabel("签发新项目令牌").fill("e2e-agent");
   await page.getByLabel("绑定 profile").selectOption({ label: "运维" });
   await page.getByRole("button", { name: "签发", exact: true }).click();

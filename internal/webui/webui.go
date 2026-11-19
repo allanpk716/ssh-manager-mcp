@@ -251,6 +251,26 @@ func (c Config) versionHint() string {
 	return c.VersionHint()
 }
 
+// navigationArea 把请求路径归入五个一级导航之一。尚未拥有专属新页面的
+// 区域先落在现有页面上，后续票据替换目标地址时不需要改这里的归组。
+func navigationArea(path string) string {
+	switch {
+	case path == "/ui/":
+		return "home"
+	case strings.HasPrefix(path, "/ui/servers/") || path == "/ui/add" ||
+		strings.HasPrefix(path, "/ui/devices/"):
+		return "servers"
+	case path == "/ui/access/pairing" || strings.HasPrefix(path, "/ui/access/pairing/") ||
+		path == "/ui/ops/client" || strings.HasPrefix(path, "/ui/ops/client/"):
+		return "clients"
+	case strings.HasPrefix(path, "/ui/access/") || strings.HasPrefix(path, "/ui/secrets/") ||
+		strings.HasPrefix(path, "/ui/shares/"):
+		return "authorization"
+	default:
+		return "more"
+	}
+}
+
 // sortNeedsAttentionFirst 稳定地把需要注意的服务器排到最前，与终端图形
 // 界面的排序口径一致。
 func sortNeedsAttentionFirst(rows []ServerRow) []ServerRow {
@@ -339,6 +359,44 @@ type capabilities struct {
 	// CanUpgradeToServer 只对提供了初始化模块的单机开放，控制升级为权威
 	// 端的入口与路由。
 	CanUpgradeToServer bool
+}
+
+// ShowClientsTab、ClientsTabPath 等方法把一级导航的可见性与目标地址固定
+// 在能力层；客户端实例页未实现前先指向现有的配对页或客户端状态页。
+func (c capabilities) ShowClientsTab() bool {
+	return c.HasPairingAndDeviceCodes || c.CanUseClientOps
+}
+
+func (c capabilities) ClientsTabPath() string {
+	if c.CanUseClientOps {
+		return "/ui/ops/client"
+	}
+	return "/ui/access/pairing"
+}
+
+func (c capabilities) ShowAuthorizationTab() bool {
+	return c.CanManageProfiles || c.ShowSecretsArea || c.ShowSharesArea || c.ShowAccessArea
+}
+
+func (c capabilities) AuthorizationTabPath() string {
+	switch {
+	case c.CanManageProfiles:
+		return "/ui/access/profiles"
+	case c.ShowSecretsArea:
+		return "/ui/secrets/"
+	case c.ShowSharesArea:
+		return "/ui/shares/"
+	default:
+		return "/ui/access/"
+	}
+}
+
+func (c capabilities) ShowMoreTab() bool {
+	return c.ShowOpsArea || c.ShowSoftwareInventoryArea || c.ShowTopologyArea
+}
+
+func (c capabilities) MoreTabPath() string {
+	return "/ui/ops/"
 }
 
 // capabilitiesForConfig 按构造参数推导页面能力开关：先按本机角色确定基础
@@ -709,7 +767,11 @@ func (h *handler) handleUIRoot(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	h.handleServerList(w, r)
+	if r.URL.Query().Get("attention") == "1" {
+		http.Redirect(w, r, "/ui/servers/?attention=1", http.StatusSeeOther)
+		return
+	}
+	h.handleHomePage(w, r)
 }
 
 // requestClientInstance 返回当前浏览器会话选中的客户端实例；没有会话时退回

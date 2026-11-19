@@ -1,0 +1,65 @@
+{{define "content"}}
+<section class="home-page">
+<header class="home-greeting">
+<div>
+<p class="home-kicker">sshmgr {{.Home.RoleLabel}}</p>
+<h1>状态总览</h1>
+</div>
+{{if .Caps.CanWrite}}<span class="owner-badge" aria-label="管理员">owner</span>{{end}}
+</header>
+{{if .Caps.CanWrite}}<a class="primary-action" href="/ui/add">＋ 添加服务器</a>{{end}}
+
+<section class="home-section" aria-labelledby="home-tasks-title">
+<div class="home-section-heading">
+<h2 id="home-tasks-title">待你处理</h2>
+<span class="home-section-count">{{len .Home.Tasks}} 项</span>
+</div>
+{{if .Home.Tasks}}
+<div class="home-card-list">
+{{range .Home.Tasks}}<a class="home-task{{if .Priority}} priority{{end}}" href="{{.Href}}">
+<span class="home-task-copy"><strong>{{.Title}}</strong><small>{{.Detail}}</small></span>
+<span class="home-task-action">处理<svg class="chevron-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg></span>
+</a>{{end}}
+</div>
+{{else}}<div class="home-empty-card">一切正常，没有等待处理的事项。</div>{{end}}
+<!-- 备注待办等待对应数据层查询合入后再加入这里。 -->
+</section>
+
+<section class="home-section" aria-labelledby="home-stats-title">
+<div class="home-section-heading"><h2 id="home-stats-title">概况</h2></div>
+<div class="home-stats">
+<a class="home-stat" href="/ui/servers/">
+<span class="home-stat-label">服务器</span>
+<strong>{{.Home.ServerCount}}<small>台</small></strong>
+{{if .Home.AttentionText}}<small class="warning">{{.Home.AttentionText}}</small>{{end}}
+</a>
+{{if .Home.ClientsKnown}}
+<a class="home-stat" href="{{.Caps.ClientsTabPath}}">
+<span class="home-stat-label">客户端</span>
+<strong>{{.Home.ClientCount}}<small>个</small></strong>
+<small>按已启用的设备码统计</small>
+</a>
+{{end}}
+{{if .Caps.CanManageProfiles}}
+<a class="home-stat" href="{{.Caps.AuthorizationTabPath}}">
+<span class="home-stat-label">profile</span>
+<strong>{{.Home.ProfileCount}}<small>个</small></strong>
+<small>进入授权管理</small>
+</a>
+{{end}}
+</div>
+</section>
+
+<section class="home-section" aria-labelledby="home-recent-title">
+<div class="home-section-heading"><h2 id="home-recent-title">最近变化</h2></div>
+{{if .Home.RecentChanges}}
+<div class="home-recent-card">
+{{range .Home.RecentChanges}}<div class="home-timeline-item">
+<span class="home-timeline-dot" aria-hidden="true"></span>
+<div><time>{{.TimeText}}</time>{{.Summary}}</div>
+</div>{{end}}
+</div>
+{{else}}<div class="home-empty-card">还没有审计记录。</div>{{end}}
+</section>
+</section>
+{{end}}

@@ -52,7 +52,7 @@ func TestOpsBackupPageRendersStatusAndActions(t *testing.T) {
 		t.Fatalf("单机应打开备份页，状态码=%d 页面：\n%s", resp.StatusCode, body)
 	}
 	for _, want := range []string{
-		`href="/ui/ops/backup"`, "/backups", "7", "/vault/backup.pass", "vault-20260102-000000.sme",
+		`href="/ui/ops/"`, `>更多<`, "/backups", "7", "/vault/backup.pass", "vault-20260102-000000.sme",
 		"已校验", `action="/ui/ops/backup/create"`, `action="/ui/ops/backup/verify"`,
 		`name="csrf_token"`, "立即备份", "校验最新备份", "计划任务", "已安装",
 	} {

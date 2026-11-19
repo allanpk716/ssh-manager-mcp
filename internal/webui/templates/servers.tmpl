@@ -10,7 +10,7 @@
 </section>
 {{end}}
 <div class="inline-form server-actions">
-{{if .AttentionFilter}}<a class="button-link" href="/ui/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/?attention=1">只看需要注意</a>{{end}}
+{{if .AttentionFilter}}<a class="button-link" href="/ui/servers/">显示全部服务器</a>{{else}}<a class="button-link" href="/ui/servers/?attention=1">只看需要注意</a>{{end}}
 {{if .Caps.CanWrite}}
 <a class="button-link primary" href="/ui/servers/new">新增服务器</a>
 <a class="button-link" href="/ui/servers/import">导入 SSH 配置</a>
@@ -23,11 +23,11 @@
 </thead>
 <tbody>
 {{range .ServerList}}<tr class="{{if .AttentionReasons}}needs-attention{{end}}">
-<td>{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong> {{end}}<a href="/ui/servers/{{.ID}}">{{.Name}}</a></td>
-<td>{{.User}}@{{.Host}}</td>
-<td>{{.Port}}</td>
-<td>{{if .AttentionReasons}}{{joinReasons .AttentionReasons}}{{else}}-{{end}}</td>
-<td class="server-row-actions">
+<td data-field-name="名称">{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong> {{end}}<a href="/ui/servers/{{.ID}}">{{.Name}}</a></td>
+<td data-field-name="登录">{{.User}}@{{.Host}}</td>
+<td data-field-name="端口">{{.Port}}</td>
+<td data-field-name="注意原因">{{if .AttentionReasons}}{{joinReasons .AttentionReasons}}{{else}}-{{end}}</td>
+<td data-field-name="操作" class="server-row-actions">
 <a href="/ui/servers/{{.ID}}">详情</a>
 {{if $.Caps.CanWrite}}<a href="/ui/servers/{{.ID}}/edit">编辑</a><a href="/ui/servers/{{.ID}}/delete">删除</a>{{end}}
 </td>

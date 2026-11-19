@@ -15,7 +15,7 @@ test("手机视口在配对列表一次完成批准", async ({ page }) => {
   await prepareMobileDarkPage(page);
   try {
     await openAuthorityUI(page, ui, ui.password);
-    await page.getByRole("link", { name: "配对" }).click();
+    await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "客户端" }).click();
     const request = page.locator(".pairing-request", { hasText: "端口映射客户端" });
     await expect(request.getByText("端口映射客户端")).toBeVisible();
     await expect(request.getByText("https://172.18.200.47:18178")).toBeVisible();
@@ -42,7 +42,7 @@ test("手机视口对异常地址只显示拒绝", async ({ page }) => {
   await prepareMobileDarkPage(page);
   try {
     await openAuthorityUI(page, ui, ui.password);
-    await page.getByRole("link", { name: "配对" }).click();
+    await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "客户端" }).click();
     const request = page.locator(".pairing-request", { hasText: "陌生地址客户端" });
     await expect(request.getByText("https://203.0.113.9:7878")).toBeVisible();
     await expect(

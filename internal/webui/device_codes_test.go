@@ -65,7 +65,6 @@ func TestAuthorityDeviceCodePageListsRowsAndIssueForm(t *testing.T) {
 		t.Fatalf("设备码页状态码=%d 页面：\n%s", page.StatusCode, body)
 	}
 	for _, want := range []string{
-		`<a href="/ui/access/device-codes">设备码</a>`,
 		"笔记本", "abcd1234", "活跃", "运维", "v1.2.3",
 		"台式机", "wxyz9876", "已撤销", "开发",
 		"工作站", "v0.21.1（旧版客户端:不支持机密项、网络拓扑、共享存储）",

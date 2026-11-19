@@ -400,7 +400,7 @@ func serversPost(t *testing.T, h http.Handler, cookie *http.Cookie, target strin
 
 func serversCSRF(t *testing.T, h http.Handler, cookie *http.Cookie) string {
 	t.Helper()
-	body := serversGet(t, h, cookie, "/ui/")
+	body := serversGet(t, h, cookie, "/ui/servers/")
 	match := regexp.MustCompile(`<meta name="csrf-token" content="([^"]+)"`).FindStringSubmatch(body)
 	if len(match) != 2 {
 		t.Fatalf("列表页应携带防跨站请求伪造令牌：\n%s", body)
@@ -414,7 +414,7 @@ func TestServersListFilterAndDetail(t *testing.T) {
 	store := newStubServerStore()
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 
-	list := serversGet(t, h, cookie, "/ui/")
+	list := serversGet(t, h, cookie, "/ui/servers/")
 	for _, want := range []string{"fine", "bare", "未挂凭据", "未设角色", "只看需要注意"} {
 		if !strings.Contains(list, want) {
 			t.Fatalf("服务器列表缺少 %q：\n%s", want, list)
@@ -424,7 +424,7 @@ func TestServersListFilterAndDetail(t *testing.T) {
 		t.Fatalf("需要注意的服务器应排在最前：\n%s", list)
 	}
 
-	filtered := serversGet(t, h, cookie, "/ui/?attention=1")
+	filtered := serversGet(t, h, cookie, "/ui/servers/?attention=1")
 	if strings.Contains(filtered, "192.0.2.10") || !strings.Contains(filtered, "bare") {
 		t.Fatalf("过滤视图应只显示需要注意的服务器：\n%s", filtered)
 	}
@@ -446,7 +446,7 @@ func TestServersClientRoleHasNoWriteRoutes(t *testing.T) {
 	store := newStubServerStore()
 	h, cookie := newServersTestHandler(t, RoleClient, store, nil)
 
-	list := serversGet(t, h, cookie, "/ui/?attention=1")
+	list := serversGet(t, h, cookie, "/ui/servers/?attention=1")
 	if !strings.Contains(list, "bare") || strings.Contains(list, "编辑") || strings.Contains(list, "删除") || strings.Contains(list, "导入") {
 		t.Fatalf("客户端列表不应出现写入口：\n%s", list)
 	}
@@ -531,6 +531,9 @@ func TestServersDeletePreviewConfirmAndCSRF(t *testing.T) {
 	if resp.StatusCode != http.StatusSeeOther {
 		body := readResponseBody(t, resp)
 		t.Fatalf("确认删除状态码 = %d，应为 303：\n%s", resp.StatusCode, body)
+	}
+	if resp.Header.Get("Location") != "/ui/servers/" {
+		t.Fatalf("确认删除后应回到服务器列表，跳转 = %q", resp.Header.Get("Location"))
 	}
 	if len(writer.deletes) != 1 || writer.deleteDigest != "digest-1" {
 		t.Fatalf("删除应带预览摘要执行：%+v", writer)

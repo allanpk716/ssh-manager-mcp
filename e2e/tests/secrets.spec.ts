@@ -1,9 +1,9 @@
-import { expect, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, test } from "../helpers";
 
 test("新增机密项后列表不显示值", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "机密项" }).click();
+  await gotoUIPath(page, "/ui/secrets/");
   await page.getByRole("link", { name: "新增机密项" }).click();
   await page.getByLabel("名字").fill("BROWSER_TOKEN");
   await page.getByLabel("备注").fill("浏览器新增");
@@ -21,7 +21,7 @@ test("新增机密项后列表不显示值", async ({ page, standaloneUI }) => {
 test("机密项矩阵整列勾选后预览确认并显示结果", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "机密项" }).click();
+  await gotoUIPath(page, "/ui/secrets/");
   await page.getByRole("link", { name: "授权矩阵" }).click();
   const webColumn = page.locator("th", { hasText: "web-1" }).first();
   await webColumn.getByRole("button", { name: "整列勾选" }).click();

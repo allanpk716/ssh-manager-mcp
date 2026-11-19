@@ -1,9 +1,9 @@
-import { expect, openClientUI, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, openClientUI, openStandaloneUI, test } from "../helpers";
 
 test("设备清单页系统包默认折叠并可展开", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "软件清单" }).click();
+  await gotoUIPath(page, "/ui/software-inventory/");
   await page.getByRole("link", { name: "工作站" }).click();
 
   await expect(page.getByRole("heading", { name: "工作站 · 软件清单" })).toBeVisible();

@@ -41,9 +41,9 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 		return body
 	}
 
-	if body := pageBody(RoleStandalone, true); !strings.Contains(body, `href="/ui/software-inventory/"`) ||
-		!strings.Contains(body, `aria-label="软件清单区域"`) {
-		t.Fatalf("单机配置软件清单来源后应显示导航入口：\n%s", body)
+	if body := pageBody(RoleStandalone, true); !strings.Contains(body, `aria-label="一级导航"`) ||
+		!strings.Contains(body, `>更多<`) {
+		t.Fatalf("单机配置软件清单来源后应显示更多标签：\n%s", body)
 	}
 	if body := pageBody(RoleStandalone, false); strings.Contains(body, `href="/ui/software-inventory/"`) {
 		t.Fatalf("未配置软件清单来源时不应显示导航入口：\n%s", body)

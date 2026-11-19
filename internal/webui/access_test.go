@@ -232,8 +232,8 @@ func TestAccessRoutesAndNoticeFollowRole(t *testing.T) {
 func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 	standalonePage := loginAndGetList(t, RoleStandalone, []ServerRow{{Name: "web-1"}}, "")
 	for _, want := range []string{
-		`<a href="/ui/access/">访问</a>`,
-		`<a href="/ui/access/profiles">Profile</a>`,
+		`href="/ui/access/profiles"`,
+		`>授权<`,
 	} {
 		if !strings.Contains(standalonePage, want) {
 			t.Fatalf("单机导航应包含 %q：\n%s", want, standalonePage)
@@ -244,8 +244,8 @@ func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 	}
 
 	clientPage := loginAndGetList(t, RoleClient, []ServerRow{{Name: "web-1"}}, "")
-	if !strings.Contains(clientPage, `<a href="/ui/access/">访问</a>`) {
-		t.Fatalf("客户端导航应显示访问区域入口：\n%s", clientPage)
+	if !strings.Contains(clientPage, `>授权<`) {
+		t.Fatalf("客户端导航应显示授权标签：\n%s", clientPage)
 	}
 	if strings.Contains(clientPage, `<a href="/ui/access/profiles">Profile</a>`) {
 		t.Fatalf("客户端导航不应显示 Profile 数据入口：\n%s", clientPage)
@@ -263,8 +263,8 @@ func TestAccessNavigationFollowsRoleCapabilities(t *testing.T) {
 	cookie := authoritySuccessfulLogin(t, server, "127.0.0.1:7879", "correct-password")
 	serverPageResponse := authorityGet(t, server, "127.0.0.1:7879", "/ui/access/profiles", cookie)
 	serverPage := readResponseBody(t, serverPageResponse)
-	if !strings.Contains(serverPage, `<a href="/ui/access/profiles">Profile</a>`) {
-		t.Fatalf("权威端导航应显示 Profile 入口：\n%s", serverPage)
+	if !strings.Contains(serverPage, `href="/ui/access/profiles"`) || !strings.Contains(serverPage, ">授权<") {
+		t.Fatalf("权威端导航应显示授权标签：\n%s", serverPage)
 	}
 }
 

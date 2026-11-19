@@ -429,7 +429,7 @@ func TestHandlerDeletePreviewChangedRendersFreshPreview(t *testing.T) {
 	confirmed := h.do(http.MethodPost, "/ui/servers/"+first+"/delete", url.Values{
 		"csrf_token": {integrationCSRF(t, h)}, "server_id": {first}, "digest": {newDigest[1]},
 	})
-	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/" {
+	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/servers/" {
 		t.Fatalf("新摘要确认应执行删除，状态码=%d 跳转=%s", confirmed.StatusCode, confirmed.Header.Get("Location"))
 	}
 	if srv, _ := st.GetServerByName("first"); srv != nil {
@@ -544,7 +544,7 @@ func TestHandlerDeletePreviewIncludesSharedStorageAndRecords(t *testing.T) {
 	confirmed := h.do(http.MethodPost, "/ui/servers/"+web+"/delete", url.Values{
 		"csrf_token": {integrationCSRF(t, h)}, "server_id": {web}, "digest": {newDigest[1]},
 	})
-	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/" {
+	if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/servers/" {
 		t.Fatalf("新摘要确认应执行删除，状态码=%d 跳转=%s", confirmed.StatusCode, confirmed.Header.Get("Location"))
 	}
 	if records, _ := st.SecretDeliveryRecords(store.SecretDeliveryRecordFilter{ServerID: web}); len(records) != 0 {

@@ -205,7 +205,7 @@ func TestInitializationWizardChoosesStandaloneAndSwitchesToFormalPage(t *testing
 		t.Fatalf("完成页应跳转正式首页，状态码=%d 跳转=%q", finished.StatusCode, finished.Header.Get("Location"))
 	}
 
-	formal := wizardPage(t, handler, cookie, "/ui/")
+	formal := wizardPage(t, handler, cookie, "/ui/servers/")
 	if !strings.Contains(formal, "正式服务器") || strings.Contains(formal, "选择本机角色") {
 		t.Fatalf("会话应延续到单机正式首页：\n%s", formal)
 	}

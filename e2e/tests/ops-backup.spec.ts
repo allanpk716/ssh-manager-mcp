@@ -1,10 +1,10 @@
-import { expect, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, openStandaloneUI, test } from "../helpers";
 
 test("备份页可先配置再立即备份并一键校验最新备份", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "运维" }).click();
-  await page.getByRole("link", { name: "备份" }).click();
+  await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "更多" }).click();
+  await gotoUIPath(page, "/ui/ops/backup");
   await expect(page.getByRole("heading", { name: "备份", exact: true })).toBeVisible();
   await expect(page.locator(".backup-alert", { hasText: "尚未配置备份" })).toBeVisible();
 
