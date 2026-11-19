@@ -5,13 +5,14 @@ package hotswap
 // bridgeio_close_unix_internal_test.go — Close 等待窥视探测路径的确定性
 // 次序测试,沿用 peek_unix_internal_test.go 的包内注入先例(poll 调用可
 // 替换)。全平台的外部行为重复测试在 bridgeio_test.go,靠竞争检测命中
-// 轮询窗口;Unix 的 poll 与关闭同一文件在竞争检测器下不成对,故在这里
-// 用注入把次序钉死。
+// 轮询窗口;Unix 的竞争检测器不会把 poll 系统调用与关闭同一文件报成
+// 冲突访问,故在这里用注入把次序钉死。
 
 import (
 	"errors"
 	"os"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,7 +53,6 @@ func TestBridgeIOCloseWaitsForInFlightPeekProbe(t *testing.T) {
 		<-release
 		return 0, nil
 	})
-	defer releaseProbe()
 	t.Cleanup(func() {
 		releaseProbe()
 		setPollPipeReadable(original)
@@ -98,6 +98,111 @@ func TestBridgeIOCloseWaitsForInFlightPeekProbe(t *testing.T) {
 	inW.Close()
 	outR.Close()
 	outW.Close()
+}
+
+// TestBridgeIOCloseDoesNotPeekAfterInFlightReadReturns:转发循环已经阻塞在
+// 真实输入的读调用内时,Close 按既有语义不等待那次读;随后输入带数据返回,
+// 转发循环必须看到停止标记并退出,不得再发起下一次窥视探测。
+func TestBridgeIOCloseDoesNotPeekAfterInFlightReadReturns(t *testing.T) {
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		inR.Close()
+		inW.Close()
+		t.Fatal(err)
+	}
+	b, err := NewBridgeIO(inR, outW, true)
+	if err != nil {
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
+		t.Fatal(err)
+	}
+
+	releaseFirstProbe := make(chan struct{})
+	unexpectedProbe := make(chan struct{})
+	releaseUnexpectedProbe := make(chan struct{})
+	var releaseFirstOnce, signalUnexpectedOnce, releaseUnexpectedOnce sync.Once
+	releaseFirst := func() { releaseFirstOnce.Do(func() { close(releaseFirstProbe) }) }
+	releaseUnexpected := func() { releaseUnexpectedOnce.Do(func() { close(releaseUnexpectedProbe) }) }
+	original := pollPipeReadableFunc
+	var pollCalls atomic.Int32
+	setPollPipeReadable(func(fds []unix.PollFd) (int, error) {
+		switch pollCalls.Add(1) {
+		case 1:
+			// 扣住第一次探测,让测试先把输入转发循环放入扣住态。
+			<-releaseFirstProbe
+			return 0, nil
+		case 2:
+			// 放行转发循环进入真实输入的阻塞读。
+			return 1, nil
+		default:
+			signalUnexpectedOnce.Do(func() { close(unexpectedProbe) })
+			<-releaseUnexpectedProbe
+			return 0, nil
+		}
+	})
+	t.Cleanup(func() {
+		releaseFirst()
+		releaseUnexpected()
+		b.Close()
+		setPollPipeReadable(original)
+		inR.Close()
+		inW.Close()
+		outR.Close()
+		outW.Close()
+	})
+
+	if !b.Hold() {
+		t.Fatal("Hold failed")
+	}
+	if !b.WaitFrozen(2 * time.Second) {
+		t.Fatal("Hold did not freeze the input forwarding loop")
+	}
+	releaseFirst()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		b.feeder.mu.Lock()
+		isReading := b.feeder.readingRealIn
+		b.feeder.mu.Unlock()
+		if isReading {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the real input read to start")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	closeDone := make(chan struct{})
+	go func() {
+		b.Close()
+		close(closeDone)
+	}()
+	select {
+	case <-closeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close hung waiting for a blocking read of the real input")
+	}
+
+	if _, err := inW.WriteString("held bytes after Close\n"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-unexpectedProbe:
+		t.Fatal("input forwarding loop started another peek probe after Close")
+	case <-b.feeder.loopDone:
+		if pollCalls.Load() != 2 {
+			t.Fatalf("poll calls = %d, want 2", pollCalls.Load())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("input forwarding loop did not exit after the in-flight read returned")
+	}
 }
 
 // TestBridgeIOCloseSkipsWaitWhenRealReadBlocked:平台窥视不可用、输入

@@ -252,9 +252,10 @@ func (b *BridgeIO) WaitCopierPhase1(d time.Duration) bool {
 }
 
 // Close 收尾:等输入转发循环与在途的窥视探测退出,再关闭 SDK 侧管道、
-// 唤醒 copier。返回后桥不再访问真实输入文件句柄,调用方可以随即关闭
-// 它。只在进程将退时调用;真实句柄不由此侧关闭(随进程回收)。转发循环
-// 已阻塞在真实输入读上的例外见 feeder.stopAndWait。
+// 唤醒 copier。除「转发循环已阻塞在真实输入读上」这个例外——那次读
+// 无法由桥侧取消,Close 不等待,避免悬挂——返回后桥不再访问真实输入
+// 文件句柄,调用方可以随即关闭它。只在进程将退时调用;真实句柄不由
+// 此侧关闭(随进程回收)。
 func (b *BridgeIO) Close() {
 	b.closeOnce.Do(func() {
 		close(b.copierQuit)
@@ -323,8 +324,10 @@ type feeder struct {
 func (f *feeder) peekProbe() (readable, ok, stuck bool) {
 	f.mu.Lock()
 	noPeek := f.noPeek
+	dead := f.dead
 	f.mu.Unlock()
-	if noPeek {
+	if noPeek || dead {
+		// Close 已请求停止时不再发起探测;调用方随后的检查点会退出循环。
 		return false, false, false
 	}
 	type res struct {
@@ -380,6 +383,10 @@ func (f *feeder) loop() {
 		n, rerr := f.in.Read(buf) // 不持锁读:状态切换只动锁内状态
 		f.finishRealRead()
 		f.mu.Lock()
+		if f.dead {
+			f.mu.Unlock()
+			return // Close 已请求停止:那次在途读交回后,不再访问真实输入。
+		}
 		if n > 0 {
 			switch f.state {
 			case feederRun, feederPump:
@@ -554,10 +561,10 @@ func (f *feeder) flushPumpSide() {
 // 输入文件句柄。
 //
 // 例外是循环已阻塞在真实输入的读调用内:那次读只有输入到达、对端关闭
-// 或进程退出才会返回,而真实输入不由此侧关闭,等它必然悬挂。此时不等待,
-// 让该读随进程退出回收;这一形态下本周期窥视已交出结果,没有仍在飞的
-// 探测。窥视卡死预算到期后被放弃的调用同样不等待(无从等待),阻塞中的
-// 调用随进程退出回收,维持现状。
+// 或进程退出才会返回,而真实输入不由此侧关闭,等它必然悬挂。此时不等待。
+// Close 返回后,循环只可能先让这一次已在途的读返回;读一返回就检查停止
+// 标记并退出,不再发起新的读或窥视探测。窥视卡死预算到期后被放弃的调用
+// 同样不等待(无从等待),阻塞中的调用随进程退出回收,维持现状。
 func (f *feeder) stopAndWait() {
 	f.mu.Lock()
 	if !f.dead {

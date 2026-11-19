@@ -491,11 +491,12 @@ func TestBridgeIOCopierPhase1Done(t *testing.T) {
 	}
 }
 
-// TestBridgeIOCloseThenHostClosesInputRepeatedly 钉住持续集成 Windows
-// 竞争检测车道实际报出的交错(#293):BridgeIO.Close 返回后,调用方立即关闭
-// 交给桥的真实输入读端。Close 必须先等齐窥视探测路径的 goroutine,这个
-// 交错在竞争检测下才会干净;重复足够轮次命中探测的轮询窗口。奇数轮带
-// 一笔在途请求帧,覆盖「探测判为可读后进入转发」的路径。
+// TestBridgeIOCloseThenHostClosesInputRepeatedly 钉住持续集成里 Windows
+// 平台开启竞争检测的测试任务实际报出的交错(#293):BridgeIO.Close
+// 返回后,调用方立即关闭交给桥的真实输入读端。Close 必须先等齐窥视
+// 探测路径的 goroutine,这个交错在竞争检测下才会干净;重复足够轮次命中
+// 探测的轮询窗口。奇数轮带一笔在途请求帧,覆盖「探测判为可读后进入
+// 转发」的路径。
 func TestBridgeIOCloseThenHostClosesInputRepeatedly(t *testing.T) {
 	const rounds = 200
 	for round := 0; round < rounds; round++ {
