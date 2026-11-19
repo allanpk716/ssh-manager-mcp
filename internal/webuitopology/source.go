@@ -98,14 +98,18 @@ func (s storeSource) Topology(_, from string) (*webui.TopologyData, error) {
 		LocalDevice: localDeviceView(local),
 	}
 	for _, site := range sites {
-		data.Sites = append(data.Sites, webui.TopologySite{ID: site.ID, Name: site.Name, Note: site.Note})
+		data.Sites = append(data.Sites, webui.TopologySite{
+			ID: site.ID, ParentID: site.ParentID, Name: site.Name,
+			LocationPath: models.NewSiteTree(sites).PathString(site.ID), Note: site.Note,
+		})
 	}
 	sort.Slice(data.Sites, func(i, j int) bool { return data.Sites[i].Name < data.Sites[j].Name })
 
 	networkByID := make(map[string]*models.Network, len(networks))
+	siteTree := models.NewSiteTree(sites)
 	for _, network := range networks {
 		networkByID[network.ID] = network
-		data.Networks = append(data.Networks, networkView(network))
+		data.Networks = append(data.Networks, networkView(network, siteTree))
 	}
 	sort.Slice(data.Networks, func(i, j int) bool { return data.Networks[i].Name < data.Networks[j].Name })
 
@@ -133,7 +137,9 @@ func (s storeSource) Topology(_, from string) (*webui.TopologyData, error) {
 		data.Devices = append(data.Devices, webui.TopologyDevice{
 			ID: device.ID, Name: device.Name, Note: device.Note,
 			Kind: deviceKind(len(serverViews), device.ClientName), ClientName: device.ClientName,
-			Servers: serverViews, SharedStorages: sharedViews,
+			SiteID: device.SiteID, LocationPath: siteTree.PathString(device.SiteID),
+			LocationMismatches: locationMismatchViews(device.SiteID, device.Memberships, siteTree),
+			Servers:            serverViews, SharedStorages: sharedViews,
 			Candidates: candidates, CandidateNotice: notice,
 		})
 		for _, membership := range device.Memberships {
@@ -186,8 +192,16 @@ func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, er
 		ContainerLayoutCoordinates: make(
 			[]webui.TopologyContainerLayoutCoordinate, 0, len(snapshot.ContainerLayoutCoordinates)),
 	}
+	sites := make([]*models.Site, 0, len(snapshot.Sites))
 	for _, site := range snapshot.Sites {
-		data.Sites = append(data.Sites, webui.TopologySite{ID: site.ID, Name: site.Name, Note: site.Note})
+		sites = append(sites, &models.Site{ID: site.ID, ParentID: site.ParentID, Name: site.Name})
+	}
+	siteTree := models.NewSiteTree(sites)
+	for _, site := range snapshot.Sites {
+		data.Sites = append(data.Sites, webui.TopologySite{
+			ID: site.ID, ParentID: site.ParentID, Name: site.Name,
+			LocationPath: siteTree.PathString(site.ID), Note: site.Note,
+		})
 	}
 	sort.Slice(data.Sites, func(i, j int) bool { return data.Sites[i].Name < data.Sites[j].Name })
 
@@ -197,6 +211,7 @@ func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, er
 		data.Networks = append(data.Networks, webui.TopologyNetwork{
 			ID: network.ID, Name: network.Name, Type: network.Type,
 			SiteID: network.SiteID, Note: network.Note, NetworkRange: network.CIDR,
+			LocationPath:  siteTree.PathString(network.SiteID),
 			BandwidthMbps: network.BandwidthMbps, Metered: network.Metered,
 		})
 	}
@@ -229,6 +244,7 @@ func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, er
 		model := &models.NetworkMembership{
 			DeviceID: membership.DeviceID, NetworkID: membership.NetworkID,
 			NetworkType: models.NetworkType(network.Type), Address: membership.Address,
+			SiteID:      network.SiteID,
 			NetworkName: network.Name, RegistrationOrder: membership.RegistrationOrder,
 		}
 		membershipsByDevice[membership.DeviceID] = append(membershipsByDevice[membership.DeviceID], model)
@@ -266,7 +282,9 @@ func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, er
 		data.Devices = append(data.Devices, webui.TopologyDevice{
 			ID: device.ID, Name: device.Name, Note: device.Note,
 			Kind: deviceKind(len(serverViews), device.ClientName), ClientName: device.ClientName,
-			Servers: serverViews, SharedStorages: sharedViews,
+			SiteID: device.SiteID, LocationPath: siteTree.PathString(device.SiteID),
+			LocationMismatches: locationMismatchViews(device.SiteID, membershipsByDevice[device.ID], siteTree),
+			Servers:            serverViews, SharedStorages: sharedViews,
 			Candidates: candidates, CandidateNotice: notice,
 		})
 	}
@@ -288,13 +306,40 @@ func (s snapshotSource) Topology(instance, from string) (*webui.TopologyData, er
 	return data, nil
 }
 
-func networkView(network *models.Network) webui.TopologyNetwork {
+func networkView(network *models.Network, tree *models.SiteTree) webui.TopologyNetwork {
 	return webui.TopologyNetwork{
 		ID: network.ID, Name: network.Name, Type: string(network.Type),
 		SiteID: network.SiteID, SiteName: network.SiteName, Note: network.Note,
+		LocationPath: tree.PathString(network.SiteID),
 		NetworkRange: network.NetworkRange, BandwidthMbps: network.BandwidthMbps,
 		Metered: network.Metered,
 	}
+}
+
+// locationMismatchViews 返回机器地点与它物理局域网覆盖地点的不一致提
+// 示。机器未登记地点、网络未覆盖地点或覆盖范围包含机器地点时不提示；
+// 这是提示字段，不是写入校验。
+func locationMismatchViews(
+	deviceSiteID string, memberships []*models.NetworkMembership, tree *models.SiteTree,
+) []webui.TopologyLocationMismatch {
+	if deviceSiteID == "" {
+		return nil
+	}
+	var mismatches []webui.TopologyLocationMismatch
+	for _, membership := range memberships {
+		if membership == nil || membership.NetworkType != models.NetworkPhysical || membership.SiteID == "" {
+			continue
+		}
+		if tree.Covers(membership.SiteID, deviceSiteID) {
+			continue
+		}
+		mismatches = append(mismatches, webui.TopologyLocationMismatch{
+			NetworkID: membership.NetworkID, NetworkName: membership.NetworkName,
+			DeviceLocationPath:  tree.PathString(deviceSiteID),
+			NetworkLocationPath: tree.PathString(membership.SiteID),
+		})
+	}
+	return mismatches
 }
 
 func membershipView(membership *models.NetworkMembership) webui.TopologyMembership {

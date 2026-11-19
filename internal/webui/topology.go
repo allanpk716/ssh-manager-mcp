@@ -46,21 +46,26 @@ const (
 	TopologyProbeOriginSelf = "self"
 )
 
-// TopologySite 是拓扑图里的一个站点，只携带只读呈现需要的字段。
+// TopologySite 是拓扑图里的一个地点，只携带只读呈现需要的字段。
+// LocationPath 是从根到该地点的完整路径，例如「公司 / 一厂区 / 3 号楼」。
 type TopologySite struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-	Note string `json:"note"`
+	ID           string `json:"id"`
+	ParentID     string `json:"parent_id,omitempty"`
+	Name         string `json:"name"`
+	LocationPath string `json:"location_path"`
+	Note         string `json:"note"`
 }
 
 // TopologyNetwork 是拓扑图里的一个网络。Type 是 physical（物理局域网）
-// 或 virtual（虚拟局域网）；物理局域网必须带所属站点。
+// 或 virtual（虚拟局域网）；物理局域网的 LocationPath 是它覆盖地点的完
+// 整路径。
 type TopologyNetwork struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Type          string `json:"type"`
 	SiteID        string `json:"site_id"`
 	SiteName      string `json:"site_name"`
+	LocationPath  string `json:"location_path,omitempty"`
 	Note          string `json:"note"`
 	NetworkRange  string `json:"network_range"`
 	BandwidthMbps int64  `json:"bandwidth_mbps"`
@@ -98,17 +103,31 @@ type TopologyCandidate struct {
 // TopologyDevice 是拓扑图上的一台设备。Kind 是 server（有关联服务器条
 // 目）、client（关联客户端实例）或 unmanaged（不受管设备）。
 type TopologyDevice struct {
-	ID             string                  `json:"id"`
-	Name           string                  `json:"name"`
-	Note           string                  `json:"note"`
-	Kind           string                  `json:"kind"`
-	ClientName     string                  `json:"client_name,omitempty"`
-	Servers        []TopologyDeviceServer  `json:"servers"`
-	SharedStorages []TopologySharedStorage `json:"shared_storages"`
-	Candidates     []TopologyCandidate     `json:"candidates"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Note         string `json:"note"`
+	Kind         string `json:"kind"`
+	ClientName   string `json:"client_name,omitempty"`
+	SiteID       string `json:"site_id,omitempty"`
+	LocationPath string `json:"location_path,omitempty"`
+	// LocationMismatches 非空时说明机器直接登记的地点不在某个物理局域
+	// 网覆盖的地点及其下级里；只是提示，不代表写入被拦截。
+	LocationMismatches []TopologyLocationMismatch `json:"location_mismatches,omitempty"`
+	Servers            []TopologyDeviceServer     `json:"servers"`
+	SharedStorages     []TopologySharedStorage    `json:"shared_storages"`
+	Candidates         []TopologyCandidate        `json:"candidates"`
 	// CandidateNotice 非空时说明没有共同网络候选，只能看兜底主机；文案
 	// 由数据来源生成，页面原样显示。
 	CandidateNotice string `json:"candidate_notice,omitempty"`
+}
+
+// TopologyLocationMismatch 描述一台机器的地点与一个物理局域网覆盖的地
+// 点不一致；两侧都写完整路径，页面原样展示。
+type TopologyLocationMismatch struct {
+	NetworkID           string `json:"network_id"`
+	NetworkName         string `json:"network_name"`
+	DeviceLocationPath  string `json:"device_location_path"`
+	NetworkLocationPath string `json:"network_location_path"`
 }
 
 // TopologyMembership 是一台设备在一个网络里的成员行；登记顺序沿用存储

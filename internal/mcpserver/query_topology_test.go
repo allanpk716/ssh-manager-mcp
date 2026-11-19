@@ -272,7 +272,7 @@ func TestQueryTopologySelfGroups(t *testing.T) {
 	}
 	want := strings.Join([]string{
 		"出发点：笔记本",
-		"所属网络：家A物理（物理局域网，站点：家A）、虚拟A（虚拟局域网）",
+		"所属网络：家A物理（物理局域网，覆盖地点：家A）、虚拟A（虚拟局域网）",
 		"同在物理局域网：",
 		"  家A物理",
 		"    工作设备 [入口一、入口二] ✓4ms 4分钟前",
@@ -452,7 +452,7 @@ func TestQueryTopologyPairDetailsDefault(t *testing.T) {
 	want := strings.Join([]string{
 		"出发点：笔记本",
 		"目标：工作设备 [入口一、入口二]",
-		"  家A物理（物理局域网，实际会选） ✓4ms 4分钟前",
+		"  家A物理（物理局域网，覆盖地点：家A，实际会选） ✓4ms 4分钟前",
 		"  虚拟A（虚拟局域网）",
 		"目标：NAS",
 		"  只能经虚拟局域网到达：虚拟A",
@@ -716,8 +716,8 @@ func TestQueryTopologyPairActualSelectionUsesDialSuccessCache(t *testing.T) {
 	if isError {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
-	if !strings.Contains(text, "家B物理（物理局域网，实际会选）") ||
-		strings.Contains(text, "家A物理（物理局域网，实际会选）") {
+	if !strings.Contains(text, "家B物理（物理局域网，覆盖地点：家B，实际会选）") ||
+		strings.Contains(text, "家A物理（物理局域网，覆盖地点：家A，实际会选）") {
 		t.Fatalf("成功地址缓存应让同级网络家B物理排在前面：\n%s", text)
 	}
 	after, err := os.ReadFile(cachePath)
@@ -749,7 +749,7 @@ func TestQueryTopologyPairUnanchoredEntryPrefersVirtualLan(t *testing.T) {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
 	if !strings.Contains(text, "虚拟A（虚拟局域网，实际会选）") ||
-		strings.Contains(text, "家A物理（物理局域网，实际会选）") {
+		strings.Contains(text, "家A物理（物理局域网，覆盖地点：家A，实际会选）") {
 		t.Fatalf("未锚定条目应只标虚拟局域网为实际会选：\n%s", text)
 	}
 }
@@ -806,10 +806,10 @@ func TestQueryTopologyPairUnanchoredWithoutCommonVirtualLanContinues(t *testing.
 	want := strings.Join([]string{
 		"出发点：笔记本",
 		"目标：工作设备 [入口一、入口二]",
-		"  家A物理（物理局域网，实际会选）",
+		"  家A物理（物理局域网，覆盖地点：家A，实际会选）",
 		"  虚拟A（虚拟局域网）",
 		"目标：未锚定物理设备 [未锚定物理入口]",
-		"  家A物理（物理局域网）",
+		"  家A物理（物理局域网，覆盖地点：家A）",
 		"  真正拨号会失败：这个服务器条目还没有主机密钥锚，首次连接只能经虚拟局域网，而出发点与它没有共同虚拟局域网",
 		"本工具不主动探测；需要现场结论请调用 probe_connectivity。",
 		"",
@@ -917,8 +917,8 @@ func TestQueryTopologyPairSkipsSuccessCacheForOtherOrigin(t *testing.T) {
 	if isError {
 		t.Fatalf("query_topology 失败：%s", text)
 	}
-	if !strings.Contains(text, "家A物理（物理局域网，实际会选）") ||
-		strings.Contains(text, "家B物理（物理局域网，实际会选）") {
+	if !strings.Contains(text, "家A物理（物理局域网，覆盖地点：家A，实际会选）") ||
+		strings.Contains(text, "家B物理（物理局域网，覆盖地点：家B，实际会选）") {
 		t.Fatalf("非本实例出发点不应使用本实例成功地址缓存：\n%s", text)
 	}
 }
@@ -975,10 +975,10 @@ func TestQueryTopologyPairDetail(t *testing.T) {
 	}
 	for _, wanted := range []string{
 		"角色：受管设备（入口一、入口二）",
-		"家A物理（物理局域网，实际会选） 地址：hidden；标称带宽：1000 Mbit/s；不按流量计费",
+		"家A物理（物理局域网，覆盖地点：家A，实际会选） 地址：hidden；标称带宽：1000 Mbit/s；不按流量计费",
 		"虚拟A（虚拟局域网） 地址：hidden；标称带宽：未登记；按流量计费",
 		"角色：不受管设备",
-		"家A物理（物理局域网，实际会选） 地址：192.0.2.21；标称带宽：1000 Mbit/s；不按流量计费",
+		"家A物理（物理局域网，覆盖地点：家A，实际会选） 地址：192.0.2.21；标称带宽：1000 Mbit/s；不按流量计费",
 	} {
 		if !strings.Contains(text, wanted) {
 			t.Fatalf("detail=true 展开参数输出缺少 %q：\n%s", wanted, text)
@@ -1062,7 +1062,7 @@ func TestQueryTopologyPairTargetRejections(t *testing.T) {
 		"from": "self", "to": []string{"授权外设备"},
 	})
 	if isError || !strings.Contains(text, "目标：授权外设备\n") ||
-		!strings.Contains(text, "  家A物理（物理局域网）\n") {
+		!strings.Contains(text, "  家A物理（物理局域网，覆盖地点：家A）\n") {
 		t.Fatalf("全部条目在授权外的设备应按设备名查询且不列条目：\n%s error=%v", text, isError)
 	}
 	if strings.Contains(text, "外部入口") || strings.Contains(text, external.ID) {
