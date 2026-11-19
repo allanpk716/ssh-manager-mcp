@@ -148,7 +148,7 @@ func seed(dir string) error {
 		}
 		if _, err := st.AddSharedStorage(store.SharedStorageInput{
 			Name: "datasets", Device: "工作站", User: "browser-mount-user",
-			PasswordSecret: "SHARE_MOUNT_PASSWORD", Drive: "X",
+			PasswordSecret: "SHARE_MOUNT_PASSWORD", Drive: "X", Note: "浏览器测试共享存储",
 			Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
 		}, store.CLISource()); err != nil {
 			return err
@@ -370,6 +370,7 @@ func seedTopology(st *store.Store) error {
 	}
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "家NAS共享", Device: "NAS", User: "backup", PasswordSecret: "NAS_PASSWORD", Drive: "N",
+		Note:        "浏览器测试的家用共享存储",
 		Directories: []models.SharedStorageDirectory{{Purpose: "照片", Path: "photos"}},
 	}, store.CLISource()); err != nil {
 		return err

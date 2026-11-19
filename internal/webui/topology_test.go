@@ -1101,3 +1101,37 @@ func TestTopologyLayoutWriterErrorsMapToClientErrors(t *testing.T) {
 		t.Fatalf("写来源失败的状态码 = %d，应为 500", failed.StatusCode)
 	}
 }
+
+// TestTopologyAssetsUseApprovedTerms 固定拓扑相关界面文案：不出现旧称
+// “站点、网络成员、兜底主机”，手机视口只读，地点显示完整多级路径。
+func TestTopologyAssetsUseApprovedTerms(t *testing.T) {
+	staticJS, err := staticFS.ReadFile("static/topology.js")
+	if err != nil {
+		t.Fatalf("读取 topology.js 失败：%v", err)
+	}
+	templates, err := templateContents()
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(name, body string) {
+		t.Helper()
+		for _, forbidden := range []string{"站点", "网络成员", "兜底主机"} {
+			if strings.Contains(body, forbidden) {
+				t.Fatalf("%s 不应出现 %q：%s", name, forbidden, body)
+			}
+		}
+	}
+	check("topology.js", string(staticJS))
+	check("topology.tmpl", templates["topology.tmpl"])
+	for _, name := range []string{"share-desktop.tmpl", "ops-upgrade-server.tmpl"} {
+		check(name, templates[name])
+	}
+	js := string(staticJS)
+	for _, want := range []string{
+		"location_path", "pageReadOnly", "服务器条目地址", "网络地址",
+	} {
+		if !strings.Contains(js, want) {
+			t.Fatalf("topology.js 缺少 %q，手机只读与多级地点显示未实现", want)
+		}
+	}
+}

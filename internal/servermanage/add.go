@@ -219,7 +219,7 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 			return preparedAdd{}, err
 		}
 		if len(memberships) > 0 {
-			return preparedAdd{}, &FieldError{Field: "device", CLI: "existing device memberships cannot be replaced", Page: "已有设备沿用全部网络成员，不能再登记新的站点与网络成员。"}
+			return preparedAdd{}, &FieldError{Field: "device", CLI: "existing device memberships cannot be replaced", Page: "已有设备沿用全部网络地址，不能再登记新的地点与网络地址。"}
 		}
 	}
 	if req.Server.Host == "" {
@@ -234,7 +234,7 @@ func (m *Manager) prepareAdd(req AddRequest) (preparedAdd, error) {
 	if req.Server.Host == "" && len(deviceMemberships) == 0 && len(memberships) == 0 {
 		return preparedAdd{}, &FieldError{
 			Field: "host", CLI: "host or at least one network membership is required",
-			Page: "兜底主机与网络成员地址至少填写一项。",
+			Page: "服务器条目主机地址与网络地址至少填写一项。",
 		}
 	}
 
@@ -279,7 +279,7 @@ func (m *Manager) prepareNetworkMemberships(
 			continue
 		}
 		if membership.Network == "" || membership.Address == "" {
-			return nil, nil, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "网络成员必须同时填写网络与地址。"}
+			return nil, nil, &FieldError{Field: "memberships", CLI: "network membership requires network and address", Page: "网络地址必须同时填写网络与地址。"}
 		}
 		network, ok := networkByName[membership.Network]
 		if !ok {
@@ -313,7 +313,7 @@ func (m *Manager) prepareNetworkMemberships(
 				if network.SiteName != siteName {
 					return nil, nil, &FieldError{
 						Field: "site", CLI: "physical network does not belong to site",
-						Page: "物理局域网不属于所选站点，请重新选择。",
+						Page: "物理局域网不属于所选地点，请重新选择。",
 					}
 				}
 				break
@@ -322,7 +322,7 @@ func (m *Manager) prepareNetworkMemberships(
 		if physical == "" {
 			return nil, nil, &FieldError{
 				Field: "site", CLI: "site requires a physical network membership",
-				Page: "填写站点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填站点。",
+				Page: "填写地点时必须同时填写物理局域网与地址；只填虚拟局域网时请不填地点。",
 			}
 		}
 	}

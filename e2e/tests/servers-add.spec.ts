@@ -18,7 +18,7 @@ test("从页头新增服务器并复用已有设备的网络成员", async ({ pa
     await page.getByLabel("密码", { exact: true }).fill("browser-new-secret");
     await page.getByRole("radio", { name: "已有设备" }).check();
     await page.locator("#add-existing-device").selectOption("工作站");
-    await expect(page.getByLabel("站点", { exact: true })).toBeHidden();
+    await expect(page.getByLabel("地点", { exact: true })).toBeHidden();
     await expect(page.getByLabel("物理局域网", { exact: true })).toBeHidden();
     await page.locator("details", { hasText: "profile 授权" }).locator("summary").click();
     await page.locator('input[name="profile_id"]').check();

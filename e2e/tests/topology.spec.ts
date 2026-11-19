@@ -301,7 +301,7 @@ test("桌面端切换三视图并查看托盘、角标与详情", async ({ page,
 
     await selectTopologyEntity(page, "topology:select-site", "家A");
     // 探测叠加用例给家A局域网补了一台「探测机」，成员数随之增加。
-    await expect(detail).toContainText("家A局域网 · 3 台成员设备");
+    await expect(detail).toContainText("家A局域网 · 3 台设备");
     expect(consoleErrors).toEqual([]);
   } finally {
     await ui.close();
@@ -452,7 +452,7 @@ test("网络框新增保留物理与虚拟网络预选并刷新成员", async ({
     await selectTopologyEntity(page, "topology:select-network", "家A局域网");
     await detail.getByRole("link", { name: "在此新增" }).click();
     await page.getByRole("link", { name: /其他设备/ }).click();
-    await expect(page.getByLabel("站点", { exact: true })).toHaveValue("家A");
+    await expect(page.getByLabel("地点", { exact: true })).toHaveValue("家A");
     await expect(page.getByLabel("物理局域网", { exact: true })).toHaveValue("家A局域网");
     await page.getByLabel("设备名", { exact: true }).fill("物理入口设备");
     await page.getByLabel("物理局域网地址").fill("192.168.1.81");
@@ -492,7 +492,7 @@ test("设备详情新增服务器条目沿用设备并刷新角标与锚状态",
 
     await expect(page.getByRole("radio", { name: "已有设备" })).toBeChecked();
     await expect(page.locator("#add-existing-device")).toHaveValue("工作站");
-    await expect(page.getByLabel("站点", { exact: true })).toBeHidden();
+    await expect(page.getByLabel("地点", { exact: true })).toBeHidden();
     await expect(page.getByLabel("物理局域网", { exact: true })).toBeHidden();
     await page.getByLabel("名称", { exact: true }).fill("device-detail-web");
     await page.getByLabel("用户", { exact: true }).fill("deploy");
@@ -699,7 +699,7 @@ test("客户端只读查看本地快照拓扑", async ({ page }) => {
     await gotoUIPath(page, "/ui/topology/");
     await page.getByRole("heading", { name: "网络拓扑" }).waitFor();
 
-    await expect(page.getByText("拓扑为只读视图；网络成员的修改请到权威端 Web UI 做。")).toBeVisible();
+    await expect(page.getByText("拓扑为只读视图；网络地址的修改请到权威端 Web UI 做。")).toBeVisible();
     const canvas = page.locator("#topology-canvas");
     await expect(canvas).not.toHaveAttribute("data-node-count", "0");
     await expect(canvas).toHaveAttribute("data-grabbable", "false");
@@ -716,7 +716,7 @@ test("客户端只读查看本地快照拓扑", async ({ page }) => {
     await selectTopologyEntity(page, "topology:select-device", "客户端服务器设备");
     await expect(detail).toBeVisible();
     await expect(detail.getByRole("link", { name: "客户端服务器" })).toBeVisible();
-    await expect(detail).toContainText("兜底主机");
+    await expect(detail).toContainText("服务器条目地址");
     await expect(detail).toContainText("192.0.2.30");
     await expect(detail.getByRole("button", { name: "编辑" })).toHaveCount(0);
 

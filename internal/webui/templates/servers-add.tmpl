@@ -55,15 +55,15 @@
 <option value="">请选择设备</option>
 {{range .ServerAdd.Devices}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.ExistingDeviceName .Name}}selected{{end}}>{{.Name}}</option>{{end}}
 </select>
-<p class="muted">选择已有设备时沿用它的站点与全部网络成员。</p></div>
+<p class="muted">选择已有设备时沿用它的地点与全部网络地址。</p></div>
 </fieldset>
 {{end}}
 <fieldset class="new-device-fields">
-<legend>站点与网络成员</legend>
-<p class="muted">不填这一组时，设备没有任何网络成员，会进入未归类设备托盘。</p>
-<div class="form-field"><label for="add-site">站点</label>
+<legend>地点与网络地址</legend>
+<p class="muted">不填这一组时，设备没有任何网络地址，会进入未归类设备托盘。</p>
+<div class="form-field"><label for="add-site">地点</label>
 <select id="add-site" name="site">
-<option value="">不填站点</option>
+<option value="">不填地点</option>
 {{range .ServerAdd.Sites}}<option value="{{.Name}}" {{if eq $.ServerAdd.Form.SiteName .Name}}selected{{end}}>{{.Name}}</option>{{end}}
 </select></div>
 <div class="form-field"><label for="add-physical-network">物理局域网</label>
