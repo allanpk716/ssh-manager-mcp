@@ -80,8 +80,10 @@ func (authorizationShareWriter) EditShare(string, ShareEditForm, ShareWriteSourc
 func (authorizationShareWriter) DeleteShare(string, ShareWriteSource) error { return nil }
 
 type authorizationSecretWriter struct {
-	preview SecretAuthorizationPreview
-	target  []SecretAuthorizationCell
+	preview     SecretAuthorizationPreview
+	target      []SecretAuthorizationCell
+	applyTarget []SecretAuthorizationCell
+	applyResult SecretApplyResult
 }
 
 func (w *authorizationSecretWriter) AddSecret(string, string, string, []byte, SecretWriteSource) error {
@@ -103,8 +105,9 @@ func (w *authorizationSecretWriter) PreviewAuthorization(target []SecretAuthoriz
 	return w.preview, nil
 }
 
-func (w *authorizationSecretWriter) ApplyAuthorization([]SecretAuthorizationCell, string, SecretWriteSource) (SecretApplyResult, *SecretAuthorizationConflict, error) {
-	return SecretApplyResult{}, nil, nil
+func (w *authorizationSecretWriter) ApplyAuthorization(target []SecretAuthorizationCell, summary string, source SecretWriteSource) (SecretApplyResult, *SecretAuthorizationConflict, error) {
+	w.applyTarget = append([]SecretAuthorizationCell(nil), target...)
+	return w.applyResult, nil, nil
 }
 
 func newAuthorizationTestHandler(t *testing.T) (http.Handler, *stubAccessStore, *authorizationSecretWriter, *http.Cookie) {
@@ -429,6 +432,32 @@ func TestServerSelectionAddModeKeepsSecretAndShareTargets(t *testing.T) {
 			}
 			if !strings.Contains(previewBody, `href="/ui/servers/"`) {
 				t.Fatalf("追加确认页应能返回服务器列表：\n%s", previewBody)
+			}
+			writer.applyResult = SecretApplyResult{Applied: true}
+			confirmForm := url.Values{
+				"csrf_token": {csrf},
+				"summary":    {"授权变更摘要"},
+				"return_to":  {"/ui/servers/"},
+			}
+			if testCase.kind == authorizationResourceKindSharedStore {
+				confirmForm.Set("authorization_view", "share-scope")
+				confirmForm.Set("share_id", testCase.id)
+			}
+			for _, cell := range writer.target {
+				confirmForm.Add("target", encodeSecretTarget(cell))
+			}
+			confirmed := postStandaloneForm(t, handler, cookie, "/ui/secrets/authorization/confirm", confirmForm)
+			confirmedBody := readResponseBody(t, confirmed)
+			if confirmed.StatusCode != http.StatusSeeOther || confirmed.Header.Get("Location") != "/ui/servers/" {
+				t.Fatalf("批量授权保存后应回到服务器列表，状态码=%d 跳转=%q 页面：\n%s",
+					confirmed.StatusCode, confirmed.Header.Get("Location"), confirmedBody)
+			}
+			allowedAfterApply := map[string]bool{}
+			for _, cell := range writer.applyTarget {
+				allowedAfterApply[cell.ServerID] = cell.Allow
+			}
+			if !allowedAfterApply["server-web"] || !allowedAfterApply["server-db"] {
+				t.Fatalf("批量授权保存应写入并集，实际目标授权格：%+v", writer.applyTarget)
 			}
 		})
 	}

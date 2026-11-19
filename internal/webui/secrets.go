@@ -471,6 +471,10 @@ func (h *handler) handleSecretAuthorizationConfirm(w http.ResponseWriter, r *htt
 			return
 		}
 	}
+	if result.Applied && safeSecretReturnPath(r.PostFormValue("return_to")) == "/ui/servers/" {
+		http.Redirect(w, r, "/ui/servers/", http.StatusSeeOther)
+		return
+	}
 	notice := "没有变化，未写入数据或审计。"
 	if result.Applied {
 		notice = "已保存授权变更。"
