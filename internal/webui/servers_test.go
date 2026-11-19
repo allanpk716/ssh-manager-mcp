@@ -114,12 +114,11 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	}}
 	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 
-	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=authorization")
 	for _, want := range []string{
-		"机密项", "API_TOKEN", "接口令牌", "环境变量名",
-		"共享存储", "datasets", "NAS", "mount-user", "/mnt/sshmgr/datasets",
-		"profile 授权", "运维",
-		"同设备其他服务器条目带来的共享存储", "worker-data", "来源服务器条目", "worker",
+		"机密项", "API_TOKEN", "接口令牌", "环境变量",
+		"共享存储", "datasets", "NAS", "/mnt/sshmgr/datasets",
+		"Profile", "运维",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("服务器详情页缺少 %q：\n%s", want, page)
@@ -131,13 +130,13 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	if strings.Count(page, `name="cell__secret-dataset__srv-fine"`) != 1 {
 		t.Fatalf("同一密码机密项只应提交一个勾选框：\n%s", page)
 	}
-	if !strings.Contains(page, "与 datasets、models 同一密码机密项") ||
+	if !strings.Contains(page, "共用同一个挂载密码机密项") ||
 		!strings.Contains(page, "models") || !strings.Contains(page, "NAS-B") ||
-		!strings.Contains(page, "model-mount-user") || !strings.Contains(page, "/mnt/sshmgr/models") {
-		t.Fatalf("同一个密码机密项驱动的共享存储应各占一行并说明共用勾选：\n%s", page)
+		!strings.Contains(page, "/mnt/sshmgr/models") {
+		t.Fatalf("同一个密码机密项驱动的共享存储应逐项展示并说明一起变化：\n%s", page)
 	}
 
-	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=authorization")
 	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无可选 profile"} {
 		if !strings.Contains(empty, want) {
 			t.Fatalf("服务器详情页空状态缺少 %q：\n%s", want, empty)
@@ -170,13 +169,11 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 	store.details["srv-bare"].ShowDeliveryRecords = true
 	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 
-	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=authorization")
 	for _, want := range []string{
 		"下发记录", "/etc/app/config.yml", "OLD_TOKEN", "引用的机密项已删除",
 		"写入时间", "office-laptop", "agent-a", "<details", "模板原文",
 		"token: {{sshmgr-secret:OLD_TOKEN}}", strings.Repeat("5", 64), "值版本号", "OLD_TOKEN：2",
-		"同设备其他服务器条目带来的下发文件", "来源服务器条目", "worker",
-		"/etc/worker/config.yml", "worker-laptop", "agent-b",
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("服务器详情页下发记录缺少 %q：\n%s", want, page)
@@ -188,14 +185,14 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 		}
 	}
 
-	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=authorization")
 	if !strings.Contains(empty, "暂无写到这台服务器的下发记录。") {
 		t.Fatalf("服务器详情页下发记录空状态不明确：\n%s", empty)
 	}
 
 	clientHandler, clientCookie := newServersTestHandler(t, RoleClient, store, &stubServerWriter{})
-	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
-	for _, forbidden := range []string{"下发记录", "同设备其他服务器条目带来的下发文件"} {
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine?tab=authorization")
+	for _, forbidden := range []string{"下发记录", "预览机密项授权变更"} {
 		if strings.Contains(clientPage, forbidden) {
 			t.Fatalf("客户端服务器详情不得显示 %q：\n%s", forbidden, clientPage)
 		}
@@ -659,7 +656,7 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 	now = now.Add(6 * time.Minute)
 
 	// 超过 5 分钟未重新验证：编辑页凭据区域提示重新验证；提交被拒且不回显。
-	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", cookie)
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?tab=connection&edit=1", cookie)
 	body := readResponseBody(t, page)
 	if !strings.Contains(body, "重新验证后才能填写") {
 		t.Fatalf("未验证的编辑页应提示重新验证：\n%s", body)
@@ -908,7 +905,7 @@ func TestAuthorityClearCredentialNeedsRecentVerify(t *testing.T) {
 	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 	now = now.Add(6 * time.Minute)
 
-	editPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", cookie)
+	editPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?tab=connection&edit=1", cookie)
 	editCSRF := hiddenInputValue(t, readResponseBody(t, editPage), "csrf_token")
 	form := url.Values{
 		"csrf_token": {editCSRF},
@@ -1043,7 +1040,7 @@ func TestServersPagesListSharedCredentialServers(t *testing.T) {
 	if !strings.Contains(complete, "共用这把私钥的服务器会一起去掉待补标记：fine,peer") {
 		t.Fatalf("补全页应列出共用凭据的服务器：\n%s", complete)
 	}
-	edit := serversGet(t, h, cookie, "/ui/servers/srv-key/edit")
+	edit := serversGet(t, h, cookie, "/ui/servers/srv-key?tab=connection&edit=1")
 	if !strings.Contains(edit, "「只补私钥口令」会影响共用这把私钥的全部服务器：fine,peer") {
 		t.Fatalf("编辑页应列出共用凭据的服务器：\n%s", edit)
 	}

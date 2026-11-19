@@ -127,3 +127,60 @@ func TestTopologyWriterManagesNetworksThroughStore(t *testing.T) {
 }
 
 func ptrString(value string) *string { return &value }
+
+// TestTopologyWriterEditsDeviceSiteAndMovesServer 校验服务器详情页新增的两
+// 个写入口都走存储层：机器地点修改与 devices move-server 等价操作。
+func TestTopologyWriterEditsDeviceSiteAndMovesServer(t *testing.T) {
+	st := newWriterTestStore(t)
+	writer := WriterFromStore(st)
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
+
+	message, err := writer.EditDeviceSite("工作站", "机房", source)
+	if err != nil || message != "已把设备 工作站 的地点改为 机房" {
+		t.Fatalf("修改机器地点失败：%v %q", err, message)
+	}
+	device, err := st.GetDevice("工作站")
+	if err != nil || device.SiteName != "机房" {
+		t.Fatalf("机器地点应已写入存储：%+v %v", device, err)
+	}
+
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "root",
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("secret")}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	move, err := writer.MoveServerToDevice(added.ServerID, "NAS", source)
+	if err != nil {
+		t.Fatalf("改挂服务器失败：%v", err)
+	}
+	if move.ServerName != "web" || move.ToDevice != "NAS" || move.FromDevice != "web" || move.AnchorNotice != "" {
+		t.Fatalf("改挂结果不正确：%+v", move)
+	}
+	movedServers, err := st.ListServersForDevice("NAS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawMove := false
+	for _, row := range movedServers {
+		if row.ID == added.ServerID {
+			sawMove = true
+		}
+	}
+	if !sawMove {
+		t.Fatalf("改挂后目标机器应包含该服务器条目：%+v", movedServers)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawWebUIDeviceEdit bool
+	for _, row := range rows {
+		if row.Action == "device.edit" && row.Source == store.AuditSourceWebUI {
+			sawWebUIDeviceEdit = true
+		}
+	}
+	if !sawWebUIDeviceEdit {
+		t.Fatalf("机器地点写入审计应记录 Web UI 来源：%+v", rows)
+	}
+}

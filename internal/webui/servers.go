@@ -830,42 +830,58 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 		h.handleServerDetail(w, r, id)
 		return
 	}
-	if h.cfg.ServerWriter == nil {
-		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
-		return
-	}
 	switch action {
 	case "edit":
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
 		h.handleServerEdit(w, r, id)
 	case "delete":
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
 		h.handleServerDelete(w, r, id)
 	case "hostkey-pin":
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
 		h.handleServerHostKeyPin(w, r, id)
 	case "hostkey-clear":
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
 		h.handleServerHostKeyClear(w, r, id)
+	case "location":
+		if h.cfg.TopologyWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerDetailLocation(w, r, id)
+	case "address/add", "address/edit", "address/remove":
+		if h.cfg.TopologyWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerDetailAddressWrite(w, r, id, strings.TrimPrefix(action, "address/"))
+	case "move":
+		if h.cfg.TopologyWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerDetailMove(w, r, id)
+	case "test":
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerDetailTest(w, r, id)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
-}
-
-func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id string) {
-	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
-		return
-	}
-	if detail == nil {
-		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
-		return
-	}
-	data := pageData{Title: detail.Name, ServerDetail: detail}
-	switch r.URL.Query().Get("hostkey") {
-	case "updated":
-		data.ServerDetailNotice, data.ServerDetailNoticeKind = "已覆盖主机密钥锚。", "success"
-	case "cleared":
-		data.ServerDetailNotice, data.ServerDetailNoticeKind = "已删除主机密钥锚。", "success"
-	}
-	h.renderPage(w, r, http.StatusOK, "servers-detail.tmpl", data)
 }
 
 // handleServerHostKeyPin 处理服务器详情页的主机密钥锚覆盖表单：权威端要
@@ -953,13 +969,12 @@ func (h *handler) handleServerHostKeyClear(w http.ResponseWriter, r *http.Reques
 func (h *handler) renderServerDetailNotice(
 	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, status int, notice string,
 ) {
-	h.renderPage(w, r, status, "servers-detail.tmpl", pageData{
-		Title: detail.Name, ServerDetail: detail, ServerDetailNotice: notice,
-	})
+	h.renderServerDetailPage(w, r, status, detail, notice, "")
 }
 
-// handleServerEdit 渲染编辑表单或处理编辑提交。权威端未在 5 分钟内验证过
-// 管理员口令时，凭据区域显示重新验证提示；提交凭据时再检查一次。
+// handleServerEdit 处理连接块内联编辑表单的提交。GET 只回到连接块并展开
+// 表单；权威端未在 5 分钟内验证过管理员口令时，凭据区域显示重新验证提
+// 示，提交凭据时再检查一次。
 func (h *handler) handleServerEdit(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method == http.MethodPost {
 		h.handleServerEditPost(w, r, id)
@@ -978,8 +993,7 @@ func (h *handler) handleServerEdit(w http.ResponseWriter, r *http.Request, id st
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
-	view := h.serverEditView(w, r, detail, "")
-	h.renderPage(w, r, http.StatusOK, "servers-edit.tmpl", pageData{Title: "编辑 " + detail.Name, ServerEdit: view})
+	http.Redirect(w, r, serverDetailTabPath(detail.ID, serverDetailTabConnection)+"&edit=1", http.StatusSeeOther)
 }
 
 type serverEditView struct {
@@ -991,7 +1005,7 @@ type serverEditView struct {
 	HasSharedKeyNotice bool
 }
 
-func (h *handler) serverEditView(w http.ResponseWriter, r *http.Request, detail *ServerDetailView, notice string) *serverEditView {
+func (h *handler) serverEditView(r *http.Request, detail *ServerDetailView, notice string) *serverEditView {
 	view := &serverEditView{Detail: detail, Notice: notice}
 	if detail.CredentialType == string(models.CredPrivateKey) {
 		if names, err := h.cfg.ServerWriter.SharedCredentialServers(detail.ID); err == nil {
@@ -1012,6 +1026,9 @@ func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, i
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "保存前读取服务器详情失败，请稍后重试。")
 		return
 	}
+	if !h.mergeServerEditUpload(w, r) {
+		return
+	}
 	form := h.parseServerEditForm(r, detail)
 	if serverFormWritesCredential(form) && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
 		http.Redirect(w, r, reverifyPath("/ui/servers/"+url.PathEscape(id)+"/edit"), http.StatusSeeOther)
@@ -1021,20 +1038,16 @@ func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, i
 	if err != nil {
 		var formErr *ServerFormError
 		if errors.As(err, &formErr) {
-			view := h.serverEditView(w, r, editErrorDetail(r, detail), formErr.Message)
-			h.renderPage(w, r, http.StatusBadRequest, "servers-edit.tmpl", pageData{
-				Title: "编辑 " + view.Detail.Name, ServerEdit: view,
-			})
+			view := h.serverEditView(r, editErrorDetail(r, detail), formErr.Message)
+			h.renderServerDetailPageView(w, r, http.StatusBadRequest, view.Detail, "", "", view)
 			return
 		}
 		h.renderError(w, r, http.StatusInternalServerError, "保存服务器失败", "保存服务器失败，请稍后重试。")
 		return
 	}
 	if conflict != nil {
-		view := h.serverEditView(w, r, conflict.Current, "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。")
-		h.renderPage(w, r, http.StatusConflict, "servers-edit.tmpl", pageData{
-			Title: "编辑 " + conflict.Current.Name, ServerEdit: view,
-		})
+		view := h.serverEditView(r, conflict.Current, "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。")
+		h.renderServerDetailPageView(w, r, http.StatusConflict, conflict.Current, "", "", view)
 		return
 	}
 	http.Redirect(w, r, "/ui/servers/"+url.PathEscape(result.Detail.ID), http.StatusSeeOther)

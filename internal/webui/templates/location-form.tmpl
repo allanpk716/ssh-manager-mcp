@@ -22,6 +22,7 @@
 {{else}}
 <form method="post" action="{{if eq .LocationForm.Mode "create"}}/ui/more/locations/new{{else if eq .LocationForm.Mode "rename"}}/ui/more/locations/rename{{else}}/ui/more/locations/move{{end}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+{{if .LocationForm.ReturnTo}}<input type="hidden" name="return_to" value="{{.LocationForm.ReturnTo}}">{{end}}
 {{if .LocationForm.Site}}<input type="hidden" name="site" value="{{.LocationForm.Site.LocationPath}}">{{end}}
 {{if ne .LocationForm.Mode "move"}}
 <div class="form-field">

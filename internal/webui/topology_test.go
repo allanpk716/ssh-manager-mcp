@@ -440,6 +440,8 @@ type stubTopologyWriter struct {
 	locationDeletes   []string
 	networkAdds       []TopologyNetworkInput
 	networkEdits      []stubNetworkEdit
+	siteEdits         [][2]string
+	serverMoves       [][2]string
 	sources           []TopologyWriteSource
 	addMessage        string
 	nextNotFoundError bool
@@ -550,6 +552,21 @@ func (w *stubTopologyWriter) EditManagedNetwork(name string, changes TopologyNet
 	w.networkEdits = append(w.networkEdits, stubNetworkEdit{name: name, changes: changes})
 	w.sources = append(w.sources, source)
 	return "已保存网络", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditDeviceSite(device, site string, source TopologyWriteSource) (string, error) {
+	w.siteEdits = append(w.siteEdits, [2]string{device, site})
+	w.sources = append(w.sources, source)
+	if site == "" {
+		return "已清除机器地点", w.nextError()
+	}
+	return "已保存机器地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) MoveServerToDevice(serverID, device string, source TopologyWriteSource) (TopologyServerMoveResult, error) {
+	w.serverMoves = append(w.serverMoves, [2]string{serverID, device})
+	w.sources = append(w.sources, source)
+	return TopologyServerMoveResult{ServerName: serverID, ToDevice: device}, w.nextError()
 }
 
 func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {

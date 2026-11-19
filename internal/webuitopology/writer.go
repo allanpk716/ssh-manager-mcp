@@ -221,6 +221,63 @@ func (w openerWriter) EditManagedNetwork(
 	})
 }
 
+func (w openerWriter) EditDeviceSite(
+	device, siteRef string, source webui.TopologyWriteSource,
+) (string, error) {
+	return withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		site := siteRef
+		edited, err := st.EditDeviceWithSource(device, store.DeviceChanges{Site: &site},
+			store.WebUISource(source.RemoteAddress))
+		if err != nil {
+			return "", topologyWriteError(err)
+		}
+		if edited.SiteName == "" {
+			return fmt.Sprintf("已清除设备 %s 的地点", edited.Name), nil
+		}
+		return fmt.Sprintf("已把设备 %s 的地点改为 %s", edited.Name, edited.SiteName), nil
+	})
+}
+
+func (w openerWriter) MoveServerToDevice(
+	serverIdentifier, device string, source webui.TopologyWriteSource,
+) (webui.TopologyServerMoveResult, error) {
+	var result webui.TopologyServerMoveResult
+	_, err := withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		move, err := st.MoveServerToDevice(serverIdentifier, device)
+		if err != nil {
+			return "", topologyWriteError(err)
+		}
+		result = webui.TopologyServerMoveResult{
+			ServerName:   move.Server.Name,
+			FromDevice:   deviceNameOrEmpty(move.FromDevice),
+			ToDevice:     move.ToDevice.Name,
+			AnchorNotice: anchorCopyNotice(move.AnchorCopy),
+		}
+		return "", nil
+	})
+	return result, err
+}
+
+func deviceNameOrEmpty(device *models.Device) string {
+	if device == nil {
+		return ""
+	}
+	return device.Name
+}
+
+func anchorCopyNotice(anchor *store.ServerAnchorCopy) string {
+	if anchor == nil {
+		return ""
+	}
+	if anchor.AnchorConflict {
+		return "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。"
+	}
+	if anchor.Copied {
+		return "已复制同机账号 " + anchor.FromServerName + " 的主机密钥锚。"
+	}
+	return ""
+}
+
 func networkTypeLabel(networkType models.NetworkType) string {
 	if networkType == models.NetworkVirtual {
 		return "虚拟局域网"
