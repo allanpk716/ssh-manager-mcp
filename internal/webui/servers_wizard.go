@@ -66,33 +66,52 @@ func (h *handler) handleServerWizardStartGet(w http.ResponseWriter, r *http.Requ
 			return
 		}
 	}
-	applyServerWizardContext(form, r.URL.Query(), topology)
+	if title, message := applyServerWizardContext(form, r.URL.Query(), topology); title != "" {
+		h.renderError(w, r, http.StatusNotFound, title, message)
+		return
+	}
 	h.renderServerWizardStart(w, r, form, "", http.StatusOK, topology)
 }
 
-func applyServerWizardContext(form *ServerAddForm, query url.Values, topology *TopologyData) {
+// applyServerWizardContext 把拓扑页带来的预选参数写进第 1 步表单；网络或
+// 设备不存在时返回 404 文案，避免静默丢弃上下文。
+func applyServerWizardContext(form *ServerAddForm, query url.Values, topology *TopologyData) (string, string) {
 	form.ReturnTo = normalizeAddReturnPath(query.Get("return_to"))
 	if network := strings.TrimSpace(query.Get("network")); network != "" {
+		found := false
 		if topology != nil {
 			for _, item := range topology.Networks {
 				if item.Name == network {
-					form.AddressNetworks = []string{network}
-					form.AddressValues = []string{""}
+					found = true
 					break
 				}
 			}
 		}
+		if !found {
+			return "网络不存在", "选择的物理局域网或虚拟局域网不存在，请回到网络拓扑后重新进入。"
+		}
+		form.AddressNetworks = []string{network}
+		form.AddressValues = []string{""}
 	}
-	if device := strings.TrimSpace(query.Get("device")); device != "" && topology != nil {
-		for _, item := range topology.Devices {
-			if item.Name == device {
-				form.DeviceChoice = "existing"
-				form.ExistingDeviceName = device
-				form.AddressNetworks = []string{"other"}
-				form.AddressValues = []string{""}
+	if device := strings.TrimSpace(query.Get("device")); device != "" {
+		found := false
+		if topology != nil {
+			for _, item := range topology.Devices {
+				if item.Name == device {
+					form.DeviceChoice = "existing"
+					form.ExistingDeviceName = device
+					form.AddressNetworks = []string{"other"}
+					form.AddressValues = []string{""}
+					found = true
+					break
+				}
 			}
 		}
+		if !found {
+			return "设备不存在", "选择的设备不存在，请回到网络拓扑后重新进入。"
+		}
 	}
+	return "", ""
 }
 
 func (h *handler) renderServerWizardStart(
@@ -170,6 +189,15 @@ func (h *handler) handleServerWizardStartPost(w http.ResponseWriter, r *http.Req
 		form.AddressNetworks = append(form.AddressNetworks, "other")
 		form.AddressValues = append(form.AddressValues, "")
 		h.renderServerWizardStart(w, r, &form, "已追加一个地址行，请继续填写。", http.StatusOK, topology)
+		return
+	}
+	if r.PostFormValue("clear_staged_credentials") == "1" {
+		if sess := h.currentSession(r); sess != nil {
+			h.setServerAddDraft(sess, nil)
+		}
+		clearServerAddCredentialFields(&form)
+		form.StagedCredential = false
+		h.renderServerWizardStart(w, r, &form, "已清除暂存的登录凭据，请重新填写后再保存。", http.StatusOK, topology)
 		return
 	}
 	fieldErrors = append(fieldErrors, serverWizardStartErrors(form)...)

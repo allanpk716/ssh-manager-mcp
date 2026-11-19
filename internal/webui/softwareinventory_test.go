@@ -828,3 +828,28 @@ func postSoftwareInventoryForm(
 	handler.ServeHTTP(recorder, request)
 	return recorder.Result()
 }
+
+// TestSoftwareInventoryTemplatesUseMobileCards 固定手机可读性要求：各清
+// 单页不使用裸表格，记录一律是带字段名的卡片。
+func TestSoftwareInventoryTemplatesUseMobileCards(t *testing.T) {
+	contents, err := templateContents()
+	if err != nil {
+		t.Fatalf("读取模板失败：%v", err)
+	}
+	for _, name := range []string{
+		"softwareinventory.tmpl", "softwareinventory-device.tmpl",
+		"softwareinventory-search.tmpl", "softwareinventory-declarations.tmpl",
+		"softwareinventory-settings.tmpl", "softwareinventory-todos.tmpl",
+	} {
+		body, ok := contents[name]
+		if !ok {
+			t.Fatalf("模板 %s 不存在", name)
+		}
+		if strings.Contains(body, "<table") {
+			t.Fatalf("软件清单模板 %s 不得使用表格：%s", name, body)
+		}
+		if !strings.Contains(body, "field-list") {
+			t.Fatalf("软件清单模板 %s 应使用带字段名的卡片：%s", name, body)
+		}
+	}
+}

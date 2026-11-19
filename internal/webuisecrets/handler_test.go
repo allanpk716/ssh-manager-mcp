@@ -303,7 +303,14 @@ func TestSecretAddWritesValueWithoutEchoAndAuditsWebUISource(t *testing.T) {
 	st := newIntegrationStore(t)
 	mustServer(t, st, "web-1")
 	h := newIntegrationHandler(t, st)
-	csrf := csrfToken(t, h)
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 
 	form := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
 		"csrf_token": {csrf}, "name": {"API_TOKEN"},
@@ -384,7 +391,14 @@ func TestSecretDetailSupportsEditValueAndDelete(t *testing.T) {
 	}
 	secretID := views[0].ID
 	h := newIntegrationHandler(t, st)
-	csrf := csrfToken(t, h)
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 	detailTarget := "/ui/secrets/" + secretID
 
 	detail := h.do(http.MethodGet, detailTarget, nil)
@@ -609,7 +623,14 @@ func TestAuthoritySecretWritesRequireReverifyAndPreserveSubmittedState(t *testin
 	now := time.Now()
 	h := newAuthorityHandler(t, st, &now)
 	now = now.Add(6 * time.Minute)
-	csrf := hiddenValue(t, body(t, h.do(http.MethodGet, "/ui/secrets/", nil)), "csrf_token")
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 
 	addResume := "/ui/secrets/new?environment_name=AUTH_TOKEN_FILE&name=NEW_TOKEN&note=%E6%9D%83%E5%A8%81%E7%AB%AF&resume=1"
 	addRejected := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
@@ -720,7 +741,14 @@ func TestAuthoritySecretMetadataEditRequiresReverifyAndPreservesSubmittedState(t
 	now := time.Now()
 	h := newAuthorityHandler(t, st, &now)
 	now = now.Add(6 * time.Minute)
-	csrf := hiddenValue(t, body(t, h.do(http.MethodGet, "/ui/secrets/", nil)), "csrf_token")
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 
 	resume := "/ui/secrets/" + secretID + "?environment_name=AUTH_TOKEN_ENV&note=" +
 		url.QueryEscape("权威端新备注") + "&resume=1"
@@ -826,7 +854,14 @@ func TestClientSecretsPageIsReadOnlyFromSnapshotAndWriteRoutesAreAbsent(t *testi
 		strings.Contains(page, "新增机密项") || strings.Contains(page, "授权矩阵") {
 		t.Fatalf("客户端页不得显示值、时间或写入口：\n%s", page)
 	}
-	csrf := csrfToken(t, h)
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 	writeTargets := []string{
 		"/ui/secrets/new", "/ui/secrets/matrix",
 		"/ui/secrets/authorization/preview", "/ui/secrets/authorization/confirm",
@@ -1164,7 +1199,14 @@ func TestSecretMetadataEditWithoutChangeWritesNothing(t *testing.T) {
 	}
 	detailTarget := "/ui/secrets/" + views[0].ID
 	h := newIntegrationHandler(t, st)
-	csrf := csrfToken(t, h)
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 
 	unchanged := h.do(http.MethodPost, detailTarget+"/edit", url.Values{
 		"csrf_token": {csrf}, "note": {"原备注"}, "environment_name": {"API_TOKEN_FILE"},
@@ -1217,7 +1259,14 @@ func webUISecretAuditRows(st *store.Store, actions ...string) ([]store.AuditRow,
 func TestSecretNoteRequiredWebUI(t *testing.T) {
 	st := newIntegrationStore(t)
 	h := newIntegrationHandler(t, st)
-	csrf := csrfToken(t, h)
+	morePage := body(t, h.do(http.MethodGet, "/ui/more/", nil))
+	csrfStart := strings.Index(morePage, `name="csrf-token" content="`)
+	if csrfStart < 0 {
+		t.Fatalf("“更多”菜单缺少防跨站请求伪造令牌：%s", morePage)
+	}
+	csrfStart += len(`name="csrf-token" content="`)
+	csrfEnd := strings.Index(morePage[csrfStart:], `"`)
+	csrf := morePage[csrfStart : csrfStart+csrfEnd]
 
 	blankAdd := h.do(http.MethodPost, "/ui/secrets/new", url.Values{
 		"csrf_token": {csrf}, "name": {"API_TOKEN"},

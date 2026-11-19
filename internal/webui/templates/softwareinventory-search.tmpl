@@ -8,18 +8,19 @@
 </form>
 
 {{if .SoftwareInventoryQuery}}
-<table>
-<thead><tr><th scope="col">设备</th><th scope="col">软件名</th><th scope="col">精确版本</th><th scope="col">来源</th><th scope="col">监听端口与暴露级别</th></tr></thead>
-<tbody>
-{{range .SoftwareInventorySearchRows}}<tr>
-<td><a href="/ui/software-inventory/devices?device={{.DeviceName | urlquery}}">{{.DeviceName}}</a></td>
-<td>{{.Item.Name}}</td>
-<td>{{.Item.Version}}</td>
-<td>{{.Item.Source}}</td>
-<td>{{if .Item.ListeningPorts}}{{range .Item.ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</td>
-</tr>{{else}}<tr><td colspan="5">没有匹配的软件条目。</td></tr>{{end}}
-</tbody>
-</table>
+<ul class="record-cards">
+{{range .SoftwareInventorySearchRows}}
+<li class="record-card">
+<h2><a href="/ui/software-inventory/devices?device={{.DeviceName | urlquery}}">{{.DeviceName}}</a></h2>
+<dl class="field-list">
+<dt>软件名</dt><dd>{{.Item.Name}}</dd>
+<dt>精确版本</dt><dd>{{.Item.Version}}</dd>
+<dt>来源</dt><dd>{{.Item.Source}}</dd>
+<dt>监听端口与暴露级别</dt><dd>{{if .Item.ListeningPorts}}{{range .Item.ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
+</dl>
+</li>
+{{else}}<li class="empty-text">没有匹配的软件条目。</li>{{end}}
+</ul>
 {{else}}
 <p>输入软件名（例如 openssh）后，会列出每台设备上的版本、来源与暴露级别。</p>
 {{end}}

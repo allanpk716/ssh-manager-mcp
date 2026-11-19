@@ -7,6 +7,7 @@
 {{if .ServerWizard.ConnectionTest.Message}}<div class="notice notice-error"><p>{{.ServerWizard.ConnectionTest.Message}}</p></div>{{end}}
 {{if and .ServerWizard.ConnectionTest.ProbeShell (ne .ServerWizard.ConnectionTest.State "succeeded")}}<p>shell 未验证，条目保持默认 POSIX。</p>{{end}}
 {{if .ServerWizard.ConnectionTest.AnchorFingerprint}}<div class="notice notice-success"><p>{{.ServerWizard.ConnectionTest.AnchorResult}}。主机密钥指纹：{{.ServerWizard.ConnectionTest.AnchorFingerprint}}</p></div>{{end}}
+{{if .ServerWizard.ConnectionTest.AnchorCopied}}<div class="notice notice-info"><p>已从服务器条目 {{.ServerWizard.ConnectionTest.AnchorCopyFromServerName}} 复制同端口主机密钥锚。</p></div>{{end}}
 <div class="inline-form">
 {{if and .ServerWizard.ConnectionTest (eq .ServerWizard.ConnectionTest.State "succeeded")}}<a class="primary-button" href="{{.ServerWizard.NextPath}}">继续{{if .ServerWizard.SameMachine}}选择 Profile{{else}}选择地点{{end}}</a>{{end}}
 {{if ne .ServerWizard.ConnectionTest.State "succeeded"}}<a class="button-link" href="/ui/servers/new">返回修改连接信息</a>{{end}}

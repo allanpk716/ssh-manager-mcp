@@ -2,20 +2,25 @@ import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, openStandaloneUI, startStandaloneUI, test } from "../helpers";
 
-// serverRow 定位某一台服务器所在的表格行，再在行内找链接，避免同名链接互
-// 相干扰。
-function serverRow(page: import("@playwright/test").Page, name: string) {
-  return page.locator("tr", { has: page.getByRole("link", { name, exact: true }) });
+// serverCard 定位某一台服务器所在的卡片，再在卡片内找链接，避免同名链接
+// 互相干扰。
+function serverCard(page: import("@playwright/test").Page, name: string) {
+  return page.locator("[data-server-card]", { has: page.getByRole("link", { name, exact: true }) });
+}
+
+async function filterAttentionOnly(page: import("@playwright/test").Page) {
+  await page.getByLabel("只看需要注意").check();
+  await page.getByRole("button", { name: "应用筛选" }).click();
 }
 
 test("过滤需要注意的服务器并编辑补齐角色", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await page.getByRole("link", { name: "只看需要注意" }).click();
-  await expect(serverRow(page, "db-1")).toContainText("未设角色");
-  await expect(serverRow(page, "web-1")).toHaveCount(0);
+  await filterAttentionOnly(page);
+  await expect(serverCard(page, "db-1")).toContainText("未设角色");
+  await expect(serverCard(page, "web-1")).toHaveCount(0);
 
-  await serverRow(page, "db-1").getByRole("link", { name: "编辑" }).click();
+  await serverCard(page, "db-1").getByRole("link", { name: "编辑" }).click();
   await page.getByLabel("角色", { exact: true }).fill("生产数据库");
   await page.getByRole("button", { name: "保存" }).click();
 
@@ -23,14 +28,14 @@ test("过滤需要注意的服务器并编辑补齐角色", async ({ page, stand
   await expect(page.getByText("生产数据库")).toBeVisible();
 
   await page.getByRole("link", { name: "返回服务器列表" }).click();
-  await page.getByRole("link", { name: "只看需要注意" }).click();
-  await expect(serverRow(page, "db-1")).toHaveCount(0);
+  await filterAttentionOnly(page);
+  await expect(serverCard(page, "db-1")).toHaveCount(0);
 });
 
 test("删除前查看影响预览并一次确认", async ({ page, standaloneUI }) => {
   await openStandaloneUI(page, standaloneUI);
 
-  await serverRow(page, "old-1").getByRole("link", { name: "删除" }).click();
+  await serverCard(page, "old-1").getByRole("link", { name: "删除" }).click();
   await expect(page.getByRole("heading", { name: "删除 old-1" })).toBeVisible();
   await expect(page.getByText("设备保留：old-1")).toBeVisible();
   await expect(page.getByText("主机密钥锚")).toBeVisible();
@@ -38,8 +43,8 @@ test("删除前查看影响预览并一次确认", async ({ page, standaloneUI }
 
   await page.getByRole("button", { name: "确认删除" }).click();
   await expect(page.getByRole("heading", { name: "服务器" })).toBeVisible();
-  await expect(serverRow(page, "old-1")).toHaveCount(0);
-  await expect(serverRow(page, "db-1")).toBeVisible();
+  await expect(serverCard(page, "old-1")).toHaveCount(0);
+  await expect(serverCard(page, "db-1")).toBeVisible();
 });
 
 // importFixture 在 Web UI 进程所在机器的临时目录里写入 SSH 配置与加密私钥，

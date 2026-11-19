@@ -109,7 +109,7 @@ func TestOpsUpdatePageShowsVersionsAndUpgradeButton(t *testing.T) {
 			t.Fatalf("升级页缺少 %q：\n%s", want, body)
 		}
 	}
-	if !strings.Contains(body, `href="/ui/ops/"`) || !strings.Contains(body, `>更多<`) {
+	if !strings.Contains(body, `href="/ui/more/"`) || !strings.Contains(body, `>更多<`) {
 		t.Fatalf("导航应显示更多标签：\n%s", body)
 	}
 	if !strings.Contains(body, `name="csrf_token"`) || !strings.Contains(body, "升级到 v0.2.0") {
@@ -239,7 +239,7 @@ func TestOpsUpdateClientPageUsesStartupInstance(t *testing.T) {
 	if ops.updateCheckInstance != "laptop" {
 		t.Fatalf("客户端升级页应按启动实例读取，实际 %q", ops.updateCheckInstance)
 	}
-	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/ops/"`) {
+	if !strings.Contains(body, `aria-label="一级导航"`) || !strings.Contains(body, `href="/ui/more/"`) {
 		t.Fatalf("客户端导航应显示更多标签：\n%s", body)
 	}
 }

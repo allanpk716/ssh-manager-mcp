@@ -111,7 +111,10 @@ func (h *handler) handleServerAddForm(w http.ResponseWriter, r *http.Request) {
 		form := defaultServerAddForm()
 		form.AddressNetworks = []string{"other"}
 		form.AddressValues = []string{""}
-		applyServerWizardContext(form, r.URL.Query(), topology)
+		if title, message := applyServerWizardContext(form, r.URL.Query(), topology); title != "" {
+			h.renderError(w, r, http.StatusNotFound, title, message)
+			return
+		}
 		h.renderServerWizardStart(w, r, form, "暂存的登录凭据已超过五分钟，请重新填写。", http.StatusOK, topology)
 		return
 	}
@@ -139,7 +142,7 @@ func (h *handler) renderAddForm(
 		var err error
 		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), "")
 		if err != nil {
-			h.renderError(w, r, http.StatusInternalServerError, "读取新增选项失败", "读取站点、网络与设备失败，请稍后重试。")
+			h.renderError(w, r, http.StatusInternalServerError, "读取新增选项失败", "读取地点、网络与设备失败，请稍后重试。")
 			return
 		}
 	}
@@ -364,10 +367,10 @@ func deviceFieldErrors(form ServerAddForm) []string {
 	}
 	var fieldErrors []string
 	if (form.PhysicalNetwork == "") != (form.PhysicalAddress == "") {
-		fieldErrors = append(fieldErrors, "网络成员必须同时填写网络与地址。")
+		fieldErrors = append(fieldErrors, "网络地址必须同时填写网络与地址。")
 	}
 	if form.SiteName != "" && (form.PhysicalNetwork == "" || form.PhysicalAddress == "") {
-		fieldErrors = append(fieldErrors, "填写站点时必须同时填写物理局域网与地址。")
+		fieldErrors = append(fieldErrors, "填写地点时必须同时填写物理局域网与地址。")
 	}
 	for index, network := range form.VirtualNetworkNames {
 		address := ""
@@ -378,7 +381,7 @@ func deviceFieldErrors(form ServerAddForm) []string {
 			continue
 		}
 		if network == "" || address == "" {
-			fieldErrors = append(fieldErrors, "网络成员必须同时填写网络与地址。")
+			fieldErrors = append(fieldErrors, "网络地址必须同时填写网络与地址。")
 			break
 		}
 	}

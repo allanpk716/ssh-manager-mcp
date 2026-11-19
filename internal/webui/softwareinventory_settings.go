@@ -67,7 +67,7 @@ func (h *handler) handleSoftwareInventoryCollector(w http.ResponseWriter, r *htt
 		return
 	}
 	if !form.Authority && form.Collector == "" {
-		form.Error = "请选择权威端，或填写客户端实例的设备码名。"
+		form.Error = "请选择权威端，或填写客户端实例的凭据名。"
 		h.renderSoftwareInventorySettings(w, r, http.StatusBadRequest, form, "", false, false)
 		return
 	}

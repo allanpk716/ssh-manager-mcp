@@ -470,7 +470,7 @@ func candidatesView(
 			candidates = append(candidates, fallbackCandidate(server))
 		}
 		if from != "" && from != webui.TopologyProbeOriginSelf {
-			return candidates, "找不到起点服务器 " + from + "，或它还未关联拓扑设备；无法按共同网络排序，以下只列出兜底主机。"
+			return candidates, "找不到起点服务器 " + from + "，或它还未关联拓扑设备；无法按共同网络排序，以下只列出服务器条目地址。"
 		}
 		return candidates, unknownDialerNotice(dialer.Reason, len(targetMemberships))
 	}
@@ -500,12 +500,12 @@ func candidatesView(
 	notice := ""
 	switch plan.FallbackOnlyReason {
 	case sshbroker.FallbackOnlyNoCommonNetwork:
-		notice = originLabel + "与这台设备没有共同网络，只能使用兜底主机；建议补登记共同网络。"
+		notice = originLabel + "与这台设备没有共同网络，只能使用服务器条目地址；建议补登记共同网络。"
 	case sshbroker.FallbackOnlyDialerUnknown:
 		notice = unknownDialerNotice(dialer.Reason, len(targetMemberships))
 	}
 	if notice == "" && len(targetMemberships) == 0 && len(servers) > 0 {
-		notice = "这台设备还没有登记网络成员，只能使用兜底主机。"
+		notice = "这台设备还没有登记网络地址，只能使用服务器条目地址。"
 	}
 	return candidates, notice
 }
@@ -527,14 +527,14 @@ func serverHost(st *store.Store, id string) string {
 func unknownDialerNotice(reason dialdevice.Reason, membershipCount int) string {
 	switch reason {
 	case dialdevice.ReasonLocalDeviceNotSet:
-		return "本机设备尚未登记，无法按共同网络排序；以下只列出兜底主机。"
+		return "本机设备尚未登记，无法按共同网络排序；以下只列出服务器条目地址。"
 	case dialdevice.ReasonLocalDeviceDeleted:
-		return "本机设备已从拓扑删除，无法按共同网络排序；以下只列出兜底主机。"
+		return "本机设备已从拓扑删除，无法按共同网络排序；以下只列出服务器条目地址。"
 	case dialdevice.ReasonDeviceMissingFromSnapshot:
-		return "本机设备不在当前快照里，无法按共同网络排序；以下只列出兜底主机。"
+		return "本机设备不在当前快照里，无法按共同网络排序；以下只列出服务器条目地址。"
 	case dialdevice.ReasonClientDeviceNotRecorded:
-		return "本机设备还没有随快照记录，无法按共同网络排序；以下只列出兜底主机。"
+		return "本机设备还没有随快照记录，无法按共同网络排序；以下只列出服务器条目地址。"
 	default:
-		return "本机设备无法识别，无法按共同网络排序；以下只列出兜底主机。"
+		return "本机设备无法识别，无法按共同网络排序；以下只列出服务器条目地址。"
 	}
 }

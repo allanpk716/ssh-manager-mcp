@@ -553,7 +553,7 @@ export async function openStandaloneUI(
   await page.goto(ui.startupURL);
   await page.getByRole("heading", { name: "状态总览" }).waitFor();
   await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "服务器" }).click();
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
+  await page.getByRole("heading", { name: /^服务器/ }).first().waitFor();
 }
 
 // openClientUI 用一次性启动链接进入客户端 Web UI 主页，再切到服务器列表。
@@ -564,7 +564,7 @@ export async function openClientUI(
   await page.goto(ui.startupURL);
   await page.getByRole("heading", { name: "状态总览" }).waitFor();
   await page.getByRole("navigation", { name: "一级导航" }).getByRole("link", { name: "服务器" }).click();
-  await page.getByRole("heading", { name: "服务器" }).waitFor();
+  await page.getByRole("heading", { name: /^服务器/ }).first().waitFor();
 }
 
 // openAuthorityUI 进入权威端登录页并完成管理员口令登录。

@@ -12,6 +12,7 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="return_to" value="{{.ServerWizard.Form.ReturnTo}}">
 {{if .ServerWizard.Form.StagedCredential}}<input type="hidden" name="resume_credentials" value="1">{{end}}
+{{if .ServerWizard.Form.StagedCredential}}<div class="inline-form staged-credentials"><button type="submit" name="clear_staged_credentials" value="1">清除已暂存的凭据</button><span>清除后保留其他字段，登录凭据需重新填写。</span></div>{{end}}
 <fieldset>
 <legend>连接与地址</legend>
 <div class="form-field"><label for="wizard-name">名称</label><input id="wizard-name" name="name" value="{{.ServerWizard.Form.Name}}" required></div>
