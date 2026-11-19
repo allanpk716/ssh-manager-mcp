@@ -18,18 +18,21 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"golang.org/x/crypto/ssh"
 
 	"ssh-manager-mcp/internal/sshbroker"
+	"ssh-manager-mcp/internal/testsshd"
 )
 
 // relayBigChunk 是引擎时序类测试的块网格: 真实网络搬运毫秒到百毫秒级, 给
@@ -278,6 +281,148 @@ func TestRelayEngineCloseAllClosesBothConnections(t *testing.T) {
 	e.tm.CloseAll()                                        // 引擎可能仍在途——CloseAll 双槽即关 + wg.Wait 收口
 	waitClientClosed(t, dstCli)
 	waitClientClosed(t, srcCli)
+}
+
+// ---------- CloseAll 与 preflight 拨号竞态 (注入同步点): 收尾之后不再建立新连接 ----------
+
+// countingProxy 是包在 testsshd 前面的计数代理：记录已接受的连接数与当前
+// 在途连接数，让测试能断言「CloseAll 之后没有新连接建立、已拨的连接最终
+// 全部关闭」。
+type countingProxy struct {
+	backend  string
+	listener net.Listener
+
+	mu       sync.Mutex
+	accepted int
+	open     int
+}
+
+func (p *countingProxy) snapshot() (accepted, open int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.accepted, p.open
+}
+
+func (p *countingProxy) forward(client net.Conn) {
+	backend, err := net.Dial("tcp", p.backend)
+	if err != nil {
+		_ = client.Close()
+		p.mu.Lock()
+		p.open--
+		p.mu.Unlock()
+		return
+	}
+	go func() {
+		_, _ = io.Copy(client, backend)
+		_ = client.Close()
+	}()
+	_, _ = io.Copy(backend, client)
+	_ = backend.Close()
+	_ = client.Close()
+	p.mu.Lock()
+	p.open--
+	p.mu.Unlock()
+}
+
+func startCountingProxy(t *testing.T, backend string) *countingProxy {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := &countingProxy{backend: backend, listener: listener}
+	go func() {
+		for {
+			client, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			proxy.mu.Lock()
+			proxy.accepted++
+			proxy.open++
+			proxy.mu.Unlock()
+			go proxy.forward(client)
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return proxy
+}
+
+// TestRelayPreflightNoNewConnectionsAfterCloseAll 用注入同步点钉死收尾竞态的
+// 时序：源端连接已建立、目标端尚未拨号时 CloseAll，preflight 不得再为目标端
+// 建立新连接（以收尾哨兵错误返回），已拨的源端连接由所有权 defer 关闭。
+func TestRelayPreflightNoNewConnectionsAfterCloseAll(t *testing.T) {
+	addr, hk, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
+	t.Cleanup(cleanup)
+	proxy := startCountingProxy(t, addr)
+	st := newStore(t)
+	srcID := seedRealServer(t, st, "rsrc", proxy.listener.Addr().String(), hk, "")
+	dstID := seedRealServer(t, st, "rdst", proxy.listener.Addr().String(), hk, "")
+	pid, _ := st.AddProfile("p")
+	_ = st.GrantServers(pid, []string{srcID, dstID})
+	tm := newTestTM(t, 8)
+	t.Cleanup(func() { tm.CloseAll() })
+	root := toSlash(t.TempDir())
+	e := &relayEnv{
+		st: st, tm: tm, pid: pid, srcID: srcID, dstID: dstID,
+		root: root, local: filepath.FromSlash(root), projID: "proj-relay",
+	}
+
+	src := relayMkSource(t, e, "afterclose/src.bin", 128)
+	pause := make(chan struct{})
+	prevPause := relayPreflightPause
+	relayPreflightPause = func() { <-pause }
+	t.Cleanup(func() { relayPreflightPause = prevPause })
+
+	callErr := make(chan error, 1)
+	go func() {
+		_, err := e.relayCall(e.relayInput(srcID, src, e.root+"/afterclose/f.bin", false))
+		callErr <- err
+	}()
+
+	// 源端连接确已建立（accepted==1）后再收尾，时序由同步点钉死。
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		accepted, _ := proxy.snapshot()
+		if accepted >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("source connection never established within 5s")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	tm.CloseAll()
+	acceptedAtClose, _ := proxy.snapshot()
+	close(pause)
+
+	select {
+	case err := <-callErr:
+		if !errors.Is(err, ErrBgManagerClosed) {
+			t.Fatalf("relay call should fail with manager-closed sentinel, got %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("relay call never returned after CloseAll")
+	}
+
+	accepted, _ := proxy.snapshot()
+	if accepted != acceptedAtClose {
+		t.Fatalf("preflight established %d new connection(s) after CloseAll (accepted %d -> %d)",
+			accepted-acceptedAtClose, acceptedAtClose, accepted)
+	}
+
+	// 已拨的源端连接由所有权 defer 关闭：在途连接数最终归零。
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		_, open := proxy.snapshot()
+		if open == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("dialed connection left open after CloseAll (open=%d)", open)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // ---------- zero-byte 全程: start-before-end + relay-bg-end + 双空摘要 ----------
