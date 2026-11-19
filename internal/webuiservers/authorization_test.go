@@ -259,9 +259,9 @@ func TestServerDetailEditsSharedStorageAuthorization(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []store.SharedStorageInput{
-		{Name: "datasets", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Y"},
-		{Name: "media", Device: "storage", User: "media-user", PasswordSecret: "MEDIA_PASSWORD", Drive: "X"},
+		{Name: "datasets", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "storage", User: "mount-user", PasswordSecret: "DATASET_PASSWORD", Drive: "Y", Note: "共享数据集"},
+		{Name: "media", Device: "storage", User: "media-user", PasswordSecret: "MEDIA_PASSWORD", Drive: "X", Note: "共享数据集"},
 	} {
 		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
 			t.Fatal(err)
@@ -815,6 +815,7 @@ func TestAuthorityServerShareEditRequiresRecentPasswordVerification(t *testing.T
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "storage", User: "mount-user",
 		PasswordSecret: "DATASET_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

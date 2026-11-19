@@ -3,7 +3,7 @@ package mcpserver
 // Plan 51 §1 — POST /server-metadata: the broker side of client metadata
 // editing. A cache-mode client (device-code authenticated, same gate as
 // /snapshot and /pin-hostkey) applies a PARTIAL edit to one server entry's
-// six metadata fields under an optimistic-lock CAS on servers.revision; the
+// five metadata fields under an optimistic-lock CAS on servers.revision; the
 // change and its audit row land in one transaction (store.UpdateForwardedMetadata).
 // Guard discipline, stderr-line convention and the 401-does-not-quarantine
 // note all follow handlePinHostkey verbatim.
@@ -22,12 +22,12 @@ import (
 )
 
 // metaMaxBodyBytes is the POST /server-metadata request-body cap (Plan 51
-// §1.1): six fields × the 4 KiB per-field cap + JSON overhead, with headroom.
+// §1.1): five fields × the 4 KiB per-field cap + JSON overhead, with headroom.
 // Repo precedent: /pin-hostkey's 64 KiB, /pair's 1 KiB.
 const metaMaxBodyBytes = 32 << 10
 
-// metaEditRequest is the §1.1 request body. Fields keys are the six-field
-// whitelist (role/services/location/hardware/caveats/description); a key's
+// metaEditRequest is the §1.1 request body. Fields keys are the five-field
+// whitelist (role/services/hardware/caveats/description); a key's
 // ABSENCE means "keep", a present empty string means "clear", and null is
 // rejected — the pointer shape carries exactly that three-way distinction.
 type metaEditRequest struct {
@@ -44,7 +44,7 @@ type metaEditResponse struct {
 	UpdatedAt  int64  `json:"updated_at"`
 }
 
-// metaConflictResponse is the 409 body. current_revision + the six fields'
+// metaConflictResponse is the 409 body. current_revision + the five fields'
 // current values let an agent merge its intent and retry in ONE hop, without
 // a cache pull. Zero-leak argument (the pin-forward equal precedent): the
 // requester's device code is granted this entry, so everything in this body
@@ -220,7 +220,6 @@ func (r *ServeRunner) handleServerMetadata(w http.ResponseWriter, req *http.Requ
 			Current: map[string]string{
 				"role":        cur.Role,
 				"services":    cur.Services,
-				"location":    cur.Location,
 				"hardware":    cur.Hardware,
 				"caveats":     cur.Caveats,
 				"description": cur.Description,

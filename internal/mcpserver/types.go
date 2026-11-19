@@ -20,12 +20,11 @@ type ServerInfo struct {
 	User        string   `json:"user" jsonschema:"ssh user"`
 	HasSudo     bool     `json:"has_sudo" jsonschema:"true if sudo=true is supported on this server"`
 	Device      string   `json:"device" jsonschema:"registered device name for this server; same value means two entries are the same physical machine; empty means no device is registered"`
-	Site        string   `json:"site" jsonschema:"site names of the device's physical local-area networks, sorted by name and joined with 、; empty means none is registered"`
+	Site        string   `json:"site" jsonschema:"read-only full path of the device's directly registered location (e.g. 'Company / Campus A / Building 3'); empty means none is registered"`
 	Networks    []string `json:"networks" jsonschema:"network names of the device, physical local-area networks first then virtual local-area networks, each sorted by name; empty means none is registered"`
 	Role        string   `json:"role" jsonschema:"this server's purpose/role (e.g. 'prod pg primary')"`
 	Services    string   `json:"services" jsonschema:"what is deployed/running on this server"`
 	Caveats     string   `json:"caveats" jsonschema:"operational gotchas & special handling rules — READ BEFORE acting on this server; empty means none"`
-	Location    string   `json:"location" jsonschema:"where this server is deployed (datacenter/region/rack/tenant)"`
 	Hardware    string   `json:"hardware" jsonschema:"hardware configuration (CPU/RAM/disk/GPU)"`
 	Tags        []string `json:"tags" jsonschema:"free-form labels"`
 	Description string   `json:"description" jsonschema:"owner's free-text notes (supplementary; prefer structured fields above)"`
@@ -37,15 +36,14 @@ type ServerInfo struct {
 }
 
 // UpdateServerMetadataInput is update_server_metadata's input (cache mode
-// only). The six metadata fields are OPTIONAL POINTERS: absent (nil) = keep
+// only). The five metadata fields are OPTIONAL POINTERS: absent (nil) = keep
 // the current value; present with an empty string = CLEAR the field. A field
-// may not be null. At least one of the six must be present.
+// may not be null. At least one of the five must be present.
 type UpdateServerMetadataInput struct {
 	ServerID         string  `json:"server_id" jsonschema:"server id from list_servers"`
 	ExpectedRevision int64   `json:"expected_revision" jsonschema:"the revision you read from list_servers (the optimistic-lock token); a mismatch returns 409 with the current values"`
 	Role             *string `json:"role,omitempty" jsonschema:"this server's purpose/role — omit to keep, empty string to clear"`
 	Services         *string `json:"services,omitempty" jsonschema:"what is deployed/running — omit to keep, empty string to clear"`
-	Location         *string `json:"location,omitempty" jsonschema:"where deployed — omit to keep, empty string to clear"`
 	Hardware         *string `json:"hardware,omitempty" jsonschema:"hardware configuration — omit to keep, empty string to clear"`
 	Caveats          *string `json:"caveats,omitempty" jsonschema:"operational gotchas — omit to keep, empty string to clear"`
 	Description      *string `json:"description,omitempty" jsonschema:"free-text notes — omit to keep, empty string to clear"`

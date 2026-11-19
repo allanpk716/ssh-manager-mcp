@@ -343,7 +343,6 @@ func (h *handler) parseServerAddForm(r *http.Request) ServerAddForm {
 	}
 	form.Shell = r.PostFormValue("shell")
 	form.Description = strings.TrimSpace(r.PostFormValue("description"))
-	form.Location = strings.TrimSpace(r.PostFormValue("location"))
 	form.Hardware = strings.TrimSpace(r.PostFormValue("hardware"))
 	form.Services = strings.TrimSpace(r.PostFormValue("services"))
 	form.Role = strings.TrimSpace(r.PostFormValue("role"))

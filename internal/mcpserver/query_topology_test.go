@@ -514,7 +514,7 @@ func TestQueryTopologyTranslatesShareAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := fixture.store.AddSecret(
-		"SHARE_TRANSLATION_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"SHARE_TRANSLATION_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -528,6 +528,7 @@ func TestQueryTopologyTranslatesShareAddress(t *testing.T) {
 	if _, err := fixture.store.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "SHARE_TRANSLATION_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +607,7 @@ func TestQueryTopologyTranslatesShareAddress(t *testing.T) {
 func TestQueryTopologyShareAddressRejections(t *testing.T) {
 	fixture := newQueryTopologyFixture(t)
 	if err := fixture.store.AddSecret(
-		"SHARE_QUERY_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"SHARE_QUERY_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -618,6 +619,7 @@ func TestQueryTopologyShareAddressRejections(t *testing.T) {
 	if _, err := fixture.store.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "SHARE_QUERY_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -1116,7 +1118,7 @@ func TestQueryTopologyIgnoresExpiredObservationWithoutRewrite(t *testing.T) {
 func TestQueryTopologyClientCacheAndOldAuthority(t *testing.T) {
 	source := newQueryTopologyFixture(t)
 	if err := source.store.AddSecret(
-		"SHARE_QUERY_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"SHARE_QUERY_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -1128,6 +1130,7 @@ func TestQueryTopologyClientCacheAndOldAuthority(t *testing.T) {
 	if _, err := source.store.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "SHARE_QUERY_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

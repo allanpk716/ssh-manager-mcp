@@ -10,7 +10,7 @@ import (
 func TestSharesUnmountRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return false }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })
@@ -26,7 +26,7 @@ func TestSharesUnmountRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 func TestSharesUnmountRejectsWindowsServer(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	errText := runCliErr(t, "shares", "unmount", "datasets", "windows-web", "--yes")
 	for _, want := range []string{"Windows 服务器不能执行共享存储卸载", "sshmgr 不在其上留下任何持久改动"} {
@@ -39,7 +39,7 @@ func TestSharesUnmountRejectsWindowsServer(t *testing.T) {
 func TestSharesUnmountShowsPreviewAndAcceptsInteractiveCancellation(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return true }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })

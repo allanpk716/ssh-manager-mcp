@@ -18,7 +18,7 @@ import (
 func TestCheckReportsEveryMountableServerWithoutAudit(t *testing.T) {
 	st := newCheckTestStore(t)
 	if err := st.AddSecret(
-		"NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -46,6 +46,7 @@ func TestCheckReportsEveryMountableServerWithoutAudit(t *testing.T) {
 	share, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +99,7 @@ func TestCheckReportsEveryMountableServerWithoutAudit(t *testing.T) {
 func TestCheckRunsServersConcurrently(t *testing.T) {
 	st := newCheckTestStore(t)
 	if err := st.AddSecret(
-		"NAS_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"NAS_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -129,6 +130,7 @@ func TestCheckRunsServersConcurrently(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

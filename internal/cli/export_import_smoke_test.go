@@ -74,6 +74,7 @@ func TestExportImport_CLIRoundTrip(t *testing.T) {
 	if _, err := stA.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note:        "共享数据集",
 		Directories: []models.SharedStorageDirectory{{Purpose: "临时数据", Path: "tmp"}},
 	}, store.CLISource()); err != nil {
 		t.Fatalf("AddSharedStorage A: %v", err)

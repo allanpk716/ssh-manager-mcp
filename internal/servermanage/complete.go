@@ -7,13 +7,12 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// CompleteRequest 是一台服务器的补全提交：六个服务器元数据字段、sudo 密码
+// CompleteRequest 是一台服务器的补全提交：五个服务器元数据字段、sudo 密码
 // 与一个条件凭据（无凭据机器的密码，或带待补口令标签机器的私钥口令）。条
 // 件凭据与 sudo 密码为空表示不变。
 type CompleteRequest struct {
 	Identifier  string
 	Description *string
-	Location    *string
 	Hardware    *string
 	Services    *string
 	Role        *string
@@ -57,7 +56,6 @@ func (m *Manager) Complete(req CompleteRequest, src Source) (*CompleteResult, er
 		}
 	}
 	add(req.Description != nil, "description")
-	add(req.Location != nil, "location")
 	add(req.Hardware != nil, "hardware")
 	add(req.Services != nil, "services")
 	add(req.Role != nil, "role")
@@ -96,7 +94,6 @@ func (m *Manager) Complete(req CompleteRequest, src Source) (*CompleteResult, er
 		target *string
 	}{
 		{req.Description, "description", &srv.Description},
-		{req.Location, "location", &srv.Location},
 		{req.Hardware, "hardware", &srv.Hardware},
 		{req.Services, "services", &srv.Services},
 		{req.Role, "role", &srv.Role},

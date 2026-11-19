@@ -37,7 +37,7 @@ type MetaEditResult struct {
 }
 
 // MetaStaleError is the typed 409 outcome: the broker's current revision plus
-// the six fields' current VALUES — the caller surfaces them so the agent can
+// the five fields' current VALUES — the caller surfaces them so the agent can
 // merge its intent and retry in one hop, no cache pull. Zero-leak: everything
 // here is a subset of what this device code's next snapshot pull returns.
 type MetaStaleError struct {
@@ -70,12 +70,12 @@ const metaMsgDisabled = "metadata editing is disabled on the broker — ask the 
 const metaMsg404 = "the broker does not support metadata editing (the owner must upgrade the broker to >= v0.19.0, then retry)"
 
 // metaMsg409 renders the stale-revision branch INCLUDING the current values —
-// the agent's merge input. Field order is fixed (the six in whitelist order)
+// the agent's merge input. Field order is fixed (the five in whitelist order)
 // so the text is deterministic under map iteration.
 func metaMsg409(serverID string, current int64, vals map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "stale revision for %s — the entry changed since your listing (current revision %d); current values:", serverID, current)
-	for _, k := range []string{"role", "services", "location", "hardware", "caveats", "description"} {
+	for _, k := range []string{"role", "services", "hardware", "caveats", "description"} {
 		fmt.Fprintf(&b, " %s=%q", k, vals[k])
 	}
 	fmt.Fprintf(&b, "; merge your intent with these values and retry with expected_revision=%d", current)
@@ -186,7 +186,7 @@ func NewMetadataForwarder(cred CacheCred) (*MetadataForwarder, error) {
 }
 
 // Edit POSTs the partial metadata edit (§2.1 branch table). fields keys are
-// the six-field whitelist; a nil VALUE is never valid (the caller builds the
+// the five-field whitelist; a nil VALUE is never valid (the caller builds the
 // map from non-nil tool params). Every failure returns an error whose
 // Error() is the branch's verbatim text; the 409 outcome is a *MetaStaleError
 // (whose own Error() is the retry-ready text) for errors.As branching.

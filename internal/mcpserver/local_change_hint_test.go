@@ -320,6 +320,7 @@ func TestLocalVaultChangeHint_SharedStorageVersionChanged(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: mountUser,
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

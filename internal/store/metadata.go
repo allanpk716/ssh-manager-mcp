@@ -20,12 +20,12 @@ import (
 	"unicode/utf8"
 )
 
-// metadataFields is the frozen six-field whitelist shared by the serve route
+// metadataFields is the frozen five-field whitelist shared by the serve route
 // (request validation) and the store primitives (defense in depth). Keys are
 // column names AND JSON keys — identical by design.
-var metadataFields = []string{"role", "services", "location", "hardware", "caveats", "description"}
+var metadataFields = []string{"role", "services", "hardware", "caveats", "description"}
 
-// ValidMetadataField reports whether k is one of the six editable fields.
+// ValidMetadataField reports whether k is one of the five editable fields.
 func ValidMetadataField(k string) bool {
 	for _, f := range metadataFields {
 		if k == f {
@@ -80,7 +80,6 @@ type metaRow struct {
 	name     string
 	role     string
 	services string
-	location string
 	hardware string
 	caveats  string
 	descript string
@@ -93,8 +92,6 @@ func (m *metaRow) valueOf(field string) string {
 		return m.role
 	case "services":
 		return m.services
-	case "location":
-		return m.location
 	case "hardware":
 		return m.hardware
 	case "caveats":
@@ -162,8 +159,8 @@ func (s *Store) UpdateForwardedMetadata(serverID string, edits map[string]*strin
 
 	var old metaRow
 	err = tx.QueryRow(
-		`SELECT name,role,services,location,hardware,caveats,description,revision FROM servers WHERE id=?`, serverID,
-	).Scan(&old.name, &old.role, &old.services, &old.location, &old.hardware, &old.caveats, &old.descript, &old.revision)
+		`SELECT name,role,services,hardware,caveats,description,revision FROM servers WHERE id=?`, serverID,
+	).Scan(&old.name, &old.role, &old.services, &old.hardware, &old.caveats, &old.descript, &old.revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, ErrServerGone
 	}

@@ -133,7 +133,6 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 	s := newTestStore(t)
 	cid := mustCred(t, s, models.CredPassword, "pw")
 	const (
-		location = "dc2 rack14"
 		hardware = "8x A100 80GB, 1TB RAM"
 		services = "postgres primary, prometheus"
 		role     = "prod pg primary"
@@ -142,7 +141,7 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 	id, err := s.AddServer(&models.Server{
 		Name: "db1", Host: "10.0.0.5", Port: 22, User: "u",
 		AuthMethod: models.AuthPassword, CredentialID: cid,
-		Location: location, Hardware: hardware, Services: services, Role: role, Caveats: caveats,
+		Hardware: hardware, Services: services, Role: role, Caveats: caveats,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -151,10 +150,10 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Location != location || got.Hardware != hardware || got.Services != services ||
+	if got.Hardware != hardware || got.Services != services ||
 		got.Role != role || got.Caveats != caveats {
-		t.Fatalf("structured fields lost:\nlocation=%q hardware=%q services=%q role=%q caveats=%q",
-			got.Location, got.Hardware, got.Services, got.Role, got.Caveats)
+		t.Fatalf("structured fields lost:\nhardware=%q services=%q role=%q caveats=%q",
+			got.Hardware, got.Services, got.Role, got.Caveats)
 	}
 	byName, _ := s.GetServerByName("db1")
 	if byName.Role != role || byName.Caveats != caveats {
@@ -183,7 +182,7 @@ func TestServerStructuredFieldsRoundTrip(t *testing.T) {
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 	})
 	gotEmpty, _ := s.GetServer(empty)
-	if gotEmpty.Location != "" || gotEmpty.Hardware != "" || gotEmpty.Services != "" ||
+	if gotEmpty.Hardware != "" || gotEmpty.Services != "" ||
 		gotEmpty.Role != "" || gotEmpty.Caveats != "" {
 		t.Fatalf("unset fields should be empty: %+v", gotEmpty)
 	}

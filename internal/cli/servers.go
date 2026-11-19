@@ -51,7 +51,7 @@ func newServersCmd() *cobra.Command {
 func serversAddCmd() *cobra.Command {
 	var (
 		name, host, user, password, keyPath, keyPass, sudoPassword, description string
-		location, hardware, services, role, caveats                             string
+		hardware, services, role, caveats                                       string
 		port                                                                    int
 		tags                                                                    []string
 		exposeHost                                                              bool
@@ -101,7 +101,6 @@ func serversAddCmd() *cobra.Command {
 			srv := &models.Server{
 				Name: name, Host: host, Port: port, User: user, Tags: tags,
 				Description: strings.TrimSpace(description),
-				Location:    strings.TrimSpace(location),
 				Hardware:    strings.TrimSpace(hardware),
 				Services:    strings.TrimSpace(services),
 				Role:        strings.TrimSpace(role),
@@ -116,7 +115,7 @@ func serversAddCmd() *cobra.Command {
 			// construction). Credential fields are deliberately NOT scanned.
 			printSecretHints(cmd, secrethint.ScanServer(
 				tagsRawForScan(srv.Tags),
-				srv.Description, srv.Location, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
+				srv.Description, srv.Hardware, srv.Services, srv.Role, srv.Caveats,
 			))
 			// Credentials are minted (or reused, when .ID is set) INSIDE the
 			// same transaction as the server insert — a mid-way failure leaves
@@ -161,7 +160,6 @@ func serversAddCmd() *cobra.Command {
 	c.Flags().StringVar(&sudoPassword, "sudo-password", "", "sudo password (enables sudo execution)")
 	c.Flags().StringSliceVar(&tags, "tags", nil, "tags")
 	c.Flags().StringVar(&description, "description", "", "owner notes (shown to the agent); prefer structured fields below")
-	c.Flags().StringVar(&location, "location", "", "where deployed (datacenter/region/rack/tenant) — shown to the agent")
 	c.Flags().StringVar(&hardware, "hardware", "", "hardware config (CPU/RAM/disk/GPU) — shown to the agent")
 	c.Flags().StringVar(&services, "services", "", "what is deployed/running here — shown to the agent")
 	c.Flags().StringVar(&role, "role", "", "this server's purpose (e.g. 'prod pg primary') — shown to the agent")
@@ -370,7 +368,7 @@ func rmSummary(srv *models.Server) map[string]any {
 func serversEditCmd() *cobra.Command {
 	var (
 		newName, host, user, password, keyPath, keyPass, sudoPassword, description string
-		location, hardware, services, role, caveats                                string
+		hardware, services, role, caveats                                          string
 		port                                                                       int
 		tags                                                                       []string
 		clearCred                                                                  bool
@@ -406,9 +404,6 @@ func serversEditCmd() *cobra.Command {
 			}
 			if fl.Changed("tags") {
 				req.Tags = &tags
-			}
-			if fl.Changed("location") {
-				req.Location = &location
 			}
 			if fl.Changed("hardware") {
 				req.Hardware = &hardware
@@ -481,7 +476,6 @@ func serversEditCmd() *cobra.Command {
 	c.Flags().IntVar(&port, "port", 22, "port")
 	c.Flags().StringVar(&user, "user", "", "ssh user")
 	c.Flags().StringVar(&description, "description", "", "owner notes (shown to the agent); prefer structured fields below")
-	c.Flags().StringVar(&location, "location", "", "where deployed (datacenter/region/rack/tenant) — shown to the agent")
 	c.Flags().StringVar(&hardware, "hardware", "", "hardware config (CPU/RAM/disk/GPU) — shown to the agent")
 	c.Flags().StringVar(&services, "services", "", "what is deployed/running here — shown to the agent")
 	c.Flags().StringVar(&role, "role", "", "this server's purpose — shown to the agent")
@@ -535,9 +529,6 @@ func scanEditMetadata(cmd *cobra.Command, srv *models.Server) []secrethint.Findi
 	}
 	if fl.Changed("description") {
 		findings = append(findings, secrethint.ScanValue("description", srv.Description)...)
-	}
-	if fl.Changed("location") {
-		findings = append(findings, secrethint.ScanValue("location", srv.Location)...)
 	}
 	if fl.Changed("hardware") {
 		findings = append(findings, secrethint.ScanValue("hardware", srv.Hardware)...)

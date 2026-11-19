@@ -114,7 +114,7 @@ func TestListServersOutputStructureUnchanged(t *testing.T) {
 	}
 	wantKeys := []string{ // 与 mapKeys 一致，按字母序排列。
 		"caveats", "description", "device", "hardware", "has_sudo", "host", "id",
-		"location", "name", "networks", "revision", "role", "services", "site",
+		"name", "networks", "revision", "role", "services", "site",
 		"tags", "user",
 	}
 	if got := mapKeys(serverList[0]); !reflect.DeepEqual(got, wantKeys) {

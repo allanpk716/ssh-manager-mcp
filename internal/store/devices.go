@@ -676,7 +676,7 @@ func serverByIdentifierTx(tx *sql.Tx, identifier string) (*models.Server, error)
 		return nil, err
 	}
 	row := tx.QueryRow(`
-		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE name=?`, identifier)
 	srv, err = scanServer(row)
 	if errors.Is(err, sql.ErrNoRows) {

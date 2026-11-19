@@ -206,12 +206,14 @@ type SnapshotServer struct {
 	SudoCredentialID string `json:"sudo_credential_id"` // "" if none (NULL coalesced)
 	TagsRaw          string `json:"tags"`               // raw DB TEXT (JSON array string) — preserved verbatim
 	Description      string `json:"description"`
-	Location         string `json:"location"`
-	Hardware         string `json:"hardware"`
-	Services         string `json:"services"`
-	Role             string `json:"role"`
-	Caveats          string `json:"caveats"`
-	ExposeHost       bool   `json:"expose_host"`
+	// Location 只存在于旧版本导出的快照里，导入时并入 Description；
+	// 新导出恒为空，配合 omitempty 不再输出该字段。
+	Location   string `json:"location,omitempty"`
+	Hardware   string `json:"hardware"`
+	Services   string `json:"services"`
+	Role       string `json:"role"`
+	Caveats    string `json:"caveats"`
+	ExposeHost bool   `json:"expose_host"`
 	// DeviceID 是服务器条目的所属设备引用，随备份、导出与 profile 裁剪
 	// 快照一起携带。
 	DeviceID string `json:"device_id,omitempty"`
@@ -460,14 +462,14 @@ func (s *Store) ExportSnapshot() (*Snapshot, error) {
 
 	// servers (COALESCE the nullable text cols to '' — credential_id is nullable
 	// since Plan 20 C0: a credential-less server carries "" in the snapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision FROM servers ORDER BY id`)
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision FROM servers ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
 	for rs.Next() {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
-			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
+			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description,
 			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.DeviceID, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
@@ -865,7 +867,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	}
 
 	// servers granted to the profile (same column shape as ExportSnapshot)
-	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,location,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision
+	rs, err := s.db.Query(`SELECT id,name,host,port,user,auth_method,COALESCE(credential_id,''),COALESCE(sudo_credential_id,''),shell_type,COALESCE(tags,''),description,hardware,services,role,caveats,expose_host,COALESCE(device_id,''),created_at,updated_at,revision
 		FROM servers WHERE id IN (SELECT server_id FROM profile_servers WHERE profile_id=?) ORDER BY id`, profileID)
 	if err != nil {
 		return nil, err
@@ -875,7 +877,7 @@ func (s *Store) ExportSnapshotForProfile(profileID string, clientDeclaredVersion
 	for rs.Next() {
 		var sv SnapshotServer
 		if err := rs.Scan(&sv.ID, &sv.Name, &sv.Host, &sv.Port, &sv.User, &sv.AuthMethod,
-			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description, &sv.Location,
+			&sv.CredentialID, &sv.SudoCredentialID, &sv.ShellType, &sv.TagsRaw, &sv.Description,
 			&sv.Hardware, &sv.Services, &sv.Role, &sv.Caveats, &sv.ExposeHost, &sv.DeviceID, &sv.CreatedAt, &sv.UpdatedAt, &sv.Revision); err != nil {
 			rs.Close()
 			return nil, err
@@ -1382,8 +1384,10 @@ func (s *Store) importSnapshot(snap *Snapshot, ownerImport bool) error {
 		// 即按默认 POSIX 处理)。与 host_keys pin 列的归一化同理:ADD COLUMN
 		// DEFAULT 只约束存量行,不管显式插入。
 		shellArg := string(models.NormalizeShellType(sv.ShellType))
-		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, sv.Description, sv.Location, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
+		// 旧快照仍带 location 字段；导入时并入说明，避免字段取消丢数据。
+		description := mergeLegacyServerLocation(sv.Description, sv.Location)
+		if _, err := tx.Exec(`INSERT INTO servers(id,name,host,port,user,auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,device_id,created_at,updated_at,revision) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			sv.ID, sv.Name, sv.Host, sv.Port, sv.User, sv.AuthMethod, credArg, sudoArg, shellArg, sv.TagsRaw, description, sv.Hardware, sv.Services, sv.Role, sv.Caveats, sv.ExposeHost, nullIfEmpty(sv.DeviceID), sv.CreatedAt, sv.UpdatedAt, sv.Revision); err != nil {
 			return fmt.Errorf("insert server %s: %w", sv.ID, err)
 		}
 	}

@@ -29,6 +29,7 @@ var (
 	ErrSecretEnvironmentNameExists     = errors.New("机密项环境变量名已被其他机密项使用（大小写不同视为同一个）")
 	ErrSecretEnvironmentNameReserved   = errors.New("机密项环境变量名在固定拒绝清单中")
 	ErrSecretReferencedBySharedStorage = errors.New("机密项仍被共享存储引用")
+	ErrSecretNoteEmpty                 = errors.New("机密项备注不能为空：agent 靠备注判断用途")
 	ErrSecretValueEmpty                = errors.New("机密项值不能为空")
 	ErrSecretValueTooShort             = fmt.Errorf("机密项值太短：至少需要 %d 个字节；短值无法可靠参与后续的输出遮蔽", secretValueMinBytes)
 	ErrSecretValueTooLarge             = fmt.Errorf("机密项值太大：最多 %d 个字节", secretValueMaxBytes)
@@ -44,6 +45,7 @@ func IsSecretValidationError(err error) bool {
 		errors.Is(err, ErrSecretEnvironmentNameInvalid),
 		errors.Is(err, ErrSecretEnvironmentNameExists),
 		errors.Is(err, ErrSecretEnvironmentNameReserved),
+		errors.Is(err, ErrSecretNoteEmpty),
 		errors.Is(err, ErrSecretValueEmpty),
 		errors.Is(err, ErrSecretValueTooShort),
 		errors.Is(err, ErrSecretValueTooLarge):
@@ -347,6 +349,10 @@ func (s *Store) AddSecretWithEnvironmentName(name, note string, value []byte, en
 	if err := validateSecretValue(value); err != nil {
 		return err
 	}
+	// 备注必填：agent 只能靠备注判断机密项用途，空白备注等于无法推断。
+	if strings.TrimSpace(note) == "" {
+		return ErrSecretNoteEmpty
+	}
 	if err := ValidateSecretEnvironmentName(environmentName); err != nil {
 		return err
 	}
@@ -470,6 +476,10 @@ func (s *Store) EditSecretMetadata(secretName string, edit SecretMetadataEdit, s
 		if err := ValidateSecretEnvironmentName(*edit.EnvironmentName); err != nil {
 			return err
 		}
+	}
+	// 备注必填只在本次要改备注时拦截；存量空备注仍可单独修改环境变量名。
+	if edit.Note != nil && strings.TrimSpace(*edit.Note) == "" {
+		return ErrSecretNoteEmpty
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -610,6 +620,9 @@ func (s *Store) EditSecretNote(name, note string, source WriteSource) error {
 	if s.readOnly {
 		return ErrReadOnly
 	}
+	if strings.TrimSpace(note) == "" {
+		return ErrSecretNoteEmpty
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -728,6 +741,22 @@ func (s *Store) ListSecretsInScope(scope SecretServerScope) ([]SecretView, error
 		return nil, err
 	}
 	return secretViewsForDisplayRows(displayRows, scope), nil
+}
+
+// ListSecretsWithoutNote 返回备注为空的机密项，供主页的待处理清单使用。
+// 存量空备注不强制迁移；这里按去掉首尾空白后的空值判断。
+func (s *Store) ListSecretsWithoutNote() ([]SecretView, error) {
+	views, err := s.ListSecretsInScope(ScopeAllServers())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SecretView, 0)
+	for _, view := range views {
+		if strings.TrimSpace(view.Note) == "" {
+			out = append(out, view)
+		}
+	}
+	return out, nil
 }
 
 // secretDisplayRow 是机密项可见列表的一行原始材料：机密项本身与一条可写入

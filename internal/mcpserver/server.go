@@ -81,7 +81,7 @@ var BrokerTools = []string{
 	"upload_content",         // [9] — write INLINE content (text/base64, decoded ≤ cap) to a remote path over SFTP (profile-gated; Plan 33 T4) — the cross-machine upload path upload_file cannot serve
 	"exec_context",           // [10] — capture the exec channel's TRUE context in one round: uid/gid/groups, tty, uid_map, LSM label, SSH provenance, process tree (profile-gated; Plan 41 §3)
 	"relay_file",             // [11] — relay a LARGE file server-to-server (or broker-disk → server): chunked streaming or mount-local copy, resumable/background task, metadata-only results (profile-gated; Plan 47 §1)
-	"update_server_metadata", // [12] — partial edit of a server entry's six metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
+	"update_server_metadata", // [12] — partial edit of a server entry's five metadata fields via the broker (optimistic-lock revision; CACHE FACE ONLY — registered when the metadata forwarder is injected; Plan 51 §7)
 	hotswap.ToolReloadSelf,   // [13] — report this bridge's current/disk/latest versions and, when the disk holds a newer generation and the bridge is idle, hot-swap into it (bridge hot-upgrade; BRIDGE FACES ONLY — registered by run.go's stdio entries, see bridgeOnlyTools)
 	"list_secrets",           // [14] — discover secret names, notes, and granted writable servers without exposing secret values (READ-ONLY)
 	"probe_connectivity",     // [15] — probe TCP connectivity and connect duration from this instance or via an authorized managed server to registered devices (spec #142; results stored locally only)
@@ -229,7 +229,7 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[0], // "list_servers"
-			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), location, hardware, caveats (special handling — read before acting), tags, description, and topology registration fields device/site/networks. Topology names mean two entries may share one machine or network; they are registered information only and do NOT mean the server is currently reachable. Use query_topology to turn these registrations into a neighbor view with locally stored observations, or probe_connectivity for a current on-site result. Never includes credentials or topology addresses.",
+			Description: "List the SSH servers you may use. ALWAYS call this first to discover server ids and capabilities before exec_command. Returns id/name/host/user/has_sudo (host is \"hidden\" unless the owner exposed it — address servers via id, never by host), plus owner-provided context: role, services (what's deployed), hardware, caveats (special handling — read before acting), tags, description, and topology registration fields device/site/networks (site is the read-only full path of the machine's registered location). Topology names mean two entries may share one machine or network; they are registered information only and do NOT mean the server is currently reachable. Use query_topology to turn these registrations into a neighbor view with locally stored observations, or probe_connectivity for a current on-site result. Never includes credentials or topology addresses.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, ListServersOutput, error) {
 			st := storeFromContext(ctx, storeFn)
@@ -559,14 +559,14 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 		addTrackedTool(srv, busy, storeFn, hkFn,
 			&mcp.Tool{
 				Name:        BrokerTools[12], // "update_server_metadata" (Plan 51)
-				Description: `Edit a server entry's descriptive metadata (role / services / location / hardware / caveats / description) in the shared vault, via the broker. Pass server_id (from list_servers) and expected_revision — the revision value you saw in list_servers (the optimistic-lock token). Each of the six fields is optional: OMIT a field to leave it unchanged; pass an EMPTY STRING to clear it. Record what you actually verified (e.g. after probing hardware or discovering deployed services) — this keeps list_servers accurate for every future session. On conflict (409, someone else edited first) the error carries the current revision AND current values of all six fields: merge your intent with those values, then retry once with the new revision. Connection details (host/port/user/credentials) and tags are NOT editable here — the owner manages those.`,
+				Description: `Edit a server entry's descriptive metadata (role / services / hardware / caveats / description) in the shared vault, via the broker. Pass server_id (from list_servers) and expected_revision — the revision value you saw in list_servers (the optimistic-lock token). Each of the five fields is optional: OMIT a field to leave it unchanged; pass an EMPTY STRING to clear it. Record what you actually verified (e.g. after probing hardware or discovering deployed services) — this keeps list_servers accurate for every future session. On conflict (409, someone else edited first) the error carries the current revision AND current values of all five fields: merge your intent with those values, then retry once with the new revision. Connection details (host/port/user/credentials) and tags are NOT editable here — the owner manages those.`,
 			},
 			func(ctx context.Context, req *mcp.CallToolRequest, in UpdateServerMetadataInput) (*mcp.CallToolResult, UpdateServerMetadataOutput, error) {
 				fields := metadataFieldsFromInput(&in)
 				if len(fields) == 0 {
 					return &mcp.CallToolResult{
 						IsError: true,
-						Content: []mcp.Content{&mcp.TextContent{Text: "update_server_metadata: provide at least one of the six metadata fields (role, services, location, hardware, caveats, description) — omit a field to keep its value, pass an empty string to clear it"}},
+						Content: []mcp.Content{&mcp.TextContent{Text: "update_server_metadata: provide at least one of the five metadata fields (role, services, hardware, caveats, description) — omit a field to keep its value, pass an empty string to clear it"}},
 					}, UpdateServerMetadataOutput{}, nil
 				}
 				res, err := meta.EditMeta(in.ServerID, in.ExpectedRevision, fields)
@@ -620,9 +620,6 @@ func metadataFieldsFromInput(in *UpdateServerMetadataInput) map[string]*string {
 	}
 	if in.Services != nil {
 		fields["services"] = in.Services
-	}
-	if in.Location != nil {
-		fields["location"] = in.Location
 	}
 	if in.Hardware != nil {
 		fields["hardware"] = in.Hardware

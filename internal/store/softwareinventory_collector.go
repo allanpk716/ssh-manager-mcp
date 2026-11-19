@@ -134,7 +134,7 @@ func preferredServerName(server *models.Server) string {
 
 func serversForDeviceTx(tx *sql.Tx, deviceID string) ([]*models.Server, error) {
 	rows, err := tx.Query(`
-		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,location,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
+		SELECT id,name,host,port,user,COALESCE(device_id,''),auth_method,credential_id,sudo_credential_id,shell_type,tags,description,hardware,services,role,caveats,expose_host,created_at,updated_at,revision
 		FROM servers WHERE device_id=?`, deviceID,
 	)
 	if err != nil {

@@ -347,7 +347,7 @@ func TestHandlerCompleteClearsMetadataFields(t *testing.T) {
 	_, st, h := newIntegrationHandler(t)
 	id, err := st.AddServerWithCredentials(&models.Server{
 		Name: "web", Host: "192.0.2.10", Port: 22, User: "root",
-		Role: "旧角色", Location: "旧机房",
+		Role: "旧角色",
 	}, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -356,7 +356,7 @@ func TestHandlerCompleteClearsMetadataFields(t *testing.T) {
 	form := url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
 		"queue":      {id}, "position": {"0"}, "action": {"save"},
-		"description": {""}, "location": {""}, "hardware": {""},
+		"description": {""}, "hardware": {""},
 		"services": {""}, "role": {""}, "special_handling": {""},
 		"sudo_password": {""}, "password": {""}, "key_passphrase": {""},
 	}
@@ -366,7 +366,7 @@ func TestHandlerCompleteClearsMetadataFields(t *testing.T) {
 		t.Fatalf("补全提交状态码 = %d，应为 303", resp.StatusCode)
 	}
 	srv, _ := st.GetServer(id)
-	if srv.Role != "" || srv.Location != "" {
+	if srv.Role != "" || srv.Description != "" {
 		t.Fatalf("空提交应清空服务器元数据字段：%+v", srv)
 	}
 }
@@ -468,8 +468,8 @@ func TestHandlerDeletePreviewIncludesSharedStorageAndRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, input := range []store.SharedStorageInput{
-		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z"},
-		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y"},
+		{Name: "datasets", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z", Note: "共享数据集"},
+		{Name: "scratch", Device: "NAS", User: "mount-user", PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Y", Note: "共享数据集"},
 	} {
 		if _, err := st.AddSharedStorage(input, store.CLISource()); err != nil {
 			t.Fatal(err)
@@ -518,6 +518,7 @@ func TestHandlerDeletePreviewIncludesSharedStorageAndRecords(t *testing.T) {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "models", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "X",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

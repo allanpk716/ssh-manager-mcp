@@ -397,7 +397,7 @@ func seedDeviceDeleteFixture(t *testing.T, dbPath string, masterKey []byte) {
 	if err := source.GrantServers(profileID, []string{root.ServerID, deploy.ServerID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := source.AddSecret("deploy_secret", "", []byte("secret-value"), store.CLISource()); err != nil {
+	if err := source.AddSecret("deploy_secret", "测试备注", []byte("secret-value"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := source.AllowSecrets([]string{"deploy_secret"}, []string{"root", "deploy"}, store.CLISource()); err != nil {
@@ -577,7 +577,7 @@ func TestDevicesRemovePreviewsAndCascadesSharedStorages(t *testing.T) {
 		t.Fatal(err)
 	}
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	before, err := store.Open(dbPath, masterKey)
 	if err != nil {

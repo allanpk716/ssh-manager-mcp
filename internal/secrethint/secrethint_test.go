@@ -192,12 +192,12 @@ func TestFormatWarningNoContentEcho(t *testing.T) {
 }
 
 // TestScanServerAggregates pins the fixed scan order
-// (tags, description, location, hardware, services, role, caveats) and that
+// (tags, description, hardware, services, role, caveats) and that
 // each hit lands as its own Finding with the right field name.
 func TestScanServerAggregates(t *testing.T) {
 	tags := "ci ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ABCD"
 	caveats := "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA0wqdLZXa\n-----END RSA PRIVATE KEY-----"
-	got := ScanServer(tags, "", "", "", "", "", caveats)
+	got := ScanServer(tags, "", "", "", "", caveats)
 	want := []Finding{
 		{Field: "tags", Rule: "prefix:ghp_"},
 		{Field: "caveats", Rule: "pem-private-key"},
@@ -210,7 +210,7 @@ func TestScanServerAggregates(t *testing.T) {
 			t.Errorf("ScanServer()[%d] = %+v, want %+v (fixed order tags→…→caveats)", i, got[i], want[i])
 		}
 	}
-	if all := ScanServer("", "", "", "", "", "", ""); len(all) != 0 {
+	if all := ScanServer("", "", "", "", "", ""); len(all) != 0 {
 		t.Errorf("ScanServer(all empty) = %v, want no findings", all)
 	}
 }

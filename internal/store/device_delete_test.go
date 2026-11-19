@@ -91,7 +91,7 @@ func TestDeviceDeleteRollsBackWhenLayoutDeleteFails(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("rollback_secret", "", []byte("rollback-secret-value"), CLISource()); err != nil {
+	if err := st.AddSecret("rollback_secret", "测试备注", []byte("rollback-secret-value"), CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AllowSecrets([]string{"rollback_secret"}, []string{"deploy"}, CLISource()); err != nil {
@@ -164,6 +164,7 @@ func TestDeviceDeleteWritesSharedStorageAuditAndRollsBackTogether(t *testing.T) 
 	if _, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

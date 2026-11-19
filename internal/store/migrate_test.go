@@ -41,9 +41,9 @@ CREATE TABLE projects (
 );
 `
 
-// serverMetadataColumns is the set of structured-metadata columns Plan 8 added to
-// servers. Shared by every migration-shape test so the column list lives in one place.
-var serverMetadataColumns = []string{"description", "location", "hardware", "services", "role", "caveats"}
+// serverMetadataColumns is the set of structured-metadata columns on servers.
+// Shared by every migration-shape test so the column list lives in one place.
+var serverMetadataColumns = []string{"description", "hardware", "services", "role", "caveats"}
 
 func hasColumn(t *testing.T, db *sql.DB, table, col string) bool {
 	t.Helper()

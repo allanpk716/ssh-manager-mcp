@@ -11,6 +11,7 @@ func TestRevokeSharedStorageMountAndPasswordChangesValueOnce(t *testing.T) {
 	added, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)
@@ -71,6 +72,7 @@ func TestRevokeSharedStorageMountAndPasswordRollsBackTogether(t *testing.T) {
 	added, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource())
 	if err != nil {
 		t.Fatal(err)

@@ -10,7 +10,7 @@ import (
 func TestSharesReselectRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return false }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })
@@ -26,7 +26,7 @@ func TestSharesReselectRequiresYesOnNonInteractiveTerminal(t *testing.T) {
 func TestSharesReselectShowsPreviewAndAcceptsInteractiveCancellation(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 	oldIsInteractive := sharesStdinIsInteractive
 	sharesStdinIsInteractive = func() bool { return true }
 	t.Cleanup(func() { sharesStdinIsInteractive = oldIsInteractive })
@@ -61,7 +61,7 @@ func TestSharesReselectRejectsCacheClient(t *testing.T) {
 func TestSharesReselectRejectsWindowsServer(t *testing.T) {
 	seedSharesCommandVault(t)
 	runCli(t, "shares", "add", "datasets", "--device", "NAS", "--user", "mount-user",
-		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z")
+		"--password-secret", "NAS_MOUNT_PASSWORD", "--drive", "Z", "--note", "共享数据集")
 
 	errText := runCliErr(t, "shares", "reselect", "datasets", "windows-web", "--yes")
 	for _, want := range []string{

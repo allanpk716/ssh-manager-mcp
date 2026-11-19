@@ -142,7 +142,7 @@ func newRelayShareFallbackEnv(t *testing.T) *relayShareFallbackEnv {
 	associate(environment.physicalBID, "B物理端点设备")
 
 	if err := st.AddSecret(
-		"FALLBACK_MOUNT_PASSWORD", "", []byte("mount-password"), store.CLISource(),
+		"FALLBACK_MOUNT_PASSWORD", "测试备注", []byte("mount-password"), store.CLISource(),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +162,7 @@ func newRelayShareFallbackEnv(t *testing.T) *relayShareFallbackEnv {
 	if _, err := st.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "共享提供方", User: "mount-user",
 		PasswordSecret: "FALLBACK_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

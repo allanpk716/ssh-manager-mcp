@@ -19,8 +19,8 @@ func TestListServersSurfacesMetadata(t *testing.T) {
 		AuthMethod: models.AuthPassword, CredentialID: cid,
 		Role: "prod ml", Services: "jupyter, trainer",
 		Caveats:  "do not reboot 02-03:00",
-		Location: "dc2 rack14", Hardware: "8x A100",
-		Tags: []string{"gpu"}, Description: "owner notes",
+		Hardware: "8x A100",
+		Tags:     []string{"gpu"}, Description: "owner notes",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +39,7 @@ func TestListServersSurfacesMetadata(t *testing.T) {
 	}
 	info := infos[0]
 	if info.Role != "prod ml" || info.Services != "jupyter, trainer" ||
-		info.Caveats != "do not reboot 02-03:00" || info.Location != "dc2 rack14" ||
+		info.Caveats != "do not reboot 02-03:00" ||
 		info.Hardware != "8x A100" || info.Description != "owner notes" {
 		t.Fatalf("ServerInfo missing structured fields: %+v", info)
 	}
@@ -49,10 +49,13 @@ func TestListServersSurfacesMetadata(t *testing.T) {
 
 	// snake_case JSON keys reach the agent.
 	b, _ := json.Marshal(info)
-	for _, key := range []string{`"role"`, `"services"`, `"caveats"`, `"location"`, `"hardware"`, `"tags"`, `"description"`} {
+	for _, key := range []string{`"role"`, `"services"`, `"caveats"`, `"hardware"`, `"tags"`, `"description"`} {
 		if !bytes.Contains(b, []byte(key)) {
 			t.Fatalf("JSON missing %s: %s", key, b)
 		}
+	}
+	if bytes.Contains(b, []byte(`"location"`)) {
+		t.Fatalf("list_servers must not output the cancelled location field: %s", b)
 	}
 }
 

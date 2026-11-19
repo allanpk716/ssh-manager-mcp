@@ -10,7 +10,6 @@
 {{if eq .ServerDetail.CredentialType "private_key"}}<dt>私钥口令</dt><dd>{{if .ServerDetail.HasKeyPassphrase}}已设置{{else}}未设置{{end}}</dd>{{end}}
 <dt>sudo 密码</dt><dd>{{if .ServerDetail.HasSudoPassword}}已设 sudo 密码{{else}}未设置{{end}}</dd>
 <dt>说明</dt><dd>{{or .ServerDetail.Description "-"}}</dd>
-<dt>位置</dt><dd>{{or .ServerDetail.Location "-"}}</dd>
 <dt>硬件</dt><dd>{{or .ServerDetail.Hardware "-"}}</dd>
 <dt>服务</dt><dd>{{or .ServerDetail.Services "-"}}</dd>
 <dt>角色</dt><dd>{{or .ServerDetail.Role "-"}}</dd>

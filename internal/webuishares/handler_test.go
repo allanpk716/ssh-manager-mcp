@@ -495,7 +495,7 @@ func mustServerToDevice(t *testing.T, st *store.Store, name string, shell models
 
 func mustSecret(t *testing.T, st *store.Store, name string) {
 	t.Helper()
-	if err := st.AddSecret(name, "", []byte(name+"-value-不回显"), store.CLISource()); err != nil {
+	if err := st.AddSecret(name, "测试备注", []byte(name+"-value-不回显"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -784,7 +784,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	invalid := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"DATASETS"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"D"}, "directories": {"缺等号的目录"},
+		"drive": {"D"}, "directories": {"缺等号的目录"}, "note": {"目录约定错误"},
 	})
 	invalidBody := body(t, invalid)
 	if invalid.StatusCode != http.StatusBadRequest {
@@ -802,7 +802,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	duplicate := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"E"},
+		"drive": {"E"}, "note": {"重复共享"},
 	})
 	duplicateBody := body(t, duplicate)
 	if duplicate.StatusCode != http.StatusBadRequest || !strings.Contains(duplicateBody, "共享名已存在") {
@@ -812,7 +812,7 @@ func TestShareAddValidatesAndAuditsWebUISource(t *testing.T) {
 	badDrive := h.do(http.MethodPost, "/ui/shares/new", url.Values{
 		"csrf_token": {csrf}, "name": {"scratch2"}, "device": {"NAS"},
 		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
-		"drive": {"C"},
+		"drive": {"C"}, "note": {"非法盘符"},
 	})
 	badDriveBody := body(t, badDrive)
 	if badDrive.StatusCode != http.StatusBadRequest || !strings.Contains(badDriveBody, "盘符不合法") {
@@ -1300,4 +1300,36 @@ func authorityPageCSRF(t *testing.T, h authorityHandler, target string) string {
 	t.Helper()
 	page := body(t, h.do(http.MethodGet, target, nil))
 	return authorityHiddenValue(t, page, "csrf_token")
+}
+
+// TestShareNoteRequiredWebUI 校验 Web UI 的新增与编辑都拒绝空白备注，并把
+// 存储层文案直接显示在表单页上。
+func TestShareNoteRequiredWebUI(t *testing.T) {
+	st := newIntegrationStore(t)
+	mustServer(t, st, "linux-web", models.ShellPOSIX)
+	datasetsID := seedShare(t, st, "datasets", "NAS", "NAS_MOUNT_PASSWORD", "Z", "linux-web")
+	h := newIntegrationHandler(t, st)
+	csrf := csrfToken(t, h)
+
+	blankAdd := h.do(http.MethodPost, "/ui/shares/new", url.Values{
+		"csrf_token": {csrf}, "name": {"scratch"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Y"}, "directories": {"临时数据=tmp"}, "note": {" "},
+	})
+	blankAddBody := body(t, blankAdd)
+	if blankAdd.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankAddBody, "共享存储备注不能为空") {
+		t.Fatalf("空白备注新增应被拒绝并显示原因，状态码=%d：\n%s", blankAdd.StatusCode, blankAddBody)
+	}
+
+	blankEdit := h.do(http.MethodPost, "/ui/shares/"+datasetsID+"/edit", url.Values{
+		"csrf_token": {csrf}, "name": {"datasets"}, "device": {"NAS"},
+		"user": {"mount-user"}, "password_secret": {"NAS_MOUNT_PASSWORD"},
+		"drive": {"Z"}, "directories": {"临时数据=tmp"}, "note": {" "},
+	})
+	blankEditBody := body(t, blankEdit)
+	if blankEdit.StatusCode != http.StatusBadRequest ||
+		!strings.Contains(blankEditBody, "共享存储备注不能为空") {
+		t.Fatalf("编辑成空白备注应被拒绝并显示原因，状态码=%d：\n%s", blankEdit.StatusCode, blankEditBody)
+	}
 }

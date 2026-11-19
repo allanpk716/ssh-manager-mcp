@@ -59,6 +59,7 @@ func TestSnapshotRevisionSharedStorageUpdateTriggerCoversAllColumns(t *testing.T
 	if _, err := s.AddSharedStorage(SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "NAS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}

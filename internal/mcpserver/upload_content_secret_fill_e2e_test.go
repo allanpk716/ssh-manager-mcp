@@ -373,7 +373,7 @@ func TestUploadContentClientCacheFillsOfflineAndUsesRefreshedValue(t *testing.T)
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
 	t.Cleanup(cleanup)
 	serverID := seedRealServer(t, authority, "real", addr, hostKey, "")
-	if err := authority.AddSecret("OFFLINE_TOKEN", "", []byte(oldValue), store.CLISource()); err != nil {
+	if err := authority.AddSecret("OFFLINE_TOKEN", "测试备注", []byte(oldValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.AllowSecrets([]string{"OFFLINE_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -486,7 +486,7 @@ func TestUploadContentOldAuthoritySnapshotRefusesPlaceholdersBeforeConnect(t *te
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw", Connections: &connections})
 	t.Cleanup(cleanup)
 	serverID := seedRealServer(t, authority, "real", addr, hostKey, "")
-	if err := authority.AddSecret("CACHED_TOKEN", "", []byte(cachedValue), store.CLISource()); err != nil {
+	if err := authority.AddSecret("CACHED_TOKEN", "测试备注", []byte(cachedValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := authority.AllowSecrets([]string{"CACHED_TOKEN"}, []string{"real"}, store.CLISource()); err != nil {
@@ -727,7 +727,7 @@ func TestUploadContentSecretAuthorizationRejectsBeforeConnectAndAuditsNames(t *t
 		"OUTSIDE_LIST":  visibleValue,
 		"HIDDEN_SECRET": hiddenValue,
 	} {
-		if err := st.AddSecret(name, "", []byte(value), store.CLISource()); err != nil {
+		if err := st.AddSecret(name, "测试备注", []byte(value), store.CLISource()); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -898,7 +898,7 @@ func TestUploadContentSecretFillSizeChecksAfterSubstitution(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("V", "", []byte(longValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("V", "测试备注", []byte(longValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AllowSecrets([]string{"V"}, []string{"real"}, store.CLISource()); err != nil {
@@ -999,7 +999,7 @@ func TestUploadContentSecretFillSizeChecksAfterSubstitution(t *testing.T) {
 func TestUploadContentBase64SizeChecksFilledContent(t *testing.T) {
 	const secretValue = "12345678"
 	st := newStore(t)
-	if err := st.AddSecret("LONG_NAME", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("LONG_NAME", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "pw"})
@@ -1075,7 +1075,7 @@ func TestUploadContentSecretOverwriteWinsCreateModeRace(t *testing.T) {
 	}
 	const secretValue = "12345678"
 	st := newStore(t)
-	if err := st.AddSecret("RACE_SECRET", "", []byte(secretValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("RACE_SECRET", "测试备注", []byte(secretValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	target := toSlash(filepath.Join(t.TempDir(), "config", "race.yaml"))
@@ -1281,7 +1281,7 @@ func TestUploadContentInvisibleSecretMatchesMissingNameError(t *testing.T) {
 	}
 	missingText := upload(toSlash(filepath.Join(t.TempDir(), "missing.yaml")))
 
-	if err := st.AddSecret("INVISIBLE_SECRET", "", []byte("12345678"), store.CLISource()); err != nil {
+	if err := st.AddSecret("INVISIBLE_SECRET", "测试备注", []byte("12345678"), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	listResult, err := clientSession.CallTool(context.Background(), &mcp.CallToolParams{
@@ -1318,7 +1318,7 @@ func TestUploadContentSecretReadFailureRejectsBeforeConnectAndAuditsError(t *tes
 	if err := st.GrantServers(profileID, []string{serverID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.AddSecret("BROKEN_SECRET", "", []byte(corruptedValue), store.CLISource()); err != nil {
+	if err := st.AddSecret("BROKEN_SECRET", "测试备注", []byte(corruptedValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if err := st.AllowSecrets([]string{"BROKEN_SECRET"}, []string{"real"}, store.CLISource()); err != nil {

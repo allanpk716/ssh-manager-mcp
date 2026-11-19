@@ -38,7 +38,6 @@ type ServerDetailView struct {
 	HasKeyPassphrase bool
 	HasSudoPassword  bool
 	Description      string
-	Location         string
 	Hardware         string
 	Services         string
 	Role             string
@@ -199,7 +198,6 @@ type ServerAddForm struct {
 	Port        int
 	Shell       string
 	Description string
-	Location    string
 	Hardware    string
 	Services    string
 	Role        string
@@ -277,7 +275,6 @@ type ServerEditForm struct {
 	User        *string
 	Shell       *string
 	Description *string
-	Location    *string
 	Hardware    *string
 	Services    *string
 	Role        *string
@@ -418,7 +415,6 @@ type ServerImportRunView struct {
 // ServerCompleteForm 是补全提交；凭据与 sudo 输入为空表示不变。
 type ServerCompleteForm struct {
 	Description   string
-	Location      string
 	Hardware      string
 	Services      string
 	Role          string
@@ -765,7 +761,6 @@ func editErrorDetail(r *http.Request, current *ServerDetailView) *ServerDetailVi
 		submitted.Shell = v
 	}
 	submitted.Description = r.PostFormValue("description")
-	submitted.Location = r.PostFormValue("location")
 	submitted.Hardware = r.PostFormValue("hardware")
 	submitted.Services = r.PostFormValue("services")
 	submitted.Role = r.PostFormValue("role")
@@ -805,7 +800,6 @@ func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView
 		form.Shell = changedString(v, current.Shell)
 	}
 	form.Description = changedString(r.PostFormValue("description"), current.Description)
-	form.Location = changedString(r.PostFormValue("location"), current.Location)
 	form.Hardware = changedString(r.PostFormValue("hardware"), current.Hardware)
 	form.Services = changedString(r.PostFormValue("services"), current.Services)
 	form.Role = changedString(r.PostFormValue("role"), current.Role)
@@ -1090,7 +1084,6 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 		// 回显。
 		shown := *detail
 		shown.Description = submitted.Description
-		shown.Location = submitted.Location
 		shown.Hardware = submitted.Hardware
 		shown.Services = submitted.Services
 		shown.Role = submitted.Role
@@ -1139,8 +1132,8 @@ func (h *handler) handleServerCompletePost(w http.ResponseWriter, r *http.Reques
 	}
 	id := queue[position]
 	form := ServerCompleteForm{
-		Description: r.PostFormValue("description"), Location: r.PostFormValue("location"),
-		Hardware: r.PostFormValue("hardware"), Services: r.PostFormValue("services"),
+		Description: r.PostFormValue("description"),
+		Hardware:    r.PostFormValue("hardware"), Services: r.PostFormValue("services"),
 		Role: r.PostFormValue("role"), Caveats: r.PostFormValue("special_handling"),
 		SudoPassword: r.PostFormValue("sudo_password"), Password: r.PostFormValue("password"),
 		KeyPassphrase: r.PostFormValue("key_passphrase"),

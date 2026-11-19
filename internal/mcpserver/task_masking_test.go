@@ -24,7 +24,7 @@ func TestBackgroundMaskingSourceRefreshesExternalStoreChangeAfterOneSecond(t *te
 		t.Fatal(err)
 	}
 	defer externalStore.Close()
-	if err := primaryStore.AddSecret("EXTERNAL_TOKEN", "", []byte(oldValue), store.CLISource()); err != nil {
+	if err := primaryStore.AddSecret("EXTERNAL_TOKEN", "测试备注", []byte(oldValue), store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	version := primaryStore.SecretValuesForMaskingVersion()

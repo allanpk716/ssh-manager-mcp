@@ -127,6 +127,7 @@ func seedCacheMountTarget(t *testing.T, fx *cacheFwdFixture) (targetID string, f
 		Directories: []models.SharedStorageDirectory{
 			{Purpose: "数据集", Path: "datasets"},
 		},
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

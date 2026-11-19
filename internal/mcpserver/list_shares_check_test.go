@@ -236,6 +236,7 @@ func newListSharesCheckFixture(t *testing.T) listSharesCheckFixture {
 	if _, err := source.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -528,6 +529,7 @@ func TestListSharesLiveCheckSkipsInvisibleServers(t *testing.T) {
 	if _, err := source.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -609,6 +611,7 @@ func TestListSharesLiveCheckWorksOnCacheSnapshot(t *testing.T) {
 	if _, err := source.AddSharedStorage(store.SharedStorageInput{
 		Name: "datasets", Device: "NAS", User: "mount-user",
 		PasswordSecret: "DATASETS_MOUNT_PASSWORD", Drive: "Z",
+		Note: "共享数据集",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
