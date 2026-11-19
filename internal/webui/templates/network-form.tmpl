@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="network-form-page">
 <div class="subpage-header">
-<a class="button-link" href="/ui/more/locations-networks/?tab=networks">返回地点与网络</a>
+<a class="back-link" href="/ui/more/locations-networks/?tab=networks" aria-label="返回地点与网络"><span aria-hidden="true">‹</span>地点与网络</a>
 <h1>{{if eq .NetworkForm.Mode "create"}}新建网络{{else}}编辑网络{{end}}</h1>
 </div>
 {{if .NetworkForm.Error}}<div class="operation-refusal"><p>{{.NetworkForm.Error}}</p></div>{{end}}

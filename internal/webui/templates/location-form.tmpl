@@ -1,7 +1,7 @@
 {{define "content"}}
 <section class="location-form-page">
 <div class="subpage-header">
-<a class="button-link" href="/ui/more/locations-networks/">返回地点与网络</a>
+<a class="back-link" href="/ui/more/locations-networks/" aria-label="返回地点与网络"><span aria-hidden="true">‹</span>地点与网络</a>
 <h1>{{if eq .LocationForm.Mode "create"}}新建地点{{else if eq .LocationForm.Mode "rename"}}地点改名{{else if eq .LocationForm.Mode "move"}}移动地点{{else}}删除地点{{end}}</h1>
 </div>
 {{if .LocationForm.Error}}<div class="operation-refusal"><p>{{.LocationForm.Error}}</p></div>{{end}}

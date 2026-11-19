@@ -1,6 +1,6 @@
 {{define "content"}}
 <section class="client-machine-page">
-<p><a href="/ui/clients/{{.Client.ID}}">返回客户端详情</a></p>
+<a class="back-link" href="/ui/clients/{{.Client.ID}}" aria-label="返回客户端详情"><span aria-hidden="true">‹</span>客户端详情</a>
 <h1>选择机器</h1>
 <p>选择 {{.Client.Name}} 运行所在的物理机。机器按地点分组。</p>
 <form method="post" action="/ui/clients/{{.Client.ID}}/machine">

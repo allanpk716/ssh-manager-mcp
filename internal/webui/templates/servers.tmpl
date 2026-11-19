@@ -25,6 +25,7 @@
 <label for="server-search">搜索</label>
 <input id="server-search" name="query" value="{{.ServerListFilter.Query}}" type="search" autocomplete="off" aria-label="搜索服务器" placeholder="名称、地址、地点或网络">
 </div>
+<div class="server-filter-pills" role="group" aria-label="筛选条件">
 {{if .ServerListFilter.HasTopology}}
 <div class="form-field">
 <label for="server-site-filter">地点</label>
@@ -43,27 +44,22 @@
 {{end}}
 <label class="switch-control attention-switch"><input type="checkbox" name="attention" value="1"{{if .ServerListFilter.Attention}} checked{{end}}><span class="switch-track" aria-hidden="true"></span><span>只看需要注意</span></label>
 <button type="submit">应用筛选</button>
+</div>
 </form>
 <p class="section-note">需要注意的排在最前。</p>
 <div class="server-card-list" aria-label="服务器卡片">
 {{range .ServerCards}}
-<article class="shared-card server-card{{if .AttentionReasons}} attention-card{{end}}" data-server-card data-card-site="{{.SiteID}}" data-card-network="{{joinTags .NetworkIDs}}" data-card-search="{{.SearchText}}">
-<div class="server-card-main">
-{{if $.Caps.CanWrite}}<label class="switch-control server-select-control"><input type="checkbox" value="{{.ID}}" aria-label="选择 {{.Name}}"><span class="switch-track" aria-hidden="true"></span><span>多选</span></label>{{end}}
-<div>
+<article class="shared-card server-card{{if .AttentionReasons}} needs-attention{{end}}" data-server-card data-card-site="{{.SiteID}}" data-card-network="{{joinTags .NetworkIDs}}" data-card-search="{{.SearchText}}">
+<div class="server-card-heading">
+<div class="server-card-title">
 <h2><a href="/ui/servers/{{.ID}}">{{.Name}}</a></h2>
 <p class="server-address">{{.User}}@{{.Host}}:{{.Port}}</p>
 </div>
+{{if $.Caps.CanWrite}}<label class="server-select-control" title="选择 {{.Name}}"><input type="checkbox" value="{{.ID}}" aria-label="选择 {{.Name}}"></label>{{end}}
 </div>
-<dl class="server-card-fields">
-<div><dt data-field-name="名称">{{.Name}}</dt><dd data-field-name="名称">{{if .AttentionReasons}}<strong class="attention-badge">需要注意</strong>{{end}}</dd></div>
-<div><dt data-field-name="地址">{{.User}}@{{.Host}}:{{.Port}}</dt><dd data-field-name="地址">{{if .SitePath}}{{.SitePath}}{{else}}地点未登记{{end}}{{if .NetworkNames}} · {{joinTags .NetworkNames}}{{end}}</dd></div>
-<div><dt data-field-name="客户端">{{.ClientCount}} 个</dt><dd data-field-name="客户端">能看见</dd></div>
-<div><dt data-field-name="机密项">{{.SecretCount}} 个</dt><dd data-field-name="机密项">已授权</dd></div>
-<div><dt data-field-name="共享存储">{{.SharedStoreCount}} 个</dt><dd data-field-name="共享存储">可挂载</dd></div>
-{{if gt .SameMachineCount 1}}<div><dt data-field-name="同机">同机 {{.SameMachineCount}} 个账号</dt><dd data-field-name="同机">共用地址与地点</dd></div>{{end}}
-{{if .AttentionReasons}}<div><dt data-field-name="需要注意的原因">{{joinReasons .AttentionReasons}}</dt><dd data-field-name="需要注意的原因">请先处理</dd></div>{{end}}
-</dl>
+<p class="server-card-context">{{if .SitePath}}{{.SitePath}}{{else}}地点未登记{{end}}{{if .NetworkNames}} · {{joinTags .NetworkNames}}{{end}}{{if gt .SameMachineCount 1}}<span class="same-machine-chip">同机 {{.SameMachineCount}} 个账号</span>{{end}}</p>
+{{if .AttentionReasons}}<div class="server-attention-tags" aria-label="需要注意的原因">{{range .AttentionReasons}}<span class="attention-reason-tag">{{reasonLabel .}}</span>{{end}}</div>{{end}}
+<p class="server-card-stats"><span>能看见 <strong>{{.ClientCount}}</strong> 个客户端</span><span><strong>{{.SecretCount}}</strong> 个机密项</span><span><strong>{{.SharedStoreCount}}</strong> 个共享存储</span></p>
 <div class="server-row-actions">
 <a href="/ui/servers/{{.ID}}">详情</a>
 {{if $.Caps.CanWrite}}<a href="/ui/servers/{{.ID}}/edit">编辑</a><a href="/ui/servers/{{.ID}}/delete">删除</a>{{end}}

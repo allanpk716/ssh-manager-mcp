@@ -6,7 +6,7 @@
 {{if ne .State "pending"}}
 <div class="operation-refusal">
 <p>该配对请求已处理，不能再批准或拒绝。</p>
-<a href="/ui/clients/pairing">返回配对列表</a>
+<a class="back-link" href="/ui/clients/pairing" aria-label="返回配对列表"><span aria-hidden="true">‹</span>配对列表</a>
 </div>
 {{end}}
 <article class="pairing-request{{if not .HasShortCode}} pairing-missing-code{{end}}{{if .ForeignTarget}} pairing-foreign{{end}}">
@@ -49,7 +49,7 @@
 {{else}}
 <div class="operation-refusal">
 <p>配对请求已过期或已处理，请返回列表查看最新状态。</p>
-<a href="/ui/clients/pairing">返回配对列表</a>
+<a class="back-link" href="/ui/clients/pairing" aria-label="返回配对列表"><span aria-hidden="true">‹</span>配对列表</a>
 </div>
 {{end}}
 </section>

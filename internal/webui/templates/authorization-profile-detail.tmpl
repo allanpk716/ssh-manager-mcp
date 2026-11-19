@@ -1,7 +1,7 @@
 {{define "content"}}
 {{if .Authorization}}{{template "authorization-subpage" .}}
 <section class="authorization-detail-page">
-<p><a href="/ui/authorization/profiles">返回 Profile</a></p>
+<a class="back-link" href="/ui/authorization/profiles" aria-label="返回 Profile"><span aria-hidden="true">‹</span>Profile</a>
 <header class="detail-title"><h1>{{.Authorization.Detail.Name}}</h1><span class="status-tag">已授权 {{len .Authorization.Detail.Servers}} 台</span></header>
 <section class="shared-card wide-card">
 <div class="section-heading"><h2>授权的服务器</h2>{{if .Authorization.Detail.CanAdjust}}<a class="secondary-link" href="{{.Authorization.Detail.SelectionPath}}">调整服务器</a>{{end}}</div>

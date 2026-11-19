@@ -248,6 +248,17 @@ var pageFuncs = template.FuncMap{
 		}
 		return strings.Join(labels, "、")
 	},
+	// reasonLabel 供列表把每个注意原因渲染成独立标签；文案与 joinReasons
+	// 共用同一个代号映射，避免两处文案漂移。
+	"reasonLabel": attentionReasonLabel,
+	// firstLine 只取多行备注的首行；客户端详情的授权资源列表用它控制
+	// 每张卡的高度，完整备注仍在各详情页展示。
+	"firstLine": func(value string) string {
+		if index := strings.IndexAny(value, "\r\n"); index >= 0 {
+			return value[:index]
+		}
+		return value
+	},
 	"shareSystemLabel": func(system string) string {
 		switch system {
 		case "linux":

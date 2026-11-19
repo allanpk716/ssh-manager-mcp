@@ -1,6 +1,6 @@
 {{define "content"}}
 <section class="client-profile-page">
-<p><a href="/ui/clients/{{.Client.ID}}">返回客户端详情</a></p>
+<a class="back-link" href="/ui/clients/{{.Client.ID}}" aria-label="返回客户端详情"><span aria-hidden="true">‹</span>客户端详情</a>
 <h1>更换 profile</h1>
 <p>选择 {{.Client.Name}} 要绑定的新 profile。确认前先核对它将新增与失去的访问范围。</p>
 <nav class="profile-choice-list">

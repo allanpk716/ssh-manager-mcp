@@ -1,6 +1,6 @@
 {{define "content"}}
 <section class="client-detail-page">
-<p><a href="/ui/clients/">返回客户端列表</a></p>
+<a class="back-link" href="/ui/clients/" aria-label="返回客户端列表"><span aria-hidden="true">‹</span>客户端</a>
 <h1>{{.Client.Name}}</h1>
 <p class="muted">{{.Client.SourceText}} · profile {{.Client.ProfileName}}</p>
 
@@ -15,12 +15,12 @@
 
 <section class="shared-card client-status-card">
 <h2>状态</h2>
-<dl>
-<div><dt>最后同步</dt><dd>{{.Client.LastPullText}}</dd></div>
-<div><dt>客户端版本</dt><dd>{{if .Client.ClientVersion}}{{.Client.ClientVersion}}{{else}}未声明{{end}}</dd></div>
-<div><dt>推荐版本</dt><dd>{{if .Client.RecommendedVersion}}{{.Client.RecommendedVersion}}{{else}}未知{{end}}</dd></div>
-<div><dt>版本对比</dt><dd>{{.Client.VersionComparisonText}}</dd></div>
-<div><dt>设备码前缀</dt><dd>{{.Client.TokenPrefix}}…</dd></div>
+<dl class="client-status-list">
+<div class="client-status-row"><dt>最后同步</dt><dd>{{.Client.LastPullText}}</dd></div>
+<div class="client-status-row"><dt>客户端版本</dt><dd>{{if .Client.ClientVersion}}{{.Client.ClientVersion}}{{else}}未声明{{end}}</dd></div>
+<div class="client-status-row"><dt>推荐版本</dt><dd>{{if .Client.RecommendedVersion}}{{.Client.RecommendedVersion}}{{else}}未知{{end}}</dd></div>
+<div class="client-status-row"><dt>版本对比</dt><dd>{{.Client.VersionComparisonText}}</dd></div>
+<div class="client-status-row"><dt>设备码前缀</dt><dd>{{.Client.TokenPrefix}}…</dd></div>
 </dl>
 </section>
 
@@ -46,8 +46,8 @@
 <section class="shared-card client-resource-card">
 <h2>它能用到的机密项与共享存储</h2>
 <ul class="client-resource-list">
-{{range .Client.Secrets}}<li><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}没有备注{{end}}</small><small>机密项 · 经 {{joinTags .ViaServers}}</small></li>{{end}}
-{{range .Client.Shares}}<li><strong>{{.Name}}</strong><small>{{if .Note}}{{.Note}}{{else}}没有备注{{end}}</small><small>共享存储 · 经 {{joinTags .ViaServers}}</small></li>{{end}}
+{{range .Client.Secrets}}<li class="client-resource-row"><strong class="client-resource-name">{{.Name}}</strong><small class="client-resource-note">{{if .Note}}{{firstLine .Note}}{{else}}没有备注{{end}}</small><small class="client-resource-via">机密项 · 经过：{{joinTags .ViaServers}}</small></li>{{end}}
+{{range .Client.Shares}}<li class="client-resource-row"><strong class="client-resource-name">{{.Name}}</strong><small class="client-resource-note">{{if .Note}}{{firstLine .Note}}{{else}}没有备注{{end}}</small><small class="client-resource-via">共享存储 · 经过：{{joinTags .ViaServers}}</small></li>{{end}}
 </ul>
 {{if not (or .Client.Secrets .Client.Shares)}}<p>当前 profile 没有可用的机密项或共享存储。</p>{{end}}
 <p class="muted">由 profile 中的服务器与各机密项、共享存储的授权共同决定。</p>

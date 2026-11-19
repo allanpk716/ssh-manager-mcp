@@ -30,7 +30,7 @@
 </div>
 {{end}}
 </div>
-<button type="submit" name="add_address" value="1" class="secondary-button">再添加一个地址</button>
+<button type="submit" name="add_address" value="1" class="secondary-button address-add">再添加一个地址</button>
 {{if eq .ServerWizard.Form.DeviceChoice "existing"}}
 <section class="same-machine" data-existing-machine>
 <h2>沿用同一台机器</h2>
@@ -50,17 +50,21 @@
 </fieldset>
 <fieldset>
 <legend>认证方式</legend>
-<label class="choice"><input type="radio" name="credential_action" value="key"{{if eq .ServerWizard.Form.CredentialAction "key"}} checked{{end}}>私钥</label>
+<div class="segmented auth-segments" role="radiogroup" aria-label="认证方式">
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="key"{{if eq .ServerWizard.Form.CredentialAction "key"}} checked{{end}}>私钥</label>
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="password"{{if eq .ServerWizard.Form.CredentialAction "password"}} checked{{end}}>密码</label>
+<label class="segment auth-segment"><input type="radio" name="credential_action" value="none"{{if or (eq .ServerWizard.Form.CredentialAction "none") (eq .ServerWizard.Form.CredentialAction "")}} checked{{end}}>暂不填写</label>
+</div>
 <div data-credential-key{{if ne .ServerWizard.Form.CredentialAction "key"}} hidden{{end}}>
 <input type="hidden" name="key_source" value="file">
-<div class="form-field"><label for="wizard-key-file">私钥文件</label><input id="wizard-key-file" name="key_file" type="file"></div>
-<button type="button" class="text-button" data-toggle-paste-key>改为粘贴私钥</button>
+<div class="auth-fields">
+<div class="form-field"><label for="wizard-key-file">选择私钥文件</label><input id="wizard-key-file" name="key_file" type="file"></div>
+<button type="button" class="text-button" data-toggle-paste-key>没有文件？改为粘贴私钥</button>
 <div class="form-field" data-paste-key hidden><label for="wizard-key">私钥内容</label><textarea id="wizard-key" name="key" rows="5" autocomplete="off" placeholder="粘贴私钥内容；不在页面回显"></textarea></div>
 <div class="form-field"><label for="wizard-key-pass">私钥口令</label><input id="wizard-key-pass" name="key_passphrase" type="password" autocomplete="new-password"></div>
 </div>
-<label class="choice"><input type="radio" name="credential_action" value="password"{{if eq .ServerWizard.Form.CredentialAction "password"}} checked{{end}}>密码</label>
-<div class="form-field" data-credential-password{{if ne .ServerWizard.Form.CredentialAction "password"}} hidden{{end}}><label for="wizard-password">密码</label><input id="wizard-password" name="password" type="password" autocomplete="new-password"></div>
-<label class="choice"><input type="radio" name="credential_action" value="none"{{if or (eq .ServerWizard.Form.CredentialAction "none") (eq .ServerWizard.Form.CredentialAction "")}} checked{{end}}>暂不填写</label>
+</div>
+<div class="auth-fields" data-credential-password{{if ne .ServerWizard.Form.CredentialAction "password"}} hidden{{end}}><div class="form-field"><label for="wizard-password">密码</label><input id="wizard-password" name="password" type="password" autocomplete="new-password"></div></div>
 </fieldset>
 <details class="more-options">
 <summary>更多选项</summary>

@@ -40,8 +40,9 @@ func TestServerListCardsShowFiltersAndBatchEntrances(t *testing.T) {
 
 	for _, want := range []string{
 		`aria-label="搜索服务器"`, `aria-label="按地点筛选"`, `aria-label="按网络筛选"`,
-		"data-field-name=\"名称\"", "root@192.0.2.10:22", "root@192.0.2.11:22",
-		"地点", "网络", "客户端", "机密项", "共享存储", "同机 2 个账号",
+		"root@192.0.2.10:22", "root@192.0.2.11:22",
+		"家A", "家A局域网", "能看见", "个客户端", "个机密项", "个共享存储", "同机 2 个账号",
+		"server-attention-tags", "未挂凭据", "未设角色", "需要注意",
 		"加入 profile", "授权机密项", "授权共享存储", "导入 SSH 配置",
 	} {
 		if !strings.Contains(page, want) {

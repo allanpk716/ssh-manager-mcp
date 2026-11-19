@@ -71,8 +71,8 @@ func TestAuthorityClientDetailShowsProfileStatusMachineAndResources(t *testing.T
 		"设备码前缀", "abc123…", "所在机器", "机器 工作站", "公司 / 一号楼",
 		"最近采集 2026-11-18 09:30:00 · 3 个软件 · 1 个待确认暴露",
 		"Ubuntu 24.04.1", "查看全部", "立即采集",
-		"它能用到的机密项与共享存储", "MATRIX_TOKEN", "浏览器测试机密项", "经 db-1",
-		"datasets", "临时数据", "危险区", "移除客户端",
+		"它能用到的机密项与共享存储", "MATRIX_TOKEN", "浏览器测试机密项", "经过：db-1",
+		"datasets", "临时数据", "共享存储 · 经过：db-1", "危险区", "移除客户端",
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("客户端详情应包含 %q：\n%s", want, body)
