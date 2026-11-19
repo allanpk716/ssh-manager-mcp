@@ -613,9 +613,9 @@ func TestExecStopForProfile(t *testing.T) {
 	if out.Status != bgStatusRunning {
 		t.Fatalf("stop on running task = %q, want running (触发时刻 status, 立即返回)", out.Status)
 	}
-	s := waitTerminal(t, m, id, 5*time.Second)
-	if s.status != bgStatusStopped {
-		t.Fatalf("terminal after stop = %q, want stopped", s.status)
+	terminal := waitTerminalViaOutput(t, m, id, 5*time.Second)
+	if terminal.Status != bgStatusStopped {
+		t.Fatalf("terminal after stop = %q, want stopped", terminal.Status)
 	}
 
 	// 幂等: 已终态再 stop → 回其终态, 零新审计行。

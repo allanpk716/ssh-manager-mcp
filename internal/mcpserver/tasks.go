@@ -79,7 +79,7 @@ type bgTask struct {
 	relayKeys      map[string]struct{}
 	relayWriteKeys map[string]struct{}
 	// auditEnd 由 Insert 从 spec.AuditEnd 绑定 (终态行构造在闭包内); 引擎
-	// 终态置位后锁外调用。
+	// 终态置位后、广播终态前在锁内调用。
 	auditEnd func(now time.Time) error
 	// sudoMeta (Plan 41 §2): sudo 任务的提权元数据——引擎终态段从 Start 栈上的
 	// metaBox 挂入 (exec 返回后已定值, 终态后只读; running 期间为 nil)。无秘密,
@@ -141,9 +141,12 @@ type BgTaskSpec struct {
 	// AuditAction 是 AuditEnd 落行的 action 词 (Plan 47 spec §6): 空 = "exec-bg-end"
 	// (缺省字面量钉死——exec 路径零行为变化); relay 传 "relay-bg-end"。
 	AuditAction string
-	// AuditEnd 回写终态审计行 (T4: Start 传 st.WriteAudit 闭包;
-	// nil 时零终态审计)。Insert 绑定为 t.auditEnd——行由闭包调用方从 task 字段
-	// 组装 (Command=taskID, Status, ExitCode, DurationMS), 引擎终态后锁外落笔。
+	// AuditEnd 回写结束审计行；后台命令与中继传输的启动代码传入存储层的
+	// 写审计函数，字段为空则不写结束审计。任务入表时把该函数包装成本任务的
+	// 结束审计函数：审计行从任务字段组装，Command 字段写任务标识，Status
+	// 字段写终态（done 使用审计状态 ok），并携带退出码与运行毫秒数。共用
+	// 收尾逻辑在同一任务管理器互斥锁内先写结束审计，再唤醒等待任务输出的
+	// 调用方。
 	AuditEnd func(row store.AuditRow) error
 }
 
@@ -755,7 +758,8 @@ func redactRuntimeErr(err error) string {
 // "恰一张" 口径修正)。终态映射: stopReq→stopped (置位先于 cancel, 同锁无
 // 窗口)、timedOut→timeout、err→failed (文本过清洗)、否则 done+exitCode。
 // closed 抑制 (spec §3): manager 已关则跳过终态写入与 end 审计行 (表项已被
-// CloseAll 摘除), 但 client 仍由本 goroutine 自关 (幂等)。终态即关 Client:
+// CloseAll 摘除), 但 client 仍由本 goroutine 自关 (幂等)。终态审计在终态广播
+// 前落笔; 终态即关 Client:
 // 锁外关、幂等; 保留期只保 task 记录 + rollingBuffer (spec §1)。
 func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Client, exec func(ctx context.Context, stdout, stderr io.Writer) (int, bool, error), sudoMetaBox *sshbroker.SudoMeta) {
 	stdoutWriter := &notifyWriter{buf: t.stdout, source: m.maskingSource, serverID: t.serverID}
@@ -798,17 +802,21 @@ func (m *TaskManager) runTask(ctx context.Context, t *bgTask, cli *sshbroker.Cli
 		t.sudoMeta = sudoMetaBox // Plan 41 §2: 终态挂载 (exec 返回后值已定, 之后只读)
 	}
 	writeEnd := t.status != bgStatusRunning && !m.closed // 终态行由本 goroutine 落笔 (同点同锁)
-	nowFn := m.now                                       // 锁内捕获时钟, 锁外调用免字段竞争
 	aux := t.auxClient                                   // 第二连接槽锁内取引用 (引擎 Run 闭包持锁挂槽)
-	m.notify(t)                                          // 终态广播 (spec §2.3 触发点②; 零等待者短路)
-	t.cancel()                                           // 释放 WithTimeout 资源
+	if writeEnd && t.auditEnd != nil {
+		// 结束审计失败仍按既有尽力而为语义忽略，不阻止任务进入终态。这里的
+		// 一次生产数据库审计写入发生在任务管理器互斥锁内；SQLite 数据库繁忙
+		// 时可按当前忙碌等待上限等待约 5 秒，期间其他需要这把锁的调用会被
+		// 阻塞。这与开始审计在任务入表阶段持锁写入的做法一致，是为先写结束
+		// 审计、后发布任务终态而有意接受的代价。
+		_ = t.auditEnd(m.now())
+	}
+	m.notify(t) // 任务进入终态：唤醒等待任务输出的长轮询；无人等待时直接返回
+	t.cancel()  // 释放 WithTimeout 资源
 	m.mu.Unlock()
 	_ = cli.Close() // 终态即关 Client (锁外关, 幂等)
 	if aux != nil {
 		_ = aux.Close() // 终态即关第二连接槽 (同款锁外关, 幂等; Plan 47 spec §2)
-	}
-	if writeEnd && t.auditEnd != nil {
-		_ = t.auditEnd(nowFn()) // exec-bg-end 行: Command=taskID, Status, ExitCode, DurationMS
 	}
 }
 

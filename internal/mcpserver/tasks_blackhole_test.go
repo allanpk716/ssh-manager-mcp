@@ -23,7 +23,6 @@ package mcpserver
 // 观察路径: 用例经 m.Output (exec_output 的生产长轮询路径) 轮询至终态。
 
 import (
-	"context"
 	"net"
 	"sync"
 	"testing"
@@ -119,29 +118,6 @@ func (p *blackholeProxy) blackout(t *testing.T) {
 	p.mu.Lock()
 	p.blackholed = true
 	p.mu.Unlock()
-}
-
-// waitTerminalViaOutput 经 m.Output (exec_output 生产长轮询路径) 轮询至任务
-// 离开 running, 上限 d (外部死线)。恒以 offset 0 观测: 黑洞任务无输出字节,
-// 每轮就是一次纯状态等待 (终态广播会提前唤醒长轮询)。
-func waitTerminalViaOutput(t *testing.T, m *TaskManager, id string, d time.Duration) BgView {
-	t.Helper()
-	deadline := time.Now().Add(d)
-	for {
-		v, ok, err := m.Output(id, 0, 0, time.Second, context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !ok {
-			t.Fatalf("task %s unknown to Output (vanished before terminal)", id)
-		}
-		if v.Status != bgStatusRunning {
-			return v
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("task %s still running after %v — 黑洞形态下死线内唯一解锁源是看门狗第三段, 未生效即回归", id, d)
-		}
-	}
 }
 
 // TestBackgroundTimeoutBlackhole: 黑洞代理 + 门控阻塞命令 + TimeoutSec=1 →

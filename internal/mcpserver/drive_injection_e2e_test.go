@@ -1426,23 +1426,12 @@ func TestNetworkDriveInjectionBackgroundNetworkFailureUpdatesAddressCache(t *tes
 	if !strings.Contains(commands[3], `\\100.64.10.10\datasets`) {
 		t.Fatalf("second mapping did not use the next address: %q", commands[3])
 	}
-	// 任务先对外进入终态，终态审计行随后在任务互斥锁外写入。这里等待
-	// 两行都落库，避免轮询任务状态恰好抢在第二条审计写入之前断言。
-	var endRows []store.AuditRow
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		var err error
-		endRows, err = fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(endRows) == 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("background end audit rows = %#v, want two rows", endRows)
-		}
-		time.Sleep(10 * time.Millisecond)
+	endRows, err := fixture.store.QueryAudit(store.AuditFilter{Actions: []string{"exec-bg-end"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(endRows) != 2 {
+		t.Fatalf("background end audit rows = %#v, want two rows", endRows)
 	}
 	auditByTask := map[string]store.AuditRow{}
 	for _, row := range endRows {

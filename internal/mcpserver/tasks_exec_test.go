@@ -58,7 +58,8 @@ func mustSnap(t *testing.T, m *TaskManager, id string) bgTaskSnapshot {
 	return s
 }
 
-// waitTerminal 轮询至任务离开 running (引擎终态置位), 上限 d。
+// waitTerminal 直接读取任务管理器的内部测试快照并轮询至任务离开 running。
+// 它适合只关心引擎已进入终态、不考核生产输出接口的用例。
 func waitTerminal(t *testing.T, m *TaskManager, id string, d time.Duration) bgTaskSnapshot {
 	t.Helper()
 	deadline := time.Now().Add(d)
@@ -70,6 +71,29 @@ func waitTerminal(t *testing.T, m *TaskManager, id string, d time.Duration) bgTa
 			t.Fatalf("task %s did not leave running within %v", id, d)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitTerminalViaOutput 经 TaskManager.Output 反复观察任务，直到状态离开
+// running。这是 exec_output 工具在生产环境使用的长轮询接口，适合需要覆盖
+// 生产输出路径的用例。函数只用返回视图中的状态，不负责汇集完整输出。
+func waitTerminalViaOutput(t *testing.T, m *TaskManager, id string, d time.Duration) BgView {
+	t.Helper()
+	deadline := time.Now().Add(d)
+	for {
+		view, ok, err := m.Output(id, 0, 0, time.Second, context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !ok {
+			t.Fatalf("task %s became unknown before terminal while waiting via Output", id)
+		}
+		if view.Status != bgStatusRunning {
+			return view
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task %s still running after %v while waiting via Output", id, d)
+		}
 	}
 }
 
@@ -397,7 +421,8 @@ func TestBackgroundFailedRSTPath(t *testing.T) {
 }
 
 // TestBackgroundAuditEndRows: done/stopped/timeout/failed 四态各落一行
-// exec-bg-end (Command=taskID, Status/Dur 断言); start(ok) 行先于 end 行
+// exec-bg-end (Command=taskID, Status/Dur 断言); 四态均经 Output 长轮询观察，
+// 观察到终态后立即单次查审计。start(ok) 行先于 end 行
 // (AuditRows 按 id 倒序——end 行在切片中位于 start 行之前 = 落笔次序在后)。
 func TestBackgroundAuditEndRows(t *testing.T) {
 	st := newStore(t)
@@ -412,7 +437,8 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 
 	// done: 立即退出 (非门控命令走默认分支)。
 	idDone, _ := startBg(t, m, st, addr, hk, "a-done", 60)
-	waitTerminal(t, m, idDone, 5*time.Second)
+	doneView := waitTerminalViaOutput(t, m, idDone, 5*time.Second)
+	requireOneEndRow(t, auditRowsForTask(t, st), "exec-bg-end", idDone, "ok")
 
 	// stopped: 门控运行中 Stop。
 	idStop, _ := startBg(t, m, st, addr, hk, "a-stop", 60)
@@ -431,8 +457,16 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 	gate.waitEntered(t, "a-fail")
 	p.rst(t)
 
-	for _, id := range []string{idStop, idTO, idFail} {
-		waitTerminal(t, m, id, 5*time.Second)
+	stopView := waitTerminalViaOutput(t, m, idStop, 5*time.Second)
+	requireOneEndRow(t, auditRowsForTask(t, st), "exec-bg-end", idStop, bgStatusStopped)
+	timeoutView := waitTerminalViaOutput(t, m, idTO, 5*time.Second)
+	requireOneEndRow(t, auditRowsForTask(t, st), "exec-bg-end", idTO, bgStatusTimeout)
+	failView := waitTerminalViaOutput(t, m, idFail, 5*time.Second)
+	requireOneEndRow(t, auditRowsForTask(t, st), "exec-bg-end", idFail, bgStatusFailed)
+	if doneView.Status != bgStatusDone || stopView.Status != bgStatusStopped ||
+		timeoutView.Status != bgStatusTimeout || failView.Status != bgStatusFailed {
+		t.Fatalf("terminal views = done=%q stopped=%q timeout=%q failed=%q",
+			doneView.Status, stopView.Status, timeoutView.Status, failView.Status)
 	}
 
 	want := map[string]struct {
@@ -445,20 +479,9 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 		idTO:   {"a-to", "timeout", 900}, // 1s 生效超时 → 运行时长 ≥ ~1s
 		idFail: {"a-fail", "failed", 0},
 	}
-	// #8 第二例: 终态置位 ≠ end 行已落笔——reaper 在终态后异步写审计, 慢机上
-	// 单发读竞态。deadline 重试至行数齐 (start 行 startBg 同步落笔、本 store 无
-	// 其他写者, 2×len(want) 即 start+end 全齐; 多余行由下方 ==8 断言钉住)。
-	auditDeadline := time.Now().Add(10 * time.Second)
 	rows, err := st.AuditRows(50)
-	for err == nil && len(rows) < 2*len(want) && time.Now().Before(auditDeadline) {
-		time.Sleep(20 * time.Millisecond)
-		rows, err = st.AuditRows(50)
-	}
 	if err != nil {
 		t.Fatal(err)
-	}
-	if len(rows) < 2*len(want) {
-		t.Fatalf("audit rows = %d after 10s deadline, want %d (async end rows not all written): %+v", len(rows), 2*len(want), rows)
 	}
 	startIdx := map[string]int{}
 	endIdx := map[string]int{}
@@ -496,6 +519,34 @@ func TestBackgroundAuditEndRows(t *testing.T) {
 	if len(rows) != 8 {
 		t.Fatalf("audit rows = %d, want 8 (4×(start+end)): %+v", len(rows), rows)
 	}
+}
+
+// auditRowsForTask 在调用方刚观察到任务终态后立即读取一次审计行，不做重试。
+func auditRowsForTask(t *testing.T, st *store.Store) []store.AuditRow {
+	t.Helper()
+	rows, err := st.AuditRows(50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rows
+}
+
+// requireOneEndRow 检查刚取得的审计行快照：动作名与任务标识都匹配的结束审计行
+// 必须恰好有一条，且状态等于期望值。函数本身不重试，避免掩盖稍后才异步落笔的
+// 结束审计行。
+func requireOneEndRow(t *testing.T, rows []store.AuditRow, action, taskID, status string) *store.AuditRow {
+	t.Helper()
+	var matches []store.AuditRow
+	for _, row := range rows {
+		if row.Action == action && row.Command == taskID {
+			matches = append(matches, row)
+		}
+	}
+	if len(matches) != 1 || matches[0].Status != status {
+		t.Fatalf("任务 %s 动作 %q 的结束审计行 = %+v，期望恰好一条状态为 %q 的行；全部审计行 = %+v",
+			taskID, action, matches, status, rows)
+	}
+	return &matches[0]
 }
 
 // TestBackgroundClientClosedAtTerminal: 终态后记录仍在 (Output 可读语义——
