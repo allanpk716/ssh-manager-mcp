@@ -128,6 +128,13 @@ type serverDetailPageView struct {
 	ShareRows     []ServerDetailSharedStorageChoice
 	Topology      *serverDetailTopologyView
 	Software      *serverDetailSoftwareView
+	Move          *serverDetailMoveDraft
+}
+
+// serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标设备与确认状态。
+type serverDetailMoveDraft struct {
+	Device     string
+	Understood bool
 }
 
 // DrawerTitle 返回当前编辑弹层的标题。
@@ -194,7 +201,13 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 	case "cleared":
 		notice, noticeKind = "已删除主机密钥锚。", "success"
 	}
-	h.renderServerDetailPage(w, r, http.StatusOK, detail, notice, noticeKind)
+	options := serverDetailRenderOptions{status: http.StatusOK, notice: notice, noticeKind: noticeKind}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if r.URL.Query().Get("move") == "confirm" {
+			options.move = &serverDetailMoveDraft{}
+		}
+	}
+	h.renderServerDetailPageView(w, r, detail, options)
 }
 
 // renderServerDetailPage 组装并渲染详情页；notice 与 noticeKind 为空时不显
@@ -216,6 +229,7 @@ type serverDetailRenderOptions struct {
 	drawer        string
 	edit          *serverEditView
 	accountDrafts map[string]string
+	move          *serverDetailMoveDraft
 }
 
 // renderServerDetailPageView 渲染详情页；drawer 非空时打开对应编辑弹层，
@@ -238,6 +252,7 @@ func (h *handler) renderServerDetailPageView(
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
 		return
 	}
+	view.Move = options.move
 	if options.edit != nil && options.edit.Notice != "" && options.notice == "" {
 		options.notice = options.edit.Notice
 	}

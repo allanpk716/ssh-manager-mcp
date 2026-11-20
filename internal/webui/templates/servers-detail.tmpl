@@ -266,24 +266,22 @@
 </section>
 
 <section aria-label="高级操作">
-<details class="advanced-card" id="server-advanced-actions">
+<details class="advanced-card" id="server-advanced-actions"{{if .ServerDetailPage.Move}} open{{end}}>
 <summary>展开高级操作</summary>
 <div class="advanced-card-body">
 <h2>高级操作</h2>
-<p>这里只放低频且有风险的操作。</p>
+<p>这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。</p>
+<div class="advanced-actions">
 {{with .ServerDetailPage.Topology}}{{if and .CanWrite .MoveChoices}}
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/move" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<label for="move-device">目标机器</label>
-<select id="move-device" name="device">{{range .MoveChoices}}<option value="{{.Name}}">{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}</select>
-<button type="submit">改挂</button>
-</form>
+<a class="secondary-button button-link" href="/ui/servers/{{$.ServerDetail.ID}}?move=confirm#server-advanced-actions" data-move-entry>改挂到另一台设备</a>
 {{end}}{{end}}
-{{if .Caps.CanWrite}}<a class="danger-button button-link" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除服务器</a>{{end}}
+{{if .Caps.CanWrite}}<a class="danger-button button-link" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除服务器条目</a>{{end}}
+</div>
 </div>
 </details>
 </section>
 </div>
 {{template "server-detail-edit" .}}
+{{template "server-detail-move" .}}
 </section>
 {{end}}

@@ -469,6 +469,47 @@ func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
 	}
 }
 
+// TestServerDetailMoveConfirmationDialog 校验改挂入口先打开确认框，普通
+// 详情页不再直接渲染写表单。
+func TestServerDetailMoveConfirmationDialog(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。",
+		`href="/ui/servers/srv-fine?move=confirm#server-advanced-actions"`,
+		">改挂到另一台设备</a>",
+		`href="/ui/servers/srv-fine/delete"`, ">删除服务器条目</a>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("高级操作缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `action="/ui/servers/srv-fine/move"`) {
+		t.Fatalf("普通详情页不应直接渲染改挂写表单：\n%s", body)
+	}
+
+	confirmed := serversGet(t, handler, cookie, "/ui/servers/srv-fine?move=confirm")
+	for _, want := range []string{
+		`data-server-move-confirm`,
+		`<h2 id="server-move-confirm-title">确认改挂</h2>`,
+		"改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。",
+		`name="device"`,
+		`name="confirm" value="1"`,
+		">我已了解</label>",
+		`data-move-submit disabled`,
+		`href="/ui/servers/srv-fine#server-advanced-actions"`,
+	} {
+		if !strings.Contains(confirmed, want) {
+			t.Fatalf("改挂确认框缺少 %q：\n%s", want, confirmed)
+		}
+	}
+}
+
 // TestServerDetailAuthorizationCardShowsThreeSwitchGroups 校验授权卡片三组
 // 开关：名称与说明两行、机密项环境变量与最近写入、profile 客户端、共享存
 // 储提供方与挂载路径，以及各自的确认表单入口；客户端只读。

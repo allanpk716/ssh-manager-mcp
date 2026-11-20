@@ -1,0 +1,25 @@
+{{define "server-detail-move"}}
+{{with .ServerDetailPage.Move}}
+{{$draft := .}}
+{{$detail := $.ServerDetail}}
+{{$closeHref := printf "/ui/servers/%s#server-advanced-actions" $detail.ID}}
+<div class="confirm-shell server-move-confirm" data-server-move-confirm data-close-move="{{$closeHref}}">
+<a class="confirm-backdrop" href="{{$closeHref}}" aria-label="关闭改挂确认" tabindex="-1"></a>
+<section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="server-move-confirm-title" data-server-move-dialog>
+<h2 id="server-move-confirm-title">确认改挂</h2>
+{{if $.ServerDetailNotice}}<div class="notice notice-{{or $.ServerDetailNoticeKind "error"}}"><p>{{$.ServerDetailNotice}}</p></div>{{end}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/move" class="server-move-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<label class="form-field" for="move-device">目标设备</label>
+<select id="move-device" name="device">{{with $.ServerDetailPage.Topology}}{{range .MoveChoices}}<option value="{{.Name}}"{{if eq .Name $draft.Device}} selected{{end}}>{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}{{end}}</select>
+<div class="confirm-box">改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。</div>
+<label class="confirm-check"><input type="checkbox" name="confirm" value="1"{{if $draft.Understood}} checked{{end}}>我已了解</label>
+<div class="confirm-actions">
+<a class="secondary-button button-link" href="{{$closeHref}}">取消</a>
+<button type="submit" class="danger-button" data-move-submit{{if not $draft.Understood}} disabled{{end}}>确认改挂</button>
+</div>
+</form>
+</section>
+</div>
+{{end}}
+{{end}}
