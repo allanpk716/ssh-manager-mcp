@@ -26,7 +26,7 @@ func MarshalCSV(result QueryResult) ([]byte, error) {
 	for _, device := range result.Devices {
 		for _, item := range device.Items {
 			record := []string{
-				device.DeviceName, item.Name, item.Version, item.CategoryLabel,
+				device.DeviceName, item.Name, item.Version, ItemDisplayCategory(item).Label(),
 				csvListeningPorts(item.ListeningPorts),
 				csvExposureLevels(item.ListeningPorts),
 				csvCollectedAt(item.CollectedAt),

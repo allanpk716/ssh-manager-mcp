@@ -436,11 +436,21 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		device.Groups[0].Items[1].Name != "Linux 内核" {
 		t.Fatalf("操作系统与内核应合并为一个分组：%+v", device.Groups[0].Items)
 	}
+	if device.Groups[0].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[0].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[1].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[1].SearchCategoryLabel != "操作系统与内核" {
+		t.Fatalf("页面分组与搜索类别应使用领域展示类别：%+v", device.Groups[0])
+	}
 	if len(device.Groups[3].Items) != 1 || device.Groups[3].Items[0].Name != "NVIDIA 显卡驱动" {
 		t.Fatalf("内核不应重复出现在驱动与固件分组：%+v", device.Groups[3].Items)
 	}
 	if !device.Groups[4].SystemPackages || device.Groups[4].SystemPackageCount != 2 {
 		t.Fatalf("系统包分组应折叠并给出数量：%+v", device.Groups[4])
+	}
+	if device.Groups[4].CategoryCode != softwareinventory.DisplayCategorySystemPackage.Code() ||
+		device.Groups[4].Items[0].CategoryCode != softwareinventory.DisplayCategorySystemPackage.Code() {
+		t.Fatalf("系统包分组与条目应带稳定类别代号：%+v", device.Groups[4])
 	}
 	process := device.Groups[5].Items[0]
 	if process.ProcessName != "gateway" || process.ExecutablePath != "/opt/gateway/gateway" ||

@@ -342,6 +342,38 @@ func TestSoftwareInventoryRootShowsDeviceCardsFiltersAndSearch(t *testing.T) {
 	}
 }
 
+// TestSoftwareInventoryWindowsSummaryWithoutKernel 验证 Windows 固定命令
+// 集没有内核条目时，首页卡片与设备详情只显示系统版本，不显示空内核。
+func TestSoftwareInventoryWindowsSummaryWithoutKernel(t *testing.T) {
+	summary := SoftwareInventoryDeviceSummary{
+		Name: "Windows 工作站", SystemName: "Windows 10 Pro",
+		SystemVersion: "22H2", StatusLabels: []string{"正常"},
+	}
+	source := &stubSoftwareInventorySource{
+		devices: []SoftwareInventoryDeviceSummary{summary},
+		device: &SoftwareInventoryDevice{
+			Name: summary.Name, Summary: summary,
+			Groups: []SoftwareInventoryGroup{{
+				CategoryLabel: "操作系统与内核",
+				Items: []SoftwareInventoryItem{{
+					CategoryLabel: "操作系统", Name: "Windows 10 Pro", Version: "22H2",
+				}},
+			}},
+		},
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+
+	homeBody := readResponseBody(t, doGetWithCookie(t, handler, cookie, "/ui/software-inventory/"))
+	if !strings.Contains(homeBody, "Windows 10 Pro 22H2") || strings.Contains(homeBody, "；-") {
+		t.Fatalf("Windows 首页卡片应只显示系统版本：\n%s", homeBody)
+	}
+	devicePath := "/ui/software-inventory/devices?device=" + url.QueryEscape(summary.Name)
+	deviceBody := readResponseBody(t, doGetWithCookie(t, handler, cookie, devicePath))
+	if !strings.Contains(deviceBody, "Windows 10 Pro 22H2") || strings.Contains(deviceBody, "；-") {
+		t.Fatalf("Windows 设备详情应只显示系统版本：\n%s", deviceBody)
+	}
+}
+
 // TestSoftwareInventorySearchRedirectsToRoot 钉住搜索入口合并后的地址口
 // 径：旧搜索地址只负责跳转首页，并保留全部查询条件。
 func TestSoftwareInventorySearchRedirectsToRoot(t *testing.T) {

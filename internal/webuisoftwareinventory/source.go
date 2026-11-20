@@ -82,8 +82,7 @@ func deviceSummary(
 			summary.SystemName == "":
 			summary.SystemName, summary.SystemVersion = item.Name, item.Version
 			summary.ImportantSoftwareCount++
-		case item.Category == softwareinventory.CategoryDriverFirmware &&
-			strings.HasSuffix(item.Name, "内核") && summary.KernelName == "":
+		case softwareinventory.IsKernelItem(item) && summary.KernelName == "":
 			summary.KernelName, summary.KernelVersion = item.Name, item.Version
 			summary.ImportantSoftwareCount++
 		case item.Category == softwareinventory.CategoryUnidentified:
@@ -751,49 +750,28 @@ func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInv
 func groupViews(items []softwareinventory.QueryItem) []webui.SoftwareInventoryGroup {
 	// 设备详情的固定分组顺序：操作系统条目与内核条目合并展示，系统包
 	// 排在未识别进程前并默认折叠。
-	labels := []string{"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程"}
-	buckets := make([][]webui.SoftwareInventoryItem, len(labels))
+	categories := softwareinventory.AllDisplayCategories()
+	buckets := make([][]webui.SoftwareInventoryItem, len(categories))
 	for _, item := range items {
-		rank := deviceGroupRank(item)
-		buckets[rank] = append(buckets[rank], itemView(item))
+		category := softwareinventory.ItemDisplayCategory(item)
+		buckets[category] = append(buckets[category], itemView(item))
 	}
-	groups := make([]webui.SoftwareInventoryGroup, 0, len(labels))
-	for rank, label := range labels {
-		if len(buckets[rank]) == 0 {
+	groups := make([]webui.SoftwareInventoryGroup, 0, len(categories))
+	for _, category := range categories {
+		bucket := buckets[category]
+		if len(bucket) == 0 {
 			continue
 		}
 		group := webui.SoftwareInventoryGroup{
-			CategoryLabel: label, Items: buckets[rank],
-			SystemPackages: label == "系统包",
+			CategoryCode: category.Code(), CategoryLabel: category.Label(), Items: bucket,
+			SystemPackages: category == softwareinventory.DisplayCategorySystemPackage,
 		}
 		if group.SystemPackages {
-			group.SystemPackageCount = len(buckets[rank])
+			group.SystemPackageCount = len(bucket)
 		}
 		groups = append(groups, group)
 	}
 	return groups
-}
-
-// deviceGroupRank 给一条软件条目标出设备详情分组顺序。操作系统条目与
-// 名称以「内核」结尾的驱动固件条目合入第一组。
-func deviceGroupRank(item softwareinventory.QueryItem) int {
-	switch {
-	case item.Category == softwareinventory.CategoryOperatingSystem:
-		return 0
-	case item.Category == softwareinventory.CategoryDriverFirmware &&
-		strings.HasSuffix(item.Name, "内核"):
-		return 0
-	case item.Category == softwareinventory.CategoryServiceProgram:
-		return 1
-	case item.Category == softwareinventory.CategoryContainerImage:
-		return 2
-	case item.Category == softwareinventory.CategoryDriverFirmware:
-		return 3
-	case item.Category == softwareinventory.CategorySystemPackage:
-		return 4
-	default:
-		return 5
-	}
 }
 
 func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
@@ -804,14 +782,11 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 			ExposureLabel: port.Exposure.Label(),
 		})
 	}
-	searchCategoryLabel := item.CategoryLabel
-	if item.Category == softwareinventory.CategoryOperatingSystem ||
-		(item.Category == softwareinventory.CategoryDriverFirmware && strings.HasSuffix(item.Name, "内核")) {
-		searchCategoryLabel = "操作系统与内核"
-	}
+	displayCategory := softwareinventory.ItemDisplayCategory(item)
 	return webui.SoftwareInventoryItem{
-		CategoryLabel: item.CategoryLabel, SearchCategoryLabel: searchCategoryLabel,
-		Name: item.Name, Version: item.Version,
+		CategoryCode: displayCategory.Code(), CategoryLabel: item.CategoryLabel,
+		SearchCategoryLabel: displayCategory.Label(),
+		Name:                item.Name, Version: item.Version,
 		PackageURL: item.PackageURL, CPE: item.CPE, Source: item.Source,
 		CollectedAt: item.CollectedAt, ConfirmedAt: item.ConfirmedAt,
 		ListeningPorts: ports, BelongsTo: item.BelongsTo, Note: item.Note,

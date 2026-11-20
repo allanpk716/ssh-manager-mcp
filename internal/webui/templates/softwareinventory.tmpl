@@ -71,7 +71,7 @@
 {{range .SoftwareInventory.SearchDevices}}
 <li class="record-card">
 <h3><a href="/ui/software-inventory/devices?device={{.DeviceName | urlquery}}">{{.DeviceName}}</a> · {{len .Rows}} 条</h3>
-{{range .Rows}}{{if ne .Item.CategoryLabel "系统包"}}
+{{range .Rows}}{{if ne .Item.CategoryCode "system_package"}}
 <article class="software-search-item">
 <strong>{{.Item.Name}}</strong>
 <dl class="field-list">
@@ -85,7 +85,7 @@
 <h4>全部软件包（{{.SystemPackageCount}} 条，默认折叠）</h4>
 <details>
 <summary>展开全部软件包</summary>
-{{range .Rows}}{{if eq .Item.CategoryLabel "系统包"}}
+{{range .Rows}}{{if eq .Item.CategoryCode "system_package"}}
 <article class="software-search-item">
 <strong>{{.Item.Name}}</strong>
 <dl class="field-list">
@@ -108,7 +108,7 @@
 <h3><a href="/ui/software-inventory/devices?device={{.Name | urlquery}}">{{.Name}}</a></h3>
 <p class="status-badges">{{range .StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
 <dl class="field-list">
-<dt>系统与内核</dt><dd>{{if .SystemName}}{{.SystemName}} {{.SystemVersion}}{{else}}-{{end}}；{{if .KernelName}}{{.KernelName}} {{.KernelVersion}}{{else}}-{{end}}</dd>
+<dt>系统与内核</dt><dd>{{if .KernelName}}{{if .SystemName}}{{.SystemName}} {{.SystemVersion}}{{else}}-{{end}}；{{.KernelName}} {{.KernelVersion}}{{else if .SystemName}}{{.SystemName}} {{.SystemVersion}}{{else}}-{{end}}</dd>
 <dt>重点软件</dt><dd>{{.ImportantSoftwareCount}}</dd>
 <dt>全部软件</dt><dd>{{.AllSoftwareCount}}</dd>
 <dt>未识别进程</dt><dd>{{.UnidentifiedProcessCount}}</dd>

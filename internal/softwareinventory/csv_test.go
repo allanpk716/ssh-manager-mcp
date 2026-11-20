@@ -75,6 +75,38 @@ func TestMarshalCSVProducesFlatSoftwareTable(t *testing.T) {
 	}
 }
 
+func TestMarshalCSVUsesSharedDisplayCategory(t *testing.T) {
+	blob, err := MarshalCSV(QueryResult{Devices: []QueryDeviceResult{{
+		DeviceName: "工作站",
+		Items: []QueryItem{
+			{
+				Category: CategoryOperatingSystem, CategoryLabel: CategoryOperatingSystem.Label(),
+				Name: "Ubuntu", Version: "24.04.1 LTS",
+			},
+			{
+				Category: CategoryDriverFirmware, CategoryLabel: CategoryDriverFirmware.Label(),
+				Name: "Linux 内核", Version: "6.8.0-49-generic",
+			},
+			{
+				Category: CategoryDriverFirmware, CategoryLabel: CategoryDriverFirmware.Label(),
+				Name: "NVIDIA 显卡驱动", Version: "550.120",
+			},
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readCSVForTest(t, blob)
+	if len(rows) != 4 {
+		t.Fatalf("CSV 应有一条表头和三条软件条目，得到 %d 行", len(rows))
+	}
+	got := []string{rows[1][3], rows[2][3], rows[3][3]}
+	want := []string{"操作系统与内核", "操作系统与内核", "驱动与固件"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("CSV 类别 = %v，想要 %v", got, want)
+	}
+}
+
 func TestMarshalCSVRowsMatchQueryFiltersAndSingleDevice(t *testing.T) {
 	manager, st := newTestManager(t)
 	mustDevice(t, st, "工作站", true)

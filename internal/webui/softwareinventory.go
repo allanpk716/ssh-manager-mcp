@@ -20,6 +20,8 @@ type SoftwareInventoryPort struct {
 // SoftwareInventoryItem 是软件清单页的一条软件条目。版本与标识原样保留；
 // 实测条目带采集时间，声明条目带确认时间。
 type SoftwareInventoryItem struct {
+	// CategoryCode 是页面分组与搜索折叠共用的展示类别稳定代号。
+	CategoryCode  string
 	CategoryLabel string
 	// SearchCategoryLabel 是全局搜索默认视图的类别文案；操作系统条目与
 	// 内核条目在同一页合成「操作系统与内核」。
@@ -48,6 +50,7 @@ type SoftwareInventoryItem struct {
 // SoftwareInventoryGroup 是设备清单页的一个类别分组。系统包默认只带数
 // 量；条目仍由服务器渲染，浏览器展开后即可看到全部。
 type SoftwareInventoryGroup struct {
+	CategoryCode       string
 	CategoryLabel      string
 	Items              []SoftwareInventoryItem
 	SystemPackageCount int

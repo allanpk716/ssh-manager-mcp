@@ -10,7 +10,7 @@
 <h2>设备摘要</h2>
 <p class="status-badges">{{range .SoftwareInventoryDevice.Summary.StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
 <dl class="field-list">
-<dt>系统与内核</dt><dd>{{if .SoftwareInventoryDevice.Summary.SystemName}}{{.SoftwareInventoryDevice.Summary.SystemName}} {{.SoftwareInventoryDevice.Summary.SystemVersion}}{{else}}-{{end}}；{{if .SoftwareInventoryDevice.Summary.KernelName}}{{.SoftwareInventoryDevice.Summary.KernelName}} {{.SoftwareInventoryDevice.Summary.KernelVersion}}{{else}}-{{end}}</dd>
+<dt>系统与内核</dt><dd>{{if .SoftwareInventoryDevice.Summary.KernelName}}{{if .SoftwareInventoryDevice.Summary.SystemName}}{{.SoftwareInventoryDevice.Summary.SystemName}} {{.SoftwareInventoryDevice.Summary.SystemVersion}}{{else}}-{{end}}；{{.SoftwareInventoryDevice.Summary.KernelName}} {{.SoftwareInventoryDevice.Summary.KernelVersion}}{{else if .SoftwareInventoryDevice.Summary.SystemName}}{{.SoftwareInventoryDevice.Summary.SystemName}} {{.SoftwareInventoryDevice.Summary.SystemVersion}}{{else}}-{{end}}</dd>
 <dt>重点软件</dt><dd>{{.SoftwareInventoryDevice.Summary.ImportantSoftwareCount}}</dd>
 <dt>全部软件</dt><dd>{{.SoftwareInventoryDevice.Summary.AllSoftwareCount}}</dd>
 <dt>未识别进程</dt><dd>{{.SoftwareInventoryDevice.Summary.UnidentifiedProcessCount}}</dd>
