@@ -59,6 +59,14 @@ func (m *Manager) EditAddresses(req EditAddressesRequest, src Source) (*EditAddr
 			}
 			return nil, &RevisionConflict{Current: current}
 		}
+		var topologyErr *store.TopologyValidationError
+		if errors.As(err, &topologyErr) {
+			page := topologyErr.Message
+			if !strings.HasSuffix(page, "。") {
+				page += "。"
+			}
+			return nil, &FieldError{Field: "memberships", CLI: topologyErr.Message, Page: page}
+		}
 		return nil, err
 	}
 	return &EditAddressesResult{

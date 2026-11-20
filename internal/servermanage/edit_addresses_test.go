@@ -89,3 +89,42 @@ func TestManagerEditAddressesMapsValidationAndRevisionErrors(t *testing.T) {
 		t.Fatalf("校验与冲突失败不得写审计：%v %+v", queryErr, rows)
 	}
 }
+
+func TestManagerEditAddressesMapsNetworkAddressConflict(t *testing.T) {
+	manager := newTestManager(t)
+	if _, err := manager.st.AddSite("机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.st.AddNetwork(models.Network{
+		Name: "机房局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.st.AddDevice("NAS", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.st.AddNetworkMembership("NAS", "机房局域网", "10.0.0.8"); err != nil {
+		t.Fatal(err)
+	}
+	device, err := manager.st.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := manager.st.AddServer(&models.Server{
+		Name: "web", Host: "203.0.113.10", Port: 22, User: "owner", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = manager.EditAddresses(EditAddressesRequest{
+		Identifier: added, OtherAddress: "", Memberships: []NetworkMembershipInput{
+			{Network: "机房局域网", Address: "10.0.0.8"},
+		},
+	}, WebUISource("192.0.2.7"))
+	var fieldErr *FieldError
+	if !errors.As(err, &fieldErr) ||
+		fieldErr.Page != "网络 机房局域网 的地址 10.0.0.8 已被设备 NAS 占用。" {
+		t.Fatalf("网络地址冲突应换成页面校验错误：%v", err)
+	}
+}
