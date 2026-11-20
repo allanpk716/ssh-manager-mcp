@@ -4,8 +4,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 type serverListTopologySource struct{}
@@ -57,6 +61,58 @@ func TestServerListCardsShowFiltersAndBatchEntrances(t *testing.T) {
 	}.Encode())
 	if strings.Contains(filtered, `value="srv-bare"`) || !strings.Contains(filtered, `value="srv-fine"`) {
 		t.Fatalf("搜索与筛选应只留下匹配卡片：\n%s", filtered)
+	}
+}
+
+// TestServerListCardsShowConnectionTestStatus 校验列表卡片底部状态行：成
+// 功、失败、从未测试三种视觉状态可区分，成功带实际地址、网络与耗时，列
+// 表不出现候选地址展开与批量测试连接入口。
+func TestServerListCardsShowConnectionTestStatus(t *testing.T) {
+	store := newStubServerStore()
+	store.rows = []ServerListEntry{
+		{ID: "srv-ok", Name: "ok", User: "root", Host: "192.0.2.10", Port: 22,
+			ConnectionTest: &ServerConnectionTestResultView{
+				State: ServerConnectionTestSucceeded, Succeeded: true,
+				CompletedAt:    time.Unix(1_782_000_000, 0),
+				SuccessAddress: "192.0.2.10", SuccessNetworkName: "办公网",
+				SuccessSource: models.DialAddressSourcePhysical, Duration: 125 * time.Millisecond,
+			}},
+		{ID: "srv-down", Name: "down", User: "root", Host: "192.0.2.11", Port: 22,
+			ConnectionTest: &ServerConnectionTestResultView{
+				State: ServerConnectionTestFailed, CompletedAt: time.Unix(1_782_000_100, 0),
+				FailureLabel: "端口不通", Duration: 40 * time.Millisecond,
+			}},
+		{ID: "srv-new", Name: "new", User: "root", Host: "192.0.2.12", Port: 22},
+	}
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: serverListTopologySource{}, Access: &stubAccessStore{},
+		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+	page := serversGet(t, handler, cookie, "/ui/servers/")
+
+	success := regexp.MustCompile(`server-test-line is-succeeded[^\v]*?aria-hidden="true"[^\v]*?已连上`).FindString(page)
+	if success == "" {
+		t.Fatalf("成功卡片应有带小圆点的已连上状态行：\n%s", page)
+	}
+	for _, want := range []string{
+		"192.0.2.10 · 办公网 · 耗时 125 毫秒",
+		`server-test-line is-failed`, "连不上：端口不通",
+		`server-test-line is-untested`, "从未测试",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器列表状态行缺少 %q：\n%s", want, page)
+		}
+	}
+	if !regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (&#43;|\+|-)\d{2}:\d{2} 已连上`).MatchString(page) {
+		t.Fatalf("成功状态行应显示测试时间：\n%s", page)
+	}
+	if strings.Contains(page, "connection-test-candidate") || strings.Contains(page, "批量测试连接") {
+		t.Fatalf("列表不应出现候选地址展开或批量测试连接：\n%s", page)
 	}
 }
 

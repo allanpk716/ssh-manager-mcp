@@ -18,6 +18,9 @@ const (
 type ListItem struct {
 	Server           *models.Server
 	AttentionReasons []string
+	// ConnectionTest 是这个服务器条目最近一次完成的连接测试结果；从未
+	// 测试时为空。列表用批量读取一次带上，不在渲染每张卡片时逐条查询。
+	ConnectionTest *models.ServerConnectionTestResult
 }
 
 // List 返回服务器列表。attentionOnly 为真时只返回需要注意的服务器；顺序
@@ -34,6 +37,20 @@ func (m *Manager) List(attentionOnly bool) ([]ListItem, error) {
 			continue
 		}
 		out = append(out, ListItem{Server: srv, AttentionReasons: reasons})
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	serverIDs := make([]string, 0, len(out))
+	for _, item := range out {
+		serverIDs = append(serverIDs, item.Server.ID)
+	}
+	connectionTests, err := m.st.ServerConnectionTestResults(serverIDs)
+	if err != nil {
+		return nil, err
+	}
+	for index := range out {
+		out[index].ConnectionTest = connectionTests[out[index].Server.ID]
 	}
 	return out, nil
 }

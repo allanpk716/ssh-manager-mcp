@@ -26,6 +26,44 @@ func newAdapterManager(t *testing.T) (*servermanage.Manager, *store.Store) {
 	return servermanage.New(st), st
 }
 
+// TestListEntriesCarryConnectionTestResults 用真实 vault 验证列表适配：
+// 最近一次连接测试结果随列表一次换成页面数据，从未测试的条目保持为空。
+func TestListEntriesCarryConnectionTestResults(t *testing.T) {
+	manager, st := newAdapterManager(t)
+	tested, err := st.AddServer(&models.Server{Name: "web", Host: "192.0.2.10", Port: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddServer(&models.Server{Name: "new", Host: "192.0.2.11", Port: 22}); err != nil {
+		t.Fatal(err)
+	}
+	saved := models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_000, 0), Succeeded: true,
+		SuccessAddress: "192.0.2.10", SuccessNetworkName: "办公网",
+		SuccessSource: models.DialAddressSourcePhysical, Duration: 120 * time.Millisecond,
+	}
+	if err := st.SaveServerConnectionTestResult(tested, saved); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := FromManager(manager).ServerList("", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]webui.ServerListEntry{}
+	for _, row := range rows {
+		byName[row.Name] = row
+	}
+	got := byName["web"].ConnectionTest
+	if got == nil || !got.Succeeded || got.SuccessAddress != "192.0.2.10" ||
+		got.SuccessNetworkName != "办公网" || got.Duration != 120*time.Millisecond {
+		t.Fatalf("web 的页面连接测试结果不正确：%+v", got)
+	}
+	if byName["new"].ConnectionTest != nil {
+		t.Fatalf("从未测试的 new 不应有页面结果：%+v", byName["new"].ConnectionTest)
+	}
+}
+
 // TestDetailViewIncludesDeliveryRecords 用真实 vault 验证 Web UI 的服务器
 // 详情数据完整映射第四组下发记录，并给客户端裁剪留下明确的显示开关。
 func TestDetailViewIncludesDeliveryRecords(t *testing.T) {
