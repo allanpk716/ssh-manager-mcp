@@ -413,7 +413,7 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 		},
 		{
 			"/ui/servers/srv-fine/move",
-			url.Values{"device": {"NAS"}},
+			url.Values{"device": {"NAS"}, "confirm": {"1"}},
 			"move",
 		},
 	}
@@ -441,6 +441,31 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 	}
 	if len(writer.serverMoves) != 1 || writer.serverMoves[0] != [2]string{"srv-fine", "NAS"} {
 		t.Fatalf("改挂写入 = %v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveRequiresUnderstanding 校验改挂必须由服务端确认
+// 「我已了解」，不能只依赖浏览器禁用提交按钮。
+func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+		"device": {"NAS"},
+	})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("未勾选确认时状态码 = %d，应为 400", response.StatusCode)
+	}
+	body := readResponseBody(t, response)
+	if !strings.Contains(body, "请先勾选「我已了解」。") {
+		t.Fatalf("未勾选确认时缺少服务端拒绝提示：\n%s", body)
+	}
+	if len(writer.serverMoves) != 0 {
+		t.Fatalf("未勾选确认时不应写入，实际调用：%v", writer.serverMoves)
 	}
 }
 

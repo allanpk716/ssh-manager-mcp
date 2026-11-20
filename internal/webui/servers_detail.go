@@ -639,6 +639,10 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择目标机器。")
 		return
 	}
+	if r.PostFormValue("confirm") != "1" {
+		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请先勾选「我已了解」。")
+		return
+	}
 	_, err := h.cfg.TopologyWriter.MoveServerToDevice(
 		detail.ID, device, TopologyWriteSource{RemoteAddress: remoteIP(r)},
 	)
