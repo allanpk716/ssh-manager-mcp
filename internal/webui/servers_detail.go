@@ -62,7 +62,6 @@ type serverDetailAddressRow struct {
 	NetworkValue string
 	TypeLabel    string
 	Address      string
-	IsOther      bool
 }
 
 // serverDetailSiblingAccount 是同一台机器上的另一个登录账号；Note 复用
@@ -97,7 +96,6 @@ type serverDetailTopologyView struct {
 	CanWrite          bool
 	CanEditAddresses  bool
 	LocationOpen      bool
-	FallbackAddress   string
 	NewLocationHref   string
 }
 
@@ -375,7 +373,6 @@ func (h *handler) serverDetailTopologyView(
 		HasDevice: detail.HasDevice, DeviceName: detail.DeviceName,
 		CanWrite:         h.cfg.TopologyWriter != nil,
 		CanEditAddresses: h.caps.CanWrite,
-		FallbackAddress:  detail.Host,
 	}
 	if !view.CanWrite {
 		view.LocationOpen = false
@@ -408,7 +405,7 @@ func (h *handler) serverDetailTopologyView(
 	if detail.Host != "" {
 		view.Addresses = append(view.Addresses, serverDetailAddressRow{
 			NetworkName: "其他（公网或未登记网络）", NetworkValue: "other",
-			TypeLabel: "其他地址", Address: detail.Host, IsOther: true,
+			TypeLabel: "其他地址", Address: detail.Host,
 		})
 	}
 	for _, network := range data.Networks {
