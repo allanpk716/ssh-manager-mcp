@@ -95,12 +95,13 @@ type serverDetailTopologyView struct {
 	NewLocationHref   string
 }
 
-// serverDetailSoftwareView 是软件清单入口卡片的数据；清单本身在软件清单
-// 设备视图查看，这里只保留采集状态与过渡入口。
+// serverDetailSoftwareView 是软件清单入口卡片的数据；摘要与清单明细都来
+// 自软件清单设备页的同一份读取结果。
 type serverDetailSoftwareView struct {
 	Available  bool
 	Reason     string
 	DeviceName string
+	Summary    SoftwareInventoryDeviceSummary
 	Status     SoftwareInventoryStatus
 }
 
@@ -467,8 +468,8 @@ func networkTypeLabel(networkType string) string {
 	return "物理局域网"
 }
 
-// serverDetailSoftwareView 组装软件清单入口卡片；清单明细由软件清单设备
-// 视图负责，详情页不再拆声明与实测清单。
+// serverDetailSoftwareView 组装软件清单入口卡片；摘要直接沿用设备软件清
+// 单页的数据，不在详情页另算一套状态。
 func (h *handler) serverDetailSoftwareView(r *http.Request, detail *ServerDetailView) *serverDetailSoftwareView {
 	view := &serverDetailSoftwareView{}
 	if h.cfg.SoftwareInventory == nil {
@@ -486,6 +487,7 @@ func (h *handler) serverDetailSoftwareView(r *http.Request, detail *ServerDetail
 	}
 	view.Available = true
 	view.DeviceName = device.Name
+	view.Summary = device.Summary
 	view.Status = device.Status
 	return view
 }

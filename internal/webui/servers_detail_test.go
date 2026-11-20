@@ -666,14 +666,18 @@ func TestServerDetailAuthorizationCardShowsThreeSwitchGroups(t *testing.T) {
 	}
 }
 
-// TestServerDetailSoftwareCardKeepsOnlyDeviceEntry 校验软件清单卡片撤下声
-// 明、认领、草稿、待办与待确认暴露入口，只保留设备视图过渡入口。
-func TestServerDetailSoftwareCardKeepsOnlyDeviceEntry(t *testing.T) {
+// TestServerDetailSoftwareCardUsesDeviceSummaryAndEntry 校验软件清单卡片使
+// 用设备软件清单页的摘要，并撤下声明、认领、草稿、待办与待确认暴露入口。
+func TestServerDetailSoftwareCardUsesDeviceSummaryAndEntry(t *testing.T) {
 	lastSuccess := time.Unix(1760000100, 0)
 	software := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
 		Name: "工作站",
+		Summary: SoftwareInventoryDeviceSummary{
+			Name: "工作站", StatusLabels: []string{"清单过期", "采集失败"},
+		},
 		Status: SoftwareInventoryStatus{
 			Managed: true, CollectorLabel: "权威端", ServerEntry: "fine", LastSuccessAt: &lastSuccess,
+			LastFailureReason: "连接超时，端口不通",
 		},
 		Groups: []SoftwareInventoryGroup{{
 			CategoryLabel: "系统包",
@@ -702,7 +706,8 @@ func TestServerDetailSoftwareCardKeepsOnlyDeviceEntry(t *testing.T) {
 
 	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
-		`id="server-card-software"`, "软件清单", "设备", "工作站", "上次成功采集", "清单状态",
+		`id="server-card-software"`, "软件清单", "设备", "工作站", "采集时间", "清单过期", "采集失败",
+		"连接超时，端口不通",
 		`action="/ui/software-inventory/collect?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`,
 		`name="return_to" value="/ui/servers/srv-fine"`, "立即采集",
 		`href="/ui/software-inventory/devices?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`, "查看软件清单",
@@ -719,6 +724,19 @@ func TestServerDetailSoftwareCardKeepsOnlyDeviceEntry(t *testing.T) {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("软件清单卡片不应再出现 %q：\n%s", forbidden, body)
 		}
+	}
+
+	clientHandler, clientCookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		role: RoleClient, servers: newServerDetailTestStore(),
+	})
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
+	if !strings.Contains(clientPage, `id="server-card-software"`) ||
+		!strings.Contains(clientPage, "软件清单在权威端查看。") {
+		t.Fatalf("客户端软件清单卡片应保留只读说明：\n%s", clientPage)
+	}
+	if strings.Contains(clientPage, "/ui/software-inventory/devices") ||
+		strings.Contains(clientPage, "立即采集") {
+		t.Fatalf("客户端软件清单卡片不应出现入口或采集表单：\n%s", clientPage)
 	}
 
 	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare")

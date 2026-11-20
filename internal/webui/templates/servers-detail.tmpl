@@ -248,10 +248,11 @@
 <article class="shared-card">
 <div class="card-heading"><h2>软件清单</h2></div>
 {{if $software.Available}}
+<p class="status-badges">{{range $software.Summary.StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
 <dl class="info-list">
 <div class="info-row"><dt>设备</dt><dd>{{$software.DeviceName}}</dd></div>
-<div class="info-row"><dt>上次成功采集</dt><dd>{{formatOptionalTime $software.Status.LastSuccessAt}}</dd></div>
-<div class="info-row"><dt>清单状态</dt><dd>{{if $software.Status.Stale}}已过期{{else}}未过期{{end}}</dd></div>
+<div class="info-row"><dt>采集时间</dt><dd>{{formatOptionalTime $software.Status.LastSuccessAt}}</dd></div>
+{{if $software.Status.LastFailureReason}}<div class="info-row"><dt>上次失败原因</dt><dd>{{$software.Status.LastFailureReason}}</dd></div>{{end}}
 </dl>
 {{if .Caps.CanWrite}}
 <form method="post" action="/ui/software-inventory/collect?device={{$software.DeviceName | urlquery}}" class="inline-form">

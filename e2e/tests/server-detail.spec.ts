@@ -55,15 +55,24 @@ test("服务器详情一列卡片并回归旧分段地址", async ({ page }) => 
     await expect(accounts).toContainText("每晚备份任务使用");
     await expect(accounts).toContainText(/上次测试：.+ 已连上/);
 
-    // 软件清单卡片只保留设备视图过渡入口。
+    // 软件清单卡片沿用设备软件清单页的摘要，并进入设备详情。
     const software = page.locator("#server-card-software");
     for (const forbidden of ["声明", "认领", "草稿", "待办", "待确认暴露"]) {
       await expect(software).not.toContainText(forbidden);
     }
-    await expect(software.getByRole("link", { name: "查看软件清单" })).toHaveAttribute(
+    await expect(software).toContainText("采集时间");
+    await expect(software).toContainText("正常");
+    const softwareEntry = software.getByRole("link", { name: "查看软件清单" });
+    await expect(softwareEntry).toHaveAttribute(
       "href",
-      /\/ui\/software-inventory\/devices\?device=/,
+      /\/ui\/software-inventory\/devices\?device=%E5%B7%A5%E4%BD%9C%E7%AB%99$/,
     );
+    await softwareEntry.click();
+    await page.getByRole("heading", { name: "工作站 · 软件清单" }).waitFor();
+    await expect(page).toHaveURL(/\/ui\/software-inventory\/devices\?device=/);
+    await page.goBack();
+    await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
+    await expect(page.locator("#server-card-software")).toBeVisible();
 
     // 旧分段查询地址回到统一详情页。
     for (const tab of ["connection", "addresses", "authorization", "software"]) {
