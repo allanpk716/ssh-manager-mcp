@@ -28,6 +28,26 @@ func TestReplaceDeviceAddressListMovesOtherAddressToNetwork(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	beforeServer, err := st.GetServer(added)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeMemberships, err := st.ListNetworkMembershipsByRegistration("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeAuditRows, err := st.QueryAudit(AuditFilter{
+		Actions: []string{"device.member-add", "device.member-edit", "device.member-rm", "server.edit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeServer.Host != "203.0.113.10" || beforeServer.Revision != 0 ||
+		len(beforeMemberships) != 0 || len(beforeAuditRows) != 0 {
+		t.Fatalf("网段确认只改编辑草稿时不应提前写入成员、清空其他地址或审计：%+v %+v %+v",
+			beforeServer, beforeMemberships, beforeAuditRows)
+	}
+
 	result, err := st.ReplaceDeviceAddressList(ReplaceDeviceAddressListRequest{
 		ServerID: added, ExpectedRevision: 0, CheckRevision: true,
 		OtherAddress: "", Memberships: []NetworkMembershipWrite{
