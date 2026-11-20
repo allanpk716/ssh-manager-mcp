@@ -323,7 +323,7 @@ func TestWriterAdapterEditServerAddressesParsesRowsAndRejectsDuplicates(t *testi
 				{Network: "机房局域网", Address: "10.0.0.8"},
 				{Network: "机房局域网", Address: "10.0.0.9"},
 			},
-			want: "同一设备在同一网络里只能有一个网络成员。",
+			want: "同一台机器在同一个网络里只能登记一个地址。",
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

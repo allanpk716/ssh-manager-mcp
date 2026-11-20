@@ -79,7 +79,7 @@ func (s *Store) ReplaceDeviceAddressList(
 		}
 		if _, duplicate := targetByNetworkID[network.ID]; duplicate {
 			return nil, &TopologyValidationError{Message: fmt.Sprintf(
-				"同一设备 %s 在网络 %s 里只能有一个网络成员", device.Name, network.Name)}
+				"同一台机器 %s 在 %s 里只能登记一个地址", device.Name, network.Name)}
 		}
 		membership := &models.NetworkMembership{
 			DeviceID: device.ID, DeviceName: device.Name,
@@ -209,7 +209,7 @@ func normalizeDeviceAddressList(
 			return "", nil, &TopologyValidationError{Message: "地址不能包含空白字符"}
 		}
 		if _, duplicate := seenNetworks[membership.Network]; duplicate {
-			return "", nil, &TopologyValidationError{Message: "同一设备在同一网络里只能有一个网络成员"}
+			return "", nil, &TopologyValidationError{Message: "同一台机器在同一个网络里只能登记一个地址"}
 		}
 		seenNetworks[membership.Network] = struct{}{}
 		memberships = append(memberships, membership)

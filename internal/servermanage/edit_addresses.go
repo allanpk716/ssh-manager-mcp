@@ -101,7 +101,7 @@ func validateEditAddresses(req EditAddressesRequest) error {
 		if _, duplicate := seen[network]; duplicate {
 			return &FieldError{
 				Field: "memberships", CLI: "duplicate network in request",
-				Page: "同一设备在同一网络里只能有一个网络成员。",
+				Page: "同一台机器在同一个网络里只能登记一个地址。",
 			}
 		}
 		seen[network] = struct{}{}
