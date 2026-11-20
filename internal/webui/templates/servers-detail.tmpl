@@ -3,25 +3,19 @@
 <a class="back-link" href="/ui/servers/" aria-label="返回服务器列表"><span aria-hidden="true">‹</span>服务器</a>
 <div class="subpage-header">
 <h1>{{.ServerDetail.Name}}</h1>
-<p class="detail-subtitle mono">{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</p>
+<p class="detail-subtitle mono">{{if .ServerDetail.Host}}{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}{{else if .ServerDetailPage.PreferredNetworkAddress}}{{.ServerDetail.User}}@{{.ServerDetailPage.PreferredNetworkAddress}}:{{.ServerDetail.Port}}{{else}}{{.ServerDetail.User}} · 端口 {{.ServerDetail.Port}}{{end}}</p>
 {{if .Caps.CanWrite}}<div id="server-last-test" class="server-last-test{{if .ServerDetail.ConnectionTest}}{{if .ServerDetail.ConnectionTest.Succeeded}} is-succeeded{{else}} is-failed{{end}}{{end}}">
 <span class="status-dot" aria-hidden="true"></span>{{if .ServerDetail.ConnectionTest}}上次测试：{{formatTime .ServerDetail.ConnectionTest.CompletedAt}} {{.ServerDetail.ConnectionTest.ShortStatusText}}{{else}}从未测试{{end}}
 </div>{{end}}
 </div>
 {{if .ServerDetailNotice}}<div class="notice notice-{{or .ServerDetailNoticeKind "error"}}"><p>{{.ServerDetailNotice}}</p></div>{{end}}
-<nav class="sticky-tabs" aria-label="服务器详情分段">
-<div class="segmented server-detail-tabs">
-<a class="segment" href="/ui/servers/{{.ServerDetail.ID}}?tab=connection"{{if eq .ServerDetailPage.Tab "connection"}} aria-current="page"{{end}}>连接</a>
-<a class="segment" href="/ui/servers/{{.ServerDetail.ID}}?tab=addresses"{{if eq .ServerDetailPage.Tab "addresses"}} aria-current="page"{{end}}>地址与地点</a>
-<a class="segment" href="/ui/servers/{{.ServerDetail.ID}}?tab=authorization"{{if eq .ServerDetailPage.Tab "authorization"}} aria-current="page"{{end}}>授权</a>
-<a class="segment" href="/ui/servers/{{.ServerDetail.ID}}?tab=software"{{if eq .ServerDetailPage.Tab "software"}} aria-current="page"{{end}}>软件</a>
-</div>
-</nav>
 
-{{if eq .ServerDetailPage.Tab "connection"}}
-<section class="detail-section" aria-label="连接">
+<div class="detail-section">
+<section aria-label="连接" id="server-card-connection">
 <article class="shared-card">
-<div class="card-heading"><h2>连接信息</h2></div>
+<div class="card-heading"><h2>连接</h2>
+{{if .Caps.CanWrite}}<a class="small-button" href="/ui/servers/{{.ServerDetail.ID}}?edit=connection" data-detail-edit-button="connection">编辑</a>{{end}}
+</div>
 <dl class="info-list">
 <div class="info-row"><dt>名称</dt><dd>{{.ServerDetail.Name}}</dd></div>
 <div class="info-row"><dt>登录用户</dt><dd class="mono">{{.ServerDetail.User}}</dd></div>
@@ -42,11 +36,6 @@
 {{end}}
 {{end}}
 </dl>
-<div class="button-row">
-{{if .Caps.CanWrite}}
-<a class="secondary-button" href="/ui/servers/{{.ServerDetail.ID}}?tab=connection&amp;edit=1">编辑</a>
-{{end}}
-</div>
 <div class="connection-test-area">
 <div id="server-connection-test-live" role="status" aria-live="polite">
 {{template "serverConnectionTestResult" .ServerDetail.ConnectionTest}}
@@ -76,182 +65,103 @@
 </details>
 {{end}}
 </article>
-
-{{if or .ServerEdit .ServerDetailPage.EditOpen}}
-{{template "server-detail-edit" .}}
-{{end}}
-
-<article class="shared-card">
-<div class="card-heading"><h2>说明信息</h2></div>
-<dl class="info-list">
-<div class="info-row"><dt>说明</dt><dd>{{or .ServerDetail.Description "-"}}</dd></div>
-<div class="info-row"><dt>硬件</dt><dd>{{or .ServerDetail.Hardware "-"}}</dd></div>
-<div class="info-row"><dt>服务</dt><dd>{{or .ServerDetail.Services "-"}}</dd></div>
-<div class="info-row"><dt>角色</dt><dd>{{or .ServerDetail.Role "-"}}</dd></div>
-<div class="info-row"><dt>注意事项</dt><dd>{{or .ServerDetail.Caveats "-"}}</dd></div>
-</dl>
-</article>
-
-{{if .Caps.CanWrite}}
-<article class="shared-card danger-card">
-<h2>危险区</h2>
-<p>删除后，这台服务器的连接信息和授权关系将被移除。</p>
-<a class="danger-button button-link" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除服务器</a>
-</article>
-{{end}}
 </section>
-{{end}}
 
-{{if eq .ServerDetailPage.Tab "addresses"}}
-<section class="detail-section" aria-label="地址与地点">
-{{if .ServerDetailPage.Topology}}
-{{$topology := .ServerDetailPage.Topology}}
+{{with .ServerDetailPage.Topology}}
+<section aria-label="地点" id="server-card-location">
 <article class="shared-card">
 <div class="card-heading"><h2>地点</h2>
-{{if and $topology.CanWrite $topology.HasDevice}}<a class="small-button" href="/ui/servers/{{.ServerDetail.ID}}?tab=addresses&amp;location=1">更改</a>{{end}}
+{{if and .CanWrite .HasDevice}}<a class="small-button" href="/ui/servers/{{$.ServerDetail.ID}}?edit=location" data-detail-edit-button="location">编辑</a>{{end}}
 </div>
-{{if $topology.HasDevice}}
-<div class="location-value">{{if $topology.LocationPath}}{{$topology.LocationPath}}{{else}}未登记地点{{end}}</div>
-{{if $topology.Mismatches}}
+{{if .HasDevice}}
+<div class="location-value">{{if .LocationPath}}{{.LocationPath}}{{else}}未登记地点{{end}}</div>
+<p class="card-help">地点登记在机器上，同一台机器的全部服务器条目共用。</p>
+{{if .Mismatches}}
 <div class="notice notice-warning">
 <p>机器地点与物理局域网覆盖的地点不一致，只是提示，不拦截连接：</p>
-<ul>{{range $topology.Mismatches}}<li>{{.NetworkName}} 覆盖 {{.NetworkLocationPath}}，机器登记在 {{.DeviceLocationPath}}。</li>{{end}}</ul>
+<ul>{{range .Mismatches}}<li>{{.NetworkName}} 覆盖 {{.NetworkLocationPath}}，机器登记在 {{.DeviceLocationPath}}。</li>{{end}}</ul>
 </div>
 {{end}}
-{{else}}
-<p class="empty-inline">未关联机器。先在下面改挂到一台机器，再登记地点。</p>
-{{end}}
-{{if and $topology.CanWrite $topology.HasDevice $topology.LocationOpen}}
-<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/location" class="location-tree-form">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<div class="location-tree" role="radiogroup" aria-label="选择地点">
-{{template "location-options" $topology.LocationOptions}}
-</div>
-<div class="form-actions">
-<button type="submit">保存地点</button>
-<a class="button-link" href="/ui/servers/{{.ServerDetail.ID}}?tab=addresses">取消</a>
-<a class="secondary-link" href="{{$topology.NewLocationHref}}">新建地点</a>
-</div>
-</form>
-{{end}}
+{{else}}<p class="empty-inline">未关联机器，暂无地点。地点在机器上登记，同一台机器的全部服务器条目共用。</p>{{end}}
 </article>
+</section>
 
+<section aria-label="地址" id="server-card-address">
 <article class="shared-card address-card">
-<div class="card-heading"><h2>地址</h2></div>
+<div class="card-heading"><h2>地址</h2>{{if .CanEditAddresses}}<a class="small-button" href="/ui/servers/{{$.ServerDetail.ID}}?edit=address" data-detail-edit-button="address">编辑</a>{{end}}</div>
 <p class="card-help">sshmgr 连接时会按自己所在的网络自动选择地址。</p>
 <div class="address-card-list">
-{{range $topology.Addresses}}
+{{range .Addresses}}
 <div class="address-card-row">
 <span class="address-network">{{.NetworkName}}</span>
 <span class="type-tag">{{.TypeLabel}}</span>
 <span class="address-value mono">{{.Address}}</span>
-{{if $topology.CanWrite}}
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/address/edit" class="inline-form address-edit-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<input type="hidden" name="network" value="{{.NetworkName}}">
-<input type="text" name="address" value="{{.Address}}" aria-label="编辑 {{.NetworkName}} 的地址">
-<button type="submit">保存</button>
-</form>
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/address/remove" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<input type="hidden" name="network" value="{{.NetworkName}}">
-<button type="submit" class="danger">移除</button>
-</form>
-{{end}}
+{{range .RangeSuggestions}}<p class="address-range-hint">这个地址落在 {{.NetworkName}} 的登记网段 {{.NetworkRange}} 内。{{if $.ServerDetailPage.Topology.CanEditAddresses}}可在『编辑』里确认归属，不会自动归入。{{else}}到权威端确认归属，不会自动归入。{{end}}</p>{{end}}
 </div>
 {{end}}
-<div class="address-card-row fallback-address">
-<span class="address-network">其他（公网或未登记网络）</span>
-<span class="type-tag">条目地址</span>
-<span class="address-value mono">{{$topology.FallbackAddress}}</span>
-{{if $.Caps.CanWrite}}<a class="secondary-link" href="/ui/servers/{{$.ServerDetail.ID}}?tab=connection&amp;edit=1">编辑</a>{{end}}
-</div>
-</div>
-{{if and $topology.CanWrite $topology.HasDevice $topology.AvailableNetworks}}
-<details class="address-add">
-<summary>＋ 添加地址</summary>
-<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/address/add" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<label for="address-network">网络</label>
-<select id="address-network" name="network">
-{{range $topology.AvailableNetworks}}<option value="{{.Name}}">{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}
-</select>
-<label for="address-value">地址</label>
-<input id="address-value" name="address" required>
-<button type="submit">添加</button>
-</form>
-</details>
-{{else if and $topology.CanWrite $topology.HasDevice}}
-<p class="empty-inline">这台机器已加入全部已登记网络。</p>
-{{end}}
-</article>
-
-{{if $topology.SiblingAccounts}}
-<article class="shared-card">
-<div class="card-heading"><h2>同一台机器上的其他账号</h2></div>
-<div class="row-list">
-{{range $topology.SiblingAccounts}}
-<div class="client-row"><span class="row-icon">机</span><span class="row-copy"><strong class="row-name">{{.Name}}</strong><span class="row-subtitle">{{.User}} · 共用这台机器的地址与地点</span></span></div>
-{{end}}
+{{if not .Addresses}}<p class="empty-inline">暂无可用地址。</p>{{end}}
 </div>
 </article>
-{{end}}
-
-{{if and $topology.CanWrite $topology.MoveChoices}}
-<article class="shared-card">
-<div class="card-heading"><h2>改挂到另一台机器</h2></div>
-<p class="card-help">等价于命令行 devices move-server；同机同端口账号的主机密钥指纹一致时会自动复制。</p>
-<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/move" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<label for="move-device">目标机器</label>
-<select id="move-device" name="device">
-{{range $topology.MoveChoices}}<option value="{{.Name}}">{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}
-</select>
-<button type="submit">改挂</button>
-</form>
-</article>
-{{end}}
-{{else}}
-<article class="shared-card"><p class="empty-inline">当前角色没有网络拓扑数据，无法显示地址与地点。</p></article>
-{{end}}
 </section>
+{{else}}
+<section aria-label="地点" id="server-card-location"><article class="shared-card"><div class="card-heading"><h2>地点</h2></div><p class="empty-inline">当前角色没有网络拓扑数据，无法显示地点。</p></article></section>
+<section aria-label="地址" id="server-card-address"><article class="shared-card address-card"><div class="card-heading"><h2>地址</h2></div><p class="empty-inline">当前角色没有网络拓扑数据，无法显示地址。</p></article></section>
 {{end}}
 
-{{if eq .ServerDetailPage.Tab "authorization"}}
-<section class="detail-section" aria-label="授权">
+<section aria-label="说明" id="server-card-description">
+<article class="shared-card">
+<div class="card-heading"><h2>说明</h2>
+{{if .Caps.CanWrite}}<a class="small-button" href="/ui/servers/{{.ServerDetail.ID}}?edit=description" data-detail-edit-button="description">编辑</a>{{end}}
+</div>
+<dl class="info-list">
+<div class="info-row"><dt>用途</dt><dd>{{or .ServerDetail.Role "-"}}</dd></div>
+<div class="info-row"><dt>部署了什么</dt><dd>{{or .ServerDetail.Services "-"}}</dd></div>
+<div class="info-row"><dt>硬件</dt><dd>{{or .ServerDetail.Hardware "-"}}</dd></div>
+<div class="info-row"><dt>注意事项</dt><dd>{{or .ServerDetail.Caveats "-"}}</dd></div>
+<div class="info-row"><dt>备注</dt><dd>{{or .ServerDetail.Description "-"}}</dd></div>
+</dl>
+</article>
+</section>
+
+<section aria-label="同一台机器上的其他账号" id="server-card-accounts">
+<article class="shared-card">
+<div class="card-heading"><h2>同一台机器上的其他账号</h2>{{with .ServerDetailPage.Topology}}{{if .CanWrite}}<a class="small-button" href="/ui/servers/{{$.ServerDetail.ID}}?edit=accounts" data-detail-edit-button="accounts">编辑</a>{{end}}{{end}}</div>
+<p class="card-help">这些服务器条目与当前条目在同一台机器上，共用上方地点与地址；登录信息各自独立。</p>
+<div class="row-list">
+{{with .ServerDetailPage.Topology}}{{range .SiblingAccounts}}<div class="client-row account-row"><span class="row-icon">机</span><span class="row-copy"><a class="row-name" href="/ui/servers/{{.ID}}">{{.Name}}</a><span class="row-subtitle">{{.User}}</span>{{if .Note}}<span class="row-note">{{.Note}}</span>{{end}}{{if and $.Caps.CanWrite .ConnectionTest}}<span class="row-state{{if .ConnectionTest.Succeeded}} is-succeeded{{else}} is-failed{{end}}">上次测试：{{formatTime .ConnectionTest.CompletedAt}} {{.ConnectionTest.ShortStatusText}}</span>{{end}}</span></div>{{end}}{{end}}
+</div>
+{{if not .ServerDetailPage.Topology}}<p class="empty-inline">当前角色没有网络拓扑数据，无法显示其他账号。</p>{{else if not .ServerDetailPage.Topology.SiblingAccounts}}<p class="empty-inline">暂无其他账号。</p>{{end}}
+</article>
+</section>
+
+<section aria-label="授权" id="server-card-authorization">
 {{if .Caps.CanWrite}}
 <article class="shared-card">
-<h2>Profile</h2>
+<div class="card-heading"><h2>授权</h2></div>
 <form method="post" action="/ui/servers/profile-authorization/preview" class="server-profile-authorization" data-auto-submit>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
 {{range .ServerDetailPage.ProfileRows}}
 <div class="auth-row">
-<div class="auth-copy">
-<strong class="resource-name">{{.Name}}</strong>
-<span class="resource-detail">{{if .ClientNames}}能看到这台服务器的客户端：{{joinTags .ClientNames}}{{else}}暂无绑定客户端{{end}}</span>
-</div>
+<div class="auth-copy"><strong class="resource-name">{{.Name}}</strong><span class="resource-detail">{{if .ClientNames}}能看到这台服务器的客户端：{{joinTags .ClientNames}}{{else}}暂无绑定客户端{{end}}</span></div>
 <label class="switch-control"><input type="checkbox" name="profile" value="{{.ID}}"{{if .Checked}} checked{{end}}><span class="switch-track"></span><span class="switch-label">{{if .Checked}}已授权{{else}}未授权{{end}}</span></label>
 </div>
 {{else}}<p class="empty-inline">暂无可选 profile。</p>{{end}}
-<div class="form-actions"><button type="submit">预览 profile 授权变更</button></div>
+<div class="form-actions"><button type="submit">预览 Profile 授权变更</button></div>
 </form>
 </article>
 
 <article class="shared-card">
-<h2>机密项</h2>
+<h3>机密项</h3>
 <form method="post" action="/ui/secrets/authorization/preview" class="server-secret-authorization" data-auto-submit>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
 <input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
 {{range .ServerDetailPage.SecretRows}}
 <div class="auth-row">
-<div class="auth-copy">
-<strong class="resource-name">{{.Name}}</strong>
-<span class="resource-note">{{.NoteFirstLine}}</span>
-<span class="resource-detail">环境变量 {{if .EnvironmentName}}${{.EnvironmentName}}{{else}}-{{end}}{{if .LatestDeliveryPath}} · 最近写入 {{.LatestDeliveryPath}}（{{.LatestDeliveryAt}}）{{end}}</span>
-</div>
+<div class="auth-copy"><strong class="resource-name">{{.Name}}</strong><span class="resource-note">{{.NoteFirstLine}}</span><span class="resource-detail">环境变量 {{if .EnvironmentName}}${{.EnvironmentName}}{{else}}-{{end}}{{if .LatestDeliveryPath}} · 最近写入 {{.LatestDeliveryPath}}{{end}}</span></div>
 <input type="hidden" name="secret_id" value="{{.ID}}">
+<input type="hidden" name="{{secretCellName .ID $.ServerDetail.ID}}" value="0">
 <label class="switch-control"><input type="checkbox" name="{{secretCellName .ID $.ServerDetail.ID}}" value="1"{{if .Checked}} checked{{end}}><span class="switch-track"></span><span class="switch-label">{{if .Checked}}可写入{{else}}不可写入{{end}}</span></label>
 </div>
 {{else}}<p class="empty-inline">暂无可写入的机密项。</p>{{end}}
@@ -260,7 +170,7 @@
 </article>
 
 <article class="shared-card">
-<h2>共享存储</h2>
+<h3>共享存储</h3>
 <form method="post" action="/ui/secrets/authorization/preview" class="server-share-authorization" data-auto-submit>
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
@@ -268,11 +178,7 @@
 <input type="hidden" name="server_id" value="{{.ServerDetail.ID}}">
 {{range .ServerDetailPage.ShareRows}}
 <div class="auth-row">
-<div class="auth-copy">
-<strong class="resource-name">{{range .SharedStorages}}{{.Name}} {{end}}</strong>
-<span class="resource-note">{{range .SharedStorages}}{{.NoteFirstLine}} {{end}}</span>
-<span class="resource-detail">{{range .SharedStorages}}由 {{or .ProviderDeviceName "-"}} 提供 · 挂载于 {{.MountPoint}}；{{end}}共用同一个挂载密码机密项，一起变化</span>
-</div>
+<div class="auth-copy"><strong class="resource-name">{{range .SharedStorages}}{{.Name}} {{end}}</strong><span class="resource-note">{{range .SharedStorages}}{{.NoteFirstLine}} {{end}}</span><span class="resource-detail">{{range .SharedStorages}}由 {{or .ProviderDeviceName "-"}} 提供 · 挂载于 {{.MountPoint}}；{{end}}共用同一个挂载密码机密项，一起变化</span></div>
 <input type="hidden" name="secret_id" value="{{.PasswordSecretID}}">
 <label class="switch-control"><input type="checkbox" name="{{secretCellName .PasswordSecretID $.ServerDetail.ID}}" value="1"{{if .Checked}} checked{{end}}><span class="switch-track"></span><span class="switch-label">{{if .Checked}}可挂载{{else}}不可挂载{{end}}</span></label>
 </div>
@@ -283,28 +189,12 @@
 
 {{if .ServerDetail.ShowDeliveryRecords}}
 <article class="shared-card">
-<h2>下发记录</h2>
+<h3>下发记录</h3>
 <table class="server-table">
 <thead><tr><th scope="col">路径</th><th scope="col">机密项</th><th scope="col">写入时间</th><th scope="col">发起设备</th><th scope="col">客户端实例</th><th scope="col">详情</th></tr></thead>
 <tbody>
 {{range .ServerDetail.DeliveryRecords}}
-<tr>
-<td>{{.Path}}</td>
-<td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td>
-<td>{{formatTime .WrittenAt}}</td>
-<td>{{.InitiatingDeviceName}}</td>
-<td>{{.InitiatingInstanceName}}</td>
-<td>
-<details>
-<summary>展开详情</summary>
-<dl>
-<dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd>
-<dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd>
-<dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd>
-</dl>
-</details>
-</td>
-</tr>
+<tr><td>{{.Path}}</td><td>{{range .Secrets}}{{.Name}}{{if .Deleted}}（引用的机密项已删除）{{end}} {{end}}</td><td>{{formatTime .WrittenAt}}</td><td>{{.InitiatingDeviceName}}</td><td>{{.InitiatingInstanceName}}</td><td><details><summary>展开详情</summary><dl><dt>模板原文</dt><dd><pre>{{.Template}}</pre></dd><dt>文件 SHA-256 哈希</dt><dd>{{.FileSHA256}}</dd><dt>值版本号</dt><dd>{{range .Secrets}}{{.Name}}：{{.ValueVersion}} {{end}}</dd></dl></details></td></tr>
 {{else}}<tr><td colspan="6">暂无写到这台服务器的下发记录。</td></tr>{{end}}
 </tbody>
 </table>
@@ -312,111 +202,56 @@
 {{end}}
 {{else}}
 <article class="shared-card"><p class="readonly-notice">仅显示本客户端可用的部分，修改请到权威端。</p></article>
-{{range .ServerDetailPage.SecretRows}}
-<article class="shared-card">
-<strong class="resource-name">{{.Name}}</strong>
-<span class="resource-note">{{.NoteFirstLine}}</span>
-<span class="resource-detail">环境变量 {{if .EnvironmentName}}${{.EnvironmentName}}{{else}}-{{end}}</span>
-</article>
-{{end}}
+{{range .ServerDetailPage.SecretRows}}<article class="shared-card"><strong class="resource-name">{{.Name}}</strong><span class="resource-note">{{.NoteFirstLine}}</span><span class="resource-detail">环境变量 {{if .EnvironmentName}}${{.EnvironmentName}}{{else}}-{{end}}</span></article>{{end}}
 {{if .ServerDetail.SiblingSharedStorages}}
-<article class="shared-card">
-<h2>同一台机器上的其他账号带来的共享存储</h2>
-<table class="server-table">
-<thead><tr><th scope="col">来源账号</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载点</th></tr></thead>
-<tbody>{{range .ServerDetail.SiblingSharedStorages}}<tr><td>{{.SourceServerName}}</td><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>{{end}}</tbody>
-</table>
-</article>
+<article class="shared-card"><h3>同一台机器上的其他账号带来的共享存储</h3><table class="server-table"><thead><tr><th scope="col">来源账号</th><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载点</th></tr></thead><tbody>{{range .ServerDetail.SiblingSharedStorages}}<tr><td>{{.SourceServerName}}</td><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>{{end}}</tbody></table></article>
 {{end}}
 {{if .ServerDetail.SharedStorages}}
-<article class="shared-card">
-<h2>共享存储</h2>
-<table class="server-table">
-<thead><tr><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载点</th></tr></thead>
-<tbody>{{range .ServerDetail.SharedStorages}}<tr><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>{{end}}</tbody>
-</table>
-</article>
+<article class="shared-card"><h3>共享存储</h3><table class="server-table"><thead><tr><th scope="col">共享名</th><th scope="col">提供方设备</th><th scope="col">挂载点</th></tr></thead><tbody>{{range .ServerDetail.SharedStorages}}<tr><td>{{.Name}}</td><td>{{or .ProviderDeviceName "-"}}</td><td>{{.MountPoint}}</td></tr>{{end}}</tbody></table></article>
 {{end}}
 {{end}}
 </section>
-{{end}}
 
-{{if eq .ServerDetailPage.Tab "software"}}
-<section class="detail-section" aria-label="软件">
+<section aria-label="软件清单" id="server-card-software">
 {{$software := .ServerDetailPage.Software}}
-{{if $software.Available}}
 <article class="shared-card">
-<h2>采集状态</h2>
+<div class="card-heading"><h2>软件清单</h2></div>
+{{if $software.Available}}
+<p class="status-badges">{{range $software.Summary.StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
 <dl class="info-list">
-<div class="info-row"><dt>采集执行者</dt><dd>{{$software.Status.CollectorLabel}}</dd></div>
-<div class="info-row"><dt>上次成功采集</dt><dd>{{formatOptionalTime $software.Status.LastSuccessAt}}</dd></div>
-<div class="info-row"><dt>采集用服务器条目</dt><dd>{{or $software.Status.ServerEntry "-"}}</dd></div>
-<div class="info-row"><dt>清单状态</dt><dd>{{if $software.Status.Stale}}已过期{{else}}未过期{{end}}</dd></div>
+<div class="info-row"><dt>设备</dt><dd>{{$software.DeviceName}}</dd></div>
+<div class="info-row"><dt>采集时间</dt><dd>{{formatOptionalTime $software.Status.LastSuccessAt}}</dd></div>
+{{if $software.Status.LastFailureReason}}<div class="info-row"><dt>上次失败原因</dt><dd>{{$software.Status.LastFailureReason}}</dd></div>{{end}}
 </dl>
 {{if .Caps.CanWrite}}
 <form method="post" action="/ui/software-inventory/collect?device={{$software.DeviceName | urlquery}}" class="inline-form">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}?tab=software">
+<input type="hidden" name="return_to" value="/ui/servers/{{.ServerDetail.ID}}">
 <button type="submit">立即采集</button>
 </form>
 {{end}}
-<div class="software-todo-preview">
-<section aria-labelledby="server-pending-exposure-title">
-<h3 id="server-pending-exposure-title">本机待确认暴露</h3>
-{{if $software.Pending}}
-<ul>
-{{range $software.Pending}}<li>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.Exposure}} <a href="{{.ActionPath}}">进入声明表单</a></li>{{end}}
-</ul>
-{{else}}<p class="empty-inline">没有。</p>{{end}}
-<a class="secondary-link" href="/ui/software-inventory/todos">查看全部待确认暴露</a>
-</section>
-<section aria-labelledby="server-unidentified-process-title">
-<h3 id="server-unidentified-process-title">本机未识别进程</h3>
-{{if $software.Unidentified}}
-<ul>
-{{range $software.Unidentified}}<li>{{.Name}} · {{.ExecutablePath}}{{if .HasAction}} <a href="{{.ActionPath}}">认领</a>{{end}}</li>{{end}}
-</ul>
-{{else}}<p class="empty-inline">没有。</p>{{end}}
-<a class="secondary-link" href="/ui/software-inventory/todos">查看全部未识别进程</a>
-</section>
-</div>
-<div class="header-actions-row">
-<a class="secondary-link" href="/ui/software-inventory/todos">待确认暴露</a>
-<a class="secondary-link" href="/ui/software-inventory/drafts">未识别进程与认领</a>
-<a class="secondary-link" href="/ui/software-inventory/devices?device={{$software.DeviceName | urlquery}}">完整软件清单</a>
-</div>
+<a class="secondary-link" href="/ui/software-inventory/devices?device={{$software.DeviceName | urlquery}}">查看软件清单</a>
+{{else}}<p class="empty-inline">{{$software.Reason}}</p>{{end}}
 </article>
-<article class="shared-card">
-<h2>实测清单</h2>
-{{template "server-software-groups" $software.Measured}}
-</article>
-<article class="shared-card">
-<h2>声明清单</h2>
-{{template "server-software-groups" $software.Declared}}
-</article>
-{{else}}
-<article class="shared-card"><p class="empty-inline">{{$software.Reason}}</p></article>
-{{end}}
 </section>
-{{end}}
-</section>
-{{end}}
 
-{{define "server-software-groups"}}
-{{range .}}
-<details class="software-group">
-<summary>{{.CategoryLabel}}（{{len .Items}} 条）</summary>
-<ul class="record-cards">
-{{range .Items}}
-<li class="record-card"><h3>{{.Name}}</h3>
-<dl class="field-list">
-<dt>版本</dt><dd>{{or .Version "-"}}</dd>
-<dt>来源</dt><dd>{{.Source}}</dd>
-<dt>时间</dt><dd>{{if .CollectedAt}}采集：{{formatOptionalTime .CollectedAt}}{{else}}确认：{{formatOptionalTime .ConfirmedAt}}{{end}}</dd>
-</dl>
-</li>
-{{end}}
-</ul>
+<section aria-label="高级操作">
+<details class="advanced-card" id="server-advanced-actions"{{if or .ServerDetailPage.Move .ServerDetailPage.AdvancedOpen}} open{{end}}>
+<summary>展开高级操作</summary>
+<div class="advanced-card-body">
+<h2>高级操作</h2>
+<p>这里只放低频且有风险的操作。改挂会改变这个条目关联的机器。</p>
+<div class="advanced-actions">
+{{with .ServerDetailPage.Topology}}{{if and .CanWrite .MoveChoices}}
+<a class="secondary-button button-link" href="/ui/servers/{{$.ServerDetail.ID}}?move=confirm#server-advanced-actions" data-move-entry>改挂到另一台机器</a>
+{{end}}{{end}}
+{{if .Caps.CanWrite}}<a class="danger-button button-link" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除服务器条目</a>{{end}}
+</div>
+</div>
 </details>
-{{else}}<p class="empty-inline">暂无条目。</p>{{end}}
+</section>
+</div>
+{{template "server-detail-edit" .}}
+{{template "server-detail-move" .}}
+</section>
 {{end}}

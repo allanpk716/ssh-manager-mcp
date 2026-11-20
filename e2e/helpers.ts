@@ -365,6 +365,7 @@ export async function startStandaloneUIWithTopology(
   probePort?: number,
   connectionTestPort?: number,
   environment?: Record<string, string>,
+  seedEnvironment?: Record<string, string>,
 ): Promise<standaloneUI> {
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-topology-"));
   const seedEnv: Record<string, string> = { SSHMGR_E2E_TOPOLOGY: "1" };
@@ -381,6 +382,7 @@ export async function startStandaloneUIWithTopology(
       ...seedVaultEnvironment(runDir),
       ...seedEnv,
       ...environment,
+      ...seedEnvironment,
     },
   });
   if (seed.status !== 0) {

@@ -114,7 +114,7 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 	}}
 	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 
-	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=authorization")
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
 		"机密项", "API_TOKEN", "接口令牌", "环境变量",
 		"共享存储", "datasets", "NAS", "/mnt/sshmgr/datasets",
@@ -136,7 +136,7 @@ func TestServerDetailShowsReverseReadGroups(t *testing.T) {
 		t.Fatalf("同一个密码机密项驱动的共享存储应逐项展示并说明一起变化：\n%s", page)
 	}
 
-	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=authorization")
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
 	for _, want := range []string{"暂无可写入的机密项", "暂无可挂载的共享存储", "暂无可选 profile"} {
 		if !strings.Contains(empty, want) {
 			t.Fatalf("服务器详情页空状态缺少 %q：\n%s", want, empty)
@@ -169,7 +169,7 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 	store.details["srv-bare"].ShowDeliveryRecords = true
 	handler, cookie := newServersTestHandler(t, RoleStandalone, store, &stubServerWriter{})
 
-	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=authorization")
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
 		"下发记录", "/etc/app/config.yml", "OLD_TOKEN", "引用的机密项已删除",
 		"写入时间", "office-laptop", "agent-a", "<details", "模板原文",
@@ -185,13 +185,13 @@ func TestServerDetailShowsReadOnlyDeliveryRecords(t *testing.T) {
 		}
 	}
 
-	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=authorization")
+	empty := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
 	if !strings.Contains(empty, "暂无写到这台服务器的下发记录。") {
 		t.Fatalf("服务器详情页下发记录空状态不明确：\n%s", empty)
 	}
 
 	clientHandler, clientCookie := newServersTestHandler(t, RoleClient, store, &stubServerWriter{})
-	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine?tab=authorization")
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
 	for _, forbidden := range []string{"下发记录", "预览机密项授权变更"} {
 		if strings.Contains(clientPage, forbidden) {
 			t.Fatalf("客户端服务器详情不得显示 %q：\n%s", forbidden, clientPage)
@@ -204,6 +204,8 @@ type stubServerWriter struct {
 	finishes       []stubFinishServerAdd
 	otherAdds      []OtherDeviceAddForm
 	edits          []ServerEditForm
+	editIDs        []string
+	addressEdits   []stubServerAddressEdit
 	deletes        []string
 	importRuns     []stubImportRun
 	completes      []stubComplete
@@ -212,6 +214,7 @@ type stubServerWriter struct {
 	run            *ServerImportRunView
 	completeErr    error
 	editErr        error
+	addressErr     error
 	deleteDigest   string
 	deleteErr      error
 	anchorCopied   bool
@@ -219,6 +222,12 @@ type stubServerWriter struct {
 	anchorConflict bool
 	pinWrites      []stubHostKeyWrite
 	clearWrites    []string
+}
+
+type stubServerAddressEdit struct {
+	id     string
+	form   ServerAddressListForm
+	source ServerWriteSource
 }
 
 type stubHostKeyWrite struct {
@@ -268,6 +277,7 @@ type stubComplete struct {
 
 func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error) {
 	w.edits = append(w.edits, form)
+	w.editIDs = append(w.editIDs, id)
 	if w.editErr != nil {
 		return nil, nil, w.editErr
 	}
@@ -275,6 +285,19 @@ func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source Ser
 		return nil, w.conflict, nil
 	}
 	return &ServerEditResultView{Detail: &ServerDetailView{ID: id, Name: form.NameValue()}}, nil, nil
+}
+
+func (w *stubServerWriter) EditServerAddresses(
+	id string, form ServerAddressListForm, source ServerWriteSource,
+) (*ServerAddressListResultView, *ServerEditConflictView, error) {
+	w.addressEdits = append(w.addressEdits, stubServerAddressEdit{id: id, form: form, source: source})
+	if w.addressErr != nil {
+		return nil, nil, w.addressErr
+	}
+	if w.conflict != nil {
+		return nil, w.conflict, nil
+	}
+	return &ServerAddressListResultView{Detail: &ServerDetailView{ID: id}}, nil, nil
 }
 
 func (w *stubServerWriter) DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error) {
@@ -495,10 +518,9 @@ func TestServersEditSubmitAndConflict(t *testing.T) {
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
 
 	form := url.Values{
-		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"},
-		"port": {"22"}, "user": {"root"}, "shell": {"posix"},
-		"description": {"新说明"}, "role": {"完整角色"}, "tags": {"gpu"},
-		"expose_host": {"1"}, "revision": {"4"},
+		"server_id": {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22"}, "user": {"root"}, "shell": {"posix"},
+		"tags": {"gpu"}, "expose_host": {"1"}, "revision": {"4"},
 		"credential_action": {"password"}, "password": {"new-login-secret"},
 		"sudo_password": {"sudo-secret"},
 	}
@@ -511,8 +533,11 @@ func TestServersEditSubmitAndConflict(t *testing.T) {
 		t.Fatalf("编辑应写入一次，实际 %d", len(writer.edits))
 	}
 	got := writer.edits[0]
-	if got.DescriptionValue() != "新说明" || got.ExpectedRevision != 4 || got.PasswordValue() != "new-login-secret" {
+	if got.ExpectedRevision != 4 || got.PasswordValue() != "new-login-secret" {
 		t.Fatalf("提交的表单不完整：%+v", got)
+	}
+	if got.Description != nil || got.Role != nil {
+		t.Fatalf("连接编辑不应改说明字段：%+v", got)
 	}
 
 	writer.conflict = &ServerEditConflictView{Current: store.details["srv-fine"]}
@@ -521,7 +546,7 @@ func TestServersEditSubmitAndConflict(t *testing.T) {
 		t.Fatalf("修订号冲突状态码 = %d，应为 409", resp.StatusCode)
 	}
 	body := readResponseBody(t, resp)
-	for _, want := range []string{"已被其他入口修改", "完整角色"} {
+	for _, want := range []string{"已被其他入口修改", `data-server-detail-drawer="connection"`, `value="root"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("冲突页面缺少 %q：\n%s", want, body)
 		}
@@ -671,7 +696,7 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 	now = now.Add(6 * time.Minute)
 
 	// 超过 5 分钟未重新验证：编辑页凭据区域提示重新验证；提交被拒且不回显。
-	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?tab=connection&edit=1", cookie)
+	page := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?edit=connection", cookie)
 	body := readResponseBody(t, page)
 	if !strings.Contains(body, "重新验证后才能填写") {
 		t.Fatalf("未验证的编辑页应提示重新验证：\n%s", body)
@@ -679,8 +704,8 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 
 	resp := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", url.Values{
 		"csrf_token": {hiddenInputValue(t, body, "csrf_token")},
-		"server_id":  {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"server_id":  {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"password"}, "password": {"authority-secret"},
 	}, cookie)
 	if resp.StatusCode != http.StatusSeeOther {
@@ -703,11 +728,12 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 	}
 	after := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", url.Values{
 		"csrf_token": {hiddenInputValue(t, reverifyBody, "csrf_token")},
-		"server_id":  {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"server_id":  {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"password"}, "password": {"authority-secret"},
 	}, cookie)
-	if after.StatusCode != http.StatusSeeOther || after.Header.Get("Location") != "/ui/servers/srv-fine" {
+	if after.StatusCode != http.StatusSeeOther ||
+		after.Header.Get("Location") != "/ui/servers/srv-fine?saved=connection#server-card-connection" {
 		t.Fatalf("验证后的凭据提交应通过，状态码=%d 跳转=%s", after.StatusCode, after.Header.Get("Location"))
 	}
 	if len(writer.edits) != 1 || writer.edits[0].PasswordValue() != "authority-secret" {
@@ -740,8 +766,8 @@ func TestStandaloneServerWritesNeedNoReverify(t *testing.T) {
 		t.Fatalf("单机不应要求重新验证：\n%s", page)
 	}
 	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/edit", url.Values{
-		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"server_id": {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"password"}, "password": {"loopback-secret"},
 	})
 	if resp.StatusCode != http.StatusSeeOther {
@@ -920,12 +946,12 @@ func TestAuthorityClearCredentialNeedsRecentVerify(t *testing.T) {
 	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
 	now = now.Add(6 * time.Minute)
 
-	editPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?tab=connection&edit=1", cookie)
+	editPage := authorityGet(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine?edit=connection", cookie)
 	editCSRF := hiddenInputValue(t, readResponseBody(t, editPage), "csrf_token")
 	form := url.Values{
 		"csrf_token": {editCSRF},
-		"server_id":  {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"4"},
+		"server_id":  {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"clear"},
 	}
 	resp := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/servers/srv-fine/edit", form, cookie)
@@ -974,9 +1000,8 @@ func TestServersEditUsesSubmittedRevision(t *testing.T) {
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
 
 	form := url.Values{
-		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"},
-		"port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"3"},
-		"description": {"新说明"},
+		"server_id": {"srv-fine"}, "edit_scope": {"description"},
+		"revision": {"3"}, "description": {"新说明"},
 	}
 	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/edit", form)
 	body := readResponseBody(t, resp)
@@ -1055,7 +1080,7 @@ func TestServersPagesListSharedCredentialServers(t *testing.T) {
 	if !strings.Contains(complete, "共用这把私钥的服务器会一起去掉待补标记：fine,peer") {
 		t.Fatalf("补全页应列出共用凭据的服务器：\n%s", complete)
 	}
-	edit := serversGet(t, h, cookie, "/ui/servers/srv-key?tab=connection&edit=1")
+	edit := serversGet(t, h, cookie, "/ui/servers/srv-key?edit=connection")
 	if !strings.Contains(edit, "「只补私钥口令」会影响共用这把私钥的全部服务器：fine,peer") {
 		t.Fatalf("编辑页应列出共用凭据的服务器：\n%s", edit)
 	}
@@ -1069,22 +1094,43 @@ func TestServersEditValidationErrorRendersForm(t *testing.T) {
 	h, cookie := newServersTestHandler(t, RoleStandalone, store, writer)
 
 	resp := serversPost(t, h, cookie, "/ui/servers/srv-fine/edit", url.Values{
-		"server_id": {"srv-fine"}, "name": {"fine"}, "host": {"192.0.2.10"},
-		"port": {"22"}, "user": {"root"}, "shell": {"posix"}, "revision": {"4"},
-		"description": {"页面说明"}, "role": {"新角色"},
+		"server_id": {"srv-fine"}, "edit_scope": {"connection"},
+		"name": {"fine"}, "port": {"22022"}, "user": {"backup"}, "shell": {"posix"}, "revision": {"4"},
 		"credential_action": {"password"}, "password": {"secret-input"},
 	})
 	body := readResponseBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("校验失败状态码 = %d，应为 400：\n%s", resp.StatusCode, body)
 	}
-	for _, want := range []string{"密码不能为空", `value="页面说明"`, `value="新角色"`} {
+	for _, want := range []string{
+		"密码不能为空", `data-server-detail-drawer="connection"`,
+		`value="backup"`, `value="22022"`,
+	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("校验页面缺少 %q：\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, "secret-input") || strings.Contains(body, "--password") {
 		t.Fatalf("校验页面不得回显凭据或命令行参数名：\n%s", body)
+	}
+
+	descriptionWriter := &stubServerWriter{editErr: &ServerFormError{Message: "说明太长"}}
+	h2, cookie2 := newServersTestHandler(t, RoleStandalone, store, descriptionWriter)
+	resp = serversPost(t, h2, cookie2, "/ui/servers/srv-fine/edit", url.Values{
+		"server_id": {"srv-fine"}, "edit_scope": {"description"}, "revision": {"4"},
+		"description": {"页面说明"}, "role": {"新角色"},
+	})
+	body = readResponseBody(t, resp)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("说明校验失败状态码 = %d，应为 400：\n%s", resp.StatusCode, body)
+	}
+	for _, want := range []string{
+		"说明太长", `data-server-detail-drawer="description"`,
+		`name="description" rows="2">页面说明</textarea>`, `name="role" rows="2">新角色</textarea>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("说明校验页面缺少 %q：\n%s", want, body)
+		}
 	}
 }
 

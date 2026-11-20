@@ -620,6 +620,9 @@ func (s *Store) EntryCandidateAddresses(srv *models.Server) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if srv.Host == "" {
+		return out, nil
+	}
 	return append(out, NormalizeSSHAddress(srv.Host, srv.Port)), nil
 }
 

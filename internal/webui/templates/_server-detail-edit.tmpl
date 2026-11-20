@@ -1,37 +1,38 @@
 {{define "server-detail-edit"}}
-{{with .ServerEdit}}
-<form method="post" action="/ui/servers/{{.Detail.ID}}/edit" class="server-form shared-card server-edit-inline" enctype="multipart/form-data">
+{{with .ServerDetailPage.EditDrawer}}
+{{$scope := .}}
+{{$detail := $.ServerDetail}}
+{{$closeHref := printf "/ui/servers/%s#server-card-%s" $detail.ID $scope}}
+<div class="drawer-shell server-detail-drawer-shell" data-server-detail-drawer="{{$scope}}" data-close-detail-edit="{{$closeHref}}">
+<a class="drawer-backdrop" href="{{$closeHref}}" aria-label="关闭编辑层" tabindex="-1"></a>
+<section class="drawer server-detail-drawer" role="dialog" aria-modal="true" aria-labelledby="server-detail-drawer-title" aria-describedby="server-detail-drawer-caption" data-server-detail-dialog>
+<div class="drawer-handle" aria-hidden="true"></div>
+<div class="drawer-header">
+<h2 id="server-detail-drawer-title">{{$.ServerDetailPage.DrawerTitle}}</h2>
+<a class="icon-button drawer-close" href="{{$closeHref}}" aria-label="关闭">✕</a>
+</div>
+<p class="drawer-caption" id="server-detail-drawer-caption">{{$.ServerDetailPage.DrawerCaption}}</p>
+{{if $.ServerDetailNotice}}<div class="notice notice-{{or $.ServerDetailNoticeKind "error"}}"><p>{{$.ServerDetailNotice}}</p></div>{{end}}
+
+{{if eq $scope "connection"}}
+{{with $.ServerEdit}}
+<form method="post" action="/ui/servers/{{.Detail.ID}}/edit" class="server-form drawer-form" enctype="multipart/form-data">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
 <input type="hidden" name="server_id" value="{{.Detail.ID}}">
+<input type="hidden" name="edit_scope" value="connection">
 <input type="hidden" name="revision" value="{{.Detail.Revision}}">
-<h3>编辑连接信息</h3>
 {{if .NeedsReverify}}<div class="operation-refusal"><p>凭据区域：重新验证后才能填写。<a href="{{.ReverifyPath}}">重新验证管理员口令</a>。</p></div>{{end}}
-<fieldset>
-<legend>连接与登录</legend>
 <div class="form-field"><label for="edit-name">名称</label><input id="edit-name" name="name" value="{{.Detail.Name}}"></div>
-<div class="form-field"><label for="edit-host">主机地址</label><input id="edit-host" name="host" value="{{.Detail.Host}}"></div>
+<div class="form-field"><label for="edit-user">登录用户</label><input id="edit-user" name="user" value="{{.Detail.User}}"></div>
 <div class="form-field"><label for="edit-port">端口</label><input id="edit-port" name="port" value="{{.Detail.Port}}" inputmode="numeric"></div>
-<div class="form-field"><label for="edit-user">用户</label><input id="edit-user" name="user" value="{{.Detail.User}}"></div>
 <div class="form-field"><label for="edit-shell">shell 类型</label>
 <select id="edit-shell" name="shell">
 <option value="posix" {{if eq .Detail.Shell "posix"}}selected{{end}}>posix</option>
 <option value="powershell" {{if eq .Detail.Shell "powershell"}}selected{{end}}>powershell</option>
 <option value="cmd" {{if eq .Detail.Shell "cmd"}}selected{{end}}>cmd</option>
 </select></div>
-</fieldset>
-<fieldset>
-<legend>说明信息</legend>
-<div class="form-field"><label for="edit-description">说明</label><input id="edit-description" name="description" value="{{.Detail.Description}}"></div>
-<div class="form-field"><label for="edit-hardware">硬件</label><input id="edit-hardware" name="hardware" value="{{.Detail.Hardware}}"></div>
-<div class="form-field"><label for="edit-services">服务</label><input id="edit-services" name="services" value="{{.Detail.Services}}"></div>
-<div class="form-field"><label for="edit-role">角色</label><input id="edit-role" name="role" value="{{.Detail.Role}}"></div>
-<div class="form-field"><label for="edit-caveats">注意事项</label><input id="edit-caveats" name="special_handling" value="{{.Detail.Caveats}}"></div>
-</fieldset>
-<fieldset>
-<legend>标签与主机可见性</legend>
 <div class="form-field"><label for="edit-tags">标签（逗号分隔）</label><input id="edit-tags" name="tags" value="{{joinTags .Detail.Tags}}"></div>
 <div class="form-field choice"><label><input type="checkbox" name="expose_host" value="1" {{if .Detail.ExposeHost}}checked{{end}}> 向 agent 展示主机地址</label></div>
-</fieldset>
 <fieldset>
 <legend>凭据</legend>
 {{if .NeedsReverify}}
@@ -53,7 +54,104 @@
 <div class="form-field"><label for="edit-sudo">sudo 密码</label><input id="edit-sudo" name="sudo_password" type="password" autocomplete="new-password"></div>
 {{end}}
 </fieldset>
-<div class="inline-form"><button type="submit">保存连接信息</button><a class="button-link" href="/ui/servers/{{.Detail.ID}}?tab=connection">取消</a></div>
+<div class="form-actions drawer-actions">
+<button type="submit">保存连接信息</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+</div>
 </form>
+{{end}}
+{{end}}
+
+{{if eq $scope "location"}}
+{{with $.ServerDetailPage.Topology}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/location" class="location-tree-form drawer-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<div class="location-tree" role="radiogroup" aria-label="选择地点">
+{{template "location-options" .LocationOptions}}
+</div>
+<div class="form-actions drawer-actions">
+<button type="submit">保存地点</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+<a class="secondary-link" href="{{.NewLocationHref}}">新建地点</a>
+</div>
+</form>
+{{end}}
+{{end}}
+
+{{if eq $scope "address"}}
+{{with $.ServerDetailPage.Topology}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/address" class="server-form drawer-form" data-server-detail-address-editor>
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="revision" value="{{$detail.Revision}}">
+<div class="address-list" data-address-list>
+{{range $index, $row := $.ServerDetailPage.AddressDrafts}}
+<div class="address-row" data-detail-address-row data-address-row>
+<label class="form-field"><span>第{{addOne $index}}行网络</span>
+<select name="address_network" aria-label="第{{addOne $index}}行网络" data-address-network>
+<option value="other"{{if eq $row.NetworkValue "other"}} selected{{end}}>其他（公网或未登记网络）</option>
+{{range $.ServerDetailPage.Topology.AvailableNetworks}}<option value="{{.Name}}"{{if eq $row.NetworkValue .Name}} selected{{end}}>{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}
+</select></label>
+<label class="form-field"><span>第{{addOne $index}}行地址</span>
+<input name="address" value="{{$row.Address}}" autocomplete="off" aria-label="第{{addOne $index}}行地址" data-address-input></label>
+{{range .RangeSuggestions}}<div class="address-suggestion" data-network-suggestion="{{.NetworkName}}" data-suggested-address="{{$row.Address}}">
+<p>属于 {{.NetworkName}}？网段 {{.NetworkRange}} 覆盖这个地址。</p>
+<button type="button" class="confirm-network-button" data-confirm-network="{{.NetworkName}}">确认</button>
+</div>{{end}}
+<button type="button" class="icon-button" data-remove-address aria-label="删除第{{addOne $index}}行地址">删除这行</button>
+</div>
+{{end}}
+</div>
+<button type="button" class="secondary-button address-add" data-add-detail-address>加一行地址</button>
+<div class="form-actions drawer-actions">
+<button type="submit">保存地址</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+</div>
+</form>
+{{end}}
+{{end}}
+
+{{if eq $scope "description"}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/edit" class="server-form drawer-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{$detail.ID}}">
+<input type="hidden" name="edit_scope" value="description">
+<input type="hidden" name="revision" value="{{$detail.Revision}}">
+<div class="form-field"><label for="edit-role">用途</label><textarea id="edit-role" name="role" rows="2">{{$detail.Role}}</textarea></div>
+<div class="form-field"><label for="edit-services">部署了什么</label><textarea id="edit-services" name="services" rows="2">{{$detail.Services}}</textarea></div>
+<div class="form-field"><label for="edit-hardware">硬件</label><textarea id="edit-hardware" name="hardware" rows="2">{{$detail.Hardware}}</textarea></div>
+<div class="form-field"><label for="edit-caveats">注意事项</label><textarea id="edit-caveats" name="special_handling" rows="2">{{$detail.Caveats}}</textarea></div>
+<div class="form-field"><label for="edit-description">备注</label><textarea id="edit-description" name="description" rows="2">{{$detail.Description}}</textarea></div>
+<div class="form-actions drawer-actions">
+<button type="submit">保存说明</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+</div>
+</form>
+{{end}}
+
+{{if eq $scope "accounts"}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/edit" class="server-form drawer-form">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="server_id" value="{{$detail.ID}}">
+<input type="hidden" name="edit_scope" value="accounts">
+{{with $.ServerDetailPage.Topology}}
+{{range .SiblingAccounts}}
+<div class="form-field">
+<label for="account-note-{{.ID}}">{{.Name}}（{{.User}}）的显示说明</label>
+<input id="account-note-{{.ID}}" name="account_note_{{.ID}}" value="{{with $draft := index $.ServerDetailPage.AccountDrafts .ID}}{{$draft}}{{else}}{{.Note}}{{end}}" autocomplete="off">
+<input type="hidden" name="account_revision_{{.ID}}" value="{{.Revision}}">
+<p class="field-help">登录信息到 <a href="/ui/servers/{{.ID}}">{{.Name}} 的详情页</a> 修改。</p>
+</div>
+{{else}}
+<p class="empty-inline">这台机器上没有其他账号。</p>
+{{end}}
+{{end}}
+<div class="form-actions drawer-actions">
+<button type="submit">保存账号说明</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+</div>
+</form>
+{{end}}
+</section>
+</div>
 {{end}}
 {{end}}

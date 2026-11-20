@@ -38,7 +38,8 @@ func ParseNetworkType(value string) (NetworkType, error) {
 	}
 }
 
-// Network 是网络拓扑里的一个地址唯一性边界。网段只给人看，不参与判断。
+// Network 是网络拓扑里的一个地址唯一性边界。网段只用来提示地址归属，
+// 不会自动归入，也不参与可达判断。
 type Network struct {
 	ID            string
 	Name          string

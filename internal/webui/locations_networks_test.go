@@ -265,3 +265,56 @@ func TestNetworkCreateAndEditHandlers(t *testing.T) {
 		t.Fatalf("编辑网络字段不符：%+v", edit)
 	}
 }
+
+func TestNetworkFormExplainsRangeAndKeepsFieldsOnWriteError(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	handler, cookie := newLocationsNetworksHandler(t, RoleStandalone,
+		&stubTopologySource{data: locationsNetworksFixture()}, writer)
+	rangePurpose := "用来提示哪些地址属于这个网络，不会自动归入"
+
+	for _, target := range []string{
+		"/ui/more/networks/new?type=physical",
+		"/ui/more/networks/edit?name=" + url.QueryEscape("办公网"),
+	} {
+		body := locationsNetworksGet(t, handler, cookie, target)
+		if !strings.Contains(body, rangePurpose) {
+			t.Fatalf("网络表单应说明网段用途：%s\n%s", target, body)
+		}
+	}
+
+	writer.nextInvalid = &TopologyInvalidInputError{
+		Message: "网段必须是网络地址，主机位必须为零；例如 192.168.100.1/24 应写为 192.168.100.0/24",
+	}
+	createdInvalid := postStandaloneForm(t, handler, cookie, "/ui/more/networks/new", url.Values{
+		"type": {"physical"}, "name": {"新办公网"}, "site": {"公司 / 一厂区 / 3 号楼"},
+		"range": {"192.168.100.1/24"}, "bandwidth_mbps": {"1000"}, "metered": {"1"},
+	})
+	createdBody := readResponseBody(t, createdInvalid)
+	for _, want := range []string{
+		"网段必须是网络地址，主机位必须为零",
+		`value="新办公网"`, `value="192.168.100.1/24"`, `value="1000"`,
+		`value="公司 / 一厂区 / 3 号楼" checked`, `name="metered" value="1" checked`,
+	} {
+		if !strings.Contains(createdBody, want) {
+			t.Fatalf("新建网络失败后表单应保留 %q：\n%s", want, createdBody)
+		}
+	}
+
+	writer.nextInvalid = &TopologyInvalidInputError{
+		Message: "网段必须是合法的 IPv4 或 IPv6 网络地址，写法如 192.168.100.0/24 或 2001:db8::/32",
+	}
+	editedInvalid := postStandaloneForm(t, handler, cookie, "/ui/more/networks/edit", url.Values{
+		"original": {"办公网"}, "name": {"新名字"}, "site": {"机房"},
+		"range": {"not-a-network"}, "bandwidth_mbps": {"2000"}, "metered": {"1"},
+	})
+	editedBody := readResponseBody(t, editedInvalid)
+	for _, want := range []string{
+		"网段必须是合法的 IPv4 或 IPv6 网络地址",
+		`value="新名字"`, `value="not-a-network"`, `value="2000"`,
+		`value="机房" checked`, `name="metered" value="1" checked`,
+	} {
+		if !strings.Contains(editedBody, want) {
+			t.Fatalf("编辑网络失败后表单应保留 %q：\n%s", want, editedBody)
+		}
+	}
+}

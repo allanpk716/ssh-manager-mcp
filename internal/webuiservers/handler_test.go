@@ -129,7 +129,7 @@ func TestHandlerEditDetectsConcurrentChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page := h.do(http.MethodGet, "/ui/servers/"+id+"?tab=connection&edit=1", nil)
+	page := h.do(http.MethodGet, "/ui/servers/"+id+"?edit=connection", nil)
 	pageBody := integrationBody(t, page)
 	revision := regexp.MustCompile(`name="revision" value="(\d+)"`).FindStringSubmatch(pageBody)
 	if len(revision) != 2 {
@@ -163,6 +163,65 @@ func TestHandlerEditDetectsConcurrentChange(t *testing.T) {
 	srv, _ := st.GetServer(id)
 	if srv.Role != "别的入口改的角色" {
 		t.Fatalf("过期提交不得写入：%+v", srv)
+	}
+}
+
+// TestHandlerAccountNotesDetectsConcurrentChange 用真实 vault 证明同机账号
+// 说明的旧修订号不会被当成保存成功，也不会覆盖其他入口刚写入的说明。
+func TestHandlerAccountNotesDetectsConcurrentChange(t *testing.T) {
+	manager, st, h := newIntegrationHandler(t)
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "root",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "backup", Host: "192.0.2.10", Port: 22, User: "backup", Description: "旧说明",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	drawer := h.do(http.MethodGet, "/ui/servers/"+primary.ServerID+"?edit=accounts", nil)
+	drawerBody := integrationBody(t, drawer)
+	revision := regexp.MustCompile(`name="account_revision_` + sibling.ServerID + `" value="(\d+)"`).
+		FindStringSubmatch(drawerBody)
+	if len(revision) != 2 {
+		t.Fatalf("账号说明编辑层应携带兄弟条目修订号：\n%s", drawerBody)
+	}
+	outsideNote := "其他入口已更新"
+	if _, err := manager.Edit(servermanage.EditRequest{
+		Identifier: sibling.ServerID, ExpectedRevision: 0, CheckRevision: true,
+		Description: &outsideNote,
+	}, servermanage.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	response := h.do(http.MethodPost, "/ui/servers/"+primary.ServerID+"/edit", url.Values{
+		"csrf_token": {integrationFormCSRF(t, h, "/ui/servers/"+primary.ServerID+"?edit=accounts")},
+		"edit_scope": {"accounts"}, "server_id": {primary.ServerID},
+		"account_note_" + sibling.ServerID:     {"旧表单提交的说明"},
+		"account_revision_" + sibling.ServerID: {revision[1]},
+	})
+	body := integrationBody(t, response)
+	if response.StatusCode != http.StatusConflict || response.Header.Get("Location") != "" ||
+		!strings.Contains(body, "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。") {
+		t.Fatalf("旧修订号应重新渲染冲突而不是跳转成功，状态码=%d 跳转=%q：\n%s",
+			response.StatusCode, response.Header.Get("Location"), body)
+	}
+	if strings.Contains(body, "已保存账号说明") {
+		t.Fatalf("修订号冲突不得显示保存成功：\n%s", body)
+	}
+	saved, err := st.GetServer(sibling.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Description != outsideNote {
+		t.Fatalf("旧表单不得覆盖账号说明，实际 = %q", saved.Description)
 	}
 }
 
@@ -583,9 +642,9 @@ func TestHandlerEditValidationErrorKeepsFields(t *testing.T) {
 
 	resp := h.do(http.MethodPost, "/ui/servers/"+id+"/edit", url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
-		"server_id":  {id}, "name": {"web"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"0"},
-		"role": {"页面上的角色"}, "credential_action": {"password"}, "password": {" "},
+		"server_id":  {id}, "edit_scope": {"connection"}, "revision": {"0"},
+		"name": {"web"}, "user": {"backup"}, "shell": {"posix"},
+		"credential_action": {"password"}, "password": {" "},
 	})
 	body := integrationBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
@@ -594,7 +653,8 @@ func TestHandlerEditValidationErrorKeepsFields(t *testing.T) {
 	if !strings.Contains(body, "密码不能为空") || strings.Contains(body, "--password") {
 		t.Fatalf("校验提示应指向字段且不含命令行参数名：\n%s", body)
 	}
-	if !strings.Contains(body, `value="页面上的角色"`) {
+	if !strings.Contains(body, `data-server-detail-drawer="connection"`) ||
+		!strings.Contains(body, `value="backup"`) {
 		t.Fatalf("校验页面应保留提交的字段值：\n%s", body)
 	}
 	if srv, _ := st.GetServer(id); srv.Role != "旧角色" {
@@ -650,17 +710,18 @@ func TestHandlerEditCombinesPassphraseWithFields(t *testing.T) {
 
 	resp := h.do(http.MethodPost, "/ui/servers/"+id+"/edit", url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
-		"server_id":  {id}, "name": {"enc"}, "host": {"192.0.2.30"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"0"},
-		"role": {"新角色"}, "credential_action": {"key-passphrase"}, "key_passphrase": {"secret-pass"},
+		"server_id":  {id}, "edit_scope": {"connection"},
+		"name": {"enc"}, "port": {"22"}, "user": {"deploy"}, "shell": {"posix"}, "revision": {"0"},
+		"credential_action": {"key-passphrase"}, "key_passphrase": {"secret-pass"},
 	})
 	integrationBody(t, resp)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/servers/"+id {
+	if resp.StatusCode != http.StatusSeeOther ||
+		resp.Header.Get("Location") != "/ui/servers/"+id+"?saved=connection#server-card-connection" {
 		t.Fatalf("组合提交应成功，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	srv, _ := st.GetServer(id)
-	if srv == nil || srv.Role != "新角色" || models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
-		t.Fatalf("组合提交应同时保存角色与私钥口令：%+v", srv)
+	if srv == nil || srv.User != "deploy" || models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
+		t.Fatalf("组合提交应同时保存登录用户与私钥口令：%+v", srv)
 	}
 	savedCred, _ := st.GetCredential(srv.CredentialID)
 	if savedCred == nil || string(savedCred.Passphrase) != "secret-pass" {

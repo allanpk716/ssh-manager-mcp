@@ -93,6 +93,60 @@ func TestNetworksRegistrationAndFilters(t *testing.T) {
 	}
 }
 
+// TestNetworksRangeValidationAndClearing 覆盖命令行新增与编辑网络时网段的
+// 输入契约：空值、合法 IPv4 与 IPv6、非法输入和清空语义。
+func TestNetworksRangeValidationAndClearing(t *testing.T) {
+	withCliStoreEnv(t)
+	seedTopologySites(t, "家A", "公司A")
+
+	for _, input := range []struct {
+		value string
+		want  string
+	}{
+		{value: "192.168.100.0", want: "网段必须是合法的 IPv4 或 IPv6 网络地址"},
+		{value: "not-a-network", want: "网段必须是合法的 IPv4 或 IPv6 网络地址"},
+		{value: "192.168.100.1/24", want: "主机位必须为零"},
+	} {
+		errText := runCliErr(t, "networks", "add", "家A局域网",
+			"--type", "physical", "--site", "家A", "--cidr", input.value)
+		if !strings.Contains(errText, input.want) {
+			t.Fatalf("非法网段 %s 应说明 %q，实际：\n%s", input.value, input.want, errText)
+		}
+	}
+	if out := runCli(t, "networks", "list"); strings.Contains(out, "家A局域网") {
+		t.Fatalf("非法网段不能写入网络：\n%s", out)
+	}
+
+	runCli(t, "networks", "add", "家A局域网",
+		"--type", "physical", "--site", "家A", "--cidr", "")
+	if out := runCli(t, "networks", "list", "--site", "家A"); strings.Contains(out, "网段：") {
+		t.Fatalf("空网段应表示没有登记网段：\n%s", out)
+	}
+
+	runCli(t, "networks", "edit", "家A局域网", "--cidr", "192.168.100.0/24")
+	runCli(t, "networks", "add", "公司局域网",
+		"--type", "physical", "--site", "公司A", "--cidr", "192.168.100.0/24")
+	runCli(t, "networks", "add", "虚拟网", "--type", "virtual", "--cidr", "2001:db8::/32")
+	out := runCli(t, "networks", "list")
+	for _, want := range []string{"192.168.100.0/24", "2001:db8::/32"} {
+		if strings.Count(out, want) < 1 {
+			t.Fatalf("合法网段应保存：\n%s", out)
+		}
+	}
+	if strings.Count(out, "192.168.100.0/24") != 2 {
+		t.Fatalf("不同网络登记相同网段应允许：\n%s", out)
+	}
+
+	errText := runCliErr(t, "networks", "edit", "家A局域网", "--cidr", "192.168.100.1/24")
+	if !strings.Contains(errText, "主机位必须为零") {
+		t.Fatalf("编辑网络应拒绝主机位不为零的网段：\n%s", errText)
+	}
+	runCli(t, "networks", "edit", "家A局域网", "--cidr", "")
+	if out := runCli(t, "networks", "list", "--site", "家A"); strings.Contains(out, "192.168.100.0/24") {
+		t.Fatalf("编辑传空字符串应清空网段：\n%s", out)
+	}
+}
+
 // TestTopologyDeleteGuards 覆盖非空站点删除被拒并列出网络、空站点可删，
 // 以及网络删除的交互终端守卫与跳过参数。
 func TestTopologyDeleteGuards(t *testing.T) {

@@ -140,6 +140,63 @@
     });
   }
 
+  // 改挂确认框：勾选「我已了解」后才允许提交；Escape 与遮罩只关闭，
+  // 不发起写入，关闭后焦点回到高级操作里的原入口。
+  function initServerMoveConfirm() {
+    var shell = document.querySelector("[data-server-move-confirm]");
+    if (shell === null) {
+      return;
+    }
+    var dialog = shell.querySelector("[data-server-move-dialog]");
+    var checkbox = shell.querySelector('input[name="confirm"]');
+    var submit = shell.querySelector("[data-move-submit]");
+    if (dialog === null || checkbox === null || submit === null) {
+      return;
+    }
+    function focusableElements() {
+      return Array.prototype.slice.call(
+        dialog.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])'
+        )
+      ).filter(function (element) {
+        return element.offsetParent !== null || element === document.activeElement;
+      });
+    }
+    document.body.classList.add("modal-open");
+    checkbox.addEventListener("change", function () {
+      submit.disabled = !checkbox.checked;
+    });
+    dialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") {
+        return;
+      }
+      var elements = focusableElements();
+      if (elements.length === 0) {
+        return;
+      }
+      var firstElement = elements[0];
+      var lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        window.location.assign(shell.getAttribute("data-close-move"));
+      }
+    });
+    window.requestAnimationFrame(function () {
+      var target = shell.querySelector("select");
+      if (target !== null) {
+        target.focus();
+      }
+    });
+  }
+
   // 批量测试连接：提交选中集合后立即把每张卡片换成进行中状态，之后逐
   // 秒读取每台任务的状态。卡片完成文案由服务器按服务器列表卡片既有的
   // 短状态规则生成，页面只负责替换显示，不另建第二套状态或文案。
@@ -824,6 +881,168 @@
     }
   }
 
+  // 服务器详情地址弹层：加行、删行、改选与「每个网络最多一行」都在浏览器
+  // 内即时更新；最终校验与写入仍由服务器处理整份表单。
+  function initServerDetailAddressEditor(root) {
+    var list = root.querySelector("[data-address-list]");
+    var template = list === null ? null : list.querySelector("[data-address-row]");
+    if (template === null) {
+      return;
+    }
+    var clone = template.cloneNode(true);
+    clone.querySelectorAll("[data-network-suggestion]").forEach(function (item) {
+      item.remove();
+    });
+
+    function confirmedState(row) {
+      var state = row.querySelector("[data-address-confirmed]");
+      if (state === null) {
+        state = document.createElement("p");
+        state.className = "address-confirmed";
+        state.setAttribute("data-address-confirmed", "");
+        state.hidden = true;
+        row.appendChild(state);
+      }
+      return state;
+    }
+
+    function updateSuggestions(select) {
+      var row = select.closest("[data-address-row]");
+      if (row === null) {
+        return;
+      }
+      var input = row.querySelector("[data-address-input]");
+      row.querySelectorAll("[data-network-suggestion]").forEach(function (item) {
+        var suggestedAddress = item.getAttribute("data-suggested-address") || "";
+        var typedAddress = input === null ? suggestedAddress : input.value;
+        item.hidden = typedAddress.trim() !== suggestedAddress.trim() ||
+          item.getAttribute("data-network-suggestion") === select.value;
+      });
+      var state = row.querySelector("[data-address-confirmed]");
+      if (state !== null) {
+        var confirmedAddress = state.getAttribute("data-confirmed-address") || "";
+        state.hidden = state.getAttribute("data-confirmed-network") !== select.value ||
+          (input !== null && input.value.trim() !== confirmedAddress.trim());
+      }
+    }
+
+    function refresh() {
+      var selects = list.querySelectorAll("[data-address-network]");
+      var selectedNetworks = {};
+      selects.forEach(function (select) {
+        if (select.value !== "") {
+          selectedNetworks[select.value] = (selectedNetworks[select.value] || 0) + 1;
+        }
+      });
+      selects.forEach(function (select, index) {
+        var rowNumber = index + 1;
+        var row = select.closest("[data-address-row]");
+        select.setAttribute("aria-label", "第" + rowNumber + "行网络");
+        var label = select.parentNode.querySelector("span");
+        if (label !== null) {
+          label.textContent = "第" + rowNumber + "行网络";
+        }
+        var input = row === null ? null : row.querySelector("[data-address-input]");
+        if (input !== null) {
+          input.setAttribute("aria-label", "第" + rowNumber + "行地址");
+          var inputLabel = input.parentNode.querySelector("span");
+          if (inputLabel !== null) {
+            inputLabel.textContent = "第" + rowNumber + "行地址";
+          }
+        }
+        var remove = row === null ? null : row.querySelector("[data-remove-address]");
+        if (remove !== null) {
+          remove.setAttribute("aria-label", "删除第" + rowNumber + "行地址");
+        }
+        select.querySelectorAll("option").forEach(function (option) {
+          if (option.value === "") {
+            return;
+          }
+          var selectedHere = select.value === option.value ? 1 : 0;
+          option.disabled = (selectedNetworks[option.value] || 0) > selectedHere;
+        });
+        updateSuggestions(select);
+      });
+    }
+
+    root.querySelectorAll("[data-remove-address]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var row = button.closest("[data-address-row]");
+        if (row !== null && row.parentNode !== null) {
+          row.remove();
+          refresh();
+        }
+      });
+    });
+    var addButton = root.querySelector("[data-add-detail-address]");
+    if (addButton !== null) {
+      addButton.addEventListener("click", function (event) {
+        event.preventDefault();
+        var usedNetworks = {};
+        list.querySelectorAll("[data-address-network]").forEach(function (current) {
+          if (current.value !== "") {
+            usedNetworks[current.value] = true;
+          }
+        });
+        var row = clone.cloneNode(true);
+        var select = row.querySelector("[data-address-network]");
+        var input = row.querySelector("[data-address-input]");
+        if (input !== null) {
+          input.value = "";
+          input.removeAttribute("value");
+        }
+        if (select !== null) {
+          var chosen = null;
+          select.querySelectorAll("option").forEach(function (option) {
+            if (chosen === null && option.value !== "other" && !usedNetworks[option.value]) {
+              chosen = option.value;
+            }
+          });
+          select.value = chosen === null ? "other" : chosen;
+        }
+        list.appendChild(row);
+        var remove = row.querySelector("[data-remove-address]");
+        if (remove !== null) {
+          remove.addEventListener("click", function () {
+            row.remove();
+            refresh();
+          });
+        }
+        refresh();
+      });
+    }
+    root.addEventListener("change", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-address-network")) {
+        refresh();
+      }
+    });
+    root.addEventListener("input", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-address-input")) {
+        refresh();
+      }
+    });
+    root.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-confirm-network]");
+      if (button === null) {
+        return;
+      }
+      var row = button.closest("[data-address-row]");
+      var select = row === null ? null : row.querySelector("[data-address-network]");
+      if (select === null) {
+        return;
+      }
+      var network = button.getAttribute("data-confirm-network");
+      select.value = network;
+      var state = confirmedState(row);
+      var input = row.querySelector("[data-address-input]");
+      state.setAttribute("data-confirmed-network", network);
+      state.setAttribute("data-confirmed-address", input === null ? "" : input.value);
+      state.textContent = "已归入 " + network + "，保存后生效";
+      refresh();
+    });
+    refresh();
+  }
+
   // 共用服务器勾选组件：搜索与三类筛选、三态全选与底部实时差异统计。
   // 隐藏行仍留在文档里，勾选值随表单提交，因此筛选不会丢选择。
   function initServerSelection(root) {
@@ -995,6 +1214,100 @@
   });
   updateAllShareScopeWarnings();
   initRequiredNoteForms();
+  // 服务器详情分区编辑弹层：打开时聚焦第一个控件并限制焦点；Escape 与遮
+  // 罩关闭；无弹层但带卡片锚点时把焦点还给对应卡片的编辑按钮。
+  function initServerDetailDrawer() {
+    function focusEditButtonForHash() {
+      var anchorMatch = /^#server-card-([a-z]+)$/.exec(window.location.hash);
+      if (anchorMatch === null) {
+        var advancedOpen =
+          window.location.hash === "#server-advanced-actions" ||
+          window.location.search.indexOf("advanced=open") >= 0;
+        if (advancedOpen) {
+          var moveEntry = document.querySelector("[data-move-entry]");
+          if (moveEntry !== null) {
+            window.requestAnimationFrame(function () {
+              moveEntry.focus();
+            });
+          }
+        }
+        return;
+      }
+      var editButton = document.querySelector(
+        '[data-detail-edit-button="' + anchorMatch[1] + '"]'
+      );
+      if (editButton !== null) {
+        window.requestAnimationFrame(function () {
+          editButton.focus();
+        });
+      }
+    }
+
+    window.addEventListener("hashchange", focusEditButtonForHash);
+    var shell = document.querySelector("[data-server-detail-drawer]");
+    if (shell === null) {
+      focusEditButtonForHash();
+      return;
+    }
+    var dialog = shell.querySelector("[data-server-detail-dialog]");
+    if (dialog === null) {
+      return;
+    }
+    function focusableElements() {
+      return Array.prototype.slice.call(
+        dialog.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+        )
+      ).filter(function (element) {
+        return element.offsetParent !== null || element === document.activeElement;
+      });
+    }
+    var controls = dialog.querySelectorAll("input, select, textarea");
+    var first = null;
+    for (var index = 0; index < controls.length; index += 1) {
+      var control = controls[index];
+      if (control.type !== "hidden" && !control.disabled && control.offsetParent !== null) {
+        first = control;
+        break;
+      }
+    }
+    if (first === null) {
+      first = dialog.querySelector("a[href], button");
+    }
+    if (first !== null) {
+      first.focus();
+    }
+    document.body.classList.add("modal-open");
+    dialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") {
+        return;
+      }
+      var elements = focusableElements();
+      if (elements.length === 0) {
+        return;
+      }
+      var firstElement = elements[0];
+      var lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        window.location.assign(shell.getAttribute("data-close-detail-edit"));
+      }
+    });
+  }
+
+  initServerDetailDrawer();
+  document
+    .querySelectorAll("[data-server-detail-address-editor]")
+    .forEach(initServerDetailAddressEditor);
+  initServerMoveConfirm();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListFilters);
   document.querySelectorAll("[data-server-list-page]").forEach(function (root) {
     var selected = new Set();

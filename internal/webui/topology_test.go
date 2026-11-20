@@ -443,6 +443,7 @@ type stubTopologyWriter struct {
 	siteEdits         [][2]string
 	siteBatchEdits    []stubSiteBatchEdit
 	serverMoves       [][2]string
+	nextMoveResult    TopologyServerMoveResult
 	sources           []TopologyWriteSource
 	addMessage        string
 	nextNotFoundError bool
@@ -573,7 +574,12 @@ func (w *stubTopologyWriter) EditDeviceSites(devices []string, site string, sour
 func (w *stubTopologyWriter) MoveServerToDevice(serverID, device string, source TopologyWriteSource) (TopologyServerMoveResult, error) {
 	w.serverMoves = append(w.serverMoves, [2]string{serverID, device})
 	w.sources = append(w.sources, source)
-	return TopologyServerMoveResult{ServerName: serverID, ToDevice: device}, w.nextError()
+	if w.nextMoveResult.ToDevice == "" {
+		w.nextMoveResult = TopologyServerMoveResult{ServerName: serverID, ToDevice: device}
+	} else if w.nextMoveResult.ServerName == "" {
+		w.nextMoveResult.ServerName = serverID
+	}
+	return w.nextMoveResult, w.nextError()
 }
 
 func (w *stubTopologyWriter) SaveTopologyLayout(save TopologyLayoutSave, source TopologyWriteSource) error {

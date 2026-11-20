@@ -436,6 +436,62 @@ func (w writerAdapter) EditServer(id string, form webui.ServerEditForm, source w
 	return result, conflict, err
 }
 
+func (w writerAdapter) EditServerAddresses(
+	id string, form webui.ServerAddressListForm, source webui.ServerWriteSource,
+) (*webui.ServerAddressListResultView, *webui.ServerEditConflictView, error) {
+	var result *webui.ServerAddressListResultView
+	var conflict *webui.ServerEditConflictView
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
+		var editErr error
+		result, conflict, editErr = EditServerAddressesView(manager, id, form, source)
+		return editErr
+	})
+	return result, conflict, err
+}
+
+// EditServerAddressesView 保存整份地址列表并换成页面数据；修订号冲突以冲
+// 突视图返回，校验失败换成页面表单错误。
+func EditServerAddressesView(
+	manager *servermanage.Manager, id string, form webui.ServerAddressListForm, source webui.ServerWriteSource,
+) (*webui.ServerAddressListResultView, *webui.ServerEditConflictView, error) {
+	request := servermanage.EditAddressesRequest{
+		Identifier: id, ExpectedRevision: form.ExpectedRevision, CheckRevision: true,
+	}
+	for _, row := range form.Rows {
+		if row.Network == webui.ServerAddressNetworkOther {
+			if request.OtherAddress != "" {
+				return nil, nil, &webui.ServerFormError{Message: "其他（公网或未登记网络）地址最多只能有一行。"}
+			}
+			request.OtherAddress = row.Address
+			continue
+		}
+		request.Memberships = append(request.Memberships, servermanage.NetworkMembershipInput{
+			Network: row.Network, Address: row.Address,
+		})
+	}
+	result, err := manager.EditAddresses(request, servermanage.WebUISource(source.RemoteAddress))
+	if err != nil {
+		var conflict *servermanage.RevisionConflict
+		if errors.As(err, &conflict) {
+			current, viewErr := DetailView(manager, id)
+			if viewErr != nil {
+				return nil, nil, viewErr
+			}
+			return nil, &webui.ServerEditConflictView{Current: current}, nil
+		}
+		var fieldErr *servermanage.FieldError
+		if errors.As(err, &fieldErr) {
+			return nil, nil, &webui.ServerFormError{Message: fieldErr.Page}
+		}
+		return nil, nil, err
+	}
+	detail, err := DetailView(manager, result.Server.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &webui.ServerAddressListResultView{Detail: detail, Warning: result.Warning}, nil, nil
+}
+
 // EditServer 执行一次编辑并把结果换成页面数据；修订号冲突以冲突视图返回。
 func EditServer(manager *servermanage.Manager, id string, form webui.ServerEditForm, source webui.ServerWriteSource) (*webui.ServerEditResultView, *webui.ServerEditConflictView, error) {
 	req := servermanage.EditRequest{

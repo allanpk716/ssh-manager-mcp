@@ -177,13 +177,22 @@ type TopologyData struct {
 	LocalDevice                TopologyLocalDevice                 `json:"local_device"`
 }
 
+// 主机密钥指纹复制结果的三种结论，供详情页生成成功提示。
+const (
+	TopologyAnchorCopyCopied   = "copied"
+	TopologyAnchorCopyNone     = "none"
+	TopologyAnchorCopyConflict = "conflict"
+)
+
 // TopologyServerMoveResult 是服务器条目改挂到另一台机器后的结果摘要；
-// AnchorCopyNotice 描述同机同端口兄弟条目主机密钥锚的复制事实。
+// AnchorCopyNotice 描述同机同端口兄弟条目主机密钥锚的复制事实，
+// AnchorCopyOutcome 是其中的结构化结论。
 type TopologyServerMoveResult struct {
-	ServerName   string
-	FromDevice   string
-	ToDevice     string
-	AnchorNotice string
+	ServerName        string
+	FromDevice        string
+	ToDevice          string
+	AnchorNotice      string
+	AnchorCopyOutcome string
 }
 
 // TopologySource 是 Web UI 读取拓扑数据的唯一入口。instance 是客户端缓存

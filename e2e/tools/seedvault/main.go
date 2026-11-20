@@ -477,6 +477,30 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_ADDRESS_RANGE_HINT")) == "1" {
+		if _, err := st.AddNetwork(models.Network{
+			Name: "家A-办公网", Type: models.NetworkPhysical, SiteName: "家A",
+			NetworkRange: "192.168.100.0/24",
+		}); err != nil {
+			return err
+		}
+		if _, err := st.AddNetwork(models.Network{
+			Name: "机房同网段", Type: models.NetworkPhysical, SiteName: "机房",
+			NetworkRange: "192.168.100.0/24",
+		}); err != nil {
+			return err
+		}
+		hintDevice, err := st.AddDeviceAtSite("网段提示机器", "网段提示浏览器测试设备", "", "家A")
+		if err != nil {
+			return err
+		}
+		if _, err := st.AddServer(&models.Server{
+			Name: "subnet-hint", Host: "192.168.100.41", Port: 22, User: "owner",
+			DeviceID: hintDevice.ID,
+		}); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SERVER_FILTERS")) == "1" {
 		if err := seedServerFilterTopology(st); err != nil {
 			return err
@@ -513,6 +537,21 @@ func seedTopology(st *store.Store) error {
 	}
 	if _, err := st.MoveServerToDevice("db-1", "工作站"); err != nil {
 		return err
+	}
+	// db-1 是 web-1 在同一台机器上的另一个账号：给它预置显示说明与最近一
+	// 次连接测试结果，供服务器详情的同机账号卡片浏览器测试断言。
+	if db, err := st.GetServerByName("db-1"); err == nil && db != nil {
+		db.Description = "每晚备份任务使用"
+		if err := st.UpdateServer(db); err != nil {
+			return err
+		}
+		if err := st.SaveServerConnectionTestResult(db.ID, models.ServerConnectionTestResult{
+			CompletedAt: time.Now().Add(-2 * time.Hour), Succeeded: true,
+			SuccessAddress: "192.0.2.11", SuccessNetworkName: "家A局域网",
+			Duration: 45 * time.Millisecond,
+		}); err != nil {
+			return err
+		}
 	}
 	if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
 		return err

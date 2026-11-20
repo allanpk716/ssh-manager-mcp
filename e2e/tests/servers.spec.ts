@@ -35,7 +35,6 @@ async function usePrivateKey(
   privateKeyPath: string,
 ): Promise<void> {
   await page.getByRole("region", { name: "连接" }).getByRole("link", { name: "编辑" }).click();
-  await page.locator("#edit-host").fill("127.0.0.1");
   await page.locator("#edit-port").fill(port);
   await page.locator("#edit-credential").selectOption("key");
   await page.locator("#edit-key-file").setInputFiles(privateKeyPath);
@@ -59,11 +58,15 @@ test("过滤需要注意的服务器并编辑补齐角色", async ({ page, stand
   await expect(serverCard(page, "web-1")).toHaveCount(0);
 
   await serverCard(page, "db-1").getByRole("link", { name: "编辑" }).click();
-  await page.getByLabel("角色", { exact: true }).fill("生产数据库");
-  await page.getByRole("button", { name: "保存" }).click();
+  await expect(page.getByRole("heading", { name: "db-1" })).toBeVisible();
+  await page.locator('[data-server-detail-drawer="connection"]').getByRole("link", { name: "取消" }).click();
+  await page.locator('[data-detail-edit-button="description"]').click();
+  await page.getByLabel("用途", { exact: true }).fill("生产数据库");
+  await page.getByRole("button", { name: "保存说明" }).click();
 
   await expect(page.getByRole("heading", { name: "db-1" })).toBeVisible();
-  await expect(page.getByText("生产数据库")).toBeVisible();
+  await expect(page.getByText("已保存说明。")).toBeVisible();
+  await expect(page.locator("#server-card-description")).toContainText("生产数据库");
 
   await page.getByRole("link", { name: "返回服务器列表" }).click();
   await filterAttentionOnly(page);
