@@ -238,6 +238,26 @@ func (w openerWriter) EditDeviceSite(
 	})
 }
 
+// EditDeviceSites 把多台机器的地点改为同一个目标；存储层在一次事务里
+// 写全部设备并各写一条现有机器地点修改审计，任一台失败整批不变。
+func (w openerWriter) EditDeviceSites(
+	devices []string, siteRef string, source webui.TopologyWriteSource,
+) error {
+	_, err := withStoreWriter(w.open, func(st *store.Store) (string, error) {
+		edited, err := st.EditDeviceSitesWithSource(
+			devices, siteRef, store.WebUISource(source.RemoteAddress),
+		)
+		if err != nil {
+			return "", topologyWriteError(err)
+		}
+		if siteRef == "" {
+			return fmt.Sprintf("已清空 %d 台机器的地点", len(edited)), nil
+		}
+		return fmt.Sprintf("已把 %d 台机器的地点设为 %s", len(edited), siteRef), nil
+	})
+	return err
+}
+
 func (w openerWriter) MoveServerToDevice(
 	serverIdentifier, device string, source webui.TopologyWriteSource,
 ) (webui.TopologyServerMoveResult, error) {

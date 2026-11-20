@@ -441,6 +441,7 @@ type stubTopologyWriter struct {
 	networkAdds       []TopologyNetworkInput
 	networkEdits      []stubNetworkEdit
 	siteEdits         [][2]string
+	siteBatchEdits    []stubSiteBatchEdit
 	serverMoves       [][2]string
 	nextMoveResult    TopologyServerMoveResult
 	sources           []TopologyWriteSource
@@ -562,6 +563,12 @@ func (w *stubTopologyWriter) EditDeviceSite(device, site string, source Topology
 		return "已清除机器地点", w.nextError()
 	}
 	return "已保存机器地点", w.nextError()
+}
+
+func (w *stubTopologyWriter) EditDeviceSites(devices []string, site string, source TopologyWriteSource) error {
+	w.siteBatchEdits = append(w.siteBatchEdits, stubSiteBatchEdit{Devices: append([]string(nil), devices...), Site: site})
+	w.sources = append(w.sources, source)
+	return w.nextError()
 }
 
 func (w *stubTopologyWriter) MoveServerToDevice(serverID, device string, source TopologyWriteSource) (TopologyServerMoveResult, error) {

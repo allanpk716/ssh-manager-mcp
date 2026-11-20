@@ -19,7 +19,7 @@ function serverCard(page: import("@playwright/test").Page, name: string) {
 
 async function filterAttentionOnly(page: import("@playwright/test").Page) {
   await page.getByLabel("只看需要注意").check();
-  await page.getByRole("button", { name: "应用筛选" }).click();
+  await page.waitForURL(/attention=1/);
 }
 
 // connectionTargetCard 定位连接测试专用条目所在的列表卡片。
@@ -126,6 +126,58 @@ test("列表卡片显示最近一次连接测试结果并跨重启保留", async
   } finally {
     await ui.close();
     await sshd.close();
+  }
+});
+
+test("服务器筛选选完立即生效并可用胶囊清除", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology(undefined, undefined, {
+    SSHMGR_E2E_SERVER_FILTERS: "1",
+  });
+  try {
+    await page.goto(ui.startupURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, "/ui/servers/");
+    await expect(page.getByRole("button", { name: "应用筛选" })).toBeHidden();
+
+    await page.getByRole("button", { name: /全部地点/ }).click();
+    await page.getByRole("heading", { name: "按地点筛选" }).waitFor();
+    const companyOption = page.getByRole("button", { name: "公司 包含全部下级地点 3 台" });
+    await companyOption.click();
+    await page.waitForURL((url) => url.searchParams.has("site"));
+    await expect(serverCard(page, "company-root")).toBeVisible();
+    await expect(serverCard(page, "factory-web")).toBeVisible();
+    await expect(serverCard(page, "building-db")).toBeVisible();
+    await expect(serverCard(page, "home-machine")).toHaveCount(0);
+
+    await page.getByRole("link", { name: "清除地点：公司" }).click();
+    await page.waitForURL((url) => !url.searchParams.has("site"));
+
+    await page.getByRole("button", { name: /全部网络/ }).click();
+    await page.getByRole("heading", { name: "按网络筛选" }).waitFor();
+    await page.getByRole("button", { name: /公司办公局域网/ }).click();
+    await page.waitForURL((url) => url.searchParams.has("network"));
+    await expect(serverCard(page, "company-root")).toBeVisible();
+    await expect(serverCard(page, "factory-web")).toBeVisible();
+    await expect(serverCard(page, "building-db")).toHaveCount(0);
+
+    await page.getByRole("link", { name: "清除网络：公司办公局域网" }).click();
+    await page.getByRole("button", { name: /全部地点/ }).click();
+    const unregisteredOption = page.getByRole("button", { name: /未登记地点/ });
+    await unregisteredOption.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForURL((url) => url.searchParams.get("site") === "__unregistered__");
+    await expect(serverCard(page, "missing-site")).toBeVisible();
+    await expect(serverCard(page, "no-device")).toBeVisible();
+    await expect(serverCard(page, "company-root")).toHaveCount(0);
+
+    await page.getByRole("link", { name: "清除全部" }).click();
+    await page.waitForURL((url) => url.search === "");
+    await page.getByLabel("搜索服务器").fill("factory");
+    await page.waitForURL(/query=factory/);
+    await expect(serverCard(page, "factory-web")).toBeVisible();
+    await expect(serverCard(page, "company-root")).toHaveCount(0);
+  } finally {
+    await ui.close();
   }
 });
 
