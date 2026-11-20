@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 type erroringDetailServerSource struct {
@@ -442,5 +444,136 @@ func TestServerAddResultUsesStoredFactsInsteadOfQueryParameters(t *testing.T) {
 	}
 	if !strings.Contains(page, "真实设备") || !strings.Contains(page, "未授权") {
 		t.Fatalf("结果页应显示存储中的设备与授权状态：%s", page)
+	}
+}
+
+// TestServerWizardTestRunningReusesSharedResult 校验进行中状态：新增向导
+// 测试页复用共享结果片段与视觉状态，由外层页面区域负责轮询，不出现旧的
+// 「状态：未验证」表述。
+func TestServerWizardTestRunningReusesSharedResult(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "wizard", User: "deploy", Host: "192.0.2.20", Port: 22}
+	tester := &stubServerConnectionTester{}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+	page := serversGet(t, h, cookie, "/ui/servers/new/test?server=srv-new&task=task-1")
+	for _, want := range []string{
+		`class="connection-test-result is-running"`,
+		"正在连接…",
+		`hx-get="/ui/servers/new/test?server=srv-new&amp;task=task-1"`,
+		`hx-trigger="every 1s"`,
+		"返回修改连接信息",
+		"先看服务器详情",
+		"shell 未验证，条目保持默认 POSIX。",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("进行中的新增向导测试页缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, banned := range []string{
+		"状态：未验证", "已验证状态等待测试完成", `hx-target="#server-connection-test-live"`,
+	} {
+		if strings.Contains(page, banned) {
+			t.Fatalf("进行中的新增向导测试页不得包含 %q：\n%s", banned, page)
+		}
+	}
+}
+
+// TestServerWizardTestSuccessReusesSharedResult 校验成功状态：共享片段显
+// 示实际使用的地址、网络与耗时，成功后才能继续，shell 未判定与首次锚定说
+// 明仍保留。
+func TestServerWizardTestSuccessReusesSharedResult(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "wizard", User: "deploy", Host: "192.0.2.20", Port: 22}
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestSucceeded, ServerID: "srv-new", ProbeShell: true,
+		AnchorFingerprint: "SHA256:test-host-key", AnchorResult: "首次连接已记录主机密钥锚",
+		ShellNotice: "无法判定 shell 类型，未猜测；请人工确认后修改标注。",
+		Result: &ServerConnectionTestResultView{
+			State: ServerConnectionTestSucceeded, Succeeded: true,
+			CompletedAt:        time.Unix(1_782_000_000, 0),
+			SuccessAddress:     "192.0.2.20",
+			SuccessNetworkName: "家A局域网",
+			SuccessSource:      models.DialAddressSourcePhysical,
+			Duration:           42 * time.Millisecond,
+			Attempts: []ServerConnectionTestAttemptView{{
+				NetworkName: "家A局域网", Address: "192.0.2.20", Source: models.DialAddressSourcePhysical,
+				OK: true, Duration: 40 * time.Millisecond,
+			}},
+		},
+	}}
+	h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+	page := serversGet(t, h, cookie, "/ui/servers/new/test?server=srv-new&task=task-1")
+	for _, want := range []string{
+		`class="connection-test-result is-succeeded"`,
+		"已连上 · 用的地址 192.0.2.20（家A局域网）· 耗时 42 毫秒",
+		"继续选择地点",
+		"SHA256:test-host-key",
+		"首次连接已记录主机密钥锚",
+		"无法判定 shell 类型，未猜测；请人工确认后修改标注。",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("成功的新增向导测试页缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, banned := range []string{"状态：未验证", "已验证状态等待测试完成", "返回修改连接信息"} {
+		if strings.Contains(page, banned) {
+			t.Fatalf("成功的新增向导测试页不得包含 %q：\n%s", banned, page)
+		}
+	}
+}
+
+// TestServerWizardTestFailuresReusesSharedResult 校验认证失败、端口不通与
+// 超时：共享片段显示白话原因和可展开的候选地址，失败后仍能返回修改连接信
+// 息，锚复制来源与冲突提示不丢失。
+func TestServerWizardTestFailuresReusesSharedResult(t *testing.T) {
+	store := newStubServerStore()
+	store.details["srv-new"] = &ServerDetailView{ID: "srv-new", Name: "wizard", User: "deploy", Host: "192.0.2.20", Port: 22}
+	for _, item := range []struct {
+		name  string
+		label string
+	}{
+		{name: "认证失败", label: "认证失败"},
+		{name: "端口不通", label: "端口不通"},
+		{name: "超时", label: "超时"},
+	} {
+		tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+			ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-new", ProbeShell: true,
+			AnchorCopied: true, AnchorCopyFromServerName: "sibling", AnchorCopyConflict: true,
+			Result: &ServerConnectionTestResultView{
+				State: ServerConnectionTestFailed, FailureLabel: item.label,
+				Attempts: []ServerConnectionTestAttemptView{{
+					NetworkName: "家A局域网", Address: "192.0.2.20",
+					Source: models.DialAddressSourcePhysical, FailureLabel: item.label,
+					Duration: 23 * time.Millisecond,
+				}},
+			},
+		}}
+		h, cookie := newServersTestHandlerWithConnectionTester(t, RoleStandalone, store, &stubServerWriter{}, tester)
+
+		page := serversGet(t, h, cookie, "/ui/servers/new/test?server=srv-new&task=task-1")
+		for _, want := range []string{
+			`class="connection-test-result is-failed"`,
+			"连不上</strong> · " + item.label,
+			"展开看每个候选地址的结果",
+			`aria-expanded="false"`,
+			"家A局域网",
+			"192.0.2.20",
+			item.label + " · 耗时 23 毫秒",
+			"返回修改连接信息",
+			"已从服务器条目 sibling 复制同端口主机密钥锚",
+			"同一设备、同一端口的其他服务器条目主机密钥锚不一致，未复制；请手工确认后锚定。",
+			"shell 未验证，条目保持默认 POSIX。",
+		} {
+			if !strings.Contains(page, want) {
+				t.Fatalf("失败原因 %s 的新增向导测试页缺少 %q：\n%s", item.name, want, page)
+			}
+		}
+		for _, banned := range []string{"状态：未验证", "已验证状态等待测试完成", "继续选择地点"} {
+			if strings.Contains(page, banned) {
+				t.Fatalf("失败原因 %s 的新增向导测试页不得包含 %q：\n%s", item.name, banned, page)
+			}
+		}
 	}
 }

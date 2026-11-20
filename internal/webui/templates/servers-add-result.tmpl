@@ -13,7 +13,7 @@
 <div><dt>连接</dt><dd>{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}</dd></div>
 <div><dt>所属设备</dt><dd>{{if .ServerAddResult.DeviceName}}{{.ServerAddResult.DeviceName}}{{else}}未显示{{end}}</dd></div>
 <div><dt>profile 授权</dt><dd>{{if .ServerAddResult.ProfileNamesUnavailable}}无法确认{{else if .ServerAddResult.ProfileNames}}{{joinTags .ServerAddResult.ProfileNames}}{{else}}未授权{{end}}</dd></div>
-<div><dt>状态</dt><dd>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}已验证状态等待测试完成{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}已验证{{else}}未验证{{end}}{{else}}未验证{{end}}</dd></div>
+<div><dt>状态</dt><dd>{{if .ServerAddResult.ConnectionTest}}{{if eq .ServerAddResult.ConnectionTest.State "running"}}正在连接{{else if eq .ServerAddResult.ConnectionTest.State "succeeded"}}已连上{{else}}连不上{{end}}{{else}}未测试{{end}}</dd></div>
 {{if .ServerAddResult.ConnectionTest}}
 {{if .ServerAddResult.ConnectionTest.AnchorFingerprint}}<div><dt>主机密钥指纹</dt><dd>{{.ServerAddResult.ConnectionTest.AnchorFingerprint}}</dd></div>{{end}}
 {{if .ServerAddResult.ConnectionTest.AnchorResult}}<div><dt>锚定结果</dt><dd>{{.ServerAddResult.ConnectionTest.AnchorResult}}{{if .ServerAddResult.ConnectionTest.HandshakeAddress}}（真实握手地址 {{.ServerAddResult.ConnectionTest.HandshakeAddress}}）{{end}}</dd></div>{{end}}

@@ -1,6 +1,6 @@
 {{define "serverConnectionTestResult"}}
 {{if .}}
-<section id="server-connection-test-result" class="connection-test-result {{if eq .State "running"}}is-running{{else if .Succeeded}}is-succeeded{{else}}is-failed{{end}}"{{if eq .State "running"}} hx-get="{{.PollPath}}" hx-trigger="every 1s" hx-target="#server-connection-test-live" hx-swap="innerHTML"{{end}}>
+<section id="server-connection-test-result" class="connection-test-result {{if eq .State "running"}}is-running{{else if .Succeeded}}is-succeeded{{else}}is-failed{{end}}"{{if and (eq .State "running") .PollPath}} hx-get="{{.PollPath}}" hx-trigger="every 1s" hx-target="#server-connection-test-live" hx-swap="innerHTML"{{end}}>
 {{if eq .State "running"}}
 <span class="connection-test-spinner" aria-hidden="true"></span>
 <span>正在连接…</span>

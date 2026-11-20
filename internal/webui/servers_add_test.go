@@ -120,7 +120,7 @@ func TestServerAddResultShowsConnectionTestOutcome(t *testing.T) {
 
 	success := serversGet(t, h, cookie, "/ui/servers/new/result?server=srv-new&task=task-1")
 	for _, want := range []string{
-		"已验证", "SHA256:known-host-key-fingerprint", "首次连接已记录主机密钥锚",
+		"已连上", "SHA256:known-host-key-fingerprint", "首次连接已记录主机密钥锚",
 		"100.64.0.20:22", "shell 类型已保存为 powershell",
 	} {
 		if !strings.Contains(success, want) {
