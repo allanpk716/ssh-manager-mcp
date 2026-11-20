@@ -613,8 +613,9 @@ func TestHandlerCompleteValidationErrorUsesPageText(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	token := integrationCSRF(t, h)
 	resp := h.do(http.MethodPost, "/ui/servers/complete", url.Values{
-		"csrf_token": {integrationCSRF(t, h)},
+		"csrf_token": {token},
 		"queue":      {id}, "position": {"0"}, "action": {"save"},
 		"description": {"页面说明"}, "hardware": {},
 		"services": {}, "role": {"网站"}, "special_handling": {},
@@ -624,7 +625,8 @@ func TestHandlerCompleteValidationErrorUsesPageText(t *testing.T) {
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("补全校验失败状态码 = %d，应为 400：\n%s", resp.StatusCode, body)
 	}
-	if !strings.Contains(body, "已有登录凭据") || strings.Contains(body, "--") {
+	// 随机令牌按 base64url 编码，可能恰好含「--」；检查命令行参数名前先去掉它。
+	if !strings.Contains(body, "已有登录凭据") || strings.Contains(strings.ReplaceAll(body, token, ""), "--") {
 		t.Fatalf("补全提示应面向页面：\n%s", body)
 	}
 	if !strings.Contains(body, `value="页面说明"`) {
