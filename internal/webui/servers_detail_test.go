@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -551,7 +552,7 @@ func TestServerDetailLocationAndMoveWrites(t *testing.T) {
 		},
 		{
 			"/ui/servers/srv-fine/move",
-			url.Values{"device": {"NAS"}},
+			url.Values{"device": {"NAS"}, "confirm": {"1"}},
 			"move",
 		},
 	}
@@ -561,7 +562,7 @@ func TestServerDetailLocationAndMoveWrites(t *testing.T) {
 			t.Fatalf("%s 状态码 = %d，应为 303", testCase.target, response.StatusCode)
 		}
 		location := response.Header.Get("Location")
-		if !strings.HasPrefix(location, "/ui/servers/srv-fine?notice=") {
+		if !strings.HasPrefix(location, "/ui/servers/srv-fine?") {
 			t.Fatalf("%s 跳转地址 = %q，应回到统一详情页", testCase.target, location)
 		}
 	}
@@ -582,6 +583,148 @@ func TestServerDetailLocationAndMoveWrites(t *testing.T) {
 		response := serversPost(t, handler, cookie, target, url.Values{"network": {"办公网"}})
 		if response.StatusCode != http.StatusNotFound {
 			t.Fatalf("旧地址入口 %s 状态码 = %d，应为 404", target, response.StatusCode)
+		}
+	}
+}
+
+// TestServerDetailMoveRequiresUnderstanding 校验改挂必须由服务端确认
+// 「我已了解」，不能只依赖浏览器禁用提交按钮。
+func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+		"device": {"NAS"},
+	})
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("未勾选确认时状态码 = %d，应为 400", response.StatusCode)
+	}
+	body := readResponseBody(t, response)
+	if !strings.Contains(body, "请先勾选「我已了解」。") {
+		t.Fatalf("未勾选确认时缺少服务端拒绝提示：\n%s", body)
+	}
+	if !strings.Contains(body, `data-server-move-confirm`) ||
+		!strings.Contains(body, `<option value="NAS" selected>`) {
+		t.Fatalf("未勾选确认被拒绝后应保留确认框与目标设备：\n%s", body)
+	}
+	if len(writer.serverMoves) != 0 {
+		t.Fatalf("未勾选确认时不应写入，实际调用：%v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveFailureKeepsChoice 校验适配层失败时保留确认框、
+// 目标设备与勾选状态，并显示既有中文错误。
+func TestServerDetailMoveFailureKeepsChoice(t *testing.T) {
+	writer := &stubTopologyWriter{nextPlainError: errors.New("database unavailable")}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+		"device": {"NAS"}, "confirm": {"1"},
+	})
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("适配层失败时状态码 = %d，应为 500", response.StatusCode)
+	}
+	body := readResponseBody(t, response)
+	for _, want := range []string{
+		"保存失败，请稍后重试。",
+		`data-server-move-confirm`,
+		`<option value="NAS" selected>`,
+		`name="confirm" value="1" checked`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("适配层失败后的确认框缺少 %q：\n%s", want, body)
+		}
+	}
+	if len(writer.serverMoves) != 1 {
+		t.Fatalf("适配层失败前应尝试一次写入，实际调用：%v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveSuccessNoticeShowsAnchorResult 校验改挂成功提示包含
+// 目标设备与主机密钥指纹三种复制结果。
+func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	cases := []struct {
+		outcome string
+		notice  string
+		want    string
+	}{
+		{"copied", "已复制同机账号 other-account 的主机密钥锚。", "已改挂到目标设备 NAS。主机密钥指纹已复制。"},
+		{"none", "", "已改挂到目标设备 NAS。无可复制的主机密钥指纹。"},
+		{"conflict", "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。", "已改挂到目标设备 NAS。同机账号的主机密钥指纹不一致，未复制。"},
+	}
+	for _, testCase := range cases {
+		writer.nextMoveResult = TopologyServerMoveResult{
+			ToDevice: "NAS", AnchorNotice: testCase.notice, AnchorCopyOutcome: testCase.outcome,
+		}
+		response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+			"device": {"NAS"}, "confirm": {"1"},
+		})
+		if response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s 改挂状态码 = %d，应为 303", testCase.outcome, response.StatusCode)
+		}
+		location := strings.SplitN(response.Header.Get("Location"), "#", 2)[0]
+		body := serversGet(t, handler, cookie, location)
+		if !strings.Contains(body, `<div class="notice notice-success"><p>`+testCase.want+`</p></div>`) {
+			t.Fatalf("指纹结果 %s 的成功提示不正确：\n%s", testCase.outcome, body)
+		}
+	}
+	if len(writer.serverMoves) != 3 {
+		t.Fatalf("三种指纹结果应分别调用一次写入，实际调用：%v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveConfirmationDialog 校验改挂入口先打开确认框，普通
+// 详情页不再直接渲染写表单。
+func TestServerDetailMoveConfirmationDialog(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。",
+		`href="/ui/servers/srv-fine?move=confirm#server-advanced-actions"`,
+		">改挂到另一台设备</a>",
+		`href="/ui/servers/srv-fine/delete"`, ">删除服务器条目</a>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("高级操作缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `action="/ui/servers/srv-fine/move"`) {
+		t.Fatalf("普通详情页不应直接渲染改挂写表单：\n%s", body)
+	}
+
+	confirmed := serversGet(t, handler, cookie, "/ui/servers/srv-fine?move=confirm")
+	for _, want := range []string{
+		`data-server-move-confirm`,
+		`<h2 id="server-move-confirm-title">确认改挂</h2>`,
+		"改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。",
+		`name="device"`,
+		`name="confirm" value="1"`,
+		">我已了解</label>",
+		`data-move-submit disabled`,
+		`href="/ui/servers/srv-fine?advanced=open#server-advanced-actions"`,
+	} {
+		if !strings.Contains(confirmed, want) {
+			t.Fatalf("改挂确认框缺少 %q：\n%s", want, confirmed)
 		}
 	}
 }

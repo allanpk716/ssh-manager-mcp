@@ -133,6 +133,14 @@ type serverDetailPageView struct {
 	ShareRows     []ServerDetailSharedStorageChoice
 	Topology      *serverDetailTopologyView
 	Software      *serverDetailSoftwareView
+	Move          *serverDetailMoveDraft
+	AdvancedOpen  bool
+}
+
+// serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标设备与确认状态。
+type serverDetailMoveDraft struct {
+	Device     string
+	Understood bool
 }
 
 // DrawerTitle 返回当前编辑弹层的标题。
@@ -197,13 +205,27 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 		noticeParam = "saved-" + r.URL.Query().Get("saved")
 	}
 	notice := serverDetailNoticeText(noticeParam)
+	if noticeParam == "server-moved" {
+		noticeKind = "success"
+		notice = serverDetailMoveNoticeText(
+			r.URL.Query().Get("moved-device"), r.URL.Query().Get("anchor-copy"),
+		)
+	}
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
 		notice, noticeKind = "已覆盖主机密钥锚。", "success"
 	case "cleared":
 		notice, noticeKind = "已删除主机密钥锚。", "success"
 	}
-	h.renderServerDetailPage(w, r, http.StatusOK, detail, notice, noticeKind)
+	options := serverDetailRenderOptions{status: http.StatusOK, notice: notice, noticeKind: noticeKind}
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if r.URL.Query().Get("move") == "confirm" {
+			options.move = &serverDetailMoveDraft{}
+		} else if r.URL.Query().Get("advanced") == "open" {
+			options.advancedOpen = true
+		}
+	}
+	h.renderServerDetailPageView(w, r, detail, options)
 }
 
 // renderServerDetailPage 组装并渲染详情页；notice 与 noticeKind 为空时不显
@@ -226,6 +248,8 @@ type serverDetailRenderOptions struct {
 	edit          *serverEditView
 	accountDrafts map[string]string
 	addressDrafts []serverDetailAddressRow
+	move          *serverDetailMoveDraft
+	advancedOpen  bool
 }
 
 // renderServerDetailPageView 渲染详情页；drawer 非空时打开对应编辑弹层，
@@ -254,6 +278,8 @@ func (h *handler) renderServerDetailPageView(
 	if !h.caps.CanWrite {
 		view.EditDrawer = ""
 	}
+	view.Move = options.move
+	view.AdvancedOpen = options.advancedOpen
 	if options.edit != nil && options.edit.Notice != "" && options.notice == "" {
 		options.notice = options.edit.Notice
 	}
@@ -564,6 +590,39 @@ func serverDetailWriteRedirect(w http.ResponseWriter, r *http.Request, id, notic
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
+// serverDetailMoveRedirect 回到详情页高级操作，并携带生成成功提示所需的
+// 目标设备与主机密钥指纹复制结论。
+func serverDetailMoveRedirect(w http.ResponseWriter, r *http.Request, id string, result TopologyServerMoveResult) {
+	outcome := result.AnchorCopyOutcome
+	switch outcome {
+	case TopologyAnchorCopyCopied, TopologyAnchorCopyNone, TopologyAnchorCopyConflict:
+	default:
+		outcome = TopologyAnchorCopyNone
+	}
+	query := url.Values{
+		"notice":       {"server-moved"},
+		"moved-device": {result.ToDevice},
+		"anchor-copy":  {outcome},
+	}
+	http.Redirect(w, r, serverDetailPath(id)+"?"+query.Encode()+"#server-advanced-actions", http.StatusSeeOther)
+}
+
+// serverDetailMoveNoticeText 生成改挂成功后的完整提示。
+func serverDetailMoveNoticeText(device, anchorOutcome string) string {
+	notice := "已改挂到目标设备 " + device + "。"
+	switch anchorOutcome {
+	case TopologyAnchorCopyCopied:
+		return notice + "主机密钥指纹已复制。"
+	case TopologyAnchorCopyConflict:
+		return notice + "同机账号的主机密钥指纹不一致，未复制。"
+	default:
+		if device == "" {
+			return "已改挂到另一台机器。无可复制的主机密钥指纹。"
+		}
+		return notice + "无可复制的主机密钥指纹。"
+	}
+}
+
 // handleServerDetailLocation 处理机器地点保存表单。
 func (h *handler) handleServerDetailLocation(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
@@ -679,17 +738,35 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 	}
 	device := strings.TrimSpace(r.PostFormValue("device"))
 	if device == "" {
-		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择目标机器。")
+		h.renderServerDetailMoveError(w, r, detail, http.StatusBadRequest, "请选择目标机器。", device, false)
 		return
 	}
-	_, err := h.cfg.TopologyWriter.MoveServerToDevice(
+	if r.PostFormValue("confirm") != "1" {
+		h.renderServerDetailMoveError(w, r, detail, http.StatusBadRequest, "请先勾选「我已了解」。", device, false)
+		return
+	}
+	result, err := h.cfg.TopologyWriter.MoveServerToDevice(
 		detail.ID, device, TopologyWriteSource{RemoteAddress: remoteIP(r)},
 	)
 	if err != nil {
-		h.renderServerDetailWriteError(w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err))
+		h.renderServerDetailMoveError(
+			w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err), device, true,
+		)
 		return
 	}
-	serverDetailWriteRedirect(w, r, detail.ID, "server-moved", "#server-advanced-actions")
+	serverDetailMoveRedirect(w, r, detail.ID, result)
+}
+
+// renderServerDetailMoveError 带改挂确认状态重新渲染详情页，保留 owner 已
+// 选目标设备与勾选状态。
+func (h *handler) renderServerDetailMoveError(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView,
+	status int, notice, device string, understood bool,
+) {
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice,
+		move: &serverDetailMoveDraft{Device: device, Understood: understood},
+	})
 }
 
 // handleServerDetailTest 启动一次连接测试。局部请求把连接卡片的结果区换
