@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"os"
-	"syscall"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -31,10 +30,9 @@ func ClassifyProbeDialError(err error) models.ProbeErrorCategory {
 		return models.ProbeErrorDNSFailure
 	}
 	switch {
-	case errors.Is(err, syscall.ECONNREFUSED):
+	case isConnRefusedErrno(err):
 		return models.ProbeErrorConnectionRefused
-	case errors.Is(err, syscall.EHOSTUNREACH), errors.Is(err, syscall.ENETUNREACH),
-		errors.Is(err, syscall.EHOSTDOWN), errors.Is(err, syscall.ENETDOWN):
+	case isNoRouteErrno(err):
 		return models.ProbeErrorNoRoute
 	}
 	return models.ProbeErrorOther
