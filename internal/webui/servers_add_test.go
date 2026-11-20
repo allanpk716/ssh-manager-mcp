@@ -120,7 +120,7 @@ func TestServerAddResultShowsConnectionTestOutcome(t *testing.T) {
 
 	success := serversGet(t, h, cookie, "/ui/servers/new/result?server=srv-new&task=task-1")
 	for _, want := range []string{
-		"已验证", "SHA256:known-host-key-fingerprint", "首次连接已记录主机密钥锚",
+		"已连上", "SHA256:known-host-key-fingerprint", "首次连接已记录主机密钥锚",
 		"100.64.0.20:22", "shell 类型已保存为 powershell",
 	} {
 		if !strings.Contains(success, want) {
@@ -137,8 +137,9 @@ type stubServerConnectionStart struct {
 }
 
 type stubServerConnectionTester struct {
-	starts []stubServerConnectionStart
-	status *ServerConnectionTestStatus
+	starts          []stubServerConnectionStart
+	startedServerID string
+	status          *ServerConnectionTestStatus
 }
 
 func (s *stubServerConnectionTester) StartServerTest(
@@ -147,6 +148,7 @@ func (s *stubServerConnectionTester) StartServerTest(
 	s.starts = append(s.starts, stubServerConnectionStart{
 		serverID: serverID, probeShell: probeShell, source: source, anchor: anchor,
 	})
+	s.startedServerID = serverID
 	return "task-1", nil
 }
 
@@ -157,8 +159,12 @@ func (s *stubServerConnectionTester) ServerTestStatus(taskID string) (*ServerCon
 	if s.status != nil {
 		return s.status, true
 	}
+	serverID := s.startedServerID
+	if serverID == "" {
+		serverID = "srv-new"
+	}
 	return &ServerConnectionTestStatus{
-		ID: taskID, State: ServerConnectionTestRunning, ServerID: "srv-new", ProbeShell: true,
+		ID: taskID, State: ServerConnectionTestRunning, ServerID: serverID, ProbeShell: true,
 	}, true
 }
 

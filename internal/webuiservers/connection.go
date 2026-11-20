@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -14,6 +15,11 @@ import (
 // connectionTaskRetention 是已完成连接测试状态的保留数量；结果页只需要轮询
 // 最近任务，过旧状态直接丢弃。
 const connectionTaskRetention = 32
+
+// connectionTestIncompleteMessage 是打不开加密库、找不到服务器条目、读取
+// 主机密钥锚失败这类提前退出错误的固定白话说明；不携带底层错误，避免把排
+// 查文本变成秘密暴露面。
+const connectionTestIncompleteMessage = "连接测试没有完成：读取加密库或服务器条目失败，请稍后重试。"
 
 // connectionTester 在进程内维护新增服务器的连接测试任务。它沿用拓扑探测
 // 页面的「启动任务、后台执行、页面轮询」模式，实际连接与锚定全部委托服务
@@ -92,6 +98,11 @@ func (r *connectionTester) ServerTestStatus(taskID string) (*webui.ServerConnect
 	}
 	status := *task
 	status.ConnectionNotes = append([]string(nil), task.ConnectionNotes...)
+	if task.Result != nil {
+		result := *task.Result
+		result.Attempts = append([]webui.ServerConnectionTestAttemptView(nil), task.Result.Attempts...)
+		status.Result = &result
+	}
 	return &status, true
 }
 
@@ -121,10 +132,27 @@ func (r *connectionTester) finishConnectionTest(
 		task.HandshakeAddress = result.HandshakeAddress
 		task.ShellDetected = string(result.ShellDetected)
 		task.ShellEvidence = result.ShellEvidence
+		task.Result = webui.NewServerConnectionTestResultView(result.ServerConnectionTestResult)
+		task.Result.Persisted = result.Persisted
 	}
 	if err != nil {
 		task.State = webui.ServerConnectionTestFailed
-		task.Message = err.Error()
+		switch {
+		case errors.Is(err, context.Canceled):
+			task.Message = "连接被取消"
+			task.Result = &webui.ServerConnectionTestResultView{
+				State: webui.ServerConnectionTestFailed, FailureLabel: "连接被取消",
+			}
+		case task.Result != nil && !task.Result.CompletedAt.IsZero():
+			// 已有完成结果时按结构化白话分类展示；成功结果的分类为空，说明
+			// 只有审计等后续记录失败，页面继续显示已连上的事实。
+			task.Message = task.Result.FailureLabel
+		default:
+			task.Message = connectionTestIncompleteMessage
+			task.Result = &webui.ServerConnectionTestResultView{
+				State: webui.ServerConnectionTestFailed, FailureLabel: "其他连接失败",
+			}
+		}
 		if task.ProbeShell {
 			task.ShellNotice = "连接失败，shell 未验证；条目保持默认 POSIX 标注。"
 		}

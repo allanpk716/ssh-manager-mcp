@@ -254,7 +254,10 @@ func seed(dir string) error {
 	if err := roles.Save(roles.State{Role: role, SetupComplete: true}); err != nil {
 		return err
 	}
-	return seedTopology(st)
+	if err := seedTopology(st); err != nil {
+		return err
+	}
+	return seedConnectionTestTarget(st)
 }
 
 // seedSoftwareInventoryViews 给设备优先界面测试种入多地点、物理与虚拟网
@@ -570,6 +573,56 @@ func seedTopology(st *store.Store) error {
 		return err
 	}
 	return seedProbeResults(st, workstation.ID)
+}
+
+// seedConnectionTestTarget 为服务器详情的连接测试浏览器用例准备专用条
+// 目。它在两个物理局域网里各登记一个本机回环地址，让端口不通与超时用例
+// 都能覆盖多候选地址；实际端口由测试进程通过环境变量提供。
+func seedConnectionTestTarget(st *store.Store) error {
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY")) != "1" {
+		return nil
+	}
+	portText := strings.TrimSpace(os.Getenv("SSHMGR_E2E_CONNECTION_TEST_PORT"))
+	if portText == "" {
+		return nil
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return fmt.Errorf("SSHMGR_E2E_CONNECTION_TEST_PORT 不是端口号：%w", err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "连接测试局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "连接测试备用局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "连接测试局域网", "127.0.0.3"); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "连接测试备用局域网", "127.0.0.4"); err != nil {
+		return err
+	}
+	target, err := st.AddDevice("连接测试目标", "服务器详情浏览器测试目标", "")
+	if err != nil {
+		return err
+	}
+	for _, membership := range []struct {
+		network string
+		address string
+	}{{"连接测试局域网", "127.0.0.1"}, {"连接测试备用局域网", "127.0.0.2"}} {
+		if _, err := st.AddNetworkMembership(target.Name, membership.network, membership.address); err != nil {
+			return err
+		}
+	}
+	_, err = st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "connection-target", Host: "127.0.0.1", Port: port, User: "owner",
+		ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, target.Name)
+	return err
 }
 
 // seedProbeResults 为浏览器测试写一份本机起点的本地探测结果：NAS 家A局域

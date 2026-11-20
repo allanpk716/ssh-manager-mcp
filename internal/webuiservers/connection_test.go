@@ -2,6 +2,7 @@ package webuiservers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -66,6 +67,16 @@ func TestConnectionTesterRunsServerManagerTestInBackground(t *testing.T) {
 		status.AnchorFingerprint == "" || status.ShellDetected != string(models.ShellPOSIX) {
 		t.Fatalf("任务完成后应显示已验证、锚与 shell 结论：%+v", status)
 	}
+	if status.Result == nil || !status.Result.Succeeded || status.Result.CompletedAt.IsZero() ||
+		status.Result.SuccessAddress != host || status.Result.SuccessNetworkLabel() != "其他（公网或未登记网络）" ||
+		status.Result.Duration <= 0 || len(status.Result.Attempts) != 1 {
+		t.Fatalf("任务完成后应带结构化连接结果：%+v", status.Result)
+	}
+	persisted, err := st.ServerConnectionTestResult(added.ServerID)
+	if err != nil || persisted == nil || !persisted.Succeeded || persisted.SuccessAddress != host ||
+		len(persisted.Attempts) != 1 {
+		t.Fatalf("后台任务完成后应写入最近一次连接测试结果：%v %+v", err, persisted)
+	}
 	if status.Message != "" || strings.Contains(strings.Join(status.ConnectionNotes, "\n"), "login-secret") {
 		t.Fatalf("成功任务不得带错误或凭据：%+v", status)
 	}
@@ -103,8 +114,33 @@ func TestConnectionTesterFromOpenerUsesShutdownContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := waitConnectionTestStatus(t, tester, taskID)
-	if status.State != webui.ServerConnectionTestFailed || !strings.Contains(status.Message, "context canceled") {
+	if status.State != webui.ServerConnectionTestFailed || status.Message != "连接被取消" {
 		t.Fatalf("已关闭的任务应继承关闭上下文并立即失败：%+v", status)
+	}
+}
+
+// TestConnectionTesterOpenFailureIsNotCanceled 覆盖任务公共边界：打不开加
+// 密库这类非取消错误归为其他连接失败，显示固定白话说明，不回显底层错误。
+func TestConnectionTesterOpenFailureIsNotCanceled(t *testing.T) {
+	openErr := errors.New("open vault with master-key-secret failed")
+	tester := ConnectionTesterFromOpener(func() (*servermanage.Manager, func(), error) {
+		return nil, func() {}, openErr
+	})
+
+	taskID, err := tester.StartServerTest("srv-missing", true, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := waitConnectionTestStatus(t, tester, taskID)
+	if status.State != webui.ServerConnectionTestFailed {
+		t.Fatalf("打开加密库失败的任务应失败：%+v", status)
+	}
+	if status.Message == "连接被取消" || strings.Contains(status.Message, "master-key-secret") ||
+		status.Message == "" {
+		t.Fatalf("非取消错误不得显示为连接被取消或底层错误：%q", status.Message)
+	}
+	if status.Result == nil || status.Result.FailureLabel != "其他连接失败" || !status.Result.CompletedAt.IsZero() {
+		t.Fatalf("非取消错误应归为其他连接失败且不带零值完成时间：%+v", status.Result)
 	}
 }
 
@@ -220,7 +256,7 @@ func TestHandlerAddServerRunsConnectionTestAndKeepsRowsOnFailure(t *testing.T) {
 	}
 	final := session.do(http.MethodGet, response.Header.Get("Location"), nil)
 	finalBody := integrationBody(t, final)
-	for _, want := range []string{"未验证", "shell 未验证", "默认 POSIX", "refused"} {
+	for _, want := range []string{"未验证", "shell 未验证", "默认 POSIX", "端口不通"} {
 		if !strings.Contains(finalBody, want) {
 			t.Fatalf("失败结果页缺少 %q：\n%s", want, finalBody)
 		}

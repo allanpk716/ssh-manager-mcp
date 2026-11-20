@@ -43,6 +43,9 @@ type Detail struct {
 	// HostKeyAnchor 是这个服务器条目当前的主机密钥锚及来源信息；条目尚
 	// 无锚时为空。同一设备的兄弟条目各有各的锚，不合并。
 	HostKeyAnchor *store.PinMeta
+	// ConnectionTest 是这个服务器条目最近一次完成的连接测试结果；从未
+	// 测试时为空。
+	ConnectionTest *models.ServerConnectionTestResult
 	// SiblingSharedStorages 是同一台设备的其他服务器条目已授权、因此
 	// 在这台机器上也可见的共享存储；每项注明来源服务器条目。
 	SiblingSharedStorages []DetailSiblingSharedStorage
@@ -145,6 +148,11 @@ func (m *Manager) Detail(identifier string) (*Detail, error) {
 		return nil, err
 	}
 	detail.HostKeyAnchor = anchor
+	connectionTest, err := m.st.ServerConnectionTestResult(srv.ID)
+	if err != nil {
+		return nil, err
+	}
+	detail.ConnectionTest = connectionTest
 	if err := m.fillReverseView(detail); err != nil {
 		return nil, err
 	}

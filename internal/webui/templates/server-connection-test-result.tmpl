@@ -1,0 +1,8 @@
+{{define "content"}}
+{{template "serverConnectionTestResult" .ServerConnectionTest}}
+{{if .ServerConnectionTestUpdateHeader}}
+<div id="server-last-test" class="server-last-test {{if .ServerConnectionTest.Succeeded}}is-succeeded{{else}}is-failed{{end}}" hx-swap-oob="true">
+<span class="status-dot" aria-hidden="true"></span>上次测试：{{formatTime .ServerConnectionTest.CompletedAt}} {{.ServerConnectionTest.ShortStatusText}}
+</div>
+{{end}}
+{{end}}

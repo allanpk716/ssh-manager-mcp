@@ -88,72 +88,78 @@ const (
 // 为空串表示无法判定(见 Detect)。owner 的 CLI 诊断命令直接调它
 // (ADR 0003)。
 func ProbeServer(parent context.Context, st *store.Store, srv *models.Server) (models.ShellType, string, []string, error) {
-	return ProbeServerWithSource(parent, st, srv, store.CLISource())
+	dial, detected, evidence, err := ProbeServerWithDialResult(parent, st, srv, store.CLISource())
+	return detected, evidence, dial.ConnectionNotes, err
 }
 
-// ProbeServerWithSource 与 ProbeServer 相同；首次锚定审计使用指定来源。
-func ProbeServerWithSource(
+// ProbeServerWithDialResult 与 ProbeServer 相同，并把统一拨号入口的结构化
+// 结果一并返回；首次锚定审计使用指定来源。
+func ProbeServerWithDialResult(
 	parent context.Context, st *store.Store, srv *models.Server, source store.WriteSource,
-) (models.ShellType, string, []string, error) {
+) (sshbroker.ServerDialResult, models.ShellType, string, error) {
+	dial := sshbroker.ServerDialResult{}
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("resolve credential: %w", err)
+		return dial, "", "", fmt.Errorf("resolve credential: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
 	defer cancel()
 	dialSource := dialplan.NewStoreSource(st, "")
-	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, dial, err := sshbroker.ConnectServerEntryWithResult(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: st, HostKeyWriteSource: source,
 		SuccessCache: dialSource,
 		Topology:     dialSource,
 	})
 	if err != nil {
-		return "", "", connectionNotes, fmt.Errorf("connect: %w", err)
+		return dial, "", "", fmt.Errorf("connect: %w", err)
 	}
 	defer cli.Close()
 	osRes, err := cli.Exec(ctx, CmdOSExpand, probeExecTimeout, probeMaxBytes)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("run %q: %w", CmdOSExpand, err)
+		return dial, "", "", fmt.Errorf("run %q: %w", CmdOSExpand, err)
 	}
 	if osRes.TimedOut {
-		return "", "", nil, fmt.Errorf("probe command %q timed out", CmdOSExpand)
+		return dial, "", "", fmt.Errorf("probe command %q timed out", CmdOSExpand)
 	}
 	psRes, err := cli.Exec(ctx, CmdPSVar, probeExecTimeout, probeMaxBytes)
 	if err != nil {
-		return "", "", nil, fmt.Errorf("run %q: %w", CmdPSVar, err)
+		return dial, "", "", fmt.Errorf("run %q: %w", CmdPSVar, err)
 	}
 	if psRes.TimedOut {
-		return "", "", nil, fmt.Errorf("probe command %q timed out", CmdPSVar)
+		return dial, "", "", fmt.Errorf("probe command %q timed out", CmdPSVar)
 	}
 	detected, evidence := Detect(Probes{OSExpand: osRes.Stdout, PSVar: psRes.Stdout})
-	return detected, evidence, connectionNotes, nil
+	return dial, detected, evidence, nil
 }
 
 // ConnectServer 只建立按服务器条目的 SSH 连接并立即关闭，供不需要探测
 // shell 的调用方复用同一条统一拨号、首次锚定与连接说明路径。
 func ConnectServer(parent context.Context, st *store.Store, srv *models.Server) ([]string, error) {
-	return ConnectServerWithSource(parent, st, srv, store.CLISource())
+	dial, err := ConnectServerWithDialResult(parent, st, srv, store.CLISource())
+	return dial.ConnectionNotes, err
 }
 
-// ConnectServerWithSource 与 ConnectServer 相同；首次锚定审计使用指定来源。
-func ConnectServerWithSource(
+// ConnectServerWithDialResult 与 ConnectServer 相同，并返回统一拨号入口的
+// 结构化结果；首次锚定审计使用指定来源。
+func ConnectServerWithDialResult(
 	parent context.Context, st *store.Store, srv *models.Server, source store.WriteSource,
-) ([]string, error) {
+) (sshbroker.ServerDialResult, error) {
+	dial := sshbroker.ServerDialResult{}
 	auth, err := vault.AuthForServer(st, srv)
 	if err != nil {
-		return nil, fmt.Errorf("resolve credential: %w", err)
+		return dial, fmt.Errorf("resolve credential: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(parent, probeShellDeadline)
 	defer cancel()
 	dialSource := dialplan.NewStoreSource(st, "")
-	cli, connectionNotes, err := sshbroker.ConnectServerEntry(ctx, sshbroker.ServerDialRequest{
+	cli, dial, err := sshbroker.ConnectServerEntryWithResult(ctx, sshbroker.ServerDialRequest{
 		Server: srv, Auth: auth, HostKeys: st, HostKeyWriteSource: source,
 		SuccessCache: dialSource,
 		Topology:     dialSource,
 	})
 	if err != nil {
-		return connectionNotes, fmt.Errorf("connect: %w", err)
+		return dial, fmt.Errorf("connect: %w", err)
 	}
 	cli.Close()
-	return connectionNotes, nil
+	return dial, nil
 }

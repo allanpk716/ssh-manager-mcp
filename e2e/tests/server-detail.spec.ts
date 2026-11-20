@@ -1,6 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, gotoUIPath, startStandaloneUIWithTopology, test } from "../helpers";
+import {
+  expect,
+  gotoUIPath,
+  reserveFreePort,
+  startSilentSSHServer,
+  startStandaloneUIWithTopology,
+  startTestSSHServer,
+  test,
+} from "../helpers";
 
 const screenshotDirectory =
   "/Users/allan716/.cache/implement-spec-split/runs/ssh-manager-mcp-294-20261119-0809/impl-299/screenshots";
@@ -99,5 +107,162 @@ test("服务器详情四块可切换并走通地点、地址与机密项授权",
     await expect(page.getByText("已保存授权变更。")).toBeVisible();
   } finally {
     await ui.close();
+  }
+});
+
+const connectionTargetPath = "/ui/servers/connection-target?tab=connection";
+
+async function openConnectionTarget(
+  page: import("@playwright/test").Page,
+  ui: { startupURL: string },
+): Promise<void> {
+  await page.goto(ui.startupURL);
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
+  await gotoUIPath(page, connectionTargetPath);
+  await page.getByRole("heading", { name: "connection-target", exact: true }).waitFor();
+}
+
+async function usePrivateKey(
+  page: import("@playwright/test").Page,
+  host: string,
+  port: string,
+  privateKeyPath: string,
+): Promise<void> {
+  await page.getByRole("region", { name: "连接" }).getByRole("link", { name: "编辑" }).click();
+  await page.locator("#edit-host").fill(host);
+  await page.locator("#edit-port").fill(port);
+  await page.locator("#edit-credential").selectOption("key");
+  await page.locator("#edit-key-file").setInputFiles(privateKeyPath);
+  await page.getByRole("button", { name: "保存连接信息" }).click();
+  await page.getByRole("heading", { name: "connection-target", exact: true }).waitFor();
+}
+
+async function startInlineConnectionTest(page: import("@playwright/test").Page): Promise<void> {
+  const detailURL = page.url();
+  await page.getByRole("button", { name: "测试连接" }).click();
+  await expect(page).toHaveURL(detailURL);
+  await expect(page.getByText("正在连接…")).toBeVisible({ timeout: 5_000 });
+}
+
+async function assertCandidateToggle(page: import("@playwright/test").Page): Promise<void> {
+  const toggle = page.locator("[data-connection-test-candidates]");
+  await expect(page.getByRole("button", { name: "展开看每个候选地址的结果" })).toBeVisible();
+  const candidates = page.locator("#server-connection-test-candidates");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(candidates).toBeHidden();
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  await expect(candidates).toBeVisible();
+  await expect(candidates.locator(".connection-test-candidate").first()).toContainText("127.0.0.1");
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(candidates).toBeHidden();
+}
+
+test("服务器详情连接测试成功后原位显示并跨重启保存", async ({ page }) => {
+  const keyDirectory = "/tmp/sshmgr-connection-test-key";
+  await mkdir(keyDirectory, { recursive: true });
+  const sshd = await startTestSSHServer(path.join(keyDirectory, "success-key.pem"), {
+    handshakeDelayMilliseconds: 400,
+  });
+  const [, port] = sshd.address.split(":");
+  const ui = await startStandaloneUIWithTopology(undefined, Number(port));
+  try {
+    await openConnectionTarget(page, ui);
+    await usePrivateKey(page, "127.0.0.1", port, sshd.privateKeyPath);
+    await startInlineConnectionTest(page);
+
+    const success = page.locator(".connection-test-result.is-succeeded");
+    await expect(success).toContainText("✓");
+    await expect(success).toContainText("已连上 · 用的地址 127.0.0.1（连接测试局域网）· 耗时", {
+      timeout: 15_000,
+    });
+    await expect(success).toContainText(/耗时 \d+ 毫秒/);
+    await expect(page.locator("#server-last-test")).toContainText(/上次测试：.+ 已连上/);
+    await expect(page.getByText("服务器列表卡片上的显示")).toHaveCount(0);
+
+    const retestButton = page.getByRole("button", { name: "测试连接", exact: true });
+    await expect(retestButton).toBeVisible();
+    await expect(retestButton).toBeEnabled();
+    await startInlineConnectionTest(page);
+    await expect(
+      page.locator(".connection-test-result.is-succeeded"),
+    ).toContainText("已连上 · 用的地址 127.0.0.1（连接测试局域网）", { timeout: 15_000 });
+
+    const restartedURL = await ui.restart();
+    await page.goto(restartedURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, connectionTargetPath);
+    await expect(page.locator("#server-last-test")).toContainText(/上次测试：.+ 已连上/);
+    await expect(page.locator(".connection-test-result.is-succeeded")).toContainText(
+      "已连上 · 用的地址 127.0.0.1（连接测试局域网）",
+    );
+  } finally {
+    await ui.close();
+    await sshd.close();
+  }
+});
+
+test("服务器详情连接测试认证失败并展示候选地址", async ({ page }) => {
+  const keyDirectory = "/tmp/sshmgr-connection-test-auth-key";
+  await mkdir(keyDirectory, { recursive: true });
+  const sshd = await startTestSSHServer(path.join(keyDirectory, "auth-key.pem"), {
+    handshakeDelayMilliseconds: 400,
+  });
+  const [, port] = sshd.address.split(":");
+  const ui = await startStandaloneUIWithTopology(undefined, Number(port));
+  try {
+    await openConnectionTarget(page, ui);
+    await startInlineConnectionTest(page);
+    const failure = page.locator(".connection-test-result.is-failed");
+    await expect(failure).toContainText("✗");
+    await expect(failure).toContainText("连不上 · 认证失败", { timeout: 15_000 });
+    await assertCandidateToggle(page);
+    await expect(page.locator("body")).not.toContainText("browser-test-password");
+    await expect(page.locator("body")).not.toContainText("unable to authenticate");
+  } finally {
+    await ui.close();
+    await sshd.close();
+  }
+});
+
+test("服务器详情连接测试端口不通并展示候选地址", async ({ page }) => {
+  const port = await reserveFreePort();
+  const ui = await startStandaloneUIWithTopology(undefined, port);
+  try {
+    await openConnectionTarget(page, ui);
+    await page.getByRole("navigation", { name: "服务器详情分段" }).getByRole("link", { name: "地址与地点" }).click();
+    await page
+      .locator(".address-card-row", { hasText: "连接测试备用局域网" })
+      .getByRole("button", { name: "移除" })
+      .click();
+    await expect(page.getByText("已移除地址。")).toBeVisible();
+    await page.getByRole("navigation", { name: "服务器详情分段" }).getByRole("link", { name: "连接" }).click();
+    await startInlineConnectionTest(page);
+    const failure = page.locator(".connection-test-result.is-failed");
+    await expect(failure).toContainText("✗");
+    await expect(failure).toContainText("连不上 · 端口不通", { timeout: 15_000 });
+    await assertCandidateToggle(page);
+  } finally {
+    await ui.close();
+  }
+});
+
+test("服务器详情连接测试超时并展示候选地址", async ({ page }) => {
+  const silentServer = await startSilentSSHServer();
+  const port = Number(silentServer.address.split(":")[1]);
+  const ui = await startStandaloneUIWithTopology(undefined, port, {
+    SSHMGR_SSH_ADDRESS_TIMEOUT: "300ms",
+  });
+  try {
+    await openConnectionTarget(page, ui);
+    await startInlineConnectionTest(page);
+    const failure = page.locator(".connection-test-result.is-failed");
+    await expect(failure).toContainText("✗");
+    await expect(failure).toContainText("连不上 · 超时", { timeout: 15_000 });
+    await assertCandidateToggle(page);
+  } finally {
+    await ui.close();
+    await silentServer.close();
   }
 });

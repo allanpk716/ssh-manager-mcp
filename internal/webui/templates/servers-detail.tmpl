@@ -4,6 +4,9 @@
 <div class="subpage-header">
 <h1>{{.ServerDetail.Name}}</h1>
 <p class="detail-subtitle mono">{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</p>
+{{if .Caps.CanWrite}}<div id="server-last-test" class="server-last-test{{if .ServerDetail.ConnectionTest}}{{if .ServerDetail.ConnectionTest.Succeeded}} is-succeeded{{else}} is-failed{{end}}{{end}}">
+<span class="status-dot" aria-hidden="true"></span>{{if .ServerDetail.ConnectionTest}}上次测试：{{formatTime .ServerDetail.ConnectionTest.CompletedAt}} {{.ServerDetail.ConnectionTest.ShortStatusText}}{{else}}从未测试{{end}}
+</div>{{end}}
 </div>
 {{if .ServerDetailNotice}}<div class="notice notice-{{or .ServerDetailNoticeKind "error"}}"><p>{{.ServerDetailNotice}}</p></div>{{end}}
 <nav class="sticky-tabs" aria-label="服务器详情分段">
@@ -41,13 +44,18 @@
 </dl>
 <div class="button-row">
 {{if .Caps.CanWrite}}
-<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/test" class="inline-form">
+<a class="secondary-button" href="/ui/servers/{{.ServerDetail.ID}}?tab=connection&amp;edit=1">编辑</a>
+{{end}}
+</div>
+<div class="connection-test-area">
+<div id="server-connection-test-live" role="status" aria-live="polite">
+{{template "serverConnectionTestResult" .ServerDetail.ConnectionTest}}
+</div>
+{{if .Caps.CanWrite}}
+<form method="post" action="/ui/servers/{{.ServerDetail.ID}}/test" class="inline-form connection-test-form" hx-post="/ui/servers/{{.ServerDetail.ID}}/test" hx-target="#server-connection-test-live" hx-swap="innerHTML" hx-push-url="false">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit" class="primary-button">测试连接</button>
 </form>
-{{end}}
-{{if .Caps.CanWrite}}
-<a class="secondary-button" href="/ui/servers/{{.ServerDetail.ID}}?tab=connection&amp;edit=1">编辑</a>
 {{end}}
 </div>
 {{if not .Caps.CanWrite}}<p class="readonly-notice">仅显示本地快照，修改请到权威端。</p>{{end}}

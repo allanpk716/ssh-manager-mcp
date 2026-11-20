@@ -390,6 +390,17 @@
     event.detail.headers["X-CSRF-Token"] = token;
   });
   document.body.addEventListener("click", function (event) {
+    var candidateToggle = event.target.closest("[data-connection-test-candidates]");
+    if (candidateToggle !== null) {
+      var candidateList = document.getElementById(candidateToggle.getAttribute("aria-controls"));
+      var expanded = candidateToggle.getAttribute("aria-expanded") !== "true";
+      candidateToggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+      candidateToggle.textContent = expanded ? "收起每个候选地址的结果" : "展开看每个候选地址的结果";
+      if (candidateList !== null) {
+        candidateList.hidden = !expanded;
+      }
+      return;
+    }
     var button = event.target.closest("[data-copy-target]");
     if (button === null) {
       return;

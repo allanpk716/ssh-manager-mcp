@@ -2,10 +2,13 @@ package webui
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // serverDetailTopologyFixture 返回带多级地点、两个网络成员与同机另一个账
@@ -400,35 +403,89 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 	}
 }
 
-// TestServerDetailTestConnectionStartsTask 校验详情页测试连接启动任务并进
-// 入独立结果页。
+// TestServerDetailTestConnectionStartsTask 校验详情页测试连接启动任务后原
+// 位轮询：局部请求不跳转，成功片段展示结构化结果并同步页头上次测试。
 func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 	tester := &stubServerConnectionTester{}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{}, tester: tester,
 		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
 	})
-	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/test", url.Values{})
-	if response.StatusCode != http.StatusSeeOther {
-		t.Fatalf("测试连接状态码 = %d，应为 303", response.StatusCode)
+	initial := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	if !strings.Contains(initial, `id="server-connection-test-live"`) ||
+		!strings.Contains(initial, `aria-live="polite"`) || !strings.Contains(initial, "从未测试") {
+		t.Fatalf("详情页应有稳定的连接测试动态结果区：\n%s", initial)
 	}
-	location := response.Header.Get("Location")
-	if !strings.HasPrefix(location, "/ui/servers/new/result?server=srv-fine") ||
-		!strings.Contains(location, "source=detail") {
-		t.Fatalf("测试连接跳转地址 = %q", location)
+	liveStart := strings.Index(initial, `id="server-connection-test-live"`)
+	formStart := strings.Index(initial, `action="/ui/servers/srv-fine/test"`)
+	if liveStart < 0 || formStart < 0 || !strings.Contains(initial[liveStart:formStart], "</div>") {
+		t.Fatalf("测试连接表单应在动态结果区域外，完成后不得被局部替换删除：\n%s", initial)
+	}
+	csrf := serversCSRF(t, handler, cookie)
+	request := httptest.NewRequest(http.MethodPost, "/ui/servers/srv-fine/test", strings.NewReader(url.Values{
+		"csrf_token": {csrf},
+	}.Encode()))
+	request.Host = "127.0.0.1:18080"
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://127.0.0.1:18080")
+	request.Header.Set("HX-Request", "true")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	response := recorder.Result()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Location") != "" {
+		t.Fatalf("局部测试连接不应跳转，状态码=%d 跳转=%q", response.StatusCode, response.Header.Get("Location"))
+	}
+	running := readResponseBody(t, response)
+	for _, want := range []string{
+		`id="server-connection-test-result"`, "正在连接…",
+		`hx-get="/ui/servers/srv-fine/test?task=task-1"`,
+	} {
+		if !strings.Contains(running, want) {
+			t.Fatalf("进行中连接测试片段缺少 %q：\n%s", want, running)
+		}
 	}
 	if len(tester.starts) != 1 || tester.starts[0].serverID != "srv-fine" {
 		t.Fatalf("测试连接应启动 srv-fine 任务，实际 %v", tester.starts)
 	}
 
+	runningPoll := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	runningPoll.Host = "127.0.0.1:18080"
+	runningPoll.Header.Set("HX-Request", "true")
+	runningPoll.AddCookie(cookie)
+	runningPollRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(runningPollRecorder, runningPoll)
+	runningPollResponse := runningPollRecorder.Result()
+	runningPollBody := readResponseBody(t, runningPollResponse)
+	if runningPollResponse.StatusCode != http.StatusNoContent || runningPollBody != "" {
+		t.Fatalf("进行中轮询应返回 204 且不改写无障碍动态提醒区域，状态码=%d 响应=%q",
+			runningPollResponse.StatusCode, runningPollBody)
+	}
+
 	tester.status = &ServerConnectionTestStatus{
 		ID: "task-1", State: ServerConnectionTestSucceeded, ServerID: "srv-fine",
 		HandshakeAddress: "192.0.2.10:22",
+		Result: &ServerConnectionTestResultView{
+			State: ServerConnectionTestSucceeded, Succeeded: true,
+			CompletedAt: time.Unix(1_782_000_000, 0), SuccessAddress: "192.0.2.10",
+			SuccessNetworkName: "办公网", Duration: 42 * time.Millisecond,
+			Persisted: true,
+			Attempts: []ServerConnectionTestAttemptView{{
+				NetworkName: "办公网", Address: "192.0.2.10", OK: true,
+				Duration: 40 * time.Millisecond,
+			}},
+		},
 	}
-	page := serversGet(t, handler, cookie, location)
+	poll := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	poll.Host = "127.0.0.1:18080"
+	poll.Header.Set("HX-Request", "true")
+	poll.AddCookie(cookie)
+	pollRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(pollRecorder, poll)
+	page := readResponseBody(t, pollRecorder.Result())
 	for _, want := range []string{
-		"连接测试完成", "走的网络", "办公网", "地址", "192.0.2.10:22",
-		`href="/ui/servers/srv-fine?tab=connection"`, "返回服务器详情",
+		"已连上 · 用的地址 192.0.2.10（办公网）· 耗时 42 毫秒",
+		"上次测试：", "已连上", `id="server-last-test"`, `hx-swap-oob="true"`,
 	} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("详情页连接测试结果缺少 %q：\n%s", want, page)
@@ -436,6 +493,106 @@ func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 	}
 	if strings.Contains(page, "已保存，") || strings.Contains(page, "服务器条目已保存") {
 		t.Fatalf("详情页连接测试结果不得沿用新增结果页的已保存文案：\n%s", page)
+	}
+}
+
+// TestServerDetailConnectionTestFailureFragmentCoversCandidates 校验失败结
+// 果只显示白话分类，候选地址默认收起，其他地址使用固定页面指称。
+func TestServerDetailConnectionTestFailureFragmentCoversCandidates(t *testing.T) {
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-fine",
+		Result: &ServerConnectionTestResultView{
+			State: ServerConnectionTestFailed, FailureLabel: "端口不通",
+			Hint: "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
+			Attempts: []ServerConnectionTestAttemptView{{
+				Address: "192.0.2.10", Source: models.DialAddressSourceFallback,
+				FailureLabel: "端口不通", Duration: 23 * time.Millisecond,
+			}},
+		},
+	}}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{}, tester: tester,
+		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	request.Host = "127.0.0.1:18080"
+	request.Header.Set("HX-Request", "true")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	page := readResponseBody(t, recorder.Result())
+	for _, want := range []string{
+		"连不上", "端口不通", `aria-expanded="false"`, "展开看每个候选地址的结果",
+		"请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
+		"其他（公网或未登记网络）", "192.0.2.10", "耗时 23 毫秒",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("失败连接测试片段缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "connection refused") || strings.Contains(page, "login-secret") {
+		t.Fatalf("失败连接测试片段不得显示底层错误或凭据：\n%s", page)
+	}
+	if !strings.Contains(page, `hidden`) {
+		t.Fatalf("候选地址默认应收起：\n%s", page)
+	}
+}
+
+// TestServerDetailConnectionTestFragmentWithoutPersistedResult 校验没有持久
+// 结果时页头带外更新不渲染零值时间，原有「上次测试」显示保持不变。
+func TestServerDetailConnectionTestFragmentWithoutPersistedResult(t *testing.T) {
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-fine",
+		Result: &ServerConnectionTestResultView{
+			State: ServerConnectionTestFailed, FailureLabel: "其他连接失败",
+		},
+	}}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{}, tester: tester,
+	})
+	request := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	request.Host = "127.0.0.1:18080"
+	request.Header.Set("HX-Request", "true")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	page := readResponseBody(t, recorder.Result())
+	for _, want := range []string{"连不上", "其他连接失败"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("未持久化的失败片段缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, `id="server-last-test"`) ||
+		strings.Contains(page, "上次测试：0001-01-01") || strings.Contains(page, "hx-swap-oob") {
+		t.Fatalf("没有持久结果时不得带外更新页头为零值时间：\n%s", page)
+	}
+}
+
+// TestServerDetailShowsPersistedConnectionTestResult 校验详情页页头与连接
+// 卡片都能回显加密库里最近一次完成结果。
+func TestServerDetailShowsPersistedConnectionTestResult(t *testing.T) {
+	store := newServerDetailTestStore()
+	detail := store.details["srv-fine"]
+	detail.ConnectionTest = NewServerConnectionTestResultView(models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_000, 0), Succeeded: true,
+		SuccessAddress: "192.0.2.10", SuccessNetworkName: "办公网", Duration: 42 * time.Millisecond,
+		Attempts: []models.ServerConnectionTestAttempt{{
+			NetworkName: "办公网", Address: "192.0.2.10", OK: true, Duration: 40 * time.Millisecond,
+		}},
+	})
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: store, writer: &stubServerWriter{},
+	})
+	page := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		`id="server-last-test"`, "上次测试：", "已连上", "已连上 · 用的地址 192.0.2.10（办公网）· 耗时 42 毫秒",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("持久连接测试结果回显缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "服务器列表卡片上的显示") {
+		t.Fatalf("详情页不得带原型中仅作演示的列表卡片区块：\n%s", page)
 	}
 }
 

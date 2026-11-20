@@ -1,6 +1,15 @@
+import { mkdir } from "node:fs/promises";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { expect, openStandaloneUI, startStandaloneUI, test } from "../helpers";
+import {
+  expect,
+  gotoUIPath,
+  openStandaloneUI,
+  startStandaloneUI,
+  startStandaloneUIWithTopology,
+  startTestSSHServer,
+  test,
+} from "../helpers";
 
 // serverCard 定位某一台服务器所在的卡片，再在卡片内找链接，避免同名链接
 // 互相干扰。
@@ -11,6 +20,35 @@ function serverCard(page: import("@playwright/test").Page, name: string) {
 async function filterAttentionOnly(page: import("@playwright/test").Page) {
   await page.getByLabel("只看需要注意").check();
   await page.getByRole("button", { name: "应用筛选" }).click();
+}
+
+// connectionTargetCard 定位连接测试专用条目所在的列表卡片。
+function connectionTargetCard(page: import("@playwright/test").Page) {
+  return serverCard(page, "connection-target");
+}
+
+// usePrivateKey 把连接测试专用条目改成私钥登录，指向本次启动的 SSH 测试
+// 服务。
+async function usePrivateKey(
+  page: import("@playwright/test").Page,
+  port: string,
+  privateKeyPath: string,
+): Promise<void> {
+  await page.getByRole("region", { name: "连接" }).getByRole("link", { name: "编辑" }).click();
+  await page.locator("#edit-host").fill("127.0.0.1");
+  await page.locator("#edit-port").fill(port);
+  await page.locator("#edit-credential").selectOption("key");
+  await page.locator("#edit-key-file").setInputFiles(privateKeyPath);
+  await page.getByRole("button", { name: "保存连接信息" }).click();
+  await page.getByRole("heading", { name: "connection-target", exact: true }).waitFor();
+}
+
+// assertListStatusFitsMobileViewport 断言手机宽度下列表没有横向溢出。
+async function assertListStatusFitsMobileViewport(page: import("@playwright/test").Page) {
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
 }
 
 test("过滤需要注意的服务器并编辑补齐角色", async ({ page, standaloneUI }) => {
@@ -30,6 +68,62 @@ test("过滤需要注意的服务器并编辑补齐角色", async ({ page, stand
   await page.getByRole("link", { name: "返回服务器列表" }).click();
   await filterAttentionOnly(page);
   await expect(serverCard(page, "db-1")).toHaveCount(0);
+});
+
+test("列表卡片显示最近一次连接测试结果并跨重启保留", async ({ page }) => {
+  const keyDirectory = "/tmp/sshmgr-servers-list-connection-key";
+  await mkdir(keyDirectory, { recursive: true });
+  const sshd = await startTestSSHServer(path.join(keyDirectory, "success-key.pem"), {
+    handshakeDelayMilliseconds: 400,
+  });
+  const [, port] = sshd.address.split(":");
+  const ui = await startStandaloneUIWithTopology(undefined, Number(port));
+  try {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(ui.startupURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, "/ui/servers/");
+
+    const card = connectionTargetCard(page);
+    await expect(card.locator(".server-test-line.is-untested")).toContainText("从未测试");
+    await expect(page.locator(".server-test-line.is-untested").first()).toContainText("从未测试");
+    await assertListStatusFitsMobileViewport(page);
+
+    await card.getByRole("link", { name: "详情" }).click();
+    await page.getByRole("heading", { name: "connection-target", exact: true }).waitFor();
+    await usePrivateKey(page, port, sshd.privateKeyPath);
+    await page.getByRole("button", { name: "测试连接" }).click();
+    await expect(page.locator(".connection-test-result.is-succeeded")).toContainText(
+      "已连上 · 用的地址 127.0.0.1（连接测试局域网）",
+      { timeout: 15_000 },
+    );
+
+    await page.getByRole("link", { name: "返回服务器列表" }).click();
+    await page.getByRole("heading", { name: /^服务器/ }).first().waitFor();
+    const success = card.locator(".server-test-line.is-succeeded");
+    await expect(success).toContainText(/已连上/);
+    await expect(success).toContainText("127.0.0.1");
+    await expect(success).toContainText("连接测试局域网");
+    await expect(success).toContainText(/耗时 \d+ 毫秒/);
+    await expect(card.locator(".server-test-line.is-untested")).toHaveCount(0);
+    await expect(page.locator(".connection-test-candidate-list")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "批量测试连接" })).toHaveCount(0);
+    await assertListStatusFitsMobileViewport(page);
+
+    const restartedURL = await ui.restart();
+    await page.goto(restartedURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, "/ui/servers/");
+    await expect(connectionTargetCard(page).locator(".server-test-line.is-succeeded")).toContainText(
+      "已连上",
+    );
+    await expect(
+      connectionTargetCard(page).locator(".server-test-line.is-succeeded"),
+    ).toContainText("127.0.0.1");
+  } finally {
+    await ui.close();
+    await sshd.close();
+  }
 });
 
 test("删除前查看影响预览并一次确认", async ({ page, standaloneUI }) => {

@@ -1,14 +1,24 @@
 import { mkdtempSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { expect, openStandaloneUI, startStandaloneUIWithTopology, startTestSSHServer, test } from "../helpers";
+import {
+  expect,
+  gotoUIPath,
+  openStandaloneUI,
+  reserveFreePort,
+  startStandaloneUIWithTopology,
+  startTestSSHServer,
+  test,
+} from "../helpers";
 
 const screenshotDir = "/Users/allan716/.cache/implement-spec-split/runs/ssh-manager-mcp-294-20261119-0809/impl-298/screenshots";
 
 test("手机分步新增服务器并上传私钥", async ({ page, isMobile }, testInfo) => {
   testInfo.skip(!isMobile, "这个用例按 390 视口验证手机流程");
   const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-server-add-"));
-  const sshd = await startTestSSHServer(path.join(runDir, "test-key.pem"));
+  const sshd = await startTestSSHServer(path.join(runDir, "test-key.pem"), {
+    handshakeDelayMilliseconds: 400,
+  });
   const ui = await startStandaloneUIWithTopology();
   try {
     await openStandaloneUI(page, ui);
@@ -26,8 +36,13 @@ test("手机分步新增服务器并上传私钥", async ({ page, isMobile }, te
     await page.screenshot({ path: `${screenshotDir}/mobile-server-step-1.png`, fullPage: true });
 
     await page.getByRole("button", { name: "测试连接并下一步" }).click();
+    await expect(page.locator(".connection-test-result.is-running")).toContainText("正在连接…");
     await expect(page.getByRole("heading", { name: "连接测试完成" })).toBeVisible({ timeout: 20_000 });
     await expect(page.getByText(/首次连接已记录主机密钥锚|主机密钥指纹/)).toBeVisible();
+    await expect(page.locator(".connection-test-result.is-succeeded")).toContainText(
+      `已连上 · 用的地址 ${host}（其他（公网或未登记网络））· 耗时`,
+    );
+    await expect(page.locator(".connection-test-result.is-succeeded")).toContainText(/耗时 \d+ 毫秒/);
     await page.screenshot({ path: `${screenshotDir}/mobile-server-connection-test.png`, fullPage: true });
     await page.getByRole("link", { name: "继续选择地点" }).click();
 
@@ -40,11 +55,50 @@ test("手机分步新增服务器并上传私钥", async ({ page, isMobile }, te
     await page.getByRole("button", { name: "完成新增" }).click();
 
     await expect(page.getByRole("heading", { name: /已保存，连接测试完成/ })).toBeVisible();
-    await expect(page.getByText("已验证")).toBeVisible();
+    await expect(page.getByText("已连上")).toBeVisible();
     await page.screenshot({ path: `${screenshotDir}/mobile-server-result.png`, fullPage: true });
+
+    // 向导测试完成后无需重测：详情页直接读出最近一次持久化结果。
+    await gotoUIPath(page, "/ui/servers/mobile-key-server?tab=connection");
+    await page.getByRole("heading", { name: "mobile-key-server", exact: true }).waitFor();
+    await expect(page.locator("#server-last-test")).toContainText(/上次测试：.+ 已连上/);
+    await expect(page.locator(".connection-test-result.is-succeeded")).toContainText(
+      `已连上 · 用的地址 ${host}`,
+    );
   } finally {
     await ui.close();
     await sshd.close();
+  }
+});
+
+test("新增向导端口不通显示共享失败结果", async ({ page }) => {
+  const port = await reserveFreePort();
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openStandaloneUI(page, ui);
+    await page.getByRole("link", { name: "新增服务器" }).click();
+    await page.getByLabel("名称", { exact: true }).fill("wizard-port-unreachable");
+    await page.getByLabel("用户", { exact: true }).fill("deploy");
+    await page.getByLabel("端口", { exact: true }).fill(String(port));
+    await page.getByRole("radio", { name: "密码" }).check();
+    await page.locator("#wizard-password").fill("browser-test-password");
+    await page.locator(".address-row select").selectOption("other");
+    await page.locator(".address-row input[name='address']").fill("127.0.0.1");
+    await page.getByRole("button", { name: "测试连接并下一步" }).click();
+
+    const failure = page.locator(".connection-test-result.is-failed");
+    await expect(failure).toContainText("✗", { timeout: 15_000 });
+    await expect(failure).toContainText("连不上 · 端口不通");
+    const toggle = page.locator("[data-connection-test-candidates]");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await toggle.click();
+    const candidates = page.locator("#server-connection-test-candidates");
+    await expect(candidates).toBeVisible();
+    await expect(candidates.locator(".connection-test-candidate").first()).toContainText("127.0.0.1");
+    await expect(page.getByRole("link", { name: "返回修改连接信息" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "继续选择地点" })).toHaveCount(0);
+  } finally {
+    await ui.close();
   }
 });
 

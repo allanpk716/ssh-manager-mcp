@@ -109,11 +109,15 @@ func ListEntries(manager *servermanage.Manager, attentionOnly bool) ([]webui.Ser
 	}
 	rows := make([]webui.ServerListEntry, 0, len(items))
 	for _, item := range items {
-		rows = append(rows, webui.ServerListEntry{
+		row := webui.ServerListEntry{
 			ID: item.Server.ID, Name: item.Server.Name, User: item.Server.User,
 			Host: item.Server.Host, Port: item.Server.Port,
 			AttentionReasons: item.AttentionReasons,
-		})
+		}
+		if item.ConnectionTest != nil {
+			row.ConnectionTest = webui.NewServerConnectionTestResultView(*item.ConnectionTest)
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -196,6 +200,9 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 			HandshakeAddr: detail.HostKeyAnchor.HandshakeAddr,
 			PinnedAt:      time.Unix(detail.HostKeyAnchor.CreatedAt, 0),
 		}
+	}
+	if detail.ConnectionTest != nil {
+		view.ConnectionTest = webui.NewServerConnectionTestResultView(*detail.ConnectionTest)
 	}
 	for _, record := range detail.DeliveryRecords {
 		view.DeliveryRecords = append(view.DeliveryRecords, deliveryRecordRow(record))
