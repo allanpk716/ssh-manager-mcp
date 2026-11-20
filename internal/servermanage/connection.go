@@ -2,10 +2,13 @@ package servermanage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/shellprobe"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -19,12 +22,16 @@ type ConnectionTestRequest struct {
 // ConnectionTestResult 是连接测试给页面与任务层的结果。主机密钥指纹不是登
 // 录秘密，可以展示；登录凭据与提权口令绝不进入这里的任何字段。
 type ConnectionTestResult struct {
+	models.ServerConnectionTestResult
 	ConnectionNotes   []string
 	ShellDetected     models.ShellType
 	ShellEvidence     string
 	AnchorFingerprint string
 	AnchorResult      string
 	HandshakeAddress  string
+	// Persisted 表示这份完成结果已经写入加密库。提前退出或保存失败时为
+	// 假，页面不得把它当作「上次测试」事实更新页头。
+	Persisted bool
 }
 
 // TestConnection 按服务器条目统一拨号入口测试连接，首次连接沿用首次信任规
@@ -48,22 +55,35 @@ func (m *Manager) TestConnection(
 
 	var detected models.ShellType
 	var evidence string
-	var notes []string
+	var dial sshbroker.ServerDialResult
+	var dialErr error
 	writeSource := storeWriteSource(req.Source)
 	if req.ProbeShell {
-		detected, evidence, notes, err = shellprobe.ProbeServerWithSource(ctx, m.st, srv, writeSource)
+		dial, detected, evidence, dialErr = shellprobe.ProbeServerWithDialResult(ctx, m.st, srv, writeSource)
 	} else {
-		notes, err = shellprobe.ConnectServerWithSource(ctx, m.st, srv, writeSource)
+		dial, dialErr = shellprobe.ConnectServerWithDialResult(ctx, m.st, srv, writeSource)
 	}
 	result := &ConnectionTestResult{
-		ConnectionNotes: notes,
-		ShellDetected:   detected,
-		ShellEvidence:   evidence,
+		ServerConnectionTestResult: connectionTestStorageResult(dial, time.Now(), dialErr),
+		ConnectionNotes:            dial.ConnectionNotes,
+		ShellDetected:              detected,
+		ShellEvidence:              evidence,
 	}
-	if err != nil {
+	if dialErr != nil {
+		result.FailureReason = overallConnectionFailureReason(dial, dialErr)
+		if !errors.Is(dialErr, context.Canceled) {
+			if persistErr := m.saveConnectionTestResult(
+				srv.ID, result.ServerConnectionTestResult, dialErr,
+			); persistErr != nil {
+				return result, persistErr
+			}
+			result.Persisted = true
+		}
 		m.applyAnchorFacts(result, srv.ID)
-		_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
-		return result, err
+		_ = m.writeConnectionTestAudit(
+			req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), dialErr,
+		)
+		return result, dialErr
 	}
 
 	if req.ProbeShell && detected != "" && detected != srv.ShellType {
@@ -73,13 +93,31 @@ func (m *Manager) TestConnection(
 			Shell: &detectedText,
 		}, req.Source); err != nil {
 			m.applyAnchorFacts(result, srv.ID)
-			_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
+			result.Succeeded = false
+			result.FailureReason = models.ConnectionTestFailureConnectedSaveFailed
+			if persistErr := m.saveConnectionTestResult(
+				srv.ID, result.ServerConnectionTestResult, err,
+			); persistErr != nil {
+				return result, persistErr
+			}
+			result.Persisted = true
+			_ = m.writeConnectionTestAudit(
+				req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err,
+			)
 			return result, err
 		}
 	}
 
 	after, err := m.st.GetEntryPinMeta(srv.ID)
 	if err != nil {
+		result.Succeeded = false
+		result.FailureReason = models.ConnectionTestFailureConnectedSaveFailed
+		if persistErr := m.saveConnectionTestResult(
+			srv.ID, result.ServerConnectionTestResult, err,
+		); persistErr != nil {
+			return result, persistErr
+		}
+		result.Persisted = true
 		_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", "", string(detected), err)
 		return result, err
 	}
@@ -92,10 +130,64 @@ func (m *Manager) TestConnection(
 			result.AnchorResult = "已按现有主机密钥锚完成校验"
 		}
 	}
-	if err := m.writeConnectionTestAudit(req.Source, srv.Name, "ok", result.AnchorFingerprint, string(detected), nil); err != nil {
+	if err := m.saveConnectionTestResult(srv.ID, result.ServerConnectionTestResult, nil); err != nil {
+		return result, err
+	}
+	result.Persisted = true
+	if err := m.writeConnectionTestAudit(
+		req.Source, srv.Name, "ok", result.AnchorFingerprint, string(detected), nil,
+	); err != nil {
 		return result, err
 	}
 	return result, nil
+}
+
+// saveConnectionTestResult 保存最近一次连接测试结果；保存失败时把原因错误
+// 与保存错误组合返回，既保留调用方错误分类，也不丢保存失败事实。
+func (m *Manager) saveConnectionTestResult(
+	serverID string, result models.ServerConnectionTestResult, cause error,
+) error {
+	err := m.st.SaveServerConnectionTestResult(serverID, result)
+	if err == nil {
+		return nil
+	}
+	if cause == nil {
+		return fmt.Errorf("保存最近一次连接测试结果失败：%w", err)
+	}
+	return fmt.Errorf("%w；保存最近一次连接测试结果失败：%v", cause, err)
+}
+
+func connectionTestStorageResult(
+	dial sshbroker.ServerDialResult, completedAt time.Time, dialErr error,
+) models.ServerConnectionTestResult {
+	return models.ServerConnectionTestResult{
+		CompletedAt: completedAt, Succeeded: dialErr == nil, Attempts: dial.Attempts,
+		Hint:           dial.Hint,
+		SuccessAddress: dial.SuccessAddress, SuccessNetworkName: dial.SuccessNetworkName,
+		SuccessSource: dial.SuccessSource,
+		Duration:      dial.Duration,
+	}
+}
+
+func overallConnectionFailureReason(
+	dial sshbroker.ServerDialResult, err error,
+) models.ConnectionTestFailureReason {
+	priority := []models.ConnectionTestFailureReason{
+		models.ConnectionTestFailureHostKeyMismatch,
+		models.ConnectionTestFailureAuthentication,
+		models.ConnectionTestFailureTimeout,
+		models.ConnectionTestFailurePortUnreachable,
+	}
+	found := map[models.ConnectionTestFailureReason]bool{}
+	for _, attempt := range dial.Attempts {
+		found[attempt.FailureReason] = true
+	}
+	for _, reason := range priority {
+		if found[reason] {
+			return reason
+		}
+	}
+	return models.ConnectionTestFailureOther
 }
 
 // applyAnchorFacts 只补充失败结果仍可确认的锚事实；锚定结论只在连接测试成

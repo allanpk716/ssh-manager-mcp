@@ -51,6 +51,25 @@ type serverWizardView struct {
 	ReverifyPath     string
 }
 
+// ConnectionTestResult 返回共享结果片段使用的页面数据。新增向导的进行中
+// 轮询由外层页面区域负责，这里不设置片段自己的轮询地址，避免同一页出现
+// 两套请求。
+func (v *serverWizardView) ConnectionTestResult() *ServerConnectionTestResultView {
+	if v.ConnectionTest == nil {
+		return nil
+	}
+	if v.ConnectionTest.Result != nil {
+		return v.ConnectionTest.Result
+	}
+	result := &ServerConnectionTestResultView{State: v.ConnectionTest.State}
+	if v.ConnectionTest.State == ServerConnectionTestSucceeded {
+		result.Succeeded = true
+		return result
+	}
+	result.FailureLabel = firstNonEmpty(v.ConnectionTest.Message, "其他连接失败")
+	return result
+}
+
 func (h *handler) handleServerWizardStartGet(w http.ResponseWriter, r *http.Request) {
 	if sess := h.currentSession(r); sess != nil {
 		h.setServerAddDraft(sess, nil)

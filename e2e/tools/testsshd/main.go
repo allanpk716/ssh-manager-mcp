@@ -13,7 +13,9 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -71,12 +73,20 @@ func run(keyPath string) error {
 		_ = listener.Close()
 	}()
 	watchStandardInputClose(listener)
+	handshakeDelay := time.Duration(0)
+	if delayText := os.Getenv("SSHMGR_E2E_TEST_SSHD_DELAY_MS"); delayText != "" {
+		delayMilliseconds, err := strconv.Atoi(delayText)
+		if err != nil || delayMilliseconds < 0 {
+			return fmt.Errorf("SSHMGR_E2E_TEST_SSHD_DELAY_MS 必须是非负整数毫秒数")
+		}
+		handshakeDelay = time.Duration(delayMilliseconds) * time.Millisecond
+	}
 	for {
 		connection, err := listener.Accept()
 		if err != nil {
 			return nil
 		}
-		go serve(connection, configuration)
+		go serve(connection, configuration, handshakeDelay)
 	}
 }
 
@@ -95,8 +105,11 @@ func watchStandardInputClose(listener net.Listener) {
 	}()
 }
 
-func serve(connection net.Conn, configuration *ssh.ServerConfig) {
+func serve(connection net.Conn, configuration *ssh.ServerConfig, handshakeDelay time.Duration) {
 	defer connection.Close()
+	if handshakeDelay > 0 {
+		time.Sleep(handshakeDelay)
+	}
 	server, channels, requests, err := ssh.NewServerConn(connection, configuration)
 	if err != nil {
 		return

@@ -452,11 +452,23 @@ func TestServersListFilterAndDetail(t *testing.T) {
 // 情，写路由不存在。
 func TestServersClientRoleHasNoWriteRoutes(t *testing.T) {
 	store := newStubServerStore()
+	store.rows[0].ConnectionTest = &ServerConnectionTestResultView{
+		State: ServerConnectionTestSucceeded, Succeeded: true,
+		CompletedAt: time.Unix(1_782_000_000, 0),
+	}
+	store.details["srv-fine"].ConnectionTest = &ServerConnectionTestResultView{
+		State: ServerConnectionTestSucceeded, Succeeded: true,
+		CompletedAt: time.Unix(1_782_000_000, 0),
+	}
 	h, cookie := newServersTestHandler(t, RoleClient, store, nil)
 
 	list := serversGet(t, h, cookie, "/ui/servers/?attention=1")
 	if !strings.Contains(list, "bare") || strings.Contains(list, "编辑") || strings.Contains(list, "删除") || strings.Contains(list, "导入") {
 		t.Fatalf("客户端列表不应出现写入口：\n%s", list)
+	}
+	if strings.Contains(list, "server-test-line") || strings.Contains(list, "data-server-connection-status") ||
+		strings.Contains(list, "从未测试") || strings.Contains(list, "已连上") {
+		t.Fatalf("客户端列表卡片不应显示来自客户端快照的连接测试状态行：\n%s", list)
 	}
 	detail := serversGet(t, h, cookie, "/ui/servers/srv-fine")
 	if !strings.Contains(detail, "fine") {
@@ -464,6 +476,9 @@ func TestServersClientRoleHasNoWriteRoutes(t *testing.T) {
 	}
 	if strings.Contains(detail, "编辑") || strings.Contains(detail, "删除") {
 		t.Fatalf("客户端详情不应出现写入口：\n%s", detail)
+	}
+	if strings.Contains(detail, `id="server-last-test"`) || strings.Contains(detail, "从未测试") {
+		t.Fatalf("客户端详情页头不应显示来自客户端快照的上次测试状态：\n%s", detail)
 	}
 	for _, target := range []string{"/ui/servers/srv-fine/edit", "/ui/servers/srv-fine/delete", "/ui/servers/import", "/ui/servers/complete"} {
 		if body, status := serversGetStatus(t, h, cookie, target); status != http.StatusNotFound {

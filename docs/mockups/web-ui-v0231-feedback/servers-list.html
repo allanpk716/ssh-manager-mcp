@@ -1,0 +1,1443 @@
+<!-- PROTOTYPE（抛弃式原型）：服务器列表 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f8">
+<title>服务器 · sshmgr 权威端</title>
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f8;
+    --card: #ffffff;
+    --primary: #2563eb;
+    --primary-strong: #1d4ed8;
+    --primary-soft: #eff6ff;
+    --text: #111827;
+    --muted: #6b7280;
+    --line: #e5e7eb;
+    --warning: #b45309;
+    --warning-soft: #fffbeb;
+    --warning-line: #f3d9a4;
+    --danger: #dc2626;
+    --danger-soft: #fef2f2;
+    --success: #059669;
+    --success-soft: #ecfdf5;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .06);
+  }
+
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.modal-open { overflow: hidden; }
+  button, input { font: inherit; }
+  button { color: inherit; }
+  button, a { -webkit-tap-highlight-color: transparent; }
+  button:focus-visible, a:focus-visible, input:focus-visible {
+    outline: 3px solid rgba(37, 99, 235, .25);
+    outline-offset: 2px;
+  }
+  button:disabled { cursor: not-allowed; opacity: .45; }
+  svg { display: block; flex: 0 0 auto; }
+
+  .page {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 20px 16px calc(102px + env(safe-area-inset-bottom));
+  }
+  .page.selecting { padding-bottom: calc(205px + env(safe-area-inset-bottom)); }
+
+  .title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+  }
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 30px;
+    font-weight: 700;
+    letter-spacing: -.02em;
+  }
+  .title-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 25px;
+    height: 24px;
+    margin-left: 6px;
+    padding: 0 7px;
+    border-radius: 8px;
+    background: #e9edf3;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 650;
+    vertical-align: 4px;
+  }
+  .primary-button, .secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 42px;
+    border: 0;
+    border-radius: 10px;
+    cursor: pointer;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+  .primary-button {
+    padding: 0 15px;
+    background: var(--primary);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, .2);
+  }
+  .primary-button:active { background: var(--primary-strong); }
+  .secondary-button {
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    background: var(--card);
+    color: #374151;
+    box-shadow: var(--shadow);
+    font-size: 14px;
+  }
+  .secondary-button.active {
+    border-color: #bfdbfe;
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+  .secondary-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .controls { margin-top: 18px; }
+  .search-box {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-height: 48px;
+    border: 1px solid #e2e5ea;
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+  }
+  .search-box > svg { margin-left: 14px; color: var(--muted); }
+  .search-box input {
+    width: 100%;
+    min-width: 0;
+    height: 46px;
+    padding: 0 44px 0 10px;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text);
+  }
+  .search-box input::placeholder { color: #9ca3af; }
+  .search-box:focus-within {
+    border-color: #93c5fd;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, .08);
+  }
+  .search-box input:focus-visible { outline: 0; }
+  .clear-search {
+    position: absolute;
+    right: 3px;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .filter-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 10px;
+  }
+  .filter-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    min-height: 44px;
+    padding: 0 11px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--card);
+    color: #4b5563;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    font-size: 14px;
+    text-align: left;
+  }
+  .filter-button strong {
+    min-width: 0;
+    overflow: hidden;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .filter-button.active {
+    border-color: #bfdbfe;
+    background: var(--primary-soft);
+    color: var(--primary);
+  }
+  .filter-button svg { color: #9ca3af; }
+  .filter-button.active svg { color: var(--primary); }
+
+  .active-filters {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 10px;
+    overflow-x: auto;
+    padding-bottom: 2px;
+    scrollbar-width: none;
+  }
+  .active-filters::-webkit-scrollbar { display: none; }
+  .active-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 8px 0 10px;
+    border: 1px solid #bfdbfe;
+    border-radius: 999px;
+    background: var(--primary-soft);
+    color: #1e40af;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .active-pill button {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: #2563eb;
+    cursor: pointer;
+  }
+  .clear-all {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .list-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 40px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+  .list-meta span:last-child { text-align: right; }
+  .server-list { display: grid; gap: 12px; }
+  .server-card {
+    position: relative;
+    display: flex;
+    min-width: 0;
+    padding: 15px;
+    border: 1px solid transparent;
+    border-radius: 12px;
+    background: var(--card);
+    box-shadow: var(--shadow);
+    transition: border-color .16s ease, background .16s ease;
+  }
+  .selection-mode .server-card { cursor: pointer; }
+  .server-card.selected {
+    border-color: #60a5fa;
+    background: #fafcff;
+    box-shadow: 0 0 0 1px rgba(37, 99, 235, .06), var(--shadow);
+  }
+  .server-card.pending-card { border-color: var(--warning-line); }
+  .check-control {
+    display: none;
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex: 0 0 42px;
+    width: 42px;
+    height: 42px;
+    margin: -4px 4px 0 -10px;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .selection-mode .check-control { display: flex; }
+  .check-circle {
+    display: grid;
+    place-items: center;
+    width: 23px;
+    height: 23px;
+    border: 1.5px solid #c3c9d2;
+    border-radius: 50%;
+    background: #fff;
+    color: transparent;
+  }
+  .selected .check-circle {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fff;
+  }
+  .card-content { flex: 1; min-width: 0; }
+  .card-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .server-name {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+    font-size: 17px;
+    line-height: 25px;
+    font-weight: 700;
+  }
+  .same-machine {
+    display: inline-flex;
+    align-items: center;
+    flex: 0 0 auto;
+    min-height: 24px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .address {
+    margin: 5px 0 0;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-size: 13px;
+    line-height: 20px;
+    overflow-wrap: anywhere;
+  }
+  .location-line {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .location-line svg { color: #9ca3af; }
+  .network-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .network-tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 23px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .network-tag.virtual { background: #eef2ff; color: #4338ca; }
+  .network-tag.other { background: #f9fafb; color: #6b7280; }
+  .network-kind { margin-left: 4px; opacity: .75; }
+  .test-line {
+    display: flex;
+    align-items: flex-start;
+    gap: 7px;
+    margin-top: 11px;
+    padding-top: 10px;
+    border-top: 1px solid #f0f1f3;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 20px;
+  }
+  .test-line.success { color: #047857; }
+  .test-line.fail { color: #b91c1c; }
+  .test-copy { min-width: 0; }
+  .test-title { display: block; font-weight: 650; }
+  .test-detail {
+    display: block;
+    margin-top: 1px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 18px;
+    overflow-wrap: anywhere;
+  }
+  .status-dot {
+    flex: 0 0 auto;
+    width: 9px;
+    height: 9px;
+    margin: 5px 0 0;
+    border-radius: 50%;
+    background: #9ca3af;
+  }
+  .success .status-dot { background: var(--success); }
+  .fail .status-dot { background: var(--danger); }
+  .spinner {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    margin: 2px 0 0;
+    border: 2px solid #bfdbfe;
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pending-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 9px;
+    margin-top: 10px;
+    padding: 8px 9px;
+    border: 1px solid var(--warning-line);
+    border-radius: 9px;
+    background: var(--warning-soft);
+    color: #92400e;
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .pending-box button {
+    flex: 0 0 auto;
+    min-height: 32px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 7px;
+    background: #d97706;
+    color: #fff;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .empty-state {
+    padding: 42px 20px;
+    border: 1px dashed #d6dae1;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, .55);
+    text-align: center;
+  }
+  .empty-state svg { margin: 0 auto 12px; color: #9ca3af; }
+  .empty-state h2 { margin: 0; font-size: 17px; }
+  .empty-state p { margin: 7px 0 16px; color: var(--muted); font-size: 13px; }
+  .text-button {
+    min-height: 42px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 10px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    cursor: pointer;
+    font-weight: 650;
+  }
+
+  .mobile-nav {
+    position: fixed;
+    z-index: 50;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    padding: 5px 4px calc(5px + env(safe-area-inset-bottom));
+    border-top: 1px solid rgba(229, 231, 235, .9);
+    background: rgba(255, 255, 255, .97);
+    box-shadow: 0 -1px 8px rgba(17, 24, 39, .035);
+    backdrop-filter: blur(14px);
+  }
+  .nav-link {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-height: 54px;
+    border-radius: 9px;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 11px;
+    line-height: 16px;
+  }
+  .nav-link[aria-current="page"] { color: var(--primary); font-weight: 650; }
+  .nav-link svg { width: 22px; height: 22px; }
+
+  .selection-bar {
+    position: fixed;
+    z-index: 60;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    padding: 11px 14px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--line);
+    background: rgba(255, 255, 255, .98);
+    box-shadow: 0 -6px 24px rgba(17, 24, 39, .08);
+    backdrop-filter: blur(16px);
+  }
+  .selection-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .selection-tools { display: flex; align-items: center; }
+  .selected-count { font-size: 14px; font-weight: 700; }
+  .select-all {
+    min-height: 40px;
+    margin: -6px 0;
+    padding: 0 8px;
+    border: 0;
+    background: transparent;
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .cancel-selection {
+    min-width: 58px;
+    min-height: 40px;
+    margin: -6px 0 -6px 4px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .selection-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .selection-actions button {
+    min-height: 44px;
+    padding: 5px 6px;
+    border: 1px solid #bfdbfe;
+    border-radius: 9px;
+    background: var(--primary-soft);
+    color: var(--primary);
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .sheet-shell { position: fixed; z-index: 100; inset: 0; }
+  .sheet-backdrop {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: rgba(17, 24, 39, .42);
+    cursor: pointer;
+  }
+  .sheet {
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    max-height: min(82vh, 690px);
+    overflow-y: auto;
+    padding: 9px 16px calc(20px + env(safe-area-inset-bottom));
+    border-radius: 20px 20px 0 0;
+    background: var(--card);
+    box-shadow: 0 -12px 45px rgba(17, 24, 39, .2);
+    animation: slide-up .2s ease-out;
+  }
+  .drawer-handle {
+    width: 38px;
+    height: 4px;
+    margin: 0 auto 11px;
+    border-radius: 999px;
+    background: #d8dde5;
+  }
+  .sheet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .sheet-header h2 {
+    margin: 0;
+    font-size: 18px;
+    line-height: 26px;
+    font-weight: 700;
+  }
+  .close-button {
+    display: grid;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    margin: -8px -9px -8px 0;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .sheet-help { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  .option-list { display: grid; gap: 8px; }
+  .option-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    min-height: 50px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: #fff;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+  }
+  .option-button:active, .option-button.selected { border-color: #93c5fd; background: var(--primary-soft); }
+  .option-copy { min-width: 0; }
+  .option-title { display: block; font-weight: 650; }
+  .option-note {
+    display: block;
+    margin-top: 2px;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 17px;
+  }
+  .option-count {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 650;
+  }
+  .indent-1 { margin-left: 22px; }
+  .indent-2 { margin-left: 44px; }
+  .sheet-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .sheet-actions > button { flex: 1; }
+  .tree-radio {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 50px;
+    padding: 9px 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: #fff;
+    cursor: pointer;
+  }
+  .tree-radio:has(input:checked) {
+    border-color: #93c5fd;
+    background: var(--primary-soft);
+  }
+  .tree-radio input { width: 20px; height: 20px; margin: 0; accent-color: var(--primary); }
+  .tree-copy { min-width: 0; flex: 1; }
+  .confirm-box {
+    padding: 14px;
+    border: 1px solid #f3d9a4;
+    border-radius: 12px;
+    background: var(--warning-soft);
+  }
+  .confirm-main { margin: 0; color: #78350f; font-size: 15px; line-height: 24px; }
+  .confirm-others {
+    margin: 9px 0 0;
+    padding-top: 9px;
+    border-top: 1px solid #f3d9a4;
+    color: #92400e;
+    font-size: 13px;
+    line-height: 21px;
+  }
+  .more-list { display: grid; gap: 8px; }
+  .more-button { text-align: left; }
+  .more-button .option-note { margin-top: 0; }
+  .toast {
+    position: fixed;
+    z-index: 200;
+    top: 16px;
+    left: 50%;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    max-width: calc(100% - 32px);
+    min-height: 48px;
+    padding: 10px 14px;
+    border: 1px solid #a7f3d0;
+    border-radius: 12px;
+    background: #fff;
+    color: #065f46;
+    box-shadow: 0 8px 30px rgba(17, 24, 39, .14);
+    transform: translateX(-50%);
+    font-size: 14px;
+    line-height: 20px;
+    animation: toast-in .2s ease-out;
+  }
+  .toast svg { color: var(--success); }
+  @keyframes slide-up {
+    from { transform: translateY(30px); opacity: .65; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes toast-in {
+    from { transform: translate(-50%, -10px); opacity: 0; }
+    to { transform: translate(-50%, 0); opacity: 1; }
+  }
+  @media (min-width: 768px) {
+    .page { padding-top: 30px; }
+    .server-list { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+    .filter-buttons { max-width: 520px; }
+    .selection-bar {
+      right: 16px;
+      bottom: 20px;
+      left: 16px;
+      max-width: 928px;
+      margin: 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+    }
+    .sheet {
+      right: 50%;
+      left: auto;
+      width: 520px;
+      margin-right: -260px;
+      border-radius: 20px;
+    }
+  }
+  @media (max-width: 370px) {
+    .selection-actions { gap: 5px; }
+    .selection-actions button { padding: 5px 3px; font-size: 12px; }
+    .server-card { padding: 14px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation: none !important;
+      transition: none !important;
+    }
+  }
+</style>
+</head>
+<body>
+<main class="page" id="page">
+  <section aria-labelledby="page-title">
+    <div class="title-row">
+      <h1 id="page-title">服务器<span class="title-count" id="titleCount">10</span></h1>
+      <button class="primary-button" id="addButton" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        添加
+      </button>
+    </div>
+    <div class="secondary-actions">
+      <button class="secondary-button" id="importButton" type="button">导入 SSH 配置</button>
+      <button class="secondary-button" id="multiButton" type="button" aria-pressed="false">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="m14 17 2 2 4-4"/></svg>
+        <span id="multiButtonText">多选</span>
+      </button>
+    </div>
+  </section>
+
+  <section class="controls" aria-label="搜索与筛选">
+    <label class="search-box">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+      <input id="searchInput" type="search" placeholder="搜索名称或地址" autocomplete="off" aria-label="按名称或地址搜索">
+      <button class="clear-search" id="clearSearch" type="button" aria-label="清空搜索" hidden>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </label>
+    <div class="filter-buttons">
+      <button class="filter-button" id="locationFilterButton" type="button" aria-haspopup="dialog">
+        <strong id="locationFilterText">全部地点</strong>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <button class="filter-button" id="networkFilterButton" type="button" aria-haspopup="dialog">
+        <strong id="networkFilterText">全部网络</strong>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+    </div>
+    <div class="active-filters" id="activeFilters" aria-live="polite"></div>
+  </section>
+
+  <div class="list-meta">
+    <span id="resultCount">10 台服务器</span>
+    <span id="listHint">地点与网络筛选选完立即生效</span>
+  </div>
+  <section class="server-list" id="serverList" aria-label="服务器列表" aria-live="polite"></section>
+  <section class="empty-state" id="emptyState" hidden>
+    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4M8 11h6"/></svg>
+    <h2>没有匹配的服务器</h2>
+    <p>试试其他名称、地址或筛选条件。</p>
+    <button class="text-button" id="resetFilters" type="button">清除筛选</button>
+  </section>
+</main>
+
+<nav class="mobile-nav" id="mobileNav" aria-label="一级导航">
+  <a class="nav-link" href="#">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m3 11 9-8 9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></svg>
+    主页
+  </a>
+  <a class="nav-link" href="#" aria-current="page">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M11 6.5h6M11 17.5h6"/></svg>
+    服务器
+  </a>
+  <a class="nav-link" href="#">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8M12 17v4M7 9l2 2-2 2M11 13h4"/></svg>
+    客户端
+  </a>
+  <a class="nav-link" href="#">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z"/><path d="m9 12 2 2 4-4"/></svg>
+    授权
+  </a>
+  <a class="nav-link" href="#">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="5" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1" fill="currentColor" stroke="none"/></svg>
+    更多
+  </a>
+</nav>
+
+<section class="selection-bar" id="selectionBar" aria-label="多选操作" hidden>
+  <div class="selection-summary">
+    <span class="selected-count" id="selectedCount">已选 0 台</span>
+    <div class="selection-tools">
+      <button class="select-all" id="selectAllButton" type="button">全选当前筛选结果</button>
+      <button class="cancel-selection" id="cancelSelection" type="button">取消</button>
+    </div>
+  </div>
+  <div class="selection-actions">
+    <button id="locationAction" type="button" disabled>设置地点</button>
+    <button id="testAction" type="button" disabled>测试连接</button>
+    <button id="moreAction" type="button" disabled>更多 ⋯</button>
+  </div>
+</section>
+
+<div class="sheet-shell" id="locationFilterSheet" hidden>
+  <button class="sheet-backdrop" data-close-sheet type="button" aria-label="关闭地点筛选" tabindex="-1"></button>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="locationFilterTitle">
+    <div class="drawer-handle" aria-hidden="true"></div>
+    <div class="sheet-header">
+      <h2 id="locationFilterTitle">按地点筛选</h2>
+      <button class="close-button" data-close-sheet type="button" aria-label="关闭">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <p class="sheet-help">选任意一级都会包含它的全部下级地点；选择后立即生效。</p>
+    <div class="option-list" id="locationFilterOptions"></div>
+  </section>
+</div>
+
+<div class="sheet-shell" id="networkFilterSheet" hidden>
+  <button class="sheet-backdrop" data-close-sheet type="button" aria-label="关闭网络筛选" tabindex="-1"></button>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="networkFilterTitle">
+    <div class="drawer-handle" aria-hidden="true"></div>
+    <div class="sheet-header">
+      <h2 id="networkFilterTitle">按网络筛选</h2>
+      <button class="close-button" data-close-sheet type="button" aria-label="关闭">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <p class="sheet-help">只列已登记的物理局域网与虚拟局域网；选择后立即生效。</p>
+    <div class="option-list" id="networkFilterOptions"></div>
+  </section>
+</div>
+
+<div class="sheet-shell" id="locationSetter" hidden>
+  <button class="sheet-backdrop" data-close-sheet type="button" aria-label="关闭设置地点" tabindex="-1"></button>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="locationSetterTitle">
+    <div class="drawer-handle" aria-hidden="true"></div>
+    <div class="sheet-header">
+      <h2 id="locationSetterTitle">设置地点</h2>
+      <button class="close-button" data-close-sheet type="button" aria-label="关闭">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <div id="locationChooseStep">
+      <p class="sheet-help">地点属于整台机器。同一台机器上的多个服务器条目会一起使用这里的地点。</p>
+      <div class="option-list" id="locationSetterOptions"></div>
+      <div class="sheet-actions">
+        <button class="primary-button" id="showConsequences" type="button" disabled>查看后果</button>
+      </div>
+    </div>
+    <div id="locationConfirmStep" hidden>
+      <p class="sheet-help">请确认这次批量修改的后果。</p>
+      <div class="confirm-box">
+        <p class="confirm-main" id="confirmMain"></p>
+        <p class="confirm-others" id="confirmOthers"></p>
+      </div>
+      <div class="sheet-actions">
+        <button class="secondary-button" id="backToChoose" type="button">上一步</button>
+        <button class="primary-button" id="confirmLocation" type="button">确认修改</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<div class="sheet-shell" id="moreSheet" hidden>
+  <button class="sheet-backdrop" data-close-sheet type="button" aria-label="关闭更多批量操作" tabindex="-1"></button>
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="moreTitle">
+    <div class="drawer-handle" aria-hidden="true"></div>
+    <div class="sheet-header">
+      <h2 id="moreTitle">更多批量操作</h2>
+      <button class="close-button" data-close-sheet type="button" aria-label="关闭">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+    <p class="sheet-help">以下操作仍按已选服务器条目执行。</p>
+    <div class="more-list option-list">
+      <button class="option-button more-button" type="button" data-more-action="profile">
+        <span class="option-copy"><span class="option-title">加入 profile</span><span class="option-note">把这批服务器加入指定的客户端 profile</span></span>
+      </button>
+      <button class="option-button more-button" type="button" data-more-action="secret">
+        <span class="option-copy"><span class="option-title">授权机密项</span><span class="option-note">选择要写入这些服务器的机密项</span></span>
+      </button>
+      <button class="option-button more-button" type="button" data-more-action="storage">
+        <span class="option-copy"><span class="option-title">授权共享存储</span><span class="option-note">让这些服务器可以挂载指定共享存储</span></span>
+      </button>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden>
+  <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></svg>
+  <span id="toastText"></span>
+</div>
+
+<script>
+  const locations = [
+    { id: 'home', name: '家A', depth: 0 },
+    { id: 'company', name: '公司', depth: 0 },
+    { id: 'factory', name: '一厂区', parent: 'company', depth: 1 },
+    { id: 'building3', name: '3 号楼', parent: 'factory', depth: 2 },
+    { id: 'machine-room', name: '机房', parent: 'factory', depth: 2 }
+  ];
+  const locationById = new Map(locations.map(item => [item.id, item]));
+  const unregisteredLocation = { id: '__none', name: '未登记地点', depth: 0 };
+
+  const networks = [
+    { id: 'home-lan', name: '家A-办公网', kind: '物理局域网', cidr: '192.168.100.0/24', coverage: 'home' },
+    { id: 'factory-lan', name: '厂区内网', kind: '物理局域网', cidr: '10.20.0.0/16', coverage: 'factory' },
+    { id: 'netbird', name: 'NetBird', kind: '虚拟局域网' }
+  ];
+  const networkById = new Map(networks.map(item => [item.id, item]));
+
+  const devices = [
+    { id: 'd-gpu3090', locationId: 'machine-room', addresses: [{ networkId: 'factory-lan', address: '10.20.3.42' }] },
+    { id: 'd-gpu4090', locationId: 'machine-room', addresses: [
+      { networkId: 'factory-lan', address: '10.20.3.41' },
+      { networkId: 'netbird', address: '100.121.176.41' }
+    ] },
+    { id: 'd-gitlab', locationId: 'building3', addresses: [{ networkId: 'factory-lan', address: '10.20.1.10' }] },
+    { id: 'd-mini', locationId: 'home', addresses: [
+      { networkId: 'home-lan', address: '192.168.100.6' },
+      { networkId: 'netbird', address: '100.121.176.6' }
+    ] },
+    { id: 'd-nuc', locationId: 'home', addresses: [
+      { networkId: 'home-lan', address: '192.168.100.40' },
+      { networkId: 'netbird', address: '100.121.176.40' }
+    ] },
+    { id: 'd-train', locationId: 'home', addresses: [
+      { networkId: 'home-lan', address: '192.168.100.30' },
+      { networkId: 'netbird', address: '100.121.176.30' }
+    ] },
+    { id: 'd-router', locationId: 'home', addresses: [{ networkId: 'home-lan', address: '192.168.100.1' }] },
+    { id: 'd-builder', locationId: 'home', addresses: [
+      { networkId: 'other', address: '192.168.100.88' },
+      { networkId: 'netbird', address: '100.121.176.88' }
+    ], pendingNetwork: { address: '192.168.100.88', networkId: 'home-lan' } },
+    { id: 'd-lab', locationId: null, addresses: [
+      { networkId: 'factory-lan', address: '10.20.8.9' },
+      { networkId: 'netbird', address: '100.121.176.9' }
+    ] }
+  ];
+  const deviceById = new Map(devices.map(item => [item.id, item]));
+
+  const servers = [
+    { id: 's-3090', name: '3090x2', user: 'ai', port: 22, deviceId: 'd-gpu3090', testPlan: 'port', test: { state: 'fail', time: '昨天 23:40', reason: '端口不通' } },
+    { id: 's-gitlab', name: 'gitlab-urit', user: 'git', port: 22, deviceId: 'd-gitlab', testPlan: 'success', test: { state: 'success', time: '今天 10:12', detail: '10.20.1.10 · 厂区内网 · 23 毫秒' } },
+    { id: 's-mini', name: 'mini6', user: 'allan', port: 22, deviceId: 'd-mini', testPlan: 'success', test: { state: 'success', time: '今天 10:12', detail: '192.168.100.6 · 家A-办公网 · 31 毫秒' } },
+    { id: 's-nuc-root', name: 'NUC10-root', user: 'root', port: 22, deviceId: 'd-nuc', testPlan: 'auth', test: { state: 'success', time: '今天 10:12', detail: '192.168.100.40 · 家A-办公网 · 23 毫秒' } },
+    { id: 's-nuc-app', name: 'NUC10-docker', user: 'app', port: 2222, deviceId: 'd-nuc', testPlan: 'success', test: { state: 'never' } },
+    { id: 's-train', name: 'train3060', user: 'ubuntu', port: 22, deviceId: 'd-train', testPlan: 'success', test: { state: 'fail', time: '昨天 23:40', reason: '认证失败' } },
+    { id: 's-router', name: '软路由', user: 'root', port: 22, deviceId: 'd-router', testPlan: 'success', test: { state: 'never' } },
+    { id: 's-builder', name: 'cloud-builder', user: 'builder', port: 22, deviceId: 'd-builder', testPlan: 'success', test: { state: 'never' } },
+    { id: 's-lab', name: 'lab-storage', user: 'ops', port: 22, deviceId: 'd-lab', testPlan: 'timeout', test: { state: 'fail', time: '昨天 21:08', reason: '超时' } },
+    { id: 's-4090', name: '4090x2', user: 'ai', port: 22, deviceId: 'd-gpu4090', testPlan: 'success', test: { state: 'success', time: '今天 09:36', detail: '10.20.3.41 · 厂区内网 · 27 毫秒' } }
+  ];
+
+  const state = {
+    query: '',
+    locationFilter: null,
+    networkFilter: null,
+    selecting: false,
+    selected: new Set(),
+    testing: new Set(),
+    chosenSetLocation: null
+  };
+
+  const page = document.getElementById('page');
+  const serverList = document.getElementById('serverList');
+  const emptyState = document.getElementById('emptyState');
+  const activeFilters = document.getElementById('activeFilters');
+  const mobileNav = document.getElementById('mobileNav');
+  const selectionBar = document.getElementById('selectionBar');
+  const selectedCount = document.getElementById('selectedCount');
+  const selectAllButton = document.getElementById('selectAllButton');
+  const locationAction = document.getElementById('locationAction');
+  const testAction = document.getElementById('testAction');
+  const moreAction = document.getElementById('moreAction');
+  const locationSetter = document.getElementById('locationSetter');
+  const locationChooseStep = document.getElementById('locationChooseStep');
+  const locationConfirmStep = document.getElementById('locationConfirmStep');
+  let toastTimer;
+
+  function locationPath(id) {
+    if (!id) return unregisteredLocation.name;
+    const parts = [];
+    let current = locationById.get(id);
+    while (current) {
+      parts.unshift(current.name);
+      current = current.parent ? locationById.get(current.parent) : null;
+    }
+    return parts.join(' / ');
+  }
+
+  function locationWithin(candidateId, filterId) {
+    if (!filterId) return true;
+    if (filterId === unregisteredLocation.id) return !candidateId;
+    let current = candidateId ? locationById.get(candidateId) : null;
+    while (current) {
+      if (current.id === filterId) return true;
+      current = current.parent ? locationById.get(current.parent) : null;
+    }
+    return false;
+  }
+
+  function childLocationIds(id) {
+    return locations.filter(item => locationWithin(item.id, id)).map(item => item.id);
+  }
+
+  function networkName(id) {
+    if (id === 'other') return '其他';
+    return networkById.get(id)?.name || id;
+  }
+
+  function primaryAddress(device) {
+    const ordered = ['home-lan', 'factory-lan', 'netbird', 'other'];
+    for (const networkId of ordered) {
+      const found = device.addresses.find(item => item.networkId === networkId);
+      if (found) return found;
+    }
+    return device.addresses[0];
+  }
+
+  function serverAddress(server) {
+    const device = deviceById.get(server.deviceId);
+    const member = primaryAddress(device);
+    return `${server.user}@${member.address}${server.port === 22 ? '' : ':' + server.port}`;
+  }
+
+  function serverNetworks(server) {
+    return deviceById.get(server.deviceId).addresses.map(item => item.networkId);
+  }
+
+  function filteredServers() {
+    const query = state.query.trim().toLocaleLowerCase();
+    return servers.filter(server => {
+      const matchesQuery = !query || `${server.name} ${serverAddress(server)} ${locationPath(deviceById.get(server.deviceId).locationId)}`.toLocaleLowerCase().includes(query);
+      const matchesLocation = locationWithin(deviceById.get(server.deviceId).locationId, state.locationFilter);
+      const matchesNetwork = !state.networkFilter || serverNetworks(server).includes(state.networkFilter);
+      return matchesQuery && matchesLocation && matchesNetwork;
+    });
+  }
+
+  function locationFilterLabel() {
+    if (!state.locationFilter) return '全部地点';
+    if (state.locationFilter === unregisteredLocation.id) return unregisteredLocation.name;
+    return locationPath(state.locationFilter);
+  }
+
+  function networkFilterLabel() {
+    return state.networkFilter ? networkName(state.networkFilter) : '全部网络';
+  }
+
+  function testHtml(server) {
+    if (state.testing.has(server.id)) {
+      return `<div class="test-line"><span class="spinner" aria-hidden="true"></span><span class="test-copy"><strong class="test-title">正在连接…</strong><span class="test-detail">这次会真的发起 SSH 连接并登录认证</span></span></div>`;
+    }
+    if (!server.test || server.test.state === 'never') {
+      return `<div class="test-line"><span class="status-dot" aria-hidden="true"></span><span class="test-copy"><strong class="test-title">从未测试</strong></span></div>`;
+    }
+    if (server.test.state === 'success') {
+      return `<div class="test-line success"><span class="status-dot" aria-hidden="true"></span><span class="test-copy"><strong class="test-title">${server.test.time} 已连上</strong><span class="test-detail">${server.test.detail || ''}</span></span></div>`;
+    }
+    return `<div class="test-line fail"><span class="status-dot" aria-hidden="true"></span><span class="test-copy"><strong class="test-title">${server.test.time} 连不上：${server.test.reason}</strong></span></div>`;
+  }
+
+  function networkTags(server) {
+    const ids = [...new Set(serverNetworks(server))];
+    return ids.map(id => {
+      if (id === 'other') return '<span class="network-tag other">其他<span class="network-kind">公网或未登记网络</span></span>';
+      const network = networkById.get(id);
+      const className = network.kind === '虚拟局域网' ? ' virtual' : '';
+      return `<span class="network-tag${className}">${network.name}<span class="network-kind">${network.kind}</span></span>`;
+    }).join('');
+  }
+
+  function pendingHtml(server) {
+    const device = deviceById.get(server.deviceId);
+    if (!device.pendingNetwork) return '';
+    const network = networkById.get(device.pendingNetwork.networkId);
+    return `<div class="pending-box"><span>地址 ${device.pendingNetwork.address} 属于 ${network.name}？</span><button type="button" data-confirm-network="${server.id}">确认</button></div>`;
+  }
+
+  function serverCard(server) {
+    const selected = state.selected.has(server.id);
+    const device = deviceById.get(server.deviceId);
+    const sameMachineCount = servers.filter(item => item.deviceId === server.deviceId).length;
+    return `<article class="server-card${selected ? ' selected' : ''}${device.pendingNetwork ? ' pending-card' : ''}" data-server-id="${server.id}">
+      <button class="check-control" type="button" aria-label="${selected ? '取消选择' : '选择'} ${server.name}" aria-pressed="${selected}" tabindex="${state.selecting ? '0' : '-1'}"><span class="check-circle"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg></span></button>
+      <div class="card-content">
+        <div class="card-heading"><h2 class="server-name">${server.name}</h2>${sameMachineCount > 1 ? `<span class="same-machine">同机 ${sameMachineCount} 个登录</span>` : ''}</div>
+        <p class="address">${serverAddress(server)}</p>
+        <div class="location-line"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 21s7-5.1 7-11a7 7 0 1 0-14 0c0 5.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.5"/></svg><span>${locationPath(device.locationId)}</span></div>
+        <div class="network-tags">${networkTags(server)}</div>
+        ${pendingHtml(server)}
+        ${testHtml(server)}
+      </div>
+    </article>`;
+  }
+
+  function renderServers() {
+    const visible = filteredServers();
+    serverList.innerHTML = visible.map(serverCard).join('');
+    serverList.hidden = visible.length === 0;
+    emptyState.hidden = visible.length !== 0;
+    document.getElementById('resultCount').textContent = `${visible.length} 台服务器`;
+    document.getElementById('titleCount').textContent = servers.length;
+    document.getElementById('listHint').textContent = state.selecting ? '点卡片或复选框选择' : '地点与网络筛选选完立即生效';
+    page.classList.toggle('selection-mode', state.selecting);
+    renderFilterButtons();
+    renderActiveFilters();
+    updateSelectionBar();
+  }
+
+  function renderFilterButtons() {
+    const locationButton = document.getElementById('locationFilterButton');
+    const networkButton = document.getElementById('networkFilterButton');
+    document.getElementById('locationFilterText').textContent = locationFilterLabel();
+    document.getElementById('networkFilterText').textContent = networkFilterLabel();
+    locationButton.classList.toggle('active', Boolean(state.locationFilter));
+    networkButton.classList.toggle('active', Boolean(state.networkFilter));
+  }
+
+  function renderActiveFilters() {
+    const pills = [];
+    if (state.locationFilter) pills.push(`<span class="active-pill">地点：${locationFilterLabel()}<button type="button" data-clear-filter="location" aria-label="清除地点筛选"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>`);
+    if (state.networkFilter) pills.push(`<span class="active-pill">网络：${networkFilterLabel()}<button type="button" data-clear-filter="network" aria-label="清除网络筛选"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>`);
+    if (state.query.trim()) pills.push(`<span class="active-pill">搜索：${escapeHtml(state.query.trim())}<button type="button" data-clear-filter="query" aria-label="清除搜索"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></span>`);
+    activeFilters.innerHTML = pills.length ? `${pills.join('')}<button class="clear-all" type="button" data-clear-filter="all">清除全部</button>` : '';
+  }
+
+  function escapeHtml(value) {
+    return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  }
+
+  function updateSelectionBar() {
+    const count = state.selected.size;
+    selectedCount.textContent = `已选 ${count} 台`;
+    const disabled = count === 0;
+    locationAction.disabled = disabled;
+    testAction.disabled = disabled || state.testing.size > 0;
+    moreAction.disabled = disabled;
+    selectAllButton.disabled = filteredServers().length === 0;
+    testAction.textContent = state.testing.size > 0 ? `测试中 ${state.testing.size} 台` : '测试连接';
+  }
+
+  function setSelecting(active) {
+    state.selecting = active;
+    if (!active) state.selected.clear();
+    page.classList.toggle('selecting', active);
+    mobileNav.hidden = active;
+    selectionBar.hidden = !active;
+    const multiButton = document.getElementById('multiButton');
+    multiButton.classList.toggle('active', active);
+    multiButton.setAttribute('aria-pressed', String(active));
+    document.getElementById('multiButtonText').textContent = active ? '退出多选' : '多选';
+    renderServers();
+  }
+
+  function toggleServer(id) {
+    if (!state.selecting) return;
+    if (state.selected.has(id)) state.selected.delete(id);
+    else state.selected.add(id);
+    renderServers();
+  }
+
+  function openSheet(element) {
+    element.hidden = false;
+    document.body.classList.add('modal-open');
+    const close = element.querySelector('[data-close-sheet]');
+    if (close) close.focus({ preventScroll: true });
+  }
+
+  function closeSheet(element) {
+    element.hidden = true;
+    if (!document.querySelector('.sheet-shell:not([hidden])')) document.body.classList.remove('modal-open');
+  }
+
+  function locationFilterOptions() {
+    const allOption = `<button class="option-button${state.locationFilter ? '' : ' selected'}" type="button" data-choose-location=""><span class="option-copy"><span class="option-title">全部地点</span><span class="option-note">不按地点限制</span></span><span class="option-count">${servers.length}</span></button>`;
+    const tree = locations.map(location => {
+      const ids = [location.id, ...childLocationIds(location.id).filter(id => id !== location.id)];
+      const count = servers.filter(server => ids.includes(deviceById.get(server.deviceId).locationId)).length;
+      const hasChildren = locations.some(item => item.parent === location.id);
+      return `<button class="option-button indent-${location.depth}${state.locationFilter === location.id ? ' selected' : ''}" type="button" data-choose-location="${location.id}"><span class="option-copy"><span class="option-title">${locationPath(location.id)}</span><span class="option-note">${hasChildren ? '包含全部下级地点' : location.name}</span></span><span class="option-count">${count}</span></button>`;
+    }).join('');
+    const unregisteredCount = servers.filter(server => !deviceById.get(server.deviceId).locationId).length;
+    const unregistered = `<button class="option-button${state.locationFilter === unregisteredLocation.id ? ' selected' : ''}" type="button" data-choose-location="${unregisteredLocation.id}"><span class="option-copy"><span class="option-title">未登记地点</span><span class="option-note">尚未选择任何地点的机器</span></span><span class="option-count">${unregisteredCount}</span></button>`;
+    document.getElementById('locationFilterOptions').innerHTML = allOption + tree + unregistered;
+  }
+
+  function networkFilterOptions() {
+    const all = `<button class="option-button${state.networkFilter ? '' : ' selected'}" type="button" data-choose-network=""><span class="option-copy"><span class="option-title">全部网络</span><span class="option-note">不按网络限制</span></span><span class="option-count">${servers.length}</span></button>`;
+    const list = networks.map(network => {
+      const count = servers.filter(server => serverNetworks(server).includes(network.id)).length;
+      const note = network.kind === '物理局域网' ? `网段 ${network.cidr} · 覆盖 ${locationPath(network.coverage)}` : '横跨多个地点的虚拟网络';
+      return `<button class="option-button${state.networkFilter === network.id ? ' selected' : ''}" type="button" data-choose-network="${network.id}"><span class="option-copy"><span class="option-title">${network.name}</span><span class="option-note">${network.kind} · ${note}</span></span><span class="option-count">${count}</span></button>`;
+    }).join('');
+    document.getElementById('networkFilterOptions').innerHTML = all + list;
+  }
+
+  function locationSetterOptions() {
+    const tree = locations.map(location => `
+      <label class="tree-radio${location.depth ? ` indent-${location.depth}` : ''}">
+        <input type="radio" name="set-location" value="${location.id}" ${state.chosenSetLocation === location.id ? 'checked' : ''}>
+        <span class="tree-copy"><span class="option-title">${locationPath(location.id)}</span></span>
+      </label>`).join('');
+    const unregistered = `<label class="tree-radio"><input type="radio" name="set-location" value="${unregisteredLocation.id}" ${state.chosenSetLocation === unregisteredLocation.id ? 'checked' : ''}><span class="tree-copy"><span class="option-title">未登记地点</span></span></label>`;
+    document.getElementById('locationSetterOptions').innerHTML = tree + unregistered;
+    document.getElementById('showConsequences').disabled = !state.chosenSetLocation;
+  }
+
+  function selectedServers() {
+    return servers.filter(server => state.selected.has(server.id));
+  }
+
+  function showLocationConsequences() {
+    const selected = selectedServers();
+    const deviceIds = [...new Set(selected.map(server => server.deviceId))];
+    const others = servers.filter(server => deviceIds.includes(server.deviceId) && !state.selected.has(server.id));
+    const targetName = state.chosenSetLocation === unregisteredLocation.id ? unregisteredLocation.name : locationPath(state.chosenSetLocation);
+    document.getElementById('confirmMain').textContent = `将把 ${selected.length} 台服务器所在的机器地点设为 ${targetName}。`;
+    document.getElementById('confirmOthers').textContent = `同一台机器上的其他账号也会一起改变：${others.length ? others.map(server => server.name).join('、') : '无'}`;
+    locationChooseStep.hidden = true;
+    locationConfirmStep.hidden = false;
+  }
+
+  function confirmLocationChange() {
+    const deviceIds = [...new Set(selectedServers().map(server => server.deviceId))];
+    deviceIds.forEach(id => {
+      deviceById.get(id).locationId = state.chosenSetLocation === unregisteredLocation.id ? null : state.chosenSetLocation;
+    });
+    closeSheet(locationSetter);
+    showToast(`已更新 ${deviceIds.length} 台机器的地点`);
+    renderServers();
+  }
+
+  function resultFor(server) {
+    const device = deviceById.get(server.deviceId);
+    const member = primaryAddress(device);
+    const networkLabel = member.networkId === 'other' ? '其他' : `${networkName(member.networkId)}（${networkById.get(member.networkId).kind}）`;
+    if (server.testPlan === 'success') return { state: 'success', time: '今天 11:38', detail: `${member.address} · ${networkLabel} · 29 毫秒` };
+    const reasons = { port: '端口不通', auth: '认证失败', timeout: '超时' };
+    return { state: 'fail', time: '今天 11:38', reason: reasons[server.testPlan] || '端口不通' };
+  }
+
+  function startBatchTests() {
+    const ids = [...state.selected];
+    if (!ids.length || state.testing.size) return;
+    ids.forEach(id => state.testing.add(id));
+    renderServers();
+    ids.forEach((id, index) => {
+      window.setTimeout(() => {
+        const server = servers.find(item => item.id === id);
+        server.test = resultFor(server);
+        state.testing.delete(id);
+        renderServers();
+        if (state.testing.size === 0) showToast(`连接测试完成：${ids.length} 台`);
+      }, 1400 + index * 300);
+    });
+  }
+
+  function showToast(message) {
+    window.clearTimeout(toastTimer);
+    document.getElementById('toastText').textContent = message;
+    document.getElementById('toast').hidden = false;
+    toastTimer = window.setTimeout(() => { document.getElementById('toast').hidden = true; }, 3200);
+  }
+
+  document.getElementById('locationFilterButton').addEventListener('click', () => {
+    locationFilterOptions();
+    openSheet(document.getElementById('locationFilterSheet'));
+  });
+  document.getElementById('networkFilterButton').addEventListener('click', () => {
+    networkFilterOptions();
+    openSheet(document.getElementById('networkFilterSheet'));
+  });
+
+  document.getElementById('locationFilterOptions').addEventListener('click', event => {
+    const option = event.target.closest('[data-choose-location]');
+    if (!option) return;
+    state.locationFilter = option.dataset.chooseLocation || null;
+    closeSheet(document.getElementById('locationFilterSheet'));
+    renderServers();
+  });
+  document.getElementById('networkFilterOptions').addEventListener('click', event => {
+    const option = event.target.closest('[data-choose-network]');
+    if (!option) return;
+    state.networkFilter = option.dataset.chooseNetwork || null;
+    closeSheet(document.getElementById('networkFilterSheet'));
+    renderServers();
+  });
+
+  document.getElementById('searchInput').addEventListener('input', event => {
+    state.query = event.target.value;
+    document.getElementById('clearSearch').hidden = !state.query;
+    renderServers();
+  });
+  document.getElementById('clearSearch').addEventListener('click', () => {
+    state.query = '';
+    document.getElementById('searchInput').value = '';
+    document.getElementById('clearSearch').hidden = true;
+    renderServers();
+  });
+
+  activeFilters.addEventListener('click', event => {
+    const button = event.target.closest('[data-clear-filter]');
+    if (!button) return;
+    const kind = button.dataset.clearFilter;
+    if (kind === 'all' || kind === 'location') state.locationFilter = null;
+    if (kind === 'all' || kind === 'network') state.networkFilter = null;
+    if (kind === 'all' || kind === 'query') {
+      state.query = '';
+      document.getElementById('searchInput').value = '';
+      document.getElementById('clearSearch').hidden = true;
+    }
+    renderServers();
+  });
+  document.getElementById('resetFilters').addEventListener('click', () => {
+    state.locationFilter = null;
+    state.networkFilter = null;
+    state.query = '';
+    document.getElementById('searchInput').value = '';
+    document.getElementById('clearSearch').hidden = true;
+    renderServers();
+  });
+
+  document.getElementById('multiButton').addEventListener('click', () => setSelecting(!state.selecting));
+  document.getElementById('cancelSelection').addEventListener('click', () => setSelecting(false));
+  selectAllButton.addEventListener('click', () => {
+    state.selected = new Set(filteredServers().map(server => server.id));
+    renderServers();
+  });
+
+  serverList.addEventListener('click', event => {
+    const confirmButton = event.target.closest('[data-confirm-network]');
+    if (confirmButton) {
+      const server = servers.find(item => item.id === confirmButton.dataset.confirmNetwork);
+      const device = deviceById.get(server.deviceId);
+      const member = device.addresses.find(item => item.address === device.pendingNetwork.address && item.networkId === 'other');
+      const confirmedAddress = device.pendingNetwork.address;
+      if (member) member.networkId = device.pendingNetwork.networkId;
+      device.pendingNetwork = null;
+      showToast(`已把 ${confirmedAddress} 归入 家A-办公网；其他地址已清空`);
+      renderServers();
+      return;
+    }
+    const card = event.target.closest('.server-card');
+    if (card && state.selecting) toggleServer(card.dataset.serverId);
+  });
+
+  locationAction.addEventListener('click', () => {
+    state.chosenSetLocation = null;
+    locationChooseStep.hidden = false;
+    locationConfirmStep.hidden = true;
+    locationSetterOptions();
+    openSheet(locationSetter);
+  });
+  document.getElementById('locationSetterOptions').addEventListener('change', event => {
+    if (event.target.name !== 'set-location') return;
+    state.chosenSetLocation = event.target.value;
+    document.getElementById('showConsequences').disabled = false;
+  });
+  document.getElementById('showConsequences').addEventListener('click', showLocationConsequences);
+  document.getElementById('backToChoose').addEventListener('click', () => {
+    locationConfirmStep.hidden = true;
+    locationChooseStep.hidden = false;
+  });
+  document.getElementById('confirmLocation').addEventListener('click', confirmLocationChange);
+
+  testAction.addEventListener('click', startBatchTests);
+  moreAction.addEventListener('click', () => openSheet(document.getElementById('moreSheet')));
+  document.getElementById('moreSheet').addEventListener('click', event => {
+    const button = event.target.closest('[data-more-action]');
+    if (!button) return;
+    const labels = {
+      profile: `已将 ${state.selected.size} 台服务器加入 profile（静态演示）`,
+      secret: `已打开 ${state.selected.size} 台服务器的机密项授权（静态演示）`,
+      storage: `已打开 ${state.selected.size} 台服务器的共享存储授权（静态演示）`
+    };
+    closeSheet(document.getElementById('moreSheet'));
+    showToast(labels[button.dataset.moreAction]);
+  });
+
+  document.querySelectorAll('[data-close-sheet]').forEach(button => {
+    button.addEventListener('click', () => closeSheet(button.closest('.sheet-shell')));
+  });
+  document.addEventListener('keydown', event => {
+    if (event.key !== 'Escape') return;
+    const sheet = document.querySelector('.sheet-shell:not([hidden])');
+    if (sheet) closeSheet(sheet);
+  });
+
+  document.getElementById('addButton').addEventListener('click', () => showToast('添加服务器（静态演示）'));
+  document.getElementById('importButton').addEventListener('click', () => showToast('导入 SSH 配置（静态演示）'));
+  document.querySelectorAll('a[href="#"]').forEach(link => link.addEventListener('click', event => event.preventDefault()));
+
+  renderServers();
+</script>
+</body>
+</html>

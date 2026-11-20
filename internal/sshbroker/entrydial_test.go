@@ -471,6 +471,112 @@ func TestConnectServerEntryFirstTrustWithoutTopologyStillHonorsVirtualLan(t *tes
 	}
 }
 
+// TestConnectServerEntryWithResultCarriesActionableHint 覆盖结构化结果的提
+// 示字段：程序内写定的白话提示随结构化结果返回，页面不需要解析底层错误文
+// 本。
+func TestConnectServerEntryWithResultCarriesActionableHint(t *testing.T) {
+	t.Run("首次锚定没有共同虚拟局域网", func(t *testing.T) {
+		srv := entryAt("srv-a", "198.51.100.10", 2202)
+		original := lowLevelDial
+		lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
+			return nil, errors.New("must not dial")
+		}
+		t.Cleanup(func() { lowLevelDial = original })
+
+		_, result, err := ConnectServerEntryWithResult(context.Background(), ServerDialRequest{
+			Server: srv, Auth: PasswordAuth("pw"),
+			HostKeys: &fakeHostKeyStore{virtualLan: []string{"100.64.10.5:2202"}},
+		})
+		if err == nil {
+			t.Fatal("首次锚定没有共同虚拟局域网应失败")
+		}
+		want := "请用带外锚定，或先从虚拟局域网内的机器连接一次。"
+		if result.Hint != want {
+			t.Fatalf("结构化结果提示 = %q，应为 %q", result.Hint, want)
+		}
+	})
+
+	t.Run("只剩兜底地址", func(t *testing.T) {
+		srv := entryAt("srv-a", "192.0.2.10", 2202)
+		original := lowLevelDial
+		lowLevelDial = func(context.Context, string, int, string, ssh.AuthMethod, ssh.HostKeyCallback, keepAliveSpec, []string) (*Client, error) {
+			return nil, errors.New("dial 192.0.2.10:2202: connection refused")
+		}
+		t.Cleanup(func() { lowLevelDial = original })
+
+		_, result, err := ConnectServerEntryWithResult(context.Background(), ServerDialRequest{
+			Server: srv, Auth: PasswordAuth("pw"),
+			HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+				srv.ID: {Blob: []byte("anchor"), Format: store.PinFormatBlob},
+			}},
+			Topology: StaticDialTopology{
+				TargetMemberships: []*models.NetworkMembership{
+					membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+				},
+			},
+		})
+		if err == nil {
+			t.Fatal("兜底地址失败应返回错误")
+		}
+		want := "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
+		if result.Hint != want {
+			t.Fatalf("结构化结果提示 = %q，应为 %q", result.Hint, want)
+		}
+	})
+}
+
+// TestConnectServerEntryWithResultClassifiesRealAuthenticationFailure 用真实
+// 本地 SSH 测试服务器钉住认证失败分类：错误口令与错误密钥都归为认证失败，
+// 而不是其他连接失败。
+func TestConnectServerEntryWithResultClassifiesRealAuthenticationFailure(t *testing.T) {
+	t.Run("错误口令", func(t *testing.T) {
+		addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{Password: "server-secret"})
+		defer cleanup()
+		srv := entryAt("srv-a", hostOf(addr), portOf(addr))
+		_, result, err := ConnectServerEntryWithResult(context.Background(), ServerDialRequest{
+			Server: srv, Auth: PasswordAuth("wrong-login-secret"),
+			HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+				srv.ID: {Blob: hostKey.Marshal(), Format: store.PinFormatBlob},
+			}},
+		})
+		if err == nil {
+			t.Fatal("错误口令必须连接失败")
+		}
+		if len(result.Attempts) != 1 || !isAuthenticationFailure(err) ||
+			result.Attempts[0].FailureReason != models.ConnectionTestFailureAuthentication {
+			t.Fatalf("错误口令应归为认证失败：%v %+v", err, result)
+		}
+		if strings.Contains(err.Error(), "wrong-login-secret") || strings.Contains(err.Error(), "server-secret") {
+			t.Fatalf("认证失败错误不得包含口令：%v", err)
+		}
+	})
+
+	t.Run("错误密钥", func(t *testing.T) {
+		_, acceptedPub := mustRSAPEM(t, "")
+		wrongPEM, _ := mustRSAPEM(t, "")
+		addr, hostKey, cleanup := testsshd.Start(t, testsshd.Options{AuthorizedKey: acceptedPub})
+		defer cleanup()
+		wrongAuth, authErr := PrivateKeyAuth(wrongPEM, nil)
+		if authErr != nil {
+			t.Fatal(authErr)
+		}
+		srv := entryAt("srv-a", hostOf(addr), portOf(addr))
+		_, result, err := ConnectServerEntryWithResult(context.Background(), ServerDialRequest{
+			Server: srv, Auth: wrongAuth,
+			HostKeys: &fakeHostKeyStore{pins: map[string]*store.Pin{
+				srv.ID: {Blob: hostKey.Marshal(), Format: store.PinFormatBlob},
+			}},
+		})
+		if err == nil {
+			t.Fatal("错误密钥必须连接失败")
+		}
+		if len(result.Attempts) != 1 || !isAuthenticationFailure(err) ||
+			result.Attempts[0].FailureReason != models.ConnectionTestFailureAuthentication {
+			t.Fatalf("错误密钥应归为认证失败：%v %+v", err, result)
+		}
+	})
+}
+
 // TestConnectServerEntryFailureListsCandidatesWithoutAddresses: 全部候选失败时
 // 错误逐行列出网络名加序号或兜底地址；底层错误先经过既有地址打码，拓扑缺
 // 失时附补登记提示。
