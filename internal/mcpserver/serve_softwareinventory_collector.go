@@ -76,7 +76,11 @@ func (r *ServeRunner) handleSoftwareInventoryAssignments(w http.ResponseWriter, 
 	for _, id := range granted {
 		grantedSet[id] = true
 	}
-	assignments, err := r.st.SoftwareCollectionAssignments(models.ClientCollector(ct.ID), time.Now())
+	now := time.Now()
+	if r.st.NowFn != nil {
+		now = r.st.NowFn()
+	}
+	assignments, err := r.st.SoftwareCollectionAssignments(models.ClientCollector(ct.ID), now)
 	if err != nil {
 		http.Error(w, "assignment lookup failed", http.StatusInternalServerError)
 		return

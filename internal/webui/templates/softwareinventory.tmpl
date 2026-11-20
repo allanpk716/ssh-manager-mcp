@@ -2,7 +2,33 @@
 <section class="software-inventory">
 <h1>软件清单</h1>
 <p>先看设备，再用全局搜索跨设备找软件。</p>
-<div class="inline-form" aria-label="全局采集与导出位置"></div>
+<div class="inline-form" aria-label="全局采集与导出位置">
+<form method="post" action="/ui/software-inventory/schedule">
+<div class="form-field">
+<label for="software-inventory-daily-time">每天采集时间</label>
+<input id="software-inventory-daily-time" type="time" step="60" name="daily_time" value="{{.SoftwareInventory.DailyCollectionTime}}">
+</div>
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">保存时间</button>
+</form>
+<form method="post" action="/ui/software-inventory/collect-all">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<button type="submit">立即全部采集</button>
+</form>
+</div>
+{{if .SoftwareInventory.ScheduleNotice}}<p class="flash-ok">{{.SoftwareInventory.ScheduleNotice}}</p>{{end}}
+{{if .SoftwareInventory.ScheduleError}}<p class="flash-error">{{.SoftwareInventory.ScheduleError}}</p>{{end}}
+{{if .SoftwareInventory.CollectionReport}}
+<section aria-label="立即全部采集报告">
+<h2>立即全部采集报告</h2>
+<p>立即全部采集完成：成功 {{.SoftwareInventory.CollectionReport.Succeeded}} 台，等待客户端实例 {{.SoftwareInventory.CollectionReport.Requested}} 台，失败 {{.SoftwareInventory.CollectionReport.Failed}} 台。</p>
+<ul>
+{{range .SoftwareInventory.CollectionReport.Devices}}
+<li>{{if .Requested}}{{if .CollectorName}}{{.DeviceName}}：已登记，等待客户端实例 {{.CollectorName}} 执行{{else}}{{.DeviceName}}：已登记，等待客户端实例执行{{end}}{{else if .Err}}{{.DeviceName}}：失败，{{.Err}}{{else}}{{.DeviceName}}：采集成功{{end}}</li>
+{{else}}<li>没有受管设备。</li>{{end}}
+</ul>
+</section>
+{{end}}
 
 <form id="software-inventory-search-form" class="software-inventory-filter" method="get" action="/ui/software-inventory/">
 <h2>全局软件搜索</h2>

@@ -205,6 +205,10 @@ func (s *Store) SoftwareCollectionAssignments(collector models.Collector, now ti
 	if err != nil {
 		return nil, err
 	}
+	dailyTime, err := s.SoftwareCollectionDailyTime()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]models.SoftwareCollectionAssignment, 0, len(statuses))
 	var profileID string
 	if err := s.db.QueryRow(
@@ -256,13 +260,16 @@ func (s *Store) SoftwareCollectionAssignments(collector models.Collector, now ti
 		if err != nil {
 			return nil, fmt.Errorf("设备 %s：%w", status.DeviceName, err)
 		}
+		due, err := models.SoftwareCollectionDue(status.LastSuccessAt, now, dailyTime)
+		if err != nil {
+			return nil, err
+		}
 		out = append(out, models.SoftwareCollectionAssignment{
 			DeviceID: status.DeviceID, DeviceName: status.DeviceName,
 			ServerID: chosen.ID, ServerName: chosen.Name,
 			Sudo: sudoEnabled[chosen.ID], PendingImmediate: status.PendingImmediate,
 			LastSuccessAt: status.LastSuccessAt,
-			Due: status.PendingImmediate || status.LastSuccessAt.IsZero() ||
-				now.Sub(status.LastSuccessAt) >= 24*time.Hour,
+			Due:           status.PendingImmediate || due,
 		})
 	}
 	return out, nil

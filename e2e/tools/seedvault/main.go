@@ -181,6 +181,11 @@ func seed(dir string) error {
 		if err := seedSoftwareInventoryViews(st, credentialID, webID); err != nil {
 			return err
 		}
+		if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SOFTWARE_INVENTORY_CLIENT_COLLECTOR")) == "1" {
+			if err := assignAllSoftwareInventoryCollectorsToClient(st, profileID); err != nil {
+				return err
+			}
+		}
 	} else if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{
 			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
@@ -359,6 +364,45 @@ func seedSoftwareInventoryViews(st *store.Store, credentialID, workstationServer
 	)
 	st.NowFn = nil
 	return err
+}
+
+// assignAllSoftwareInventoryCollectorsToClient 把浏览器测试库里全部受管设备
+// 的采集执行者登记给 laptop-client。全局立即采集因此只登记客户端分派，
+// 不会拨号到种子数据里的不可达地址。
+func assignAllSoftwareInventoryCollectorsToClient(st *store.Store, profileID string) error {
+	statuses, err := st.SoftwareCollectionStatuses("")
+	if err != nil {
+		return err
+	}
+	serverIDs := make([]string, 0)
+	for _, status := range statuses {
+		if !status.Managed {
+			continue
+		}
+		servers, err := st.FullServersForDevice(status.DeviceName)
+		if err != nil {
+			return err
+		}
+		for _, server := range servers {
+			serverIDs = append(serverIDs, server.ID)
+		}
+	}
+	if len(serverIDs) > 0 {
+		if err := st.GrantServers(profileID, serverIDs); err != nil {
+			return err
+		}
+	}
+	for _, status := range statuses {
+		if !status.Managed {
+			continue
+		}
+		if err := st.SetSoftwareCollectionCollector(
+			status.DeviceName, "laptop-client", "", store.CLISource(),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeBrowserTestCertificate 给权威端浏览器测试生成一张 P-256 椭圆曲线

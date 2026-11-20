@@ -621,6 +621,64 @@ func (s openerSource) RequestSoftwareInventoryCollection(
 	return webui.SoftwareInventoryCollectionResult{}, nil
 }
 
+func (s openerSource) SoftwareInventoryDailyTime() (string, error) {
+	st, done, err := s.open()
+	if err != nil {
+		return "", err
+	}
+	defer done()
+	return st.SoftwareCollectionDailyTime()
+}
+
+func (s openerSource) SetSoftwareInventoryDailyTime(
+	value string, source webui.SoftwareInventoryWriteSource,
+) error {
+	if _, _, err := models.ParseSoftwareCollectionDailyTime(value); err != nil {
+		return &webui.SoftwareInventoryFormError{Message: err.Error()}
+	}
+	st, done, err := s.open()
+	if err != nil {
+		return err
+	}
+	defer done()
+	if err := st.SetSoftwareCollectionDailyTime(
+		value, store.WebUISource(source.RemoteAddress),
+	); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s openerSource) RequestSoftwareInventoryCollectionAll(
+	ctx context.Context, source webui.SoftwareInventoryWriteSource,
+) (webui.SoftwareInventoryCollectionRoundResult, error) {
+	st, done, err := s.open()
+	if err != nil {
+		return webui.SoftwareInventoryCollectionRoundResult{}, err
+	}
+	defer done()
+	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
+	report, err := softwareinventory.New(st).CollectAllForScope(
+		ctx, softwareinventory.AllDevicesVisible(),
+		&softwareinventory.Service{Store: st},
+		domainSource,
+	)
+	if err != nil {
+		return webui.SoftwareInventoryCollectionRoundResult{}, err
+	}
+	result := webui.SoftwareInventoryCollectionRoundResult{
+		Succeeded: report.Succeeded, Requested: report.Requested, Failed: report.Failed,
+		Devices: make([]webui.SoftwareInventoryCollectionDeviceResult, 0, len(report.Devices)),
+	}
+	for _, device := range report.Devices {
+		result.Devices = append(result.Devices, webui.SoftwareInventoryCollectionDeviceResult{
+			DeviceName: device.DeviceName, Requested: device.Requested,
+			CollectorName: device.CollectorName, Err: device.Err,
+		})
+	}
+	return result, nil
+}
+
 func deviceError(deviceName string, err error) error {
 	if errors.Is(err, softwareinventory.ErrDeviceNotVisible) {
 		return &webui.SoftwareInventoryDeviceNotFoundError{DeviceName: deviceName}

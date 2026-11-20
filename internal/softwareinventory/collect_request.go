@@ -3,9 +3,33 @@ package softwareinventory
 import (
 	"cmp"
 	"context"
+	"time"
 
 	"ssh-manager-mcp/internal/store"
 )
+
+// ImmediateCollectionDeviceReport 是「立即全部采集」里一台设备的结论。
+type ImmediateCollectionDeviceReport struct {
+	DeviceName string `json:"device_name"`
+	// Requested 为 true 表示这台设备只登记了立即采集请求，等待客户端实
+	// 例执行。
+	Requested bool `json:"requested"`
+	// CollectorName 是等待执行的客户端实例名称，仅用于页面报告。
+	CollectorName string            `json:"collector_name,omitempty"`
+	Report        *CollectionReport `json:"report,omitempty"`
+	Err           string            `json:"error,omitempty"`
+}
+
+// ImmediateCollectionRoundReport 是「立即全部采集」的整轮结论。失败设备
+// 不中断其余设备，因此 Devices 会同时保留成功、等待客户端实例与失败。
+type ImmediateCollectionRoundReport struct {
+	StartedAt time.Time                         `json:"started_at"`
+	EndedAt   time.Time                         `json:"ended_at"`
+	Succeeded int                               `json:"succeeded"`
+	Requested int                               `json:"requested"`
+	Failed    int                               `json:"failed"`
+	Devices   []ImmediateCollectionDeviceReport `json:"devices"`
+}
 
 // ImmediateCollectionOutcome 是一次「立即采集」请求的结论。
 type ImmediateCollectionOutcome struct {
@@ -79,4 +103,69 @@ func (m *Manager) CollectForScopeWithServerEntry(
 		return nil, err
 	}
 	return &ImmediateCollectionOutcome{DeviceName: deviceName, Report: report}, nil
+}
+
+// CollectAllForScope 对可见范围内的全部受管设备发起立即采集。采集执行者
+// 是本实例的设备同步执行；是客户端实例的设备只登记请求。单台失败记入报
+// 告后继续处理下一台。
+func (m *Manager) CollectAllForScope(
+	ctx context.Context,
+	visibility Visibility,
+	service *Service,
+	source Source,
+) (*ImmediateCollectionRoundReport, error) {
+	statuses, err := m.st.SoftwareCollectionStatuses("")
+	if err != nil {
+		return nil, err
+	}
+	if service == nil {
+		service = &Service{Store: m.st, Now: m.Now}
+	}
+	report := &ImmediateCollectionRoundReport{StartedAt: m.now()}
+	for _, status := range statuses {
+		if !status.Managed {
+			continue
+		}
+		if _, err := m.st.SoftwareDeviceOverviewForDevice(status.DeviceName, visibility); err != nil {
+			if err == store.ErrSoftwareDeviceNotVisible {
+				continue
+			}
+			return nil, err
+		}
+		device := ImmediateCollectionDeviceReport{
+			DeviceName: status.DeviceName, CollectorName: status.CollectorName,
+		}
+		switch {
+		case ctx.Err() != nil:
+			device.Err = "本轮在执行前已停止"
+		case status.Collector.IsClient():
+			if err := m.st.RequestSoftwareImmediateCollection(status.DeviceName, source.origin); err != nil {
+				device.Err = err.Error()
+			} else {
+				device.Requested = true
+				report.Requested++
+			}
+		default:
+			result, err := service.Collect(ctx, CollectRequest{
+				DeviceName:  status.DeviceName,
+				ServerEntry: status.PreferredServerID,
+				Source:      source,
+			})
+			if err != nil {
+				device.Err = err.Error()
+			} else {
+				device.Report = result
+				report.Succeeded++
+			}
+		}
+		if device.Err != "" {
+			report.Failed++
+		}
+		report.Devices = append(report.Devices, device)
+	}
+	report.EndedAt = m.now()
+	if err := ctx.Err(); err != nil {
+		return report, err
+	}
+	return report, nil
 }

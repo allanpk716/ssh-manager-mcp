@@ -73,6 +73,25 @@ test("全局搜索支持精确版本并默认折叠全部软件包", async ({ pa
   await expect(virtualCard.getByText("openssl-library")).toBeVisible();
 });
 
+test("每天采集时间持久保存且立即全部采集登记客户端设备", async ({ page, softwareInventoryScheduleUI }) => {
+  await openSoftwareInventory(page, softwareInventoryScheduleUI);
+  const dailyTime = page.getByLabel("每天采集时间");
+  await expect(dailyTime).toHaveValue("01:00");
+  await dailyTime.fill("02:30");
+  await page.getByRole("button", { name: "保存时间" }).click();
+  await expect(page.getByText("每天采集时间已保存。")).toBeVisible();
+  await page.reload();
+  await expect(page.getByLabel("每天采集时间")).toHaveValue("02:30");
+
+  await page.getByRole("button", { name: "立即全部采集" }).click();
+  const report = page.locator("section[aria-label='立即全部采集报告']");
+  await expect(report).toContainText("成功 0 台，等待客户端实例 5 台，失败 0 台");
+  for (const device of ["工作站", "虚拟网设备", "分部过期设备", "分部失败设备", "old-1"]) {
+    await expect(report).toContainText(`${device}：已登记，等待客户端实例 laptop-client 执行`);
+  }
+  await expect(report).not.toContainText("不受管存储");
+});
+
 test("软件清单区域撤下旧流程入口", async ({ page, softwareInventoryUI }) => {
   await openSoftwareInventory(page, softwareInventoryUI);
   const area = page.locator("section.software-inventory");

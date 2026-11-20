@@ -54,55 +54,61 @@ func TestSoftwareInventoryNavFollowsCapability(t *testing.T) {
 }
 
 type stubSoftwareInventorySource struct {
-	device         *SoftwareInventoryDevice
-	deviceErr      error
-	devices        []SoftwareInventoryDeviceSummary
-	deviceFilter   SoftwareInventoryFilter
-	searchRows     []SoftwareInventorySearchRow
-	searchDevices  []SoftwareInventorySearchDevice
-	searchQuery    string
-	searchFilter   SoftwareInventoryFilter
-	collectResult  SoftwareInventoryCollectionResult
-	collectErr     error
-	collectDevice  string
-	collectAddress string
-	collectCalled  bool
-	todos          SoftwareInventoryTodos
-	declaration    *SoftwareInventoryDeclaration
-	addedForm      SoftwareInventoryDeclarationForm
-	addAddress     string
-	addCalled      bool
-	addID          string
-	editCalled     bool
-	editID         string
-	editForm       SoftwareInventoryDeclarationForm
-	editAddress    string
-	claimCalled    bool
-	claimID        string
-	claimKey       string
-	claimAddress   string
-	deleteCalled   bool
-	deleteID       string
-	deleteAddress  string
-	drafts         []SoftwareInventoryDraft
-	confirmID      string
-	confirmForm    *SoftwareInventoryDeclarationForm
-	confirmAddress string
-	confirmCalled  bool
-	rejectID       string
-	rejectAddress  string
-	rejectCalled   bool
-	settings       SoftwareInventorySettings
-	declarations   []SoftwareInventoryDeclaration
-	collectorForm  SoftwareInventoryCollectorForm
-	collectorErr   error
-	collectorAddr  string
-	collectorCall  bool
-	sudoServer     string
-	sudoEnabled    bool
-	sudoErr        error
-	sudoAddress    string
-	sudoCalled     bool
+	device             *SoftwareInventoryDevice
+	deviceErr          error
+	devices            []SoftwareInventoryDeviceSummary
+	deviceFilter       SoftwareInventoryFilter
+	searchRows         []SoftwareInventorySearchRow
+	searchDevices      []SoftwareInventorySearchDevice
+	searchQuery        string
+	searchFilter       SoftwareInventoryFilter
+	collectResult      SoftwareInventoryCollectionResult
+	collectAllResult   SoftwareInventoryCollectionRoundResult
+	collectErr         error
+	collectDevice      string
+	collectAddress     string
+	collectCalled      bool
+	dailyTimeValue     string
+	dailyTimeAddress   string
+	dailyTimeSetCalled bool
+	collectAllAddress  string
+	collectAllCalled   bool
+	todos              SoftwareInventoryTodos
+	declaration        *SoftwareInventoryDeclaration
+	addedForm          SoftwareInventoryDeclarationForm
+	addAddress         string
+	addCalled          bool
+	addID              string
+	editCalled         bool
+	editID             string
+	editForm           SoftwareInventoryDeclarationForm
+	editAddress        string
+	claimCalled        bool
+	claimID            string
+	claimKey           string
+	claimAddress       string
+	deleteCalled       bool
+	deleteID           string
+	deleteAddress      string
+	drafts             []SoftwareInventoryDraft
+	confirmID          string
+	confirmForm        *SoftwareInventoryDeclarationForm
+	confirmAddress     string
+	confirmCalled      bool
+	rejectID           string
+	rejectAddress      string
+	rejectCalled       bool
+	settings           SoftwareInventorySettings
+	declarations       []SoftwareInventoryDeclaration
+	collectorForm      SoftwareInventoryCollectorForm
+	collectorErr       error
+	collectorAddr      string
+	collectorCall      bool
+	sudoServer         string
+	sudoEnabled        bool
+	sudoErr            error
+	sudoAddress        string
+	sudoCalled         bool
 }
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryDevices(
@@ -137,6 +143,30 @@ func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
 	s.collectDevice = deviceName
 	s.collectAddress = source.RemoteAddress
 	return s.collectResult, s.collectErr
+}
+
+func (s *stubSoftwareInventorySource) SoftwareInventoryDailyTime() (string, error) {
+	if s.dailyTimeValue == "" {
+		return "01:00", nil
+	}
+	return s.dailyTimeValue, nil
+}
+
+func (s *stubSoftwareInventorySource) SetSoftwareInventoryDailyTime(
+	value string, source SoftwareInventoryWriteSource,
+) error {
+	s.dailyTimeSetCalled = true
+	s.dailyTimeValue = value
+	s.dailyTimeAddress = source.RemoteAddress
+	return nil
+}
+
+func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollectionAll(
+	_ context.Context, source SoftwareInventoryWriteSource,
+) (SoftwareInventoryCollectionRoundResult, error) {
+	s.collectAllCalled = true
+	s.collectAllAddress = source.RemoteAddress
+	return s.collectAllResult, nil
 }
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryTodos() (SoftwareInventoryTodos, error) {

@@ -486,10 +486,13 @@ type session struct {
 	// authorizationRefusal 保存删除 Profile 被拒绝的一次性提示。
 	authorizationRefusal *AccessProfileInUse
 	opsBackupFlash       *OpsBackupFlash
-	serverAddDraft       *serverAddDraft
-	generation           int64
-	lastActive           time.Time
-	lastVerified         time.Time
+	// softwareInventoryCollection 保存「立即全部采集」跳回首页前的一次
+	// 性报告；首页读取后立即清空。
+	softwareInventoryCollection *SoftwareInventoryCollectionRoundResult
+	serverAddDraft              *serverAddDraft
+	generation                  int64
+	lastActive                  time.Time
+	lastVerified                time.Time
 }
 
 // handler 是回环模式 Web UI 的根处理器，所有路由都在 /ui/ 前缀下。

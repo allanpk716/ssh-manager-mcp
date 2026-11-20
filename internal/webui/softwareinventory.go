@@ -123,12 +123,16 @@ type SoftwareInventoryOption struct {
 // SoftwareInventoryPageView 是设备优先首页的全部页面数据。设备列表与搜索
 // 结果共享同一组条件，保证两组结果的地点与网络口径一致。
 type SoftwareInventoryPageView struct {
-	Filter         SoftwareInventoryFilter
-	SiteOptions    []SoftwareInventoryOption
-	NetworkOptions []SoftwareInventoryOption
-	Devices        []SoftwareInventoryDeviceSummary
-	SearchDevices  []SoftwareInventorySearchDevice
-	HasSearch      bool
+	Filter              SoftwareInventoryFilter
+	DailyCollectionTime string
+	ScheduleNotice      string
+	ScheduleError       string
+	CollectionReport    *SoftwareInventoryCollectionRoundResult
+	SiteOptions         []SoftwareInventoryOption
+	NetworkOptions      []SoftwareInventoryOption
+	Devices             []SoftwareInventoryDeviceSummary
+	SearchDevices       []SoftwareInventorySearchDevice
+	HasSearch           bool
 }
 
 // SoftwareInventorySearchRow 是跨设备搜索结果中的一行。
@@ -155,6 +159,23 @@ func (e *SoftwareInventoryDeviceNotFoundError) Error() string {
 // true 表示只登记了请求，等待客户端实例执行。
 type SoftwareInventoryCollectionResult struct {
 	Requested bool
+}
+
+// SoftwareInventoryCollectionDeviceResult 是「立即全部采集」里一台设备的
+// 页面结论。Err 同时用于同步采集失败与登记客户端请求失败。
+type SoftwareInventoryCollectionDeviceResult struct {
+	DeviceName    string
+	Requested     bool
+	CollectorName string
+	Err           string
+}
+
+// SoftwareInventoryCollectionRoundResult 是「立即全部采集」的页面报告。
+type SoftwareInventoryCollectionRoundResult struct {
+	Succeeded int
+	Requested int
+	Failed    int
+	Devices   []SoftwareInventoryCollectionDeviceResult
 }
 
 // SoftwareInventoryFormError 表示软件清单表单提交内容校验失败，Message 可
@@ -208,6 +229,12 @@ type SoftwareInventorySource interface {
 		deviceName string,
 		source SoftwareInventoryWriteSource,
 	) (SoftwareInventoryCollectionResult, error)
+	SoftwareInventoryDailyTime() (string, error)
+	SetSoftwareInventoryDailyTime(value string, source SoftwareInventoryWriteSource) error
+	RequestSoftwareInventoryCollectionAll(
+		ctx context.Context,
+		source SoftwareInventoryWriteSource,
+	) (SoftwareInventoryCollectionRoundResult, error)
 }
 
 // registerSoftwareInventoryRoutes 注册软件清单页路由。客户端不注册任何
@@ -230,9 +257,57 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventorySearch(w, r)
 	case "/ui/software-inventory/collect":
 		h.handleSoftwareInventoryCollect(w, r)
+	case "/ui/software-inventory/schedule":
+		h.handleSoftwareInventorySchedule(w, r)
+	case "/ui/software-inventory/collect-all":
+		h.handleSoftwareInventoryCollectAll(w, r)
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
+}
+
+// handleSoftwareInventorySchedule 保存全局每天采集时间。调度服务与客户端
+// 分派都在下一次读取设置时使用新时间，不需要重启权威端。
+func (h *handler) handleSoftwareInventorySchedule(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "保存每天采集时间只接受 POST 请求。")
+		return
+	}
+	value := strings.TrimSpace(r.PostFormValue("daily_time"))
+	if err := h.cfg.SoftwareInventory.SetSoftwareInventoryDailyTime(
+		value, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
+	); err != nil {
+		var formErr *SoftwareInventoryFormError
+		if errors.As(err, &formErr) {
+			http.Redirect(w, r, "/ui/software-inventory/?schedule=error", http.StatusSeeOther)
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "保存每天采集时间失败", "保存每天采集时间失败，请稍后重试。")
+		return
+	}
+	http.Redirect(w, r, "/ui/software-inventory/?schedule=saved", http.StatusSeeOther)
+}
+
+// handleSoftwareInventoryCollectAll 处理「立即全部采集」。同步结果与等待
+// 客户端实例的登记结果先放在会话里的一次性报告，跳回首页后展示。
+func (h *handler) handleSoftwareInventoryCollectAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "立即全部采集只接受 POST 请求。")
+		return
+	}
+	report, err := h.cfg.SoftwareInventory.RequestSoftwareInventoryCollectionAll(
+		r.Context(), SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
+	)
+	if err != nil {
+		h.renderError(w, r, http.StatusInternalServerError, "立即全部采集失败", "立即全部采集失败，请稍后重试。")
+		return
+	}
+	if sess := h.currentSession(r); sess != nil {
+		h.mu.Lock()
+		sess.softwareInventoryCollection = &report
+		h.mu.Unlock()
+	}
+	http.Redirect(w, r, "/ui/software-inventory/?collect_all=done", http.StatusSeeOther)
 }
 
 // handleSoftwareInventoryCollect 处理立即采集表单。本实例采集时同步执行；
@@ -302,6 +377,21 @@ func (h *handler) handleSoftwareInventoryRoot(w http.ResponseWriter, r *http.Req
 	})
 }
 
+func (h *handler) takeSoftwareInventoryCollectionReport(r *http.Request) *SoftwareInventoryCollectionRoundResult {
+	if r.URL.Query().Get("collect_all") != "done" {
+		return nil
+	}
+	sess := h.currentSession(r)
+	if sess == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	report := sess.softwareInventoryCollection
+	sess.softwareInventoryCollection = nil
+	return report
+}
+
 func softwareInventoryFilterFromQuery(r *http.Request) SoftwareInventoryFilter {
 	return SoftwareInventoryFilter{
 		Name:         strings.TrimSpace(r.URL.Query().Get("query")),
@@ -315,6 +405,18 @@ func (h *handler) softwareInventoryPageView(
 	r *http.Request, filter SoftwareInventoryFilter,
 ) (*SoftwareInventoryPageView, error) {
 	view := &SoftwareInventoryPageView{Filter: filter}
+	dailyTime, err := h.cfg.SoftwareInventory.SoftwareInventoryDailyTime()
+	if err != nil {
+		return nil, err
+	}
+	view.DailyCollectionTime = dailyTime
+	switch r.URL.Query().Get("schedule") {
+	case "saved":
+		view.ScheduleNotice = "每天采集时间已保存。"
+	case "error":
+		view.ScheduleError = "每天采集时间保存失败，请核对 24 小时制的「小时:分钟」写法。"
+	}
+	view.CollectionReport = h.takeSoftwareInventoryCollectionReport(r)
 	devices, err := h.cfg.SoftwareInventory.SoftwareInventoryDevices(filter)
 	if err != nil {
 		return nil, err

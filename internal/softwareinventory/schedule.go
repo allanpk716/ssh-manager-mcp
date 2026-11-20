@@ -11,12 +11,9 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// 采集调度的固定限制来自规格：每天保持新鲜，因此距上次成功已满一天就到
-// 期；周期检查建议每小时一轮；并发上限建议 4。
+// 采集调度的固定限制来自规格：全局每天在配置的时间到期；周期检查建议每
+// 小时一轮；并发上限建议 4。
 const (
-	// CollectDueAfter 是设备到期阈值：距上次成功采集达到这个时长后，下
-	// 一轮重新采集；从未成功采集过的设备始终到期。
-	CollectDueAfter = 24 * time.Hour
 	// DefaultScheduleInterval 是 Run 周期检查的默认间隔。
 	DefaultScheduleInterval = time.Hour
 	// DefaultScheduleConcurrency 是一轮里同时采集的设备数上限。
@@ -27,8 +24,8 @@ const (
 // 采集服务；测试注入假函数验证调度行为。
 type SchedulerCollectFunc func(ctx context.Context, request CollectRequest) (*CollectionReport, error)
 
-// Scheduler 是软件清单采集调度服务：周期检查「采集执行者是本实例、且距
-// 上次成功已满一天或有待执行的立即采集请求」的设备，按并发上限采集。
+// Scheduler 是软件清单采集调度服务：周期检查「采集执行者是本实例、且已
+// 经过全局每日采集时间或有待执行的立即采集请求」的设备，按并发上限采集。
 // 时钟、间隔与采集函数都可注入；serve 只负责启动与收尾。
 type Scheduler struct {
 	Store *store.Store
@@ -73,8 +70,9 @@ func NewScheduler(st *store.Store) *Scheduler {
 	return &Scheduler{Store: st, service: &Service{Store: st}}
 }
 
-// ExecuteRound 执行一轮：读本实例名下的受管设备状态，筛出到期设备（距
-// 上次成功已满一天，或有待执行的立即采集请求），立即采集请求排最前，
+// ExecuteRound 执行一轮：读本实例名下的受管设备状态，筛出到期设备（上次
+// 成功早于最近一次已到达的每日采集时间，或有待执行的立即采集请求），
+// 立即采集请求排最前，
 // 其余按设备名排序，按并发上限采集。单台设备失败不中断本轮。
 func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, error) {
 	if s == nil || s.Store == nil {
@@ -86,9 +84,17 @@ func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, er
 		return nil, err
 	}
 	now := s.now()
+	dailyTime, err := s.Store.SoftwareCollectionDailyTime()
+	if err != nil {
+		return nil, err
+	}
 	due := make([]models.SoftwareCollectionStatus, 0, len(statuses))
 	for _, status := range statuses {
-		if status.PendingImmediate || now.Sub(status.LastSuccessAt) >= CollectDueAfter {
+		collectionDue, err := models.SoftwareCollectionDue(status.LastSuccessAt, now, dailyTime)
+		if err != nil {
+			return nil, err
+		}
+		if status.PendingImmediate || collectionDue {
 			due = append(due, status)
 		}
 	}

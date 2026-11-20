@@ -300,6 +300,27 @@ export async function startStandaloneUIWithSoftwareInventory(): Promise<standalo
   return startUIProcess(runDir);
 }
 
+// startStandaloneUIWithSoftwareInventorySchedule 用同一份软件清单种子启
+// 动单机 Web UI，并把受管设备的采集执行者都登记给客户端实例，避免浏览器
+// 测试点击「立即全部采集」时拨号到不可达测试地址。
+export async function startStandaloneUIWithSoftwareInventorySchedule(): Promise<standaloneUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-software-inventory-schedule-"));
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...seedVaultEnvironment(runDir),
+      SSHMGR_E2E_SOFTWARE_INVENTORY: "1",
+      SSHMGR_E2E_SOFTWARE_INVENTORY_CLIENT_COLLECTOR: "1",
+    },
+  });
+  if (seed.status !== 0) {
+    await rm(runDir, { recursive: true, force: true });
+    throw new Error(`准备软件清单定时采集临时加密库失败：${seed.stdout}\n${seed.stderr}`);
+  }
+  return startUIProcess(runDir);
+}
+
 // startClientUIWithTopology 用带拓扑数据的本地快照启动客户端 Web UI，供网
 // 络拓扑浏览器测试验证只读视图与按快照裁剪的呈现。
 export async function startClientUIWithTopology(): Promise<clientUI> {
@@ -588,6 +609,11 @@ export const test = base.extend<
   },
   softwareInventoryUI: async ({}, use) => {
     const ui = await startStandaloneUIWithSoftwareInventory();
+    await use(ui);
+    await ui.close();
+  },
+  softwareInventoryScheduleUI: async ({}, use) => {
+    const ui = await startStandaloneUIWithSoftwareInventorySchedule();
     await use(ui);
     await ui.close();
   },
