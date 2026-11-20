@@ -26,6 +26,7 @@
 <div class="form-field">
 <label for="network-range">网段</label>
 <input id="network-range" name="range" value="{{.NetworkForm.NetworkRange}}" maxlength="50" autocomplete="off" placeholder="例如：192.168.100.0/24">
+<p class="form-help">用来提示哪些地址属于这个网络，不会自动归入。</p>
 </div>
 {{if eq .NetworkForm.Type "physical"}}
 <fieldset class="form-fields">

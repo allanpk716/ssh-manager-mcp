@@ -107,3 +107,49 @@ test("390 视口管理三级地点、移动、删除守卫与网络覆盖地点"
   }
 });
 
+test("网络表单说明网段用途并在非法输入后保留字段", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await page.goto(ui.startupURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await openMoreMenu(page);
+    await page.getByRole("link", { name: "地点与网络" }).click();
+    await page.getByRole("heading", { name: "地点与网络" }).waitFor();
+    await page.getByRole("link", { name: "新建物理局域网" }).click();
+    await page.getByRole("heading", { name: "新建网络" }).waitFor();
+
+    const rangePurpose = page.getByText("用来提示哪些地址属于这个网络，不会自动归入。");
+    await expect(rangePurpose).toBeVisible();
+    await page.getByLabel("名称", { exact: true }).fill("浏览器测试网络");
+    await page.getByLabel("家A", { exact: true }).check();
+    await page.getByLabel("网段", { exact: true }).fill("192.168.100.1/24");
+    await page.getByLabel("标称带宽（Mbps）").fill("1000");
+    await page.getByLabel("按流量计费").check();
+    await page.getByRole("button", { name: "保存" }).click();
+
+    await expect(page.getByText("网段必须是网络地址，主机位必须为零")).toBeVisible();
+    await expect(page.getByLabel("名称", { exact: true })).toHaveValue("浏览器测试网络");
+    await expect(page.getByLabel("家A", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("网段", { exact: true })).toHaveValue("192.168.100.1/24");
+    await expect(page.getByLabel("标称带宽（Mbps）")).toHaveValue("1000");
+    await expect(page.getByLabel("按流量计费")).toBeChecked();
+
+    await page.getByRole("link", { name: "返回地点与网络" }).click();
+    await page.getByRole("heading", { name: "地点与网络" }).waitFor();
+    await page.locator(".network-row", { hasText: "家A局域网" }).getByRole("link", { name: "编辑" }).click();
+    await page.getByRole("heading", { name: "编辑网络" }).waitFor();
+    await expect(rangePurpose).toBeVisible();
+    await page.getByLabel("网段", { exact: true }).fill("not-a-network");
+    await page.getByRole("button", { name: "保存" }).click();
+
+    await expect(page.getByText("网段必须是合法的 IPv4 或 IPv6 网络地址")).toBeVisible();
+    await expect(page.getByLabel("名称", { exact: true })).toHaveValue("家A局域网");
+    await expect(page.getByLabel("家A", { exact: true })).toBeChecked();
+    await expect(page.getByLabel("网段", { exact: true })).toHaveValue("not-a-network");
+    await expect(page.getByLabel("标称带宽（Mbps）")).toHaveValue("1000");
+    await expect(page.getByLabel("按流量计费")).toBeChecked();
+  } finally {
+    await ui.close();
+  }
+});
+

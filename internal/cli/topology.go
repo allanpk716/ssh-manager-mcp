@@ -326,7 +326,7 @@ func networksAddCmd() *cobra.Command {
 	c.Flags().StringVar(&networkType, "type", "", "网络类型：physical（物理局域网）或 virtual（虚拟局域网）")
 	c.Flags().StringVar(&site, "site", "", "覆盖的地点；物理局域网必填（可为任意一级，传完整路径），虚拟局域网不能使用")
 	c.Flags().StringVar(&note, "note", "", "备注")
-	c.Flags().StringVar(&networkRange, "cidr", "", "网段；只给人看，不参与判断")
+	c.Flags().StringVar(&networkRange, "cidr", "", "网段；只用来提示地址归属，不会自动归入")
 	c.Flags().Int64Var(&bandwidth, "bandwidth-mbps", 0, "标称带宽，单位 Mbit/s；0 表示未填写")
 	c.Flags().BoolVar(&metered, "metered", false, "是否按流量计费")
 	_ = c.MarkFlagRequired("type")
@@ -387,7 +387,7 @@ func networksEditCmd() *cobra.Command {
 	c.Flags().StringVar(&name, "name", "", "新名字")
 	c.Flags().StringVar(&site, "site", "", "新的覆盖地点；传完整路径")
 	c.Flags().StringVar(&note, "note", "", "新备注；传空字符串清空")
-	c.Flags().StringVar(&networkRange, "cidr", "", "新网段；传空字符串清空")
+	c.Flags().StringVar(&networkRange, "cidr", "", "新网段；传空字符串清空；只用来提示地址归属，不会自动归入")
 	c.Flags().Int64Var(&bandwidth, "bandwidth-mbps", 0, "新的标称带宽，单位 Mbit/s；0 表示未填写")
 	c.Flags().BoolVar(&metered, "metered", false, "是否按流量计费")
 	return c

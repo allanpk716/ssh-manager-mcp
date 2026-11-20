@@ -126,6 +126,51 @@ func TestTopologyWriterManagesNetworksThroughStore(t *testing.T) {
 	}
 }
 
+func TestTopologyWriterManagedNetworksValidateNetworkRange(t *testing.T) {
+	st := newWriterTestStore(t)
+	writer := WriterFromStore(st)
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
+
+	invalid := &webui.TopologyInvalidInputError{}
+	if _, err := writer.AddManagedNetwork(webui.TopologyNetworkInput{
+		Name: "坏网段", Type: "physical", Site: "家A", NetworkRange: "192.168.100.1/24",
+	}, source); !errors.As(err, &invalid) {
+		t.Fatalf("主机位不为零的网段应按输入错误拒绝：%v", err)
+	}
+	networks, err := st.ListNetworks(store.NetworkFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range networks {
+		if network.Name == "坏网段" {
+			t.Fatalf("非法网段不能写入网络：%+v", network)
+		}
+	}
+
+	invalidRange := "not-a-network"
+	if _, err := writer.EditManagedNetwork("家A局域网", webui.TopologyNetworkChanges{
+		NetworkRange: &invalidRange,
+	}, source); !errors.As(err, &invalid) {
+		t.Fatalf("编辑网络的非法网段应按输入错误拒绝：%v", err)
+	}
+	networks, err = st.ListNetworks(store.NetworkFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawOriginal := false
+	for _, network := range networks {
+		if network.Name == "家A局域网" {
+			sawOriginal = true
+			if network.NetworkRange != "" {
+				t.Fatalf("非法编辑不能改变原网段：%+v", network)
+			}
+		}
+	}
+	if !sawOriginal {
+		t.Fatalf("原网络应仍然存在：%+v", networks)
+	}
+}
+
 func ptrString(value string) *string { return &value }
 
 // TestTopologyWriterEditsDeviceSiteAndMovesServer 校验服务器详情页新增的两

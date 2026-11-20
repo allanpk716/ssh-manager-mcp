@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"time"
 
@@ -56,6 +57,26 @@ type NetworkFilter struct {
 func validateTopologyName(objectType, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return &TopologyValidationError{Message: fmt.Sprintf("%s名字不能为空", objectType)}
+	}
+	return nil
+}
+
+// validateNetworkRange 允许留空；非空时必须是主机位为零的 IPv4 或 IPv6
+// 网络地址。错误文字直接给 owner 看。
+func validateNetworkRange(networkRange string) error {
+	if networkRange == "" {
+		return nil
+	}
+	prefix, err := netip.ParsePrefix(networkRange)
+	if err != nil {
+		return &TopologyValidationError{
+			Message: "网段必须是合法的 IPv4 或 IPv6 网络地址，写法如 192.168.100.0/24 或 2001:db8::/32",
+		}
+	}
+	if prefix.Addr() != prefix.Masked().Addr() {
+		return &TopologyValidationError{
+			Message: "网段必须是网络地址，主机位必须为零；例如 192.168.100.1/24 应写为 192.168.100.0/24",
+		}
 	}
 	return nil
 }
@@ -237,6 +258,10 @@ func (s *Store) AddNetworkWithSource(input models.Network, source WriteSource) (
 	if input.BandwidthMbps < 0 {
 		return nil, &TopologyValidationError{Message: "标称带宽不能小于 0 Mbit/s"}
 	}
+	input.NetworkRange = strings.TrimSpace(input.NetworkRange)
+	if err := validateNetworkRange(input.NetworkRange); err != nil {
+		return nil, err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
@@ -299,6 +324,12 @@ func (s *Store) EditNetworkWithSource(name string, changes NetworkChanges, sourc
 		return nil, ErrReadOnly
 	}
 	name = strings.TrimSpace(name)
+	if changes.NetworkRange != nil {
+		networkRange := strings.TrimSpace(*changes.NetworkRange)
+		if err := validateNetworkRange(networkRange); err != nil {
+			return nil, err
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
