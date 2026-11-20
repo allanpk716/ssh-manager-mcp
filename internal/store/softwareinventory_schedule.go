@@ -11,22 +11,52 @@ import (
 
 const softwareCollectionDailyTimeSettingKey = "softwareinventory.collection.daily_time"
 
+// SoftwareCollectionDailyTimeSetting 是全局每天采集时间与这条设置修改时刻
+// 的持久保存值。
+type SoftwareCollectionDailyTimeSetting struct {
+	Value     string
+	ChangedAt time.Time
+}
+
+// SoftwareCollectionDailyTimeSetting 读取全局每天采集时间与修改时刻。设置
+// 缺失时返回默认 01:00 和零修改时刻；旧数据的修改时刻为零时同样返回零
+// 值；已保存但格式非法的值会让调度与客户端分派同时失败，避免悄悄换回默
+// 认时间。
+func (s *Store) SoftwareCollectionDailyTimeSetting() (SoftwareCollectionDailyTimeSetting, error) {
+	var value string
+	var changedAt int64
+	err := s.db.QueryRow(
+		`SELECT value,COALESCE(updated_at,0) FROM settings WHERE key=?`,
+		softwareCollectionDailyTimeSettingKey,
+	).Scan(&value, &changedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return SoftwareCollectionDailyTimeSetting{
+			Value: models.DefaultSoftwareCollectionDailyTime,
+		}, nil
+	}
+	if err != nil {
+		return SoftwareCollectionDailyTimeSetting{}, err
+	}
+	normalized := strings.TrimSpace(value)
+	if _, _, err := models.ParseSoftwareCollectionDailyTime(normalized); err != nil {
+		return SoftwareCollectionDailyTimeSetting{}, err
+	}
+	setting := SoftwareCollectionDailyTimeSetting{Value: normalized}
+	if changedAt > 0 {
+		setting.ChangedAt = time.Unix(changedAt, 0)
+	}
+	return setting, nil
+}
+
 // SoftwareCollectionDailyTime 读取全局每天采集时间。设置缺失时返回默认
 // 01:00；已保存但格式非法的值会让调度与客户端分派同时失败，避免悄悄换
 // 回默认时间。
 func (s *Store) SoftwareCollectionDailyTime() (string, error) {
-	value, stored, err := s.GetSetting(softwareCollectionDailyTimeSettingKey)
+	setting, err := s.SoftwareCollectionDailyTimeSetting()
 	if err != nil {
 		return "", err
 	}
-	if !stored {
-		return models.DefaultSoftwareCollectionDailyTime, nil
-	}
-	normalized := strings.TrimSpace(value)
-	if _, _, err := models.ParseSoftwareCollectionDailyTime(normalized); err != nil {
-		return "", err
-	}
-	return normalized, nil
+	return setting.Value, nil
 }
 
 // SetSoftwareCollectionDailyTime 校验并持久保存全局每天采集时间，同时写
@@ -40,6 +70,7 @@ func (s *Store) SetSoftwareCollectionDailyTime(value string, source WriteSource)
 	if _, _, err := models.ParseSoftwareCollectionDailyTime(normalized); err != nil {
 		return err
 	}
+	at := s.nowTime()
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -58,11 +89,11 @@ func (s *Store) SetSoftwareCollectionDailyTime(value string, source WriteSource)
 	if _, err := tx.Exec(`
 		INSERT INTO settings(key,value,updated_at) VALUES(?,?,?)
 		ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`,
-		softwareCollectionDailyTimeSettingKey, normalized, s.nowTime().Unix(),
+		softwareCollectionDailyTimeSettingKey, normalized, at.Unix(),
 	); err != nil {
 		return err
 	}
-	if err := writeSoftwareAuditTx(tx, s.nowTime(), "software-collect-time", map[string]any{
+	if err := writeSoftwareAuditTx(tx, at, "software-collect-time", map[string]any{
 		"old": strings.TrimSpace(oldValue), "new": normalized,
 	}, source); err != nil {
 		return err

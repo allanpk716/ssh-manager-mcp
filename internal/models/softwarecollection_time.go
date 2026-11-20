@@ -45,12 +45,19 @@ func MostRecentSoftwareCollectionTime(now time.Time, value string) (time.Time, e
 	return latest, nil
 }
 
-// SoftwareCollectionDue 判断一台设备的上次成功是否早于最近一次已到达的
-// 每日采集时间。待执行的立即采集请求由调用方处理，不属于日历规则。
-func SoftwareCollectionDue(lastSuccess, now time.Time, value string) (bool, error) {
+// SoftwareCollectionDue 判断最近一次已到达的每日采集时间是否晚于上次成
+// 功与每日时间修改时刻中较晚的一项。这样把时间提前后，不会把修改前已经
+// 过去的当天窗口误判成要补采；修改之后错过的新窗口仍会补采。旧数据没有
+// 修改时刻时传入零值，行为与只看上次成功一致。待执行的立即采集请求由调
+// 用方处理，不属于日历规则。
+func SoftwareCollectionDue(lastSuccess, changedAt, now time.Time, value string) (bool, error) {
 	latest, err := MostRecentSoftwareCollectionTime(now, value)
 	if err != nil {
 		return false, err
 	}
-	return lastSuccess.Unix() <= 0 || lastSuccess.Before(latest), nil
+	effectiveAfter := changedAt
+	if lastSuccess.After(effectiveAfter) {
+		effectiveAfter = lastSuccess
+	}
+	return latest.After(effectiveAfter), nil
 }

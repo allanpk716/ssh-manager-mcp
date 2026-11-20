@@ -84,13 +84,15 @@ func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, er
 		return nil, err
 	}
 	now := s.now()
-	dailyTime, err := s.Store.SoftwareCollectionDailyTime()
+	dailyTime, err := s.Store.SoftwareCollectionDailyTimeSetting()
 	if err != nil {
 		return nil, err
 	}
 	due := make([]models.SoftwareCollectionStatus, 0, len(statuses))
 	for _, status := range statuses {
-		collectionDue, err := models.SoftwareCollectionDue(status.LastSuccessAt, now, dailyTime)
+		collectionDue, err := models.SoftwareCollectionDue(
+			status.LastSuccessAt, dailyTime.ChangedAt, now, dailyTime.Value,
+		)
 		if err != nil {
 			return nil, err
 		}

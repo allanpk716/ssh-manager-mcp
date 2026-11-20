@@ -22,6 +22,8 @@ func TestSoftwareInventoryAssignmentsFollowDailyTime(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+	changedAt := time.Date(2026, 1, 2, 1, 0, 0, 0, time.Local)
+	fx.st.NowFn = func() time.Time { return changedAt }
 	if err := fx.st.SetSoftwareCollectionDailyTime("02:30", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -40,6 +42,47 @@ func TestSoftwareInventoryAssignmentsFollowDailyTime(t *testing.T) {
 	assertAssignmentDue(t, body, false)
 
 	fx.st.NowFn = func() time.Time { return beforeTime.Add(30 * time.Minute) }
+	_, body = postCollectorEndpoint(t, fx.srv, fx.laptopToken, "/software-inventory/assignments", `{}`)
+	assertAssignmentDue(t, body, true)
+}
+
+// TestSoftwareInventoryAssignmentsHonorDailyTimeChange 验证客户端实例分派
+// 与权威端调度使用同一个「修改后从下一次新时间开始生效」的判断。
+func TestSoftwareInventoryAssignmentsHonorDailyTimeChange(t *testing.T) {
+	fx := newSoftwareInventoryRunner(t)
+	gpu, err := fx.st.GetServerByName("gpu")
+	if err != nil || gpu == nil {
+		t.Fatalf("取 gpu 条目失败：%v %+v", err, gpu)
+	}
+	if err := fx.st.SetSoftwareCollectionCollector(
+		"gpu-设备", "laptop", gpu.ID, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	lastSuccess := time.Date(2026, 1, 1, 3, 0, 0, 0, time.Local)
+	fx.st.NowFn = func() time.Time { return lastSuccess }
+	if err := fx.st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
+		Collector: models.ClientCollector(fx.laptopID), ServerID: gpu.ID,
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	changedAt := time.Date(2026, 1, 2, 2, 0, 0, 0, time.Local)
+	fx.st.NowFn = func() time.Time { return changedAt }
+	if err := fx.st.SetSoftwareCollectionDailyTime("01:00", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	_, body := postCollectorEndpoint(t, fx.srv, fx.laptopToken, "/software-inventory/assignments", `{}`)
+	assertAssignmentDue(t, body, false)
+
+	nextNewTime := time.Date(2026, 1, 3, 1, 0, 0, 0, time.Local)
+	fx.st.NowFn = func() time.Time { return nextNewTime }
+	_, body = postCollectorEndpoint(t, fx.srv, fx.laptopToken, "/software-inventory/assignments", `{}`)
+	assertAssignmentDue(t, body, true)
+
+	missedAfterChange := time.Date(2026, 1, 3, 2, 0, 0, 0, time.Local)
+	fx.st.NowFn = func() time.Time { return missedAfterChange }
 	_, body = postCollectorEndpoint(t, fx.srv, fx.laptopToken, "/software-inventory/assignments", `{}`)
 	assertAssignmentDue(t, body, true)
 }

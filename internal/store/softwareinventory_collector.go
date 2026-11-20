@@ -205,7 +205,7 @@ func (s *Store) SoftwareCollectionAssignments(collector models.Collector, now ti
 	if err != nil {
 		return nil, err
 	}
-	dailyTime, err := s.SoftwareCollectionDailyTime()
+	dailyTime, err := s.SoftwareCollectionDailyTimeSetting()
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +260,9 @@ func (s *Store) SoftwareCollectionAssignments(collector models.Collector, now ti
 		if err != nil {
 			return nil, fmt.Errorf("设备 %s：%w", status.DeviceName, err)
 		}
-		due, err := models.SoftwareCollectionDue(status.LastSuccessAt, now, dailyTime)
+		due, err := models.SoftwareCollectionDue(
+			status.LastSuccessAt, dailyTime.ChangedAt, now, dailyTime.Value,
+		)
 		if err != nil {
 			return nil, err
 		}
