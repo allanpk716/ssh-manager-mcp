@@ -201,6 +201,64 @@ func TestWriterAdapterEditsAndAuditsWebUISource(t *testing.T) {
 	}
 }
 
+// TestWriterAdapterEditsServerAddressList 用真实 vault 验证地址列表适配：
+// 其他地址改归网络后返回最新详情，修订号冲突换成分区编辑的冲突视图。
+func TestWriterAdapterEditsServerAddressList(t *testing.T) {
+	manager, st := newAdapterManager(t)
+	if _, err := st.AddSite("机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "机房局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	device, err := st.AddDevice("workstation", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := st.AddServer(&models.Server{
+		Name: "web", Host: "203.0.113.10", Port: 22, User: "owner", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := WriterFromManager(manager)
+
+	result, conflict, err := writer.EditServerAddresses(id, webui.ServerAddressListForm{
+		ExpectedRevision: 0,
+		Rows:             []webui.ServerAddressRow{{Network: "机房局域网", Address: "10.0.0.8"}},
+	}, webui.ServerWriteSource{RemoteAddress: "192.0.2.7"})
+	if err != nil || conflict != nil {
+		t.Fatalf("地址列表编辑失败：%v conflict=%+v", err, conflict)
+	}
+	if result.Detail == nil || result.Detail.Host != "" || result.Detail.Revision != 1 {
+		t.Fatalf("地址列表编辑结果不正确：%+v", result.Detail)
+	}
+
+	_, conflict, err = writer.EditServerAddresses(id, webui.ServerAddressListForm{
+		ExpectedRevision: 0,
+		Rows:             []webui.ServerAddressRow{{Network: "机房局域网", Address: "10.0.0.9"}},
+	}, webui.ServerWriteSource{RemoteAddress: "192.0.2.7"})
+	if err != nil || conflict == nil || conflict.Current.Host != "" || conflict.Current.Revision != 1 {
+		t.Fatalf("修订号冲突应返回当前详情：%v %+v", err, conflict)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		Actions: []string{"server.edit", "device.member-add"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("成功保存应各有一行服务器与网络成员审计，实际 %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.7" {
+			t.Fatalf("地址列表审计来源不正确：%+v", row)
+		}
+	}
+}
+
 // TestDetailViewIncludesReverseGroups 用真实 vault 验证页面详情数据来自服
 // 务器管理模块的同一份反向查询结果。
 func TestDetailViewIncludesReverseGroups(t *testing.T) {
