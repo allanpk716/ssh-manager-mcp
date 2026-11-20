@@ -96,7 +96,7 @@
 <span class="address-network">{{.NetworkName}}</span>
 <span class="type-tag">{{.TypeLabel}}</span>
 <span class="address-value mono">{{.Address}}</span>
-{{range .RangeSuggestions}}<p class="address-range-hint">这个地址落在 {{.NetworkName}} 的登记网段 {{.NetworkRange}} 内。可在『编辑』里确认归属，不会自动归入。</p>{{end}}
+{{range .RangeSuggestions}}<p class="address-range-hint">这个地址落在 {{.NetworkName}} 的登记网段 {{.NetworkRange}} 内。{{if $.ServerDetailPage.Topology.CanEditAddresses}}可在『编辑』里确认归属，不会自动归入。{{else}}到权威端确认归属，不会自动归入。{{end}}</p>{{end}}
 </div>
 {{end}}
 {{if not .Addresses}}<p class="empty-inline">暂无可用地址。</p>{{end}}

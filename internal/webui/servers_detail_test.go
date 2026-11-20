@@ -621,6 +621,23 @@ func serverDetailNetworkRangeFixture(deviceSiteID string) *TopologyData {
 	}
 }
 
+// TestServerDetailAddressRangeSuggestionsClientReadOnly 校验客户端只读地址
+// 行的网段提示不引导到不存在的编辑入口。
+func TestServerDetailAddressRangeSuggestionsClientReadOnly(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		role: RoleClient, servers: newServerDetailNetworkRangeTestStore(),
+		topology: &stubTopologySource{data: serverDetailNetworkRangeFixture("site-home")},
+	})
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	want := "这个地址落在 家A-办公网 的登记网段 192.168.100.0/24 内。到权威端确认归属，不会自动归入。"
+	if !strings.Contains(body, want) {
+		t.Fatalf("客户端只读地址行应引导到权威端，缺少 %q：\n%s", want, body)
+	}
+	if strings.Contains(body, "可在『编辑』里确认归属") || strings.Contains(body, "?edit=address") {
+		t.Fatalf("客户端只读地址行不应引用编辑入口：\n%s", body)
+	}
+}
+
 // TestServerDetailAddressListWrite 校验整份地址表单走服务器写入口，并把
 // 其他地址行转换成清空语义。
 func TestServerDetailAddressListWrite(t *testing.T) {
