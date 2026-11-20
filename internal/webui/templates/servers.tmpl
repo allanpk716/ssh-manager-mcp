@@ -20,32 +20,42 @@
 <a class="secondary-button" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
 {{end}}
 </div>
-<form class="server-filter-form" method="get" action="/ui/servers/" aria-label="搜索与筛选服务器">
+<form class="server-filter-form" method="get" action="/ui/servers/" aria-label="搜索与筛选服务器" data-server-filter-form>
 <div class="form-field search-field">
 <label for="server-search">搜索</label>
 <input id="server-search" name="query" value="{{.ServerListFilter.Query}}" type="search" autocomplete="off" aria-label="搜索服务器" placeholder="名称、地址、地点或网络">
 </div>
 <div class="server-filter-pills" role="group" aria-label="筛选条件">
 {{if .ServerListFilter.HasTopology}}
+<div class="server-filter-selects" data-server-filter-selects>
 <div class="form-field">
 <label for="server-site-filter">地点</label>
 <select id="server-site-filter" name="site" aria-label="按地点筛选">
-<option value="">全部地点</option>
-{{range .ServerListFilter.Sites}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Site .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+{{range .ServerListFilter.Sites}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Site .Value}} selected{{end}}>{{.Label}}{{if .Note}} · {{.Note}}{{end}} · {{.Count}} 台</option>{{end}}
 </select>
 </div>
 <div class="form-field">
 <label for="server-network-filter">网络</label>
 <select id="server-network-filter" name="network" aria-label="按网络筛选">
-<option value="">全部网络</option>
-{{range .ServerListFilter.Networks}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Network .Value}} selected{{end}}>{{.Label}}</option>{{end}}
+{{range .ServerListFilter.Networks}}<option value="{{.Value}}"{{if eq $.ServerListFilter.Network .Value}} selected{{end}}>{{.Label}}{{if .Note}} · {{.Note}}{{end}} · {{.Count}} 台</option>{{end}}
 </select>
 </div>
 {{end}}
+</div>
 <label class="switch-control attention-switch"><input type="checkbox" name="attention" value="1"{{if .ServerListFilter.Attention}} checked{{end}}><span class="switch-track" aria-hidden="true"></span><span>只看需要注意</span></label>
-<button type="submit">应用筛选</button>
+<button class="no-script-filter-submit" type="submit" data-no-script-filter-submit>应用筛选</button>
 </div>
 </form>
+{{if .ServerListFilter.HasTopology}}
+<div class="server-filter-buttons" hidden data-server-filter-buttons>
+<button class="filter-button{{if .ServerListFilter.Site}} active{{end}}" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="server-site-filter-sheet" data-open-server-filter="site"><strong>{{if .ServerListFilter.Site}}{{.ServerListFilter.SiteLabel}}{{else}}全部地点{{end}}</strong><span aria-hidden="true">▾</span></button>
+<button class="filter-button{{if .ServerListFilter.Network}} active{{end}}" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="server-network-filter-sheet" data-open-server-filter="network"><strong>{{if .ServerListFilter.Network}}{{.ServerListFilter.NetworkLabel}}{{else}}全部网络{{end}}</strong><span aria-hidden="true">▾</span></button>
+</div>
+{{end}}
+<div class="active-filters" aria-live="polite" data-server-filter-live="polite">
+{{range .ServerListFilter.Pills}}<span class="active-pill">{{.Label}}<a href="{{.Href}}" aria-label="清除{{.Label}}">✕</a></span>{{end}}
+{{if .ServerListFilter.Pills}}<a class="clear-all" href="{{.ServerListFilter.ClearAllHref}}">清除全部</a>{{end}}
+</div>
 <p class="section-note">需要注意的排在最前。</p>
 <div class="server-card-list" aria-label="服务器卡片">
 {{range .ServerCards}}
@@ -78,9 +88,33 @@
 </div>
 </article>
 {{else}}
-<section class="empty-inline">没有符合条件的服务器。</section>
+<section class="empty-inline">没有符合条件的服务器。<a href="{{.ServerListFilter.ClearAllHref}}">清除筛选</a></section>
 {{end}}
 </div>
+{{if .ServerListFilter.HasTopology}}
+<div class="drawer-shell server-filter-sheet" id="server-site-filter-sheet" data-server-filter-sheet hidden>
+<button class="drawer-backdrop" type="button" data-close-server-filter aria-label="关闭地点筛选"></button>
+<section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-site-filter-title">
+<div class="drawer-handle" aria-hidden="true"></div>
+<h2 id="server-site-filter-title">按地点筛选</h2>
+<p class="section-note">选任意一级都会包含它的全部下级地点；选择后立即生效。</p>
+<div class="server-filter-options">
+{{range .ServerListFilter.Sites}}<button class="filter-option{{if eq $.ServerListFilter.Site .Value}} selected{{end}}" type="button" data-server-filter-choice="site" data-filter-value="{{.Value}}"><span class="filter-option-copy"><strong>{{.Label}}</strong>{{if .Note}}<small>{{.Note}}</small>{{end}}</span><span class="filter-option-count">{{.Count}} 台</span></button>{{end}}
+</div>
+</section>
+</div>
+<div class="drawer-shell server-filter-sheet" id="server-network-filter-sheet" data-server-filter-sheet hidden>
+<button class="drawer-backdrop" type="button" data-close-server-filter aria-label="关闭网络筛选"></button>
+<section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-network-filter-title">
+<div class="drawer-handle" aria-hidden="true"></div>
+<h2 id="server-network-filter-title">按网络筛选</h2>
+<p class="section-note">只列已登记的物理局域网与虚拟局域网；选择后立即生效。</p>
+<div class="server-filter-options">
+{{range .ServerListFilter.Networks}}<button class="filter-option{{if eq $.ServerListFilter.Network .Value}} selected{{end}}" type="button" data-server-filter-choice="network" data-filter-value="{{.Value}}"><span class="filter-option-copy"><strong>{{.Label}}</strong>{{if .Note}}<small>{{.Note}}</small>{{end}}</span><span class="filter-option-count">{{.Count}} 台</span></button>{{end}}
+</div>
+</section>
+</div>
+{{end}}
 </section>
 {{if and .Caps.CanWrite .ServerBatch}}
 <section class="server-selection-bar" data-server-selection-bar hidden aria-label="批量操作">

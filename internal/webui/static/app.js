@@ -27,6 +27,89 @@
     document.querySelectorAll("[data-share-scope-form]").forEach(updateShareScopeWarnings);
   }
 
+  // 服务器列表筛选：搜索、地点、网络与「只看需要注意」选完即提交；无脚
+  // 本环境仍保留原生 GET 表单与提交按钮。
+  function initServerListFilters(root) {
+    var form = root.querySelector("[data-server-filter-form]");
+    if (form === null) {
+      return;
+    }
+    var search = form.querySelector('input[name="query"]');
+    var attention = form.querySelector('input[name="attention"]');
+    var selects = form.querySelector("[data-server-filter-selects]");
+    var buttons = root.querySelector("[data-server-filter-buttons]");
+    var noScriptSubmit = form.querySelector("[data-no-script-filter-submit]");
+    var searchTimer = 0;
+
+    function submitForm() {
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+        return;
+      }
+      form.submit();
+    }
+
+    if (search !== null) {
+      search.addEventListener("input", function () {
+        window.clearTimeout(searchTimer);
+        searchTimer = window.setTimeout(submitForm, 250);
+      });
+    }
+    if (attention !== null) {
+      attention.addEventListener("change", submitForm);
+    }
+    if (selects !== null && buttons !== null) {
+      selects.hidden = true;
+      buttons.hidden = false;
+    }
+    if (noScriptSubmit !== null) {
+      noScriptSubmit.hidden = true;
+    }
+
+    var sheets = Array.prototype.slice.call(root.querySelectorAll("[data-server-filter-sheet]"));
+    function closeSheets() {
+      sheets.forEach(function (sheet) {
+        sheet.hidden = true;
+      });
+      if (buttons !== null) {
+        buttons.querySelectorAll("[data-open-server-filter]").forEach(function (button) {
+          button.setAttribute("aria-expanded", "false");
+        });
+      }
+    }
+
+    if (buttons !== null) {
+      buttons.querySelectorAll("[data-open-server-filter]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var sheet = document.getElementById(button.getAttribute("aria-controls"));
+          closeSheets();
+          if (sheet !== null) {
+            sheet.hidden = false;
+            button.setAttribute("aria-expanded", "true");
+          }
+        });
+      });
+      root.querySelectorAll("[data-close-server-filter]").forEach(function (element) {
+        element.addEventListener("click", closeSheets);
+      });
+    }
+    root.querySelectorAll("[data-server-filter-choice]").forEach(function (choice) {
+      choice.addEventListener("click", function () {
+        var field = form.querySelector('select[name="' + choice.getAttribute("data-server-filter-choice") + '"]');
+        if (field !== null) {
+          field.value = choice.getAttribute("data-filter-value");
+        }
+        closeSheets();
+        submitForm();
+      });
+    });
+    root.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        closeSheets();
+      }
+    });
+  }
+
   function updateRevealTarget(checkbox) {
     var target = document.querySelector("[data-share-reveal-target]");
     if (target !== null) {
@@ -440,6 +523,7 @@
   });
   updateAllShareScopeWarnings();
   initRequiredNoteForms();
+  document.querySelectorAll("[data-server-list-page]").forEach(initServerListFilters);
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);

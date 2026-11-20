@@ -25,6 +25,36 @@ func (serverListTopologySource) Topology(string, string) (*TopologyData, error) 
 	}, nil
 }
 
+type serverListHierarchicalTopologySource struct{}
+
+func (serverListHierarchicalTopologySource) Topology(string, string) (*TopologyData, error) {
+	return &TopologyData{
+		Sites: []TopologySite{
+			{ID: "site-company", ParentID: "", Name: "公司", LocationPath: "公司"},
+			{ID: "site-factory", ParentID: "site-company", Name: "一厂区", LocationPath: "公司 / 一厂区"},
+			{ID: "site-building", ParentID: "site-factory", Name: "3 号楼", LocationPath: "公司 / 一厂区 / 3 号楼"},
+			{ID: "site-home", ParentID: "", Name: "家A", LocationPath: "家A"},
+		},
+		Networks: []TopologyNetwork{
+			{ID: "net-office", Name: "公司办公局域网", Type: "physical", SiteID: "site-company", LocationPath: "公司", NetworkRange: "10.20.0.0/16"},
+			{ID: "net-virtual", Name: "跨地点虚拟局域网", Type: "virtual"},
+		},
+		Devices: []TopologyDevice{
+			{ID: "device-root", Name: "总部机器", SiteID: "site-company", LocationPath: "公司", Servers: []TopologyDeviceServer{{ID: "srv-root"}}},
+			{ID: "device-factory", Name: "厂区机器", SiteID: "site-factory", LocationPath: "公司 / 一厂区", Servers: []TopologyDeviceServer{{ID: "srv-factory"}}},
+			{ID: "device-building", Name: "楼内机器", SiteID: "site-building", LocationPath: "公司 / 一厂区 / 3 号楼", Servers: []TopologyDeviceServer{{ID: "srv-building"}}},
+			{ID: "device-home", Name: "家里机器", SiteID: "site-home", LocationPath: "家A", Servers: []TopologyDeviceServer{{ID: "srv-home"}}},
+			{ID: "device-missing-site", Name: "未登记地点机器", SiteID: "", Servers: []TopologyDeviceServer{{ID: "srv-missing-site"}}},
+		},
+		Memberships: []TopologyMembership{
+			{DeviceID: "device-root", NetworkID: "net-office"},
+			{DeviceID: "device-factory", NetworkID: "net-office"},
+			{DeviceID: "device-building", NetworkID: "net-virtual"},
+			{DeviceID: "device-missing-site", NetworkID: "net-office"},
+		},
+	}, nil
+}
+
 func TestServerListCardsShowFiltersAndBatchEntrances(t *testing.T) {
 	store := newStubServerStore()
 	store.rows = append(store.rows, ServerListEntry{
@@ -129,6 +159,152 @@ func TestServerListCardsShowConnectionTestStatus(t *testing.T) {
 	}
 	if strings.Contains(page, "connection-test-candidate") || strings.Contains(page, "批量测试连接") {
 		t.Fatalf("列表不应出现候选地址展开或批量测试连接：\n%s", page)
+	}
+}
+
+func TestServerListFiltersUseLocationSubtreeUnregisteredAndNetworkMembership(t *testing.T) {
+	store := newStubServerStore()
+	store.rows = []ServerListEntry{
+		{ID: "srv-root", Name: "root", User: "owner", Host: "10.20.0.10", Port: 22},
+		{ID: "srv-factory", Name: "factory", User: "owner", Host: "10.20.1.10", Port: 22},
+		{ID: "srv-building", Name: "building", User: "owner", Host: "10.20.2.10", Port: 22,
+			AttentionReasons: []string{"未挂凭据"}},
+		{ID: "srv-home", Name: "home", User: "owner", Host: "192.168.1.10", Port: 22},
+		{ID: "srv-missing-site", Name: "missing-site", User: "owner", Host: "10.20.3.10", Port: 22},
+		{ID: "srv-no-device", Name: "no-device", User: "owner", Host: "203.0.113.10", Port: 22},
+	}
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: serverListHierarchicalTopologySource{}, Access: &stubAccessStore{},
+		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+
+	page := serversGet(t, handler, cookie, "/ui/servers/")
+	for _, want := range []string{
+		"公司 / 一厂区 / 3 号楼", "包含全部下级地点", "未登记地点",
+		"没有关联机器，或机器尚未选择地点",
+		"公司办公局域网", "物理局域网 · 网段 10.20.0.0/16 · 覆盖 公司",
+		"跨地点虚拟局域网", "虚拟局域网 · 横跨多个地点", "6 台",
+		"公司 · 包含全部下级地点 · 3 台", "未登记地点 · 没有关联机器，或机器尚未选择地点 · 2 台",
+		"公司办公局域网 · 物理局域网 · 网段 10.20.0.0/16 · 覆盖 公司 · 3 台",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("筛选选项缺少 %q：\n%s", want, page)
+		}
+	}
+
+	company := serversGet(t, handler, cookie, "/ui/servers/?site=site-company")
+	for _, want := range []string{"srv-root", "srv-factory", "srv-building"} {
+		if !strings.Contains(company, `value="`+want+`"`) {
+			t.Fatalf("选择上级地点应包含下级服务器 %q：\n%s", want, company)
+		}
+	}
+	for _, unwanted := range []string{"srv-home", "srv-missing-site", "srv-no-device"} {
+		if strings.Contains(company, `value="`+unwanted+`"`) {
+			t.Fatalf("选择上级地点不应包含范围外服务器 %q：\n%s", unwanted, company)
+		}
+	}
+
+	building := serversGet(t, handler, cookie, "/ui/servers/?site=site-building")
+	if !strings.Contains(building, `value="srv-building"`) || strings.Contains(building, `value="srv-root"`) ||
+		strings.Contains(building, `value="srv-factory"`) {
+		t.Fatalf("选择下级地点不应包含上级或其他分支：\n%s", building)
+	}
+
+	unregistered := serversGet(t, handler, cookie, "/ui/servers/?site=__unregistered__")
+	if !strings.Contains(unregistered, `value="srv-missing-site"`) || !strings.Contains(unregistered, `value="srv-no-device"`) ||
+		strings.Contains(unregistered, `value="srv-root"`) {
+		t.Fatalf("未登记地点应只包含没有关联机器或机器未登记地点的服务器：\n%s", unregistered)
+	}
+
+	network := serversGet(t, handler, cookie, "/ui/servers/?network=net-office")
+	if !strings.Contains(network, `value="srv-root"`) || !strings.Contains(network, `value="srv-missing-site"`) ||
+		strings.Contains(network, `value="srv-building"`) || strings.Contains(network, `value="srv-no-device"`) {
+		t.Fatalf("网络筛选应按设备是否为网络成员匹配：\n%s", network)
+	}
+
+	combined := serversGet(t, handler, cookie, "/ui/servers/?site=site-company&network=net-virtual&query=building&attention=1")
+	if !strings.Contains(combined, `value="srv-building"`) || strings.Contains(combined, `value="srv-root"`) ||
+		strings.Contains(combined, `value="srv-factory"`) {
+		t.Fatalf("地点、网络与需要注意筛选应取交集：\n%s", combined)
+	}
+}
+
+func TestServerListFilterPillsNoScriptFallbackAndEmptyState(t *testing.T) {
+	store := newStubServerStore()
+	store.rows = []ServerListEntry{
+		{ID: "srv-building", Name: "building", User: "owner", Host: "10.20.2.10", Port: 22},
+		{ID: "srv-home", Name: "home", User: "owner", Host: "192.168.1.10", Port: 22},
+	}
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: serverListHierarchicalTopologySource{}, Access: &stubAccessStore{},
+		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+
+	filtered := serversGet(t, handler, cookie, "/ui/servers/?site=site-company&network=net-virtual&query=building")
+	for _, want := range []string{
+		`data-server-filter-form`,
+		`data-server-filter-live="polite"`,
+		"地点：公司", `/ui/servers/?network=net-virtual&amp;query=building`,
+		"网络：跨地点虚拟局域网", `/ui/servers/?query=building&amp;site=site-company`,
+		"搜索：building", `/ui/servers/?network=net-virtual&amp;site=site-company`,
+		"清除全部", `href="/ui/servers/"`,
+		`type="submit"`, "应用筛选",
+	} {
+		if !strings.Contains(filtered, want) {
+			t.Fatalf("筛选视图缺少 %q：\n%s", want, filtered)
+		}
+	}
+
+	// 定稿原型的一键清除只清地点、网络与搜索；「只看需要注意」不在胶囊
+	// 里，应保持原状，避免用户看不见的条件被一并重置。
+	empty := serversGet(t, handler, cookie, "/ui/servers/?site=site-home&query=not-found&attention=1")
+	for _, want := range []string{"没有符合条件的服务器", "清除筛选", `/ui/servers/`} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("无结果空态缺少 %q：\n%s", want, empty)
+		}
+	}
+	for _, want := range []string{
+		`href="/ui/servers/?attention=1">清除全部`,
+		`href="/ui/servers/?attention=1">清除筛选`,
+	} {
+		if !strings.Contains(empty, want) {
+			t.Fatalf("一键清除应保留「只看需要注意」，缺少 %q：\n%s", want, empty)
+		}
+	}
+}
+
+func TestServerListClientRoleCanFilterWithoutBatchEntrances(t *testing.T) {
+	store := newStubServerStore()
+	store.rows = []ServerListEntry{{ID: "srv-building", Name: "building", User: "owner", Host: "10.20.2.10", Port: 22}}
+	handler, startup, err := New(Config{
+		Role: RoleClient, Servers: store, Topology: serverListHierarchicalTopologySource{},
+		Access: &stubAccessStore{}, VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+
+	page := serversGet(t, handler, cookie, "/ui/servers/?site=site-company&network=net-virtual")
+	for _, want := range []string{"按地点筛选", "按网络筛选", "地点：公司", "网络：跨地点虚拟局域网"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端应能使用全部筛选，缺少 %q：\n%s", want, page)
+		}
+	}
+	for _, forbidden := range []string{"server-select-control", "data-server-selection-bar", "data-server-batch-drawer", "导入 SSH 配置"} {
+		if strings.Contains(page, forbidden) {
+			t.Fatalf("客户端筛选页不应出现批量写入口 %q：\n%s", forbidden, page)
+		}
 	}
 }
 

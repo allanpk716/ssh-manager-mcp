@@ -309,6 +309,11 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SERVER_FILTERS")) == "1" {
+		if err := seedServerFilterTopology(st); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS")) == "1" {
 		if _, err := st.AddNetwork(models.Network{
 			Name: "家A备用局域网", Type: models.NetworkPhysical, SiteName: "家A",
@@ -408,6 +413,68 @@ func seedTopology(st *store.Store) error {
 		return err
 	}
 	return seedProbeResults(st, workstation.ID)
+}
+
+// seedServerFilterTopology 为服务器列表筛选浏览器用例准备多级地点、未登记
+// 地点与两类网络的成员数据；只在显式设置开关时改变种子库。
+func seedServerFilterTopology(st *store.Store) error {
+	company, err := st.AddSite("公司", "服务器筛选测试总部")
+	if err != nil {
+		return err
+	}
+	factory, err := st.AddSiteWithParent("一厂区", "", company.Name)
+	if err != nil {
+		return err
+	}
+	if _, err := st.AddSiteWithParent("3 号楼", "", factory.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "公司办公局域网", Type: models.NetworkPhysical, SiteName: company.Name,
+		NetworkRange: "10.20.0.0/16",
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "跨地点虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+		return err
+	}
+	devices := []struct {
+		name       string
+		site       string
+		serverName string
+		host       string
+		network    string
+	}{
+		{name: "公司总部机器", site: company.Name, serverName: "company-root", host: "10.20.0.10", network: "公司办公局域网"},
+		{name: "一厂区机器", site: factory.Name, serverName: "factory-web", host: "10.20.1.10", network: "公司办公局域网"},
+		{name: "三号楼机器", site: "公司 / 一厂区 / 3 号楼", serverName: "building-db", host: "10.20.2.10", network: "跨地点虚拟局域网"},
+		{name: "未登记地点机器", site: "", serverName: "missing-site", host: "10.20.3.10", network: "公司办公局域网"},
+	}
+	for _, item := range devices {
+		if _, err := st.AddDeviceAtSite(item.name, "服务器筛选浏览器测试设备", "", item.site); err != nil {
+			return err
+		}
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: item.serverName, Host: item.host, Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, item.name); err != nil {
+			return err
+		}
+		if _, err := st.AddNetworkMembership(item.name, item.network, item.host); err != nil {
+			return err
+		}
+	}
+	if _, err := st.AddDeviceAtSite("家里备用机器", "服务器筛选浏览器测试设备", "", "家A"); err != nil {
+		return err
+	}
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "home-machine", Host: "192.168.1.21", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "家里备用机器"); err != nil {
+		return err
+	}
+	_, err = st.AddServerWithCredentials(&models.Server{
+		Name: "no-device", Host: "203.0.113.20", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil)
+	return err
 }
 
 // seedConnectionTestTarget 为服务器详情的连接测试浏览器用例准备专用条
