@@ -706,18 +706,22 @@ func (s openerSource) RequestSoftwareInventoryCollectionAll(
 		&softwareinventory.Service{Store: st},
 		domainSource,
 	)
-	if err != nil {
+	if report == nil {
 		return webui.SoftwareInventoryCollectionRoundResult{}, err
 	}
 	result := webui.SoftwareInventoryCollectionRoundResult{
 		Succeeded: report.Succeeded, Requested: report.Requested, Failed: report.Failed,
-		Devices: make([]webui.SoftwareInventoryCollectionDeviceResult, 0, len(report.Devices)),
+		Interrupted: report.Interrupted,
+		Devices:     make([]webui.SoftwareInventoryCollectionDeviceResult, 0, len(report.Devices)),
 	}
 	for _, device := range report.Devices {
 		result.Devices = append(result.Devices, webui.SoftwareInventoryCollectionDeviceResult{
 			DeviceName: device.DeviceName, Requested: device.Requested,
 			CollectorName: device.CollectorName, Err: device.Err,
 		})
+	}
+	if err != nil {
+		return result, err
 	}
 	return result, nil
 }

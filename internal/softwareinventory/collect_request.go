@@ -3,6 +3,8 @@ package softwareinventory
 import (
 	"cmp"
 	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"ssh-manager-mcp/internal/store"
@@ -23,12 +25,15 @@ type ImmediateCollectionDeviceReport struct {
 // ImmediateCollectionRoundReport 是「立即全部采集」的整轮结论。失败设备
 // 不中断其余设备，因此 Devices 会同时保留成功、等待客户端实例与失败。
 type ImmediateCollectionRoundReport struct {
-	StartedAt time.Time                         `json:"started_at"`
-	EndedAt   time.Time                         `json:"ended_at"`
-	Succeeded int                               `json:"succeeded"`
-	Requested int                               `json:"requested"`
-	Failed    int                               `json:"failed"`
-	Devices   []ImmediateCollectionDeviceReport `json:"devices"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+	Succeeded int       `json:"succeeded"`
+	Requested int       `json:"requested"`
+	Failed    int       `json:"failed"`
+	// Interrupted 表示这轮在遍历完前被取消，Devices 只是已处理设备的部
+	// 分报告。
+	Interrupted bool                              `json:"interrupted,omitempty"`
+	Devices     []ImmediateCollectionDeviceReport `json:"devices"`
 }
 
 // ImmediateCollectionOutcome 是一次「立即采集」请求的结论。
@@ -126,11 +131,23 @@ func (m *Manager) CollectAllForScope(
 		if !status.Managed {
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			report.Interrupted = true
+			report.EndedAt = m.now()
+			return report, err
+		}
 		if _, err := m.st.SoftwareDeviceOverviewForDevice(status.DeviceName, visibility); err != nil {
-			if err == store.ErrSoftwareDeviceNotVisible {
+			if errors.Is(err, store.ErrSoftwareDeviceNotVisible) {
 				continue
 			}
-			return nil, err
+			report.Failed++
+			report.Devices = append(report.Devices, ImmediateCollectionDeviceReport{
+				DeviceName: status.DeviceName,
+				Err: fmt.Sprintf(
+					"读取设备 %s 的可见范围失败：%v", status.DeviceName, err,
+				),
+			})
+			continue
 		}
 		device := ImmediateCollectionDeviceReport{
 			DeviceName: status.DeviceName, CollectorName: status.CollectorName,
@@ -165,6 +182,7 @@ func (m *Manager) CollectAllForScope(
 	}
 	report.EndedAt = m.now()
 	if err := ctx.Err(); err != nil {
+		report.Interrupted = true
 		return report, err
 	}
 	return report, nil

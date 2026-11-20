@@ -2,6 +2,7 @@ package webuisoftwareinventory
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"ssh-manager-mcp/internal/softwareinventory"
@@ -83,5 +84,24 @@ func TestSourceSavesDailyTimeAndRequestsAllClientCollections(t *testing.T) {
 		if !status.PendingImmediate {
 			t.Fatalf("设备 %s 应登记立即采集请求：%+v", status.DeviceName, status)
 		}
+	}
+}
+
+// TestSourceReturnsInterruptedCollectionReport 验证「立即全部采集」被取消
+// 时，适配层仍把领域层的部分报告交给页面显示。
+func TestSourceReturnsInterruptedCollectionReport(t *testing.T) {
+	st, _ := newTestStore(t)
+	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	report, err := source.RequestSoftwareInventoryCollectionAll(
+		ctx, webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消的立即全部采集应返回 context.Canceled，得到 %v", err)
+	}
+	if !report.Interrupted {
+		t.Fatalf("部分报告应带被中断标记：%+v", report)
 	}
 }

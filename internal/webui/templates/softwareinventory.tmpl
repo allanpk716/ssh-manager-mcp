@@ -22,7 +22,12 @@
 {{if .SoftwareInventory.CollectionReport}}
 <section aria-label="立即全部采集报告">
 <h2>立即全部采集报告</h2>
+{{if .SoftwareInventory.CollectionReport.Interrupted}}
+<p>立即全部采集被中断：已处理部分设备；成功 {{.SoftwareInventory.CollectionReport.Succeeded}} 台，等待客户端实例 {{.SoftwareInventory.CollectionReport.Requested}} 台，失败 {{.SoftwareInventory.CollectionReport.Failed}} 台。</p>
+<p>仍有设备未处理，需要时请重新发起立即全部采集。</p>
+{{else}}
 <p>立即全部采集完成：成功 {{.SoftwareInventory.CollectionReport.Succeeded}} 台，等待客户端实例 {{.SoftwareInventory.CollectionReport.Requested}} 台，失败 {{.SoftwareInventory.CollectionReport.Failed}} 台。</p>
+{{end}}
 <ul>
 {{range .SoftwareInventory.CollectionReport.Devices}}
 <li>{{if .Requested}}{{if .CollectorName}}{{.DeviceName}}：已登记，等待客户端实例 {{.CollectorName}} 执行{{else}}{{.DeviceName}}：已登记，等待客户端实例执行{{end}}{{else if .Err}}{{.DeviceName}}：失败，{{.Err}}{{else}}{{.DeviceName}}：采集成功{{end}}</li>

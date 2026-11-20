@@ -70,6 +70,7 @@ type stubSoftwareInventorySource struct {
 	searchFilter       SoftwareInventoryFilter
 	collectResult      SoftwareInventoryCollectionResult
 	collectAllResult   SoftwareInventoryCollectionRoundResult
+	collectAllErr      error
 	collectErr         error
 	collectDevice      string
 	collectAddress     string
@@ -179,7 +180,7 @@ func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollectionAll(
 ) (SoftwareInventoryCollectionRoundResult, error) {
 	s.collectAllCalled = true
 	s.collectAllAddress = source.RemoteAddress
-	return s.collectAllResult, nil
+	return s.collectAllResult, s.collectAllErr
 }
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryTodos() (SoftwareInventoryTodos, error) {

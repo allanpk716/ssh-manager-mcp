@@ -205,7 +205,9 @@ type SoftwareInventoryCollectionRoundResult struct {
 	Succeeded int
 	Requested int
 	Failed    int
-	Devices   []SoftwareInventoryCollectionDeviceResult
+	// Interrupted 表示这轮被取消，Devices 只包含已处理设备。
+	Interrupted bool
+	Devices     []SoftwareInventoryCollectionDeviceResult
 }
 
 // SoftwareInventoryFormError 表示软件清单表单提交内容校验失败，Message 可
@@ -364,7 +366,7 @@ func (h *handler) handleSoftwareInventoryCollectAll(w http.ResponseWriter, r *ht
 	report, err := h.cfg.SoftwareInventory.RequestSoftwareInventoryCollectionAll(
 		r.Context(), SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
 	)
-	if err != nil {
+	if err != nil && !(errors.Is(err, context.Canceled) && report.Interrupted) {
 		h.renderError(w, r, http.StatusInternalServerError, "立即全部采集失败", "立即全部采集失败，请稍后重试。")
 		return
 	}

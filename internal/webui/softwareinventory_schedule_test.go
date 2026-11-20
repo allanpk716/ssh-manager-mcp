@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,6 +72,43 @@ func TestSoftwareInventoryScheduleAndCollectAllForms(t *testing.T) {
 	} {
 		if !strings.Contains(reportBody, wanted) {
 			t.Fatalf("立即全部采集报告缺少 %q：\n%s", wanted, reportBody)
+		}
+	}
+}
+
+// TestSoftwareInventoryCollectAllShowsInterruptedReport 验证「立即全部采
+// 集」被取消且已有部分报告时，页面仍展示报告而不是整页失败。
+func TestSoftwareInventoryCollectAllShowsInterruptedReport(t *testing.T) {
+	source := &stubSoftwareInventorySource{
+		devices: []SoftwareInventoryDeviceSummary{{
+			Name: "工作站", StatusLabels: []string{"正常"},
+		}},
+		collectAllResult: SoftwareInventoryCollectionRoundResult{
+			Interrupted: true, Succeeded: 1,
+			Devices: []SoftwareInventoryCollectionDeviceResult{{DeviceName: "工作站"}},
+		},
+		collectAllErr: context.Canceled,
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	home := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/")
+	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, home))
+
+	response := postSoftwareInventoryForm(t, handler, cookie, "/ui/software-inventory/collect-all",
+		url.Values{"csrf_token": {csrf}},
+	)
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/software-inventory/?collect_all=done" {
+		t.Fatalf("中断但有部分报告时应跳回首页，状态码=%d Location=%s",
+			response.StatusCode, response.Header.Get("Location"))
+	}
+	reportBody := readResponseBody(t, doGetWithCookie(t, handler, cookie, response.Header.Get("Location")))
+	for _, wanted := range []string{
+		"立即全部采集被中断：已处理部分设备；成功 1 台，等待客户端实例 0 台，失败 0 台。",
+		"仍有设备未处理，需要时请重新发起立即全部采集。",
+		"工作站：采集成功",
+	} {
+		if !strings.Contains(reportBody, wanted) {
+			t.Fatalf("中断报告缺少 %q：\n%s", wanted, reportBody)
 		}
 	}
 }

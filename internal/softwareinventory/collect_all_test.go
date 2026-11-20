@@ -96,3 +96,74 @@ func TestCollectAllForScopeTraversesEveryManagedDevice(t *testing.T) {
 		t.Fatalf("失败后不应清空上次成功清单：%+v %v", items, err)
 	}
 }
+
+// TestCollectAllForScopeReturnsPartialReportWhenCanceled 验证上下文取消后
+// 停止遍历：已完成的设备保留在部分报告里，未执行设备不算作失败。
+func TestCollectAllForScopeReturnsPartialReportWhenCanceled(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 0, 0, 0, time.Local)
+	manager, st := newTestManager(t)
+	manager.Now = func() time.Time { return now }
+	st.NowFn = func() time.Time { return now }
+	mustDevice(t, st, "A工作站", true)
+	mustDevice(t, st, "备份机", true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	service := &Service{Store: st, Now: manager.Now, RemoteExec: func(
+		_ context.Context, server *models.Server, _ models.ShellType, _ string, _ bool,
+	) (RemoteExecResult, error) {
+		if server.Name == "A工作站-ssh" {
+			cancel()
+		}
+		return RemoteExecResult{Stdout: fixtureOutput(t, "ubuntu2404-full.txt")}, nil
+	}}
+	report, err := manager.CollectAllForScope(ctx, AllDevicesVisible(), service, WebUISource("198.51.100.9"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消后应返回 context.Canceled，得到 %v", err)
+	}
+	if report == nil || !report.Interrupted {
+		t.Fatalf("部分报告应带被中断标记：%+v", report)
+	}
+	if report.Succeeded != 1 || report.Failed != 0 || len(report.Devices) != 1 {
+		t.Fatalf("取消后应只保留已完成的设备：%+v", report)
+	}
+	if report.Devices[0].DeviceName != "A工作站" || report.Devices[0].Report == nil {
+		t.Fatalf("A工作站的采集结果应保留在部分报告里：%+v", report.Devices[0])
+	}
+	if report.EndedAt.IsZero() {
+		t.Fatal("部分报告应填写结束时间")
+	}
+	cancel()
+}
+
+// TestCollectAllForScopeContinuesWhenDeviceVisibilityReadFails 验证读取某台
+// 设备可见范围失败时，这台设备只记为失败，后续设备仍会继续处理。
+func TestCollectAllForScopeContinuesWhenDeviceVisibilityReadFails(t *testing.T) {
+	now := time.Date(2026, 1, 2, 3, 0, 0, 0, time.Local)
+	manager, st := newTestManager(t)
+	manager.Now = func() time.Time { return now }
+	st.NowFn = func() time.Time { return now }
+	mustDevice(t, st, "A工作站", true)
+	mustDevice(t, st, "备份机", true)
+
+	service := &Service{Store: st, Now: manager.Now, RemoteExec: func(
+		_ context.Context, server *models.Server, _ models.ShellType, _ string, _ bool,
+	) (RemoteExecResult, error) {
+		if server.Name == "A工作站-ssh" {
+			_ = st.Close()
+			return RemoteExecResult{}, errors.New("连接已关闭")
+		}
+		return RemoteExecResult{}, errors.New("不应再执行采集")
+	}}
+	report, err := manager.CollectAllForScope(
+		context.Background(), AllDevicesVisible(), service, WebUISource("198.51.100.9"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Failed != 2 || len(report.Devices) != 2 {
+		t.Fatalf("可见范围读取失败不应中断后续设备：%+v", report)
+	}
+	if !strings.Contains(report.Devices[1].Err, "读取设备 备份机 的可见范围失败") {
+		t.Fatalf("备份机应带可见范围读取失败原因：%+v", report.Devices[1])
+	}
+}
