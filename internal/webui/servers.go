@@ -1003,7 +1003,7 @@ func (h *handler) handleServerEdit(w http.ResponseWriter, r *http.Request, id st
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
-	http.Redirect(w, r, serverDetailTabPath(detail.ID, serverDetailTabConnection)+"&edit=1", http.StatusSeeOther)
+	http.Redirect(w, r, serverDetailEditPath(detail.ID, serverDetailEditConnection), http.StatusSeeOther)
 }
 
 type serverEditView struct {
@@ -1033,23 +1033,41 @@ func (h *handler) serverEditView(r *http.Request, detail *ServerDetailView, noti
 func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, id string) {
 	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 	if err != nil || detail == nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "保存前读取服务器详情失败，请稍后重试。")
+		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
+	scope := serverDetailEditScopeFromForm(r)
+	switch scope {
+	case serverDetailEditDescription:
+		h.handleServerDescriptionEditPost(w, r, detail)
+	case serverDetailEditAccounts:
+		h.handleServerAccountNotesEditPost(w, r, detail)
+	default:
+		h.handleServerConnectionEditPost(w, r, detail)
+	}
+}
+
+// handleServerConnectionEditPost 处理连接编辑弹层的提交：只解析连接字
+// 段，缺省的说明与地址字段不会被清空。
+func (h *handler) handleServerConnectionEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
 	if !h.mergeServerEditUpload(w, r) {
 		return
 	}
-	form := h.parseServerEditForm(r, detail)
+	form := h.parseServerEditForm(r, detail, serverDetailEditConnection)
 	if serverFormWritesCredential(form) && h.cfg.Role == RoleServer && !h.recentlyVerified(h.currentSession(r)) {
-		http.Redirect(w, r, reverifyPath("/ui/servers/"+url.PathEscape(id)+"/edit"), http.StatusSeeOther)
+		http.Redirect(w, r, reverifyPath("/ui/servers/"+url.PathEscape(detail.ID)+"/edit"), http.StatusSeeOther)
 		return
 	}
-	result, conflict, err := h.cfg.ServerWriter.EditServer(id, form, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	result, conflict, err := h.cfg.ServerWriter.EditServer(detail.ID, form, ServerWriteSource{RemoteAddress: remoteIP(r)})
 	if err != nil {
 		var formErr *ServerFormError
 		if errors.As(err, &formErr) {
-			view := h.serverEditView(r, editErrorDetail(r, detail), formErr.Message)
-			h.renderServerDetailPageView(w, r, http.StatusBadRequest, view.Detail, "", "", view)
+			view := h.serverEditView(
+				r, editErrorDetail(r, detail, serverDetailEditConnection), formErr.Message,
+			)
+			h.renderServerDetailPageView(w, r, view.Detail, serverDetailRenderOptions{
+				status: http.StatusBadRequest, drawer: serverDetailEditConnection, edit: view,
+			})
 			return
 		}
 		h.renderError(w, r, http.StatusInternalServerError, "保存服务器失败", "保存服务器失败，请稍后重试。")
@@ -1057,48 +1075,139 @@ func (h *handler) handleServerEditPost(w http.ResponseWriter, r *http.Request, i
 	}
 	if conflict != nil {
 		view := h.serverEditView(r, conflict.Current, "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。")
-		h.renderServerDetailPageView(w, r, http.StatusConflict, conflict.Current, "", "", view)
+		h.renderServerDetailPageView(w, r, conflict.Current, serverDetailRenderOptions{
+			status: http.StatusConflict, drawer: serverDetailEditConnection, edit: view,
+		})
 		return
 	}
-	http.Redirect(w, r, "/ui/servers/"+url.PathEscape(result.Detail.ID), http.StatusSeeOther)
+	h.redirectServerDetailSaved(w, r, result.Detail.ID, serverDetailEditConnection)
 }
 
-// editErrorDetail 用提交值覆盖当前详情的非凭据字段，供校验失败后重新渲染
-// 表单时保留 owner 刚输入的内容；凭据字段一律不回显。
-func editErrorDetail(r *http.Request, current *ServerDetailView) *ServerDetailView {
+// handleServerDescriptionEditPost 处理说明编辑弹层的提交：只解析五个说明
+// 字段，允许提交空值清空，不触碰连接与凭据字段。
+func (h *handler) handleServerDescriptionEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
+	form := h.parseServerEditForm(r, detail, serverDetailEditDescription)
+	result, conflict, err := h.cfg.ServerWriter.EditServer(detail.ID, form, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			current := editErrorDetail(r, detail, serverDetailEditDescription)
+			h.renderServerDetailPageView(w, r, current, serverDetailRenderOptions{
+				status: http.StatusBadRequest, notice: formErr.Message, drawer: serverDetailEditDescription,
+			})
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "保存服务器失败", "保存服务器失败，请稍后重试。")
+		return
+	}
+	if conflict != nil {
+		h.renderServerDetailPageView(w, r, conflict.Current, serverDetailRenderOptions{
+			status: http.StatusConflict,
+			notice: "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。",
+			drawer: serverDetailEditDescription,
+		})
+		return
+	}
+	h.redirectServerDetailSaved(w, r, result.Detail.ID, serverDetailEditDescription)
+}
+
+// handleServerAccountNotesEditPost 处理同机账号说明弹层：逐个比较每个账号
+// 的显示说明，只写发生变化的条目；登录信息不在这一层提交。
+func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
+	drafts := map[string]string{}
+	for key, values := range r.PostForm {
+		if !strings.HasPrefix(key, "account_note_") || len(values) == 0 {
+			continue
+		}
+		accountID := strings.TrimPrefix(key, "account_note_")
+		if accountID == "" {
+			continue
+		}
+		sibling, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), accountID)
+		if err != nil || sibling == nil || !sibling.HasDevice ||
+			sibling.DeviceName == "" || sibling.DeviceName != detail.DeviceName {
+			continue
+		}
+		note := strings.TrimSpace(values[0])
+		drafts[accountID] = note
+		if note == sibling.Description {
+			continue
+		}
+		revision, _ := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("account_revision_"+accountID)), 10, 64)
+		_, _, err = h.cfg.ServerWriter.EditServer(accountID, ServerEditForm{
+			Description: &note, ExpectedRevision: revision,
+		}, ServerWriteSource{RemoteAddress: remoteIP(r)})
+		if err != nil {
+			h.renderAccountNotesError(w, r, detail, err, drafts)
+			return
+		}
+	}
+	http.Redirect(
+		w, r, serverDetailPath(detail.ID)+"?saved=accounts"+serverDetailCardAnchor(serverDetailEditAccounts),
+		http.StatusSeeOther,
+	)
+}
+
+// renderAccountNotesError 按错误类型重新渲染账号说明弹层并保留输入。
+func (h *handler) renderAccountNotesError(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, err error, drafts map[string]string,
+) {
+	notice := "保存账号说明失败，请稍后重试。"
+	status := http.StatusInternalServerError
+	var formErr *ServerFormError
+	if errors.As(err, &formErr) {
+		notice = formErr.Message
+		status = http.StatusBadRequest
+	}
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice, drawer: serverDetailEditAccounts, accountDrafts: drafts,
+	})
+}
+
+// redirectServerDetailSaved 保存成功后回到统一详情页并定位对应卡片。
+func (h *handler) redirectServerDetailSaved(w http.ResponseWriter, r *http.Request, id, scope string) {
+	http.Redirect(
+		w, r, serverDetailPath(id)+"?saved="+scope+serverDetailCardAnchor(scope), http.StatusSeeOther,
+	)
+}
+
+// editErrorDetail 用提交值覆盖当前详情里属于指定编辑分区的字段，供校验
+// 失败后重新渲染弹层时保留 owner 刚输入的内容；凭据字段一律不回显。
+func editErrorDetail(r *http.Request, current *ServerDetailView, scope string) *ServerDetailView {
 	submitted := *current
 	_ = r.ParseForm()
-	if v := r.PostFormValue("name"); v != "" {
-		submitted.Name = v
+	switch scope {
+	case serverDetailEditDescription:
+		submitted.Description = r.PostFormValue("description")
+		submitted.Hardware = r.PostFormValue("hardware")
+		submitted.Services = r.PostFormValue("services")
+		submitted.Role = r.PostFormValue("role")
+		submitted.Caveats = r.PostFormValue("special_handling")
+	default:
+		if v := r.PostFormValue("name"); v != "" {
+			submitted.Name = v
+		}
+		if port, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("port"))); err == nil && port > 0 {
+			submitted.Port = port
+		}
+		if v := r.PostFormValue("user"); v != "" {
+			submitted.User = v
+		}
+		if v := r.PostFormValue("shell"); v != "" {
+			submitted.Shell = v
+		}
+		if tags := parseTags(r.PostFormValue("tags")); tags != nil {
+			submitted.Tags = tags
+		}
+		submitted.ExposeHost = r.PostFormValue("expose_host") == "1"
 	}
-	if v := r.PostFormValue("host"); v != "" {
-		submitted.Host = v
-	}
-	if port, err := strconv.Atoi(strings.TrimSpace(r.PostFormValue("port"))); err == nil && port > 0 {
-		submitted.Port = port
-	}
-	if v := r.PostFormValue("user"); v != "" {
-		submitted.User = v
-	}
-	if v := r.PostFormValue("shell"); v != "" {
-		submitted.Shell = v
-	}
-	submitted.Description = r.PostFormValue("description")
-	submitted.Hardware = r.PostFormValue("hardware")
-	submitted.Services = r.PostFormValue("services")
-	submitted.Role = r.PostFormValue("role")
-	submitted.Caveats = r.PostFormValue("special_handling")
-	if tags := parseTags(r.PostFormValue("tags")); tags != nil {
-		submitted.Tags = tags
-	}
-	submitted.ExposeHost = r.PostFormValue("expose_host") == "1"
 	return &submitted
 }
 
-// parseServerEditForm 把提交值与当前值比对，只保留变化过的字段，避免把没
-// 动过的字段清空。修订号取表单隐藏字段携带的值做乐观锁；与当前修订号不
-// 一致时由写来源按冲突拒绝。
-func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView) ServerEditForm {
+// parseServerEditForm 按编辑分区把提交值与当前值比对，只保留变化过的字
+// 段，避免把没提交的字段当成空值清空。修订号取表单隐藏字段携带的值做乐
+// 观锁；与当前修订号不一致时由写来源按冲突拒绝。
+func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView, scope string) ServerEditForm {
 	form := ServerEditForm{CredentialAction: "keep"}
 	if revision, err := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("revision")), 10, 64); err == nil {
 		form.ExpectedRevision = revision
@@ -1110,11 +1219,16 @@ func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView
 		}
 		return nil
 	}
+	if scope == serverDetailEditDescription {
+		form.Description = changedString(r.PostFormValue("description"), current.Description)
+		form.Hardware = changedString(r.PostFormValue("hardware"), current.Hardware)
+		form.Services = changedString(r.PostFormValue("services"), current.Services)
+		form.Role = changedString(r.PostFormValue("role"), current.Role)
+		form.Caveats = changedString(r.PostFormValue("special_handling"), current.Caveats)
+		return form
+	}
 	if v := r.PostFormValue("name"); v != "" {
 		form.Name = changedString(v, current.Name)
-	}
-	if v := r.PostFormValue("host"); v != "" {
-		form.Host = changedString(v, current.Host)
 	}
 	if v := r.PostFormValue("user"); v != "" {
 		form.User = changedString(v, current.User)
@@ -1122,11 +1236,6 @@ func (h *handler) parseServerEditForm(r *http.Request, current *ServerDetailView
 	if v := r.PostFormValue("shell"); v != "" {
 		form.Shell = changedString(v, current.Shell)
 	}
-	form.Description = changedString(r.PostFormValue("description"), current.Description)
-	form.Hardware = changedString(r.PostFormValue("hardware"), current.Hardware)
-	form.Services = changedString(r.PostFormValue("services"), current.Services)
-	form.Role = changedString(r.PostFormValue("role"), current.Role)
-	form.Caveats = changedString(r.PostFormValue("special_handling"), current.Caveats)
 	if tags := parseTags(r.PostFormValue("tags")); strings.Join(tags, ",") != strings.Join(current.Tags, ",") {
 		form.Tags = tags
 	}

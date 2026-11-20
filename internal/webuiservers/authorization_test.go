@@ -160,7 +160,7 @@ func TestServerDetailEditsOrdinarySecretAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK {
 		t.Fatalf("服务器详情状态码=%d：\n%s", detail.StatusCode, detailBody)
@@ -281,7 +281,7 @@ func TestServerDetailEditsSharedStorageAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK {
 		t.Fatalf("服务器详情状态码=%d：\n%s", detail.StatusCode, detailBody)
@@ -475,7 +475,7 @@ func TestServerDetailEditsProfileAuthorization(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := authorizationCSRF(t, handler, cookie)
 
-	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil)
+	detail := authorizationRequest(handler, cookie, http.MethodGet, "/ui/servers/"+server+"", nil)
 	detailBody := authorizationBody(t, detail)
 	if detail.StatusCode != http.StatusOK ||
 		!strings.Contains(detailBody, "/ui/servers/profile-authorization/preview") ||
@@ -736,7 +736,7 @@ func TestAuthorityServerProfileEditRequiresRecentPasswordVerification(t *testing
 		t.Fatalf("权威端登录失败，状态码=%d cookie=%v", loggedIn.StatusCode, loggedIn.Cookies())
 	}
 
-	detail := do(http.MethodGet, "/ui/servers/"+server+"?tab=authorization", nil, session)
+	detail := do(http.MethodGet, "/ui/servers/"+server+"", nil, session)
 	detailBody := authorizationBody(t, detail)
 	csrf := authorizationCSRFValue(detailBody)
 	now = now.Add(6 * time.Minute)
@@ -1018,7 +1018,7 @@ func TestClientServerDetailHasNoReverseAuthorizationWriteEntrance(t *testing.T) 
 		t.Fatalf("应签发客户端会话 cookie，实际 %d，状态码=%d 页面：\n%s",
 			len(cookies), response.StatusCode, data)
 	}
-	client := authorizationRequest(handler, cookies[0], http.MethodGet, "/ui/servers/srv-web?tab=authorization", nil)
+	client := authorizationRequest(handler, cookies[0], http.MethodGet, "/ui/servers/srv-web", nil)
 	page := authorizationBody(t, client)
 	if client.StatusCode != http.StatusOK ||
 		!strings.Contains(page, "仅显示本客户端可用的部分，修改请到权威端。") ||

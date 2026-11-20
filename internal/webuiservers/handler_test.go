@@ -129,7 +129,7 @@ func TestHandlerEditDetectsConcurrentChange(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	page := h.do(http.MethodGet, "/ui/servers/"+id+"?tab=connection&edit=1", nil)
+	page := h.do(http.MethodGet, "/ui/servers/"+id+"?edit=connection", nil)
 	pageBody := integrationBody(t, page)
 	revision := regexp.MustCompile(`name="revision" value="(\d+)"`).FindStringSubmatch(pageBody)
 	if len(revision) != 2 {
@@ -583,9 +583,9 @@ func TestHandlerEditValidationErrorKeepsFields(t *testing.T) {
 
 	resp := h.do(http.MethodPost, "/ui/servers/"+id+"/edit", url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
-		"server_id":  {id}, "name": {"web"}, "host": {"192.0.2.10"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"0"},
-		"role": {"页面上的角色"}, "credential_action": {"password"}, "password": {" "},
+		"server_id":  {id}, "edit_scope": {"connection"}, "revision": {"0"},
+		"name": {"web"}, "user": {"backup"}, "shell": {"posix"},
+		"credential_action": {"password"}, "password": {" "},
 	})
 	body := integrationBody(t, resp)
 	if resp.StatusCode != http.StatusBadRequest {
@@ -594,7 +594,8 @@ func TestHandlerEditValidationErrorKeepsFields(t *testing.T) {
 	if !strings.Contains(body, "密码不能为空") || strings.Contains(body, "--password") {
 		t.Fatalf("校验提示应指向字段且不含命令行参数名：\n%s", body)
 	}
-	if !strings.Contains(body, `value="页面上的角色"`) {
+	if !strings.Contains(body, `data-server-detail-drawer="connection"`) ||
+		!strings.Contains(body, `value="backup"`) {
 		t.Fatalf("校验页面应保留提交的字段值：\n%s", body)
 	}
 	if srv, _ := st.GetServer(id); srv.Role != "旧角色" {
@@ -648,17 +649,18 @@ func TestHandlerEditCombinesPassphraseWithFields(t *testing.T) {
 
 	resp := h.do(http.MethodPost, "/ui/servers/"+id+"/edit", url.Values{
 		"csrf_token": {integrationCSRF(t, h)},
-		"server_id":  {id}, "name": {"enc"}, "host": {"192.0.2.30"}, "port": {"22"},
-		"user": {"root"}, "shell": {"posix"}, "revision": {"0"},
-		"role": {"新角色"}, "credential_action": {"key-passphrase"}, "key_passphrase": {"secret-pass"},
+		"server_id":  {id}, "edit_scope": {"connection"},
+		"name": {"enc"}, "port": {"22"}, "user": {"deploy"}, "shell": {"posix"}, "revision": {"0"},
+		"credential_action": {"key-passphrase"}, "key_passphrase": {"secret-pass"},
 	})
 	integrationBody(t, resp)
-	if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/ui/servers/"+id {
+	if resp.StatusCode != http.StatusSeeOther ||
+		resp.Header.Get("Location") != "/ui/servers/"+id+"?saved=connection#server-card-connection" {
 		t.Fatalf("组合提交应成功，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	srv, _ := st.GetServer(id)
-	if srv == nil || srv.Role != "新角色" || models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
-		t.Fatalf("组合提交应同时保存角色与私钥口令：%+v", srv)
+	if srv == nil || srv.User != "deploy" || models.ServerHasTag(srv.Tags, models.TagNeedsPassphrase) {
+		t.Fatalf("组合提交应同时保存登录用户与私钥口令：%+v", srv)
 	}
 	savedCred, _ := st.GetCredential(srv.CredentialID)
 	if savedCred == nil || string(savedCred.Passphrase) != "secret-pass" {

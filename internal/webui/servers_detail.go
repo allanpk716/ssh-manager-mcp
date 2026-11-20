@@ -8,31 +8,49 @@ import (
 	"strings"
 )
 
-// 服务器详情页的四个分段；值同时用于查询参数与模板判断。
+// 服务器详情页一列卡片里的可编辑分区；值同时用于查询参数与表单隐藏
+// 字段，决定底部弹层渲染哪一组字段。
 const (
-	serverDetailTabConnection    = "connection"
-	serverDetailTabAddresses     = "addresses"
-	serverDetailTabAuthorization = "authorization"
-	serverDetailTabSoftware      = "software"
+	serverDetailEditConnection  = "connection"
+	serverDetailEditLocation    = "location"
+	serverDetailEditDescription = "description"
+	serverDetailEditAccounts    = "accounts"
 )
 
-// serverDetailTabFromQuery 返回要显示的分段；未知值回落到连接块。
-func serverDetailTabFromQuery(r *http.Request) string {
-	switch r.URL.Query().Get("tab") {
-	case serverDetailTabAddresses:
-		return serverDetailTabAddresses
-	case serverDetailTabAuthorization:
-		return serverDetailTabAuthorization
-	case serverDetailTabSoftware:
-		return serverDetailTabSoftware
+// serverDetailEditScopeFromQuery 返回要打开的编辑弹层；空串表示不打开。
+func serverDetailEditScopeFromQuery(r *http.Request) string {
+	switch r.URL.Query().Get("edit") {
+	case serverDetailEditConnection, serverDetailEditLocation, serverDetailEditDescription, serverDetailEditAccounts:
+		return r.URL.Query().Get("edit")
 	default:
-		return serverDetailTabConnection
+		return ""
 	}
 }
 
-// serverDetailTabPath 返回一个分段的详情页地址。
-func serverDetailTabPath(id, tab string) string {
-	return "/ui/servers/" + url.PathEscape(id) + "?tab=" + tab
+// serverDetailEditScopeFromForm 返回表单声明的编辑分区；旧表单没有这个
+// 字段时按连接分区处理，保持既有提交不失效。
+func serverDetailEditScopeFromForm(r *http.Request) string {
+	switch r.PostFormValue("edit_scope") {
+	case serverDetailEditDescription, serverDetailEditAccounts:
+		return r.PostFormValue("edit_scope")
+	default:
+		return serverDetailEditConnection
+	}
+}
+
+// serverDetailPath 返回统一详情页地址；anchor 非空时追加对应卡片锚点。
+func serverDetailPath(id string) string {
+	return "/ui/servers/" + url.PathEscape(id)
+}
+
+// serverDetailCardAnchor 返回一个分区卡片的页面内锚点。
+func serverDetailCardAnchor(scope string) string {
+	return "#server-card-" + scope
+}
+
+// serverDetailEditPath 返回打开某个编辑弹层的详情页地址。
+func serverDetailEditPath(id, scope string) string {
+	return serverDetailPath(id) + "?edit=" + scope
 }
 
 // serverDetailAddressRow 是地址卡片里的一行：网络名、类型与地址。
@@ -42,10 +60,15 @@ type serverDetailAddressRow struct {
 	Address     string
 }
 
-// serverDetailSiblingAccount 是同一台机器上的另一个登录账号。
+// serverDetailSiblingAccount 是同一台机器上的另一个登录账号；Note 复用
+// 该条目的服务器元数据说明字段，ConnectionTest 来自 #326 的持久结果。
 type serverDetailSiblingAccount struct {
-	Name string
-	User string
+	ID             string
+	Name           string
+	User           string
+	Note           string
+	Revision       int64
+	ConnectionTest *ServerConnectionTestResultView
 }
 
 // serverDetailDeviceOption 是改挂表单里的一台机器。
@@ -72,32 +95,13 @@ type serverDetailTopologyView struct {
 	NewLocationHref   string
 }
 
-// serverDetailSoftwareView 是软件块的数据；实测与声明两份清单在服务端分
-// 好，模板只负责展示。
+// serverDetailSoftwareView 是软件清单入口卡片的数据；清单本身在软件清单
+// 设备视图查看，这里只保留采集状态与过渡入口。
 type serverDetailSoftwareView struct {
-	Available    bool
-	Reason       string
-	DeviceName   string
-	Status       SoftwareInventoryStatus
-	Measured     []SoftwareInventoryGroup
-	Declared     []SoftwareInventoryGroup
-	Pending      []serverDetailPendingExposureRow
-	Unidentified []serverDetailUnidentifiedProcessRow
-}
-
-type serverDetailPendingExposureRow struct {
-	Address    string
-	Port       int
-	Protocol   string
-	Exposure   string
-	ActionPath string
-}
-
-type serverDetailUnidentifiedProcessRow struct {
-	Name           string
-	ExecutablePath string
-	ActionPath     string
-	HasAction      bool
+	Available  bool
+	Reason     string
+	DeviceName string
+	Status     SoftwareInventoryStatus
 }
 
 // serverDetailSecretRow 是授权块里一个机密项的完整展示行。
@@ -113,22 +117,56 @@ type serverDetailProfileRow struct {
 	ClientNames []string
 }
 
-// serverDetailPageView 是详情页除服务器条目本体外的页面组装数据。
+// serverDetailPageView 是详情页除服务器条目本体外的页面组装数据；
+// EditDrawer 非空时页面末尾渲染对应分区的底部编辑弹层。
 type serverDetailPageView struct {
-	Tab          string
-	EditOpen     bool
-	Edit         *serverEditView
-	SecretRows   []serverDetailSecretRow
-	ProfileRows  []serverDetailProfileRow
-	ShareRows    []ServerDetailSharedStorageChoice
-	Topology     *serverDetailTopologyView
-	Software     *serverDetailSoftwareView
-	ReadonlyRows bool
+	EditDrawer    string
+	Edit          *serverEditView
+	AccountDrafts map[string]string
+	SecretRows    []serverDetailSecretRow
+	ProfileRows   []serverDetailProfileRow
+	ShareRows     []ServerDetailSharedStorageChoice
+	Topology      *serverDetailTopologyView
+	Software      *serverDetailSoftwareView
 }
 
-// handleServerDetail 渲染服务器详情页。四个分段由查询参数选择，地址与地
-// 点、软件块的数据在这里按需组装；组装失败按服务器错误处理。
+// DrawerTitle 返回当前编辑弹层的标题。
+func (v serverDetailPageView) DrawerTitle() string {
+	switch v.EditDrawer {
+	case serverDetailEditLocation:
+		return "编辑地点"
+	case serverDetailEditDescription:
+		return "编辑说明"
+	case serverDetailEditAccounts:
+		return "编辑其他账号说明"
+	default:
+		return "编辑连接"
+	}
+}
+
+// DrawerCaption 返回当前编辑弹层的说明文字。
+func (v serverDetailPageView) DrawerCaption() string {
+	switch v.EditDrawer {
+	case serverDetailEditLocation:
+		return "地点登记在机器上，同一台机器的全部服务器条目共用。"
+	case serverDetailEditDescription:
+		return "这些内容只写给人看，用于补充这台服务器的背景。"
+	case serverDetailEditAccounts:
+		return "只编辑显示用的说明；账号的登录信息在各自详情页修改。"
+	default:
+		return "只修改这个条目自己的登录信息。"
+	}
+}
+
+// handleServerDetail 渲染统一详情页。一列卡片的数据全部组装；编辑弹层由
+// edit 查询参数选择。旧分段地址与旧编辑参数回到统一详情页。
 func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if target, ok := serverDetailLegacyRedirect(id, r.URL.Query()); ok {
+			http.Redirect(w, r, target, http.StatusSeeOther)
+			return
+		}
+	}
 	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
@@ -141,7 +179,15 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 	if taskID := strings.TrimSpace(r.URL.Query().Get("task")); taskID != "" {
 		detail.ConnectionTest = h.serverConnectionTaskView(detail, taskID)
 	}
-	notice, noticeKind := serverDetailNoticeText(r.URL.Query().Get("notice")), ""
+	noticeKind := ""
+	if serverDetailSavedNoticeKind("saved-"+r.URL.Query().Get("saved")) != "" {
+		noticeKind = "success"
+	}
+	noticeParam := r.URL.Query().Get("notice")
+	if noticeParam == "" {
+		noticeParam = "saved-" + r.URL.Query().Get("saved")
+	}
+	notice := serverDetailNoticeText(noticeParam)
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
 		notice, noticeKind = "已覆盖主机密钥锚。", "success"
@@ -157,33 +203,70 @@ func (h *handler) renderServerDetailPage(
 	w http.ResponseWriter, r *http.Request, status int, detail *ServerDetailView,
 	notice, noticeKind string,
 ) {
-	h.renderServerDetailPageView(w, r, status, detail, notice, noticeKind, nil)
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice, noticeKind: noticeKind,
+	})
 }
 
-// renderServerDetailPageView 渲染详情页；edit 非空时在连接块内联展开编辑
-// 表单并显示它的提示。
+// serverDetailRenderOptions 描述一次详情页渲染的附加状态。
+type serverDetailRenderOptions struct {
+	status        int
+	notice        string
+	noticeKind    string
+	drawer        string
+	edit          *serverEditView
+	accountDrafts map[string]string
+}
+
+// renderServerDetailPageView 渲染详情页；drawer 非空时打开对应编辑弹层，
+// edit 携带连接弹层的校验提示与最新值。
 func (h *handler) renderServerDetailPageView(
-	w http.ResponseWriter, r *http.Request, status int, detail *ServerDetailView,
-	notice, noticeKind string, edit *serverEditView,
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView,
+	options serverDetailRenderOptions,
 ) {
-	view, err := h.serverDetailPage(r, detail)
+	drawer := options.drawer
+	if drawer == "" && r.Method == http.MethodGet || drawer == "" && r.Method == http.MethodHead {
+		drawer = serverDetailEditScopeFromQuery(r)
+	}
+	edit := options.edit
+	if drawer == serverDetailEditConnection && edit == nil && h.cfg.ServerWriter != nil &&
+		(r.Method == http.MethodGet || r.Method == http.MethodHead) {
+		edit = h.serverEditView(r, detail, "")
+	}
+	view, err := h.serverDetailPageWith(r, detail, drawer, edit, options.accountDrafts)
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
 		return
 	}
-	if edit != nil {
-		view.EditOpen = true
-		view.Edit = edit
-		if edit.Notice != "" && notice == "" {
-			notice = edit.Notice
-		}
+	if options.edit != nil && options.edit.Notice != "" && options.notice == "" {
+		options.notice = options.edit.Notice
 	}
 	data := pageData{
 		Title: detail.Name, ServerDetail: detail,
-		ServerDetailNotice: notice, ServerDetailNoticeKind: noticeKind,
+		ServerDetailNotice: options.notice, ServerDetailNoticeKind: options.noticeKind,
 		ServerDetailPage: view, ServerEdit: view.Edit,
 	}
-	h.renderPage(w, r, status, "servers-detail.tmpl", data)
+	h.renderPage(w, r, options.status, "servers-detail.tmpl", data)
+}
+
+// serverDetailLegacyRedirect 把旧分段地址与旧编辑参数换算成统一详情页地
+// 址；没有旧参数时返回 false。
+func serverDetailLegacyRedirect(id string, query url.Values) (string, bool) {
+	scope := ""
+	if query.Get("edit") == "1" {
+		scope = serverDetailEditConnection
+	}
+	if query.Get("location") == "1" {
+		scope = serverDetailEditLocation
+	}
+	if !query.Has("tab") && scope == "" {
+		return "", false
+	}
+	target := serverDetailPath(id)
+	if scope != "" {
+		target = serverDetailEditPath(id, scope)
+	}
+	return target, true
 }
 
 // serverDetailNoticeText 把详情页动作的查询参数提示码换成文案。
@@ -197,21 +280,51 @@ func serverDetailNoticeText(kind string) string {
 		return "已移除地址。"
 	case "server-moved":
 		return "已改挂到另一台机器。"
+	case "saved-connection":
+		return "已保存连接信息。"
+	case "saved-description":
+		return "已保存说明。"
+	case "saved-accounts":
+		return "已保存账号说明。"
 	default:
 		return ""
 	}
 }
 
-// serverDetailPage 组装四个分段的附加数据。拓扑读取失败会让整页失败；软
+// serverDetailSavedNoticeKind 把保存成功的提示码换成分区值；空串表示不是
+// 保存成功提示。
+func serverDetailSavedNoticeKind(kind string) string {
+	switch kind {
+	case "saved-connection":
+		return serverDetailEditConnection
+	case "saved-description":
+		return serverDetailEditDescription
+	case "saved-accounts":
+		return serverDetailEditAccounts
+	default:
+		return ""
+	}
+}
+
+// serverDetailPage 组装一列卡片的附加数据。拓扑读取失败会让整页失败；软
 // 件清单没有数据时只显示原因，不阻塞详情页。
 func (h *handler) serverDetailPage(r *http.Request, detail *ServerDetailView) (*serverDetailPageView, error) {
-	view := &serverDetailPageView{
-		Tab:          serverDetailTabFromQuery(r),
-		EditOpen:     r.URL.Query().Get("edit") == "1",
-		ReadonlyRows: h.cfg.ServerWriter == nil,
+	drawer := serverDetailEditScopeFromQuery(r)
+	var edit *serverEditView
+	if drawer == serverDetailEditConnection && h.cfg.ServerWriter != nil {
+		edit = h.serverEditView(r, detail, "")
 	}
-	if view.EditOpen && h.cfg.ServerWriter != nil {
-		view.Edit = h.serverEditView(r, detail, "")
+	return h.serverDetailPageWith(r, detail, drawer, edit, nil)
+}
+
+// serverDetailPageWith 按指定弹层与编辑数据组装页面；校验失败重新渲染时
+// 由调用方传入最新值与保留的账号说明草稿。
+func (h *handler) serverDetailPageWith(
+	r *http.Request, detail *ServerDetailView, drawer string,
+	edit *serverEditView, accountDrafts map[string]string,
+) (*serverDetailPageView, error) {
+	view := &serverDetailPageView{
+		EditDrawer: drawer, Edit: edit, AccountDrafts: accountDrafts,
 	}
 	if h.cfg.Topology != nil {
 		data, err := h.cfg.Topology.Topology(h.requestClientInstance(r), TopologyProbeOriginSelf)
@@ -219,14 +332,11 @@ func (h *handler) serverDetailPage(r *http.Request, detail *ServerDetailView) (*
 			return nil, err
 		}
 		view.Topology = h.serverDetailTopologyView(detail, data, r)
-	}
-	view.Software = h.serverDetailSoftwareView(r, detail)
-	if view.Software.Available && h.cfg.SoftwareInventory != nil {
-		if todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos(); err == nil {
-			view.Software.Pending = serverDetailPendingExposureRows(todos, detail.DeviceName)
-			view.Software.Unidentified = serverDetailUnidentifiedProcessRows(todos, detail.DeviceName)
+		if drawer == serverDetailEditLocation && view.Topology.CanWrite && view.Topology.HasDevice {
+			view.Topology.LocationOpen = true
 		}
 	}
+	view.Software = h.serverDetailSoftwareView(r, detail)
 	view.SecretRows = serverDetailSecretRows(detail)
 	view.ProfileRows = h.serverDetailProfileRows(r, detail)
 	view.ShareRows = detail.SharedStorageChoices
@@ -244,8 +354,6 @@ func (h *handler) serverDetailTopologyView(
 	}
 	if !view.CanWrite {
 		view.LocationOpen = false
-	} else {
-		view.LocationOpen = r.URL.Query().Get("location") == "1"
 	}
 	networkByID := map[string]TopologyNetwork{}
 	for _, network := range data.Networks {
@@ -293,9 +401,13 @@ func (h *handler) serverDetailTopologyView(
 		if server.ID == detail.ID || server.Name == detail.Name {
 			continue
 		}
-		view.SiblingAccounts = append(view.SiblingAccounts, serverDetailSiblingAccount{
-			Name: server.Name, User: server.User,
-		})
+		row := serverDetailSiblingAccount{ID: server.ID, Name: server.Name, User: server.User}
+		if sibling, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), server.ID); err == nil && sibling != nil {
+			row.Note = sibling.Description
+			row.Revision = sibling.Revision
+			row.ConnectionTest = sibling.ConnectionTest
+		}
+		view.SiblingAccounts = append(view.SiblingAccounts, row)
 	}
 	for _, candidate := range data.Devices {
 		if candidate.Name == device.Name {
@@ -315,7 +427,7 @@ func (h *handler) serverDetailTopologyView(
 		}
 		view.NewLocationHref = locationCreatePath + "?" + url.Values{
 			"parent":    {device.LocationPath},
-			"return_to": {serverDetailTabPath(detail.ID, serverDetailTabAddresses) + "&location=1"},
+			"return_to": {serverDetailEditPath(detail.ID, serverDetailEditLocation)},
 		}.Encode()
 	}
 	return view
@@ -329,7 +441,8 @@ func networkTypeLabel(networkType string) string {
 	return "物理局域网"
 }
 
-// serverDetailSoftwareView 组装软件块；实测与声明按条目来源拆成两份清单。
+// serverDetailSoftwareView 组装软件清单入口卡片；清单明细由软件清单设备
+// 视图负责，详情页不再拆声明与实测清单。
 func (h *handler) serverDetailSoftwareView(r *http.Request, detail *ServerDetailView) *serverDetailSoftwareView {
 	view := &serverDetailSoftwareView{}
 	if h.cfg.SoftwareInventory == nil {
@@ -348,69 +461,7 @@ func (h *handler) serverDetailSoftwareView(r *http.Request, detail *ServerDetail
 	view.Available = true
 	view.DeviceName = device.Name
 	view.Status = device.Status
-	for _, group := range device.Groups {
-		measured := group
-		declared := group
-		measured.Items = nil
-		declared.Items = nil
-		for _, item := range group.Items {
-			if item.Source == "声明" {
-				declared.Items = append(declared.Items, item)
-			} else {
-				measured.Items = append(measured.Items, item)
-			}
-		}
-		if len(measured.Items) > 0 {
-			view.Measured = append(view.Measured, measured)
-		}
-		if len(declared.Items) > 0 {
-			view.Declared = append(view.Declared, declared)
-		}
-	}
 	return view
-}
-
-func serverDetailPendingExposureRows(todos SoftwareInventoryTodos, deviceName string) []serverDetailPendingExposureRow {
-	rows := make([]serverDetailPendingExposureRow, 0, 3)
-	for _, device := range todos.PendingExposure {
-		if device.DeviceName != deviceName {
-			continue
-		}
-		for _, port := range device.Ports {
-			if len(rows) == 3 {
-				return rows
-			}
-			rows = append(rows, serverDetailPendingExposureRow{
-				Address: port.Address, Port: port.Port, Protocol: port.Protocol, Exposure: port.ExposureLabel,
-				ActionPath: declarationFormPath(deviceName, port.ObservedStableKey, port.Address, port.Port, port.Protocol, "all_addresses"),
-			})
-		}
-	}
-	return rows
-}
-
-func serverDetailUnidentifiedProcessRows(todos SoftwareInventoryTodos, deviceName string) []serverDetailUnidentifiedProcessRow {
-	rows := make([]serverDetailUnidentifiedProcessRow, 0, 3)
-	for _, process := range todos.UnidentifiedProcesses {
-		if process.DeviceName != deviceName || len(rows) == 3 {
-			continue
-		}
-		row := serverDetailUnidentifiedProcessRow{
-			Name: process.Name, ExecutablePath: process.ExecutablePath,
-		}
-		if process.ProcessName != "" {
-			row.Name = process.ProcessName
-		}
-		if len(process.ListeningPorts) > 0 {
-			port := process.ListeningPorts[0]
-			row.HasAction = true
-			row.ActionPath = declarationFormPath(
-				deviceName, process.ObservedStableKey, port.Address, port.Port, port.Protocol, "all_addresses",
-			)
-		}
-		rows = append(rows, row)
-	}
-	return rows
 }
 
 // serverDetailSecretRows 把机密项选择与最近写入记录拼成展示行；客户端没
@@ -487,9 +538,13 @@ func serverDetailWriteErrorText(err error) (string, bool) {
 	return "", false
 }
 
-// serverDetailWriteRedirect 保存成功后回到地址与地点块。
-func serverDetailWriteRedirect(w http.ResponseWriter, r *http.Request, id, notice string) {
-	http.Redirect(w, r, serverDetailTabPath(id, serverDetailTabAddresses)+"&notice="+notice, http.StatusSeeOther)
+// serverDetailWriteRedirect 保存成功后回到统一详情页的对应卡片锚点。
+func serverDetailWriteRedirect(w http.ResponseWriter, r *http.Request, id, notice, anchor string) {
+	target := serverDetailPath(id) + "?notice=" + notice
+	if anchor != "" {
+		target += anchor
+	}
+	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
 // handleServerDetailLocation 处理机器地点保存表单。
@@ -510,10 +565,12 @@ func (h *handler) handleServerDetailLocation(w http.ResponseWriter, r *http.Requ
 	if _, err := h.cfg.TopologyWriter.EditDeviceSite(
 		detail.DeviceName, site, TopologyWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
-		h.renderServerDetailWriteError(w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err))
+		h.renderServerDetailDrawerError(
+			w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err), serverDetailEditLocation,
+		)
 		return
 	}
-	serverDetailWriteRedirect(w, r, detail.ID, "location-saved")
+	serverDetailWriteRedirect(w, r, detail.ID, "location-saved", serverDetailCardAnchor(serverDetailEditLocation))
 }
 
 // handleServerDetailAddressWrite 处理地址的新增、编辑与移除。
@@ -563,7 +620,7 @@ func (h *handler) handleServerDetailAddressWrite(w http.ResponseWriter, r *http.
 	if action == "remove" {
 		notice = "address-removed"
 	}
-	serverDetailWriteRedirect(w, r, detail.ID, notice)
+	serverDetailWriteRedirect(w, r, detail.ID, notice, "#server-card-address")
 }
 
 // handleServerDetailMove 处理改挂到另一台机器表单，等价于命令行
@@ -589,7 +646,7 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 		h.renderServerDetailWriteError(w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err))
 		return
 	}
-	serverDetailWriteRedirect(w, r, detail.ID, "server-moved")
+	serverDetailWriteRedirect(w, r, detail.ID, "server-moved", "#server-advanced-actions")
 }
 
 // handleServerDetailTest 启动一次连接测试。局部请求把连接卡片的结果区换
@@ -722,6 +779,17 @@ func (h *handler) renderServerDetailWriteError(
 	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, status int, notice string,
 ) {
 	h.renderServerDetailPage(w, r, status, detail, notice, "")
+}
+
+// renderServerDetailDrawerError 带提示重新渲染详情页并保持指定编辑弹层打
+// 开，让 owner 在同一层里看到失败原因。
+func (h *handler) renderServerDetailDrawerError(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, status int,
+	notice, drawer string,
+) {
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice, drawer: drawer,
+	})
 }
 
 // mergeServerEditUpload 读取编辑表单上传的私钥文件并合入表单值；选择文件

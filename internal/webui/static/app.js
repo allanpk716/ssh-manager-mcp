@@ -440,6 +440,80 @@
   });
   updateAllShareScopeWarnings();
   initRequiredNoteForms();
+  // 服务器详情分区编辑弹层：打开时聚焦第一个控件并限制焦点；Escape 与遮
+  // 罩关闭；无弹层但带卡片锚点时把焦点还给对应卡片的编辑按钮。
+  function initServerDetailDrawer() {
+    var shell = document.querySelector("[data-server-detail-drawer]");
+    if (shell === null) {
+      var anchorMatch = /^#server-card-([a-z]+)$/.exec(window.location.hash);
+      if (anchorMatch === null) {
+        return;
+      }
+      var editButton = document.querySelector(
+        '[data-detail-edit-button="' + anchorMatch[1] + '"]'
+      );
+      if (editButton !== null) {
+        window.requestAnimationFrame(function () {
+          editButton.focus();
+        });
+      }
+      return;
+    }
+    var dialog = shell.querySelector("[data-server-detail-dialog]");
+    if (dialog === null) {
+      return;
+    }
+    function focusableElements() {
+      return Array.prototype.slice.call(
+        dialog.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled])'
+        )
+      ).filter(function (element) {
+        return element.offsetParent !== null || element === document.activeElement;
+      });
+    }
+    var controls = dialog.querySelectorAll("input, select, textarea");
+    var first = null;
+    for (var index = 0; index < controls.length; index += 1) {
+      var control = controls[index];
+      if (control.type !== "hidden" && !control.disabled && control.offsetParent !== null) {
+        first = control;
+        break;
+      }
+    }
+    if (first === null) {
+      first = dialog.querySelector("a[href], button");
+    }
+    if (first !== null) {
+      first.focus();
+    }
+    document.body.classList.add("modal-open");
+    dialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") {
+        return;
+      }
+      var elements = focusableElements();
+      if (elements.length === 0) {
+        return;
+      }
+      var firstElement = elements[0];
+      var lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        window.location.assign(shell.getAttribute("data-close-detail-edit"));
+      }
+    });
+  }
+
+  initServerDetailDrawer();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);

@@ -501,6 +501,21 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.MoveServerToDevice("db-1", "工作站"); err != nil {
 		return err
 	}
+	// db-1 是 web-1 在同一台机器上的另一个账号：给它预置显示说明与最近一
+	// 次连接测试结果，供服务器详情的同机账号卡片浏览器测试断言。
+	if db, err := st.GetServerByName("db-1"); err == nil && db != nil {
+		db.Description = "每晚备份任务使用"
+		if err := st.UpdateServer(db); err != nil {
+			return err
+		}
+		if err := st.SaveServerConnectionTestResult(db.ID, models.ServerConnectionTestResult{
+			CompletedAt: time.Now().Add(-2 * time.Hour), Succeeded: true,
+			SuccessAddress: "192.0.2.11", SuccessNetworkName: "家A局域网",
+			Duration: 45 * time.Millisecond,
+		}); err != nil {
+			return err
+		}
+	}
 	if _, err := st.AddNetworkMembership("工作站", "家A局域网", "192.168.1.20"); err != nil {
 		return err
 	}

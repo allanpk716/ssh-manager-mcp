@@ -89,7 +89,7 @@ func hostKeyPage(t *testing.T, handler http.Handler, cookie *http.Cookie, path s
 
 func hostKeyCSRF(t *testing.T, handler http.Handler, cookie *http.Cookie, serverID string) string {
 	t.Helper()
-	page := hostKeyPage(t, handler, cookie, "/ui/servers/"+serverID+"?tab=connection")
+	page := hostKeyPage(t, handler, cookie, "/ui/servers/"+serverID+"")
 	return authorizationHiddenOne(page, "csrf_token")
 }
 
@@ -136,7 +136,7 @@ func TestServerDetailOverwritesAndClearsHostKeyAnchor(t *testing.T) {
 	handler, cookie := newAuthorizationTestHandler(t, st)
 	csrf := hostKeyCSRF(t, handler, cookie, rootID)
 
-	page := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID+"?tab=connection")
+	page := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID+"")
 	for _, want := range []string{
 		"/ui/servers/" + rootID + "/hostkey-pin", "覆盖主机密钥指纹",
 		"/ui/servers/" + rootID + "/hostkey-clear", "确认删除主机密钥指纹",
@@ -246,7 +246,7 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 	}
 	handler, cookie := newAuthorizationTestHandler(t, st)
 
-	rootPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID+"?tab=connection")
+	rootPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+rootID+"")
 	for _, want := range []string{
 		"主机密钥指纹", rootAnchor.fingerprint, "主机密钥算法", rootAnchor.key.Type(),
 		"首次信任", "学到锚的地址", "192.0.2.10:22", "锚定时间",
@@ -259,7 +259,7 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 		t.Fatalf("root 条目不得显示兄弟条目的锚：\n%s", rootPage)
 	}
 
-	workerPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+workerID+"?tab=connection")
+	workerPage := hostKeyPage(t, handler, cookie, "/ui/servers/"+workerID+"")
 	for _, want := range []string{workerAnchor.fingerprint, "192.0.2.11:2200"} {
 		if !strings.Contains(workerPage, want) {
 			t.Fatalf("worker 条目详情页应显示自己的锚与学到锚的地址 %q：\n%s", want, workerPage)
@@ -269,7 +269,7 @@ func TestServerDetailShowsOwnHostKeyAnchor(t *testing.T) {
 		t.Fatalf("worker 条目不得显示兄弟条目的锚：\n%s", workerPage)
 	}
 
-	barePage := hostKeyPage(t, handler, cookie, "/ui/servers/"+bareID+"?tab=connection")
+	barePage := hostKeyPage(t, handler, cookie, "/ui/servers/"+bareID+"")
 	if !strings.Contains(barePage, "尚未锚定") {
 		t.Fatalf("尚无锚的条目必须明确显示尚未锚定：\n%s", barePage)
 	}
@@ -376,7 +376,7 @@ func TestAuthorityHostKeyAnchorWritesRequireRecentPasswordVerification(t *testin
 		t.Fatal(err)
 	}
 	env := newHostKeyAuthorityEnv(t, st)
-	detail := hostKeyAuthorityRequest(env, env.session, http.MethodGet, "/ui/servers/"+rootID+"?tab=connection", nil)
+	detail := hostKeyAuthorityRequest(env, env.session, http.MethodGet, "/ui/servers/"+rootID+"", nil)
 	csrf := authorizationHiddenOne(authorizationBody(t, detail), "csrf_token")
 	env.now = env.now.Add(6 * time.Minute)
 

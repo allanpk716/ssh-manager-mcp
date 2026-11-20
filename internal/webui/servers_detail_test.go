@@ -62,6 +62,17 @@ func newServerDetailTestStore() *stubServerStore {
 	detail.Role = "构建机"
 	detail.Caveats = "只允许 owner 登录"
 	detail.ShowHostKeyAnchor = true
+	sibling := &ServerDetailView{
+		ID: "srv-other", Name: "other-account", User: "backup", Host: "192.0.2.10", Port: 22,
+		Shell: "posix", CredentialType: "password", Revision: 7,
+		Description: "每晚备份任务使用", DeviceName: "工作站", HasDevice: true,
+	}
+	sibling.ConnectionTest = NewServerConnectionTestResultView(models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_000, 0), Succeeded: true,
+		SuccessAddress: "192.0.2.10", SuccessNetworkName: "办公网",
+		Duration: 31 * time.Millisecond,
+	})
+	store.details["srv-other"] = sibling
 	return store
 }
 
@@ -100,97 +111,273 @@ func newServerDetailTestHandler(t *testing.T, options serverDetailHandlerOptions
 	return handler, cookies[0]
 }
 
-// TestServerDetailConnectionTabShowsCardsAndInlineEdit 校验详情页吸顶分段
-// 控件、连接卡片、五个元数据字段与并入连接块的内联编辑表单。
-func TestServerDetailConnectionTabShowsCardsAndInlineEdit(t *testing.T) {
+// TestServerDetailShowsOneColumnCardsAndLegacyTabRedirects 校验详情页只保留
+// 一列分区卡片；旧分段查询地址回到统一详情页。
+func TestServerDetailShowsOneColumnCardsAndLegacyTabRedirects(t *testing.T) {
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
 	})
 
 	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
-	for _, want := range []string{
-		`class="segmented server-detail-tabs"`,
-		`href="/ui/servers/srv-fine?tab=connection"`, `aria-current="page"`,
-		`href="/ui/servers/srv-fine?tab=addresses"`,
-		`href="/ui/servers/srv-fine?tab=authorization"`,
-		`href="/ui/servers/srv-fine?tab=software"`,
-		"连接信息", "登录用户", "root", "端口", "认证方式", "密码",
-		"sudo 密码", "主机密钥指纹", "shell 类型",
-		"说明信息", "说明", "内部服务", "硬件", "NUC", "服务", "Docker",
-		"角色", "构建机", "注意事项", "只允许 owner 登录",
-		"危险区", `href="/ui/servers/srv-fine/delete"`, "删除服务器",
-		`action="/ui/servers/srv-fine/test"`, "测试连接",
-		`href="/ui/servers/srv-fine?tab=connection&amp;edit=1"`,
+	for _, forbidden := range []string{
+		`class="segmented server-detail-tabs"`, `aria-label="服务器详情分段"`, "地址与地点",
 	} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("服务器详情连接块缺少 %q：\n%s", want, body)
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("统一详情页不应再包含 %q：\n%s", forbidden, body)
 		}
 	}
-	if strings.Contains(body, `name="description"`) {
-		t.Fatalf("未请求编辑时不应展开编辑表单：\n%s", body)
+
+	labels := []string{
+		`aria-label="连接"`, `<h2>地点</h2>`, `<h2>地址</h2>`, `<h2>说明</h2>`,
+		`<h2>同一台机器上的其他账号</h2>`, `<h2>授权</h2>`, `<h2>软件清单</h2>`,
+		`<h2>高级操作</h2>`,
+	}
+	position := 0
+	for _, label := range labels {
+		found := strings.Index(body[position:], label)
+		if found < 0 {
+			t.Fatalf("统一详情页缺少卡片标记 %q：\n%s", label, body)
+		}
+		position += found + len(label)
+	}
+	if !strings.Contains(body, `<details class="advanced-card" id="server-advanced-actions">`) {
+		t.Fatalf("高级操作应默认折叠：\n%s", body)
 	}
 
-	editing := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=connection&edit=1")
-	for _, want := range []string{
-		`action="/ui/servers/srv-fine/edit"`, `name="description"`,
-		`name="key_file"`, `enctype="multipart/form-data"`, "保存连接信息",
+	for _, testCase := range []struct{ oldPath, want string }{
+		{"/ui/servers/srv-fine?tab=connection", "/ui/servers/srv-fine"},
+		{"/ui/servers/srv-fine?tab=addresses", "/ui/servers/srv-fine"},
+		{"/ui/servers/srv-fine?tab=authorization", "/ui/servers/srv-fine"},
+		{"/ui/servers/srv-fine?tab=software", "/ui/servers/srv-fine"},
+		{"/ui/servers/srv-fine?tab=connection&edit=1", "/ui/servers/srv-fine?edit=connection"},
+		{"/ui/servers/srv-fine?tab=addresses&location=1", "/ui/servers/srv-fine?edit=location"},
+		{"/ui/servers/srv-fine?edit=1", "/ui/servers/srv-fine?edit=connection"},
+		{"/ui/servers/srv-fine?location=1", "/ui/servers/srv-fine?edit=location"},
+		{"/ui/servers/srv-fine/edit", "/ui/servers/srv-fine?edit=connection"},
 	} {
-		if !strings.Contains(editing, want) {
-			t.Fatalf("服务器详情内联编辑表单缺少 %q：\n%s", want, editing)
+		request := httptest.NewRequest(http.MethodGet, testCase.oldPath, nil)
+		request.Host = "127.0.0.1:18080"
+		request.AddCookie(cookie)
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+		response := recorder.Result()
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("旧地址 %s 状态码 = %d，应为 303", testCase.oldPath, response.StatusCode)
+		}
+		if location := response.Header.Get("Location"); location != testCase.want {
+			t.Fatalf("旧地址 %s 跳转到 %q，应为 %q", testCase.oldPath, location, testCase.want)
 		}
 	}
 }
 
-// TestServerDetailAddressTabShowsLocationAddressAndAccounts 校验地址与地点
-// 块：完整地点路径、网络 + 地址行、不一致提示、同机账号与改挂表单。
-func TestServerDetailAddressTabShowsLocationAddressAndAccounts(t *testing.T) {
+// TestServerDetailConnectionEditorDrawer 校验连接分区使用底部弹层，只包含连
+// 接相关字段，且不再把主机地址与说明混入连接编辑。
+func TestServerDetailConnectionEditorDrawer(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=connection")
+	for _, want := range []string{
+		`data-server-detail-drawer="connection"`, `role="dialog"`, `aria-modal="true"`,
+		`aria-labelledby="server-detail-drawer-title"`,
+		`<h2 id="server-detail-drawer-title">编辑连接</h2>`,
+		`for="edit-name"`, `for="edit-user"`, `for="edit-port"`, `for="edit-shell"`,
+		`for="edit-tags"`, `name="expose_host"`, `name="credential_action"`,
+		`name="sudo_password"`, `data-cancel-detail-edit`, "保存连接信息",
+		`name="edit_scope" value="connection"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("连接编辑弹层缺少 %q：\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`id="edit-host"`, `name="host"`, `name="description"`, `name="hardware"`,
+		`name="services"`, `name="role"`, `name="special_handling"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("连接编辑弹层不应包含 %q：\n%s", forbidden, body)
+		}
+	}
+	if strings.Count(body, `role="dialog"`) != 1 {
+		t.Fatalf("详情页一次只应渲染一个编辑弹层：\n%s", body)
+	}
+}
+
+// TestServerDetailLocationEditorDrawer 校验地点分区弹层沿用地点树、就地新
+// 建地点与「不登记地点」，普通页面不再内联渲染地点表单。
+func TestServerDetailLocationEditorDrawer(t *testing.T) {
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
 		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
 		topologyWriter: &stubTopologyWriter{},
 	})
 
-	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=addresses")
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=location")
 	for _, want := range []string{
-		"地点", "机房", `class="location-value"`,
-		`href="/ui/servers/srv-fine?tab=addresses&amp;location=1"`, "更改",
-		"地址", "办公网", "物理局域网", "192.0.2.10",
-		"虚拟网", "虚拟局域网", "100.64.0.10",
-		"其他（公网或未登记网络）",
-		"地点不一致", "机房", "公司 / 一厂区 / 3 号楼",
-		"同一台机器上的其他账号", "other-account", "backup",
-		"共用这台机器的地址与地点",
-		"改挂到另一台机器", `name="device"`, `<option value="NAS">`,
-		`action="/ui/servers/srv-fine/address/add"`, `name="network"`, `name="address"`,
-		"＋ 添加地址", "机房网",
+		`data-server-detail-drawer="location"`, `<h2 id="server-detail-drawer-title">编辑地点</h2>`,
+		`action="/ui/servers/srv-fine/location"`, `value="公司 / 一厂区 / 3 号楼"`,
+		`value="机房"`, "不登记地点", `name="site"`, "保存地点", "新建地点",
+		`data-cancel-detail-edit`,
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("服务器详情地址与地点块缺少 %q：\n%s", want, body)
+			t.Fatalf("地点编辑弹层缺少 %q：\n%s", want, body)
 		}
 	}
+	if !strings.Contains(body, "return_to=%2Fui%2Fservers%2Fsrv-fine%3Fedit%3Dlocation") {
+		t.Fatalf("新建地点应回到地点编辑弹层：\n%s", body)
+	}
 
-	locationPage := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=addresses&location=1")
+	plain := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	if strings.Contains(plain, `name="site"`) || strings.Contains(plain, `role="dialog"`) {
+		t.Fatalf("未请求编辑时地点卡片不应同时渲染预览与编辑表单：\n%s", plain)
+	}
+}
+
+// TestServerDetailDescriptionEditorDrawer 校验说明分区按五个既有元数据字段
+// 分组编辑，弹层不夹带连接字段。
+func TestServerDetailDescriptionEditorDrawer(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=description")
 	for _, want := range []string{
-		`action="/ui/servers/srv-fine/location"`, `value="公司 / 一厂区 / 3 号楼"`,
-		`value="机房"`, "不登记地点", `name="site"`,
-		`href="/ui/more/locations/new?parent=%E6%9C%BA%E6%88%BF`, "新建地点",
+		`data-server-detail-drawer="description"`,
+		`<h2 id="server-detail-drawer-title">编辑说明</h2>`,
+		`for="edit-role">用途`, `for="edit-services">部署了什么`, `for="edit-hardware">硬件`,
+		`for="edit-caveats">注意事项`, `for="edit-description">备注`,
+		`name="role" rows="2">构建机</textarea>`, `name="services" rows="2">Docker</textarea>`,
+		`name="hardware" rows="2">NUC</textarea>`, `name="special_handling" rows="2">只允许 owner 登录</textarea>`,
+		`name="description" rows="2">内部服务</textarea>`, `name="edit_scope" value="description"`,
+		"保存说明", `data-cancel-detail-edit`,
 	} {
-		if !strings.Contains(locationPage, want) {
-			t.Fatalf("服务器详情地点选择器缺少 %q：\n%s", want, locationPage)
+		if !strings.Contains(body, want) {
+			t.Fatalf("说明编辑弹层缺少 %q：\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{
+		`name="user"`, `name="port"`, `name="credential_action"`, `name="sudo_password"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("说明编辑弹层不应包含 %q：\n%s", forbidden, body)
+		}
+	}
+}
+
+// TestServerDetailAccountsCardAndNoteEditor 校验同机账号卡片显示说明与最近
+// 测试状态，编辑层只改各账号显示说明并写入各自条目。
+func TestServerDetailAccountsCardAndNoteEditor(t *testing.T) {
+	store := newServerDetailTestStore()
+	writer := &stubServerWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: store, writer: writer,
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		"同一台机器上的其他账号", `href="/ui/servers/srv-other"`, "other-account", "backup",
+		"每晚备份任务使用", "上次测试：", "已连上", `href="/ui/servers/srv-fine?edit=accounts"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("同机账号卡片缺少 %q：\n%s", want, body)
 		}
 	}
 
-	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=addresses")
-	if strings.Contains(bare, "同一台机器上的其他账号") {
-		t.Fatalf("没有同机账号时不应显示该卡片：\n%s", bare)
+	drawer := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=accounts")
+	for _, want := range []string{
+		`data-server-detail-drawer="accounts"`,
+		`<h2 id="server-detail-drawer-title">编辑其他账号说明</h2>`,
+		"只编辑显示用的说明；账号的登录信息在各自详情页修改。",
+		`name="account_note_srv-other" value="每晚备份任务使用"`,
+		`name="account_revision_srv-other" value="7"`,
+		`name="edit_scope" value="accounts"`, `href="/ui/servers/srv-other"`,
+	} {
+		if !strings.Contains(drawer, want) {
+			t.Fatalf("同机账号编辑弹层缺少 %q：\n%s", want, drawer)
+		}
 	}
-	if !strings.Contains(bare, "未关联机器") {
-		t.Fatalf("未关联机器时应有明确说明：\n%s", bare)
+	for _, forbidden := range []string{`name="user"`, `name="port"`, `name="credential_action"`} {
+		if strings.Contains(drawer, forbidden) {
+			t.Fatalf("同机账号编辑弹层不应包含 %q：\n%s", forbidden, drawer)
+		}
+	}
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/edit", url.Values{
+		"edit_scope": {"accounts"}, "server_id": {"srv-fine"},
+		"account_note_srv-other":     {"夜里跑备份任务"},
+		"account_revision_srv-other": {"7"},
+	})
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("账号说明保存状态码 = %d，应为 303", response.StatusCode)
+	}
+	if location := response.Header.Get("Location"); location != "/ui/servers/srv-fine?saved=accounts#server-card-accounts" {
+		t.Fatalf("账号说明保存跳转到 %q", location)
+	}
+	if len(writer.editIDs) != 1 || writer.editIDs[0] != "srv-other" {
+		t.Fatalf("账号说明应写入同机账号条目，实际 = %v", writer.editIDs)
+	}
+	if len(writer.edits) != 1 || writer.edits[0].Description == nil ||
+		*writer.edits[0].Description != "夜里跑备份任务" || writer.edits[0].User != nil {
+		t.Fatalf("账号说明写入字段 = %#v，应只写显示说明", writer.edits)
+	}
+
+	clientHandler, clientCookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		role: RoleClient, servers: store,
+		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
+	})
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
+	if strings.Contains(clientPage, "?edit=accounts") || strings.Contains(clientPage, "?edit=connection") {
+		t.Fatalf("客户端详情页不应出现编辑入口：\n%s", clientPage)
+	}
+}
+
+// TestServerDetailUnifiedPageShowsCardsAndFields 校验统一详情页的连接、地
+// 点、地址与说明卡片内容与高级操作占位。
+func TestServerDetailUnifiedPageShowsCardsAndFields(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	for _, want := range []string{
+		`id="server-card-connection"`, `href="/ui/servers/srv-fine?edit=connection"`,
+		"连接", "登录用户", "root", "端口", "认证方式", "密码",
+		"sudo 密码", "主机密钥指纹", "shell 类型",
+		`action="/ui/servers/srv-fine/test"`, "测试连接",
+		`id="server-card-location"`, `href="/ui/servers/srv-fine?edit=location"`,
+		`class="location-value"`, "机房", "地点登记在机器上",
+		`id="server-card-address"`, "办公网", "物理局域网", "192.0.2.10",
+		"虚拟网", "虚拟局域网", "100.64.0.10", "其他（公网或未登记网络）",
+		"地点不一致", "公司 / 一厂区 / 3 号楼",
+		`action="/ui/servers/srv-fine/address/add"`, "＋ 添加地址", "机房网",
+		`id="server-card-description"`, `href="/ui/servers/srv-fine?edit=description"`,
+		"用途", "构建机", "部署了什么", "Docker", "硬件", "NUC",
+		"注意事项", "只允许 owner 登录", "备注", "内部服务",
+		"高级操作", `href="/ui/servers/srv-fine/delete"`, "删除服务器",
+		"这里只放低频且有风险的操作。",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("统一详情页缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `role="dialog"`) || strings.Contains(body, `name="description"`) {
+		t.Fatalf("未请求编辑时不应同时渲染预览与编辑表单：\n%s", body)
+	}
+
+	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
+	if !strings.Contains(bare, "同一台机器上的其他账号") || !strings.Contains(bare, "未关联机器") {
+		t.Fatalf("未关联机器时仍应有账号卡片与说明：\n%s", bare)
 	}
 }
 
 // TestServerDetailAddressLocationAndMoveWrites 校验地点、地址与改挂写操作
-// 都走拓扑写来源并回到地址与地点块。
+// 都走拓扑写来源并回到统一详情页对应卡片。
 func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 	writer := &stubTopologyWriter{}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -236,8 +423,8 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 			t.Fatalf("%s 状态码 = %d，应为 303", testCase.target, response.StatusCode)
 		}
 		location := response.Header.Get("Location")
-		if !strings.HasPrefix(location, "/ui/servers/srv-fine?tab=addresses&notice=") {
-			t.Fatalf("%s 跳转地址 = %q，应回到地址与地点块", testCase.target, location)
+		if !strings.HasPrefix(location, "/ui/servers/srv-fine?notice=") {
+			t.Fatalf("%s 跳转地址 = %q，应回到统一详情页", testCase.target, location)
 		}
 	}
 	if len(writer.siteEdits) != 1 || writer.siteEdits[0] != [2]string{"工作站", "机房"} {
@@ -257,10 +444,10 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 	}
 }
 
-// TestServerDetailAuthorizationTabShowsThreeSwitchGroups 校验授权块三组开
-// 关：名称与说明两行、机密项环境变量与最近写入、profile 客户端、共享存
-// 储提供方与挂载路径，以及各自的确认表单入口。
-func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
+// TestServerDetailAuthorizationCardShowsThreeSwitchGroups 校验授权卡片三组
+// 开关：名称与说明两行、机密项环境变量与最近写入、profile 客户端、共享存
+// 储提供方与挂载路径，以及各自的确认表单入口；客户端只读。
+func TestServerDetailAuthorizationCardShowsThreeSwitchGroups(t *testing.T) {
 	store := newServerDetailTestStore()
 	detail := store.details["srv-fine"]
 	detail.SecretChoices = []ServerDetailSecretChoice{{
@@ -297,8 +484,9 @@ func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
 		},
 	})
 
-	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=authorization")
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
+		`id="server-card-authorization"`,
 		"Profile", "机密项", "共享存储",
 		`class="resource-name"`, `API_TOKEN`, `class="resource-note"`, "接口令牌第一行",
 		"环境变量 $API_TOKEN", "最近写入 /srv/app/.env",
@@ -313,7 +501,7 @@ func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
 		"下发记录", "/srv/app/.env",
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("服务器详情授权块缺少 %q：\n%s", want, body)
+			t.Fatalf("服务器详情授权卡片缺少 %q：\n%s", want, body)
 		}
 	}
 
@@ -321,20 +509,23 @@ func TestServerDetailAuthorizationTabShowsThreeSwitchGroups(t *testing.T) {
 		role: RoleClient, servers: store,
 		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
 	})
-	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine?tab=authorization")
+	clientPage := serversGet(t, clientHandler, clientCookie, "/ui/servers/srv-fine")
 	for _, forbidden := range []string{
 		`action="/ui/secrets/authorization/preview"`,
 		`action="/ui/servers/profile-authorization/preview"`,
 	} {
 		if strings.Contains(clientPage, forbidden) {
-			t.Fatalf("客户端授权块不得包含写表单 %q：\n%s", forbidden, clientPage)
+			t.Fatalf("客户端授权卡片不得包含写表单 %q：\n%s", forbidden, clientPage)
 		}
+	}
+	if !strings.Contains(clientPage, "仅显示本客户端可用的部分，修改请到权威端。") {
+		t.Fatalf("客户端授权卡片应提示到权威端修改：\n%s", clientPage)
 	}
 }
 
-// TestServerDetailSoftwareTabReusesInventory 校验软件块复用软件清单来源：
-// 采集状态、立即采集、实测与声明两份清单和待办入口。
-func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
+// TestServerDetailSoftwareCardKeepsOnlyDeviceEntry 校验软件清单卡片撤下声
+// 明、认领、草稿、待办与待确认暴露入口，只保留设备视图过渡入口。
+func TestServerDetailSoftwareCardKeepsOnlyDeviceEntry(t *testing.T) {
 	lastSuccess := time.Unix(1760000100, 0)
 	software := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
 		Name: "工作站",
@@ -353,21 +544,12 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 			DeviceName: "工作站",
 			Ports: []SoftwareInventoryPendingPort{
 				{Address: "192.0.2.10", Port: 8080, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-web"},
-				{Address: "192.0.2.10", Port: 9090, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-metrics"},
 			},
-		}, {
-			DeviceName: "NAS",
-			Ports: []SoftwareInventoryPendingPort{{
-				Address: "192.0.2.30", Port: 445, Protocol: "tcp", ExposureLabel: "未确认", ObservedStableKey: "stable-nas",
-			}},
 		}},
 		UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{{
 			DeviceName: "工作站", ProcessName: "legacy-agent", ExecutablePath: "/opt/legacy/agent",
 			ObservedStableKey: "stable-legacy",
 			ListeningPorts:    []SoftwareInventoryPort{{Address: "192.0.2.10", Port: 9100, Protocol: "tcp", ExposureLabel: "未确认"}},
-		}, {
-			DeviceName: "NAS", ProcessName: "nas-agent", ExecutablePath: "/opt/nas/agent",
-			ObservedStableKey: "stable-nas-agent",
 		}},
 	}}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -375,31 +557,30 @@ func TestServerDetailSoftwareTabReusesInventory(t *testing.T) {
 		software: software,
 	})
 
-	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?tab=software")
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
-		"采集状态", "采集执行者", "权威端", "上次成功",
+		`id="server-card-software"`, "软件清单", "设备", "工作站", "上次成功采集", "清单状态",
 		`action="/ui/software-inventory/collect?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`,
-		`name="return_to" value="/ui/servers/srv-fine?tab=software"`, "立即采集",
-		"实测清单", "nginx", "声明清单", "内部工具",
-		"本机待确认暴露", "192.0.2.10:8080/tcp", "192.0.2.10:9090/tcp",
-		"observed_key=stable-web", "observed_key=stable-metrics", "进入声明表单",
-		"本机未识别进程", "legacy-agent", "/opt/legacy/agent", "认领",
-		"查看全部待确认暴露", "查看全部未识别进程",
-		`href="/ui/software-inventory/todos"`, "待确认暴露",
-		`href="/ui/software-inventory/drafts"`, "未识别进程与认领",
-		`href="/ui/software-inventory/devices?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`, "完整软件清单",
+		`name="return_to" value="/ui/servers/srv-fine"`, "立即采集",
+		`href="/ui/software-inventory/devices?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`, "查看软件清单",
 	} {
 		if !strings.Contains(body, want) {
-			t.Fatalf("服务器详情软件块缺少 %q：\n%s", want, body)
+			t.Fatalf("服务器详情软件清单卡片缺少 %q：\n%s", want, body)
 		}
 	}
-	if strings.Contains(body, "192.0.2.30:445") || strings.Contains(body, "nas-agent") {
-		t.Fatalf("服务器详情软件块只应显示本机前几条待办，不应显示其他机器：%s", body)
+	for _, forbidden := range []string{
+		"声明", "认领", "草稿", "待办", "待确认暴露", "未识别进程",
+		"/ui/software-inventory/todos", "/ui/software-inventory/drafts",
+		"192.0.2.10:8080", "legacy-agent",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("软件清单卡片不应再出现 %q：\n%s", forbidden, body)
+		}
 	}
 
-	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare?tab=software")
+	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
 	if !strings.Contains(bare, "未关联机器") {
-		t.Fatalf("未关联机器的软件块应有说明：\n%s", bare)
+		t.Fatalf("未关联机器的软件清单卡片应有说明：\n%s", bare)
 	}
 }
 

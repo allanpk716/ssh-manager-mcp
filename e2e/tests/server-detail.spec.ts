@@ -4,113 +4,159 @@ import {
   expect,
   gotoUIPath,
   reserveFreePort,
+  startClientUIWithTopology,
   startSilentSSHServer,
   startStandaloneUIWithTopology,
   startTestSSHServer,
   test,
 } from "../helpers";
 
-const screenshotDirectory =
-  "/Users/allan716/.cache/implement-spec-split/runs/ssh-manager-mcp-294-20261119-0809/impl-299/screenshots";
-
 async function openDetail(
   page: import("@playwright/test").Page,
   ui: { startupURL: string },
 ): Promise<void> {
-  await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(ui.startupURL);
   await page.getByRole("heading", { name: "状态总览" }).waitFor();
   await gotoUIPath(page, "/ui/servers/web-1");
   await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
 }
 
-test("服务器详情四块可切换并走通地点、地址与机密项授权", async ({ page }) => {
+test("服务器详情一列卡片并回归旧分段地址", async ({ page }) => {
   const ui = await startStandaloneUIWithTopology();
   try {
     await openDetail(page, ui);
-    const tabs = page.getByRole("navigation", { name: "服务器详情分段" });
-    await expect(tabs.getByRole("link", { name: "连接" })).toBeVisible();
-    await expect(tabs.getByRole("link", { name: "地址与地点" })).toBeVisible();
-    await expect(tabs.getByRole("link", { name: "授权" })).toBeVisible();
-    await expect(tabs.getByRole("link", { name: "软件" })).toBeVisible();
-    await expect(page.getByRole("region", { name: "连接" }).getByRole("heading", { name: "连接信息" })).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "服务器详情分段" })).toHaveCount(0);
 
-    await mkdir(screenshotDirectory, { recursive: true });
-    await page.screenshot({
-      path: path.join(screenshotDirectory, "connection-390x844.png"),
-      fullPage: true,
-    });
+    const cardIDs = await page.locator(".detail-section > section").evaluateAll((sections) =>
+      sections.map((section) => section.id),
+    );
+    const expectedOrder = [
+      "server-card-connection",
+      "server-card-location",
+      "server-card-address",
+      "server-card-description",
+      "server-card-accounts",
+      "server-card-authorization",
+      "server-card-software",
+    ];
+    let position = -1;
+    for (const id of expectedOrder) {
+      const current = cardIDs.indexOf(id);
+      expect(current, `卡片 ${id} 应存在`).toBeGreaterThan(-1);
+      expect(current, `卡片 ${id} 应按顺序出现`).toBeGreaterThan(position);
+      position = current;
+      await expect(page.locator(`#${id}`)).toBeVisible();
+    }
+    await expect(page.locator("#server-advanced-actions")).not.toHaveAttribute("open", "");
 
-    await tabs.getByRole("link", { name: "地址与地点" }).click();
-    const addresses = page.getByRole("region", { name: "地址与地点" });
-    await expect(addresses.getByText("同一台机器上的其他账号")).toBeVisible();
-    await expect(addresses.getByText("db-1")).toBeVisible();
-    await expect(addresses.getByText("家A局域网").first()).toBeVisible();
-    await page.screenshot({
-      path: path.join(screenshotDirectory, "addresses-390x844.png"),
-      fullPage: true,
-    });
+    // 同机账号卡片：账号、说明与最近测试状态都来自持久数据。
+    const accounts = page.locator("#server-card-accounts");
+    await expect(accounts.getByRole("link", { name: "db-1" })).toBeVisible();
+    await expect(accounts).toContainText("每晚备份任务使用");
+    await expect(accounts).toContainText(/上次测试：.+ 已连上/);
 
-    await tabs.getByRole("link", { name: "授权" }).click();
-    const authorization = page.getByRole("region", { name: "授权" });
-    await expect(authorization.getByText("MATRIX_TOKEN", { exact: true })).toBeVisible();
-    await page.screenshot({
-      path: path.join(screenshotDirectory, "authorization-390x844.png"),
-      fullPage: true,
-    });
+    // 软件清单卡片只保留设备视图过渡入口。
+    const software = page.locator("#server-card-software");
+    for (const forbidden of ["声明", "认领", "草稿", "待办", "待确认暴露"]) {
+      await expect(software).not.toContainText(forbidden);
+    }
+    await expect(software.getByRole("link", { name: "查看软件清单" })).toHaveAttribute(
+      "href",
+      /\/ui\/software-inventory\/devices\?device=/,
+    );
 
-    await tabs.getByRole("link", { name: "软件" }).click();
-    const software = page.getByRole("region", { name: "软件" });
-    await expect(software.getByText("采集状态")).toBeVisible();
-    await page.screenshot({
-      path: path.join(screenshotDirectory, "software-390x844.png"),
-      fullPage: true,
-    });
-
-    // 更改地点：先当场新建，再选中新地点保存。
-    await tabs.getByRole("link", { name: "地址与地点" }).click();
-    await addresses.getByRole("link", { name: "更改" }).click();
-    await expect(addresses.getByRole("radiogroup", { name: "选择地点" })).toBeVisible();
-    await addresses.getByRole("link", { name: "新建地点" }).click();
-    await page.getByLabel("名称").fill("浏览器测试地点");
-    await page.getByRole("button", { name: "保存" }).click();
-    await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
-    await page.getByRole("radio", { name: "浏览器测试地点" }).check();
-    await page.getByRole("button", { name: "保存地点" }).click();
-    await expect(page.getByText("已保存机器地点。")).toBeVisible();
-    await expect(page.locator(".location-value")).toHaveText("浏览器测试地点");
-
-    // 添加地址：机房局域网还没有这台机器的地址。
-    await page.getByText("＋ 添加地址").click();
-    await page.getByLabel("地址", { exact: true }).fill("10.0.0.99");
-    await page.getByRole("button", { name: "添加", exact: true }).click();
-    await expect(page.getByText("已保存地址。")).toBeVisible();
-    await expect(
-      page.locator(".address-card-row", { hasText: "机房局域网" }).getByText("10.0.0.99"),
-    ).toBeVisible();
-
-    // 授权机密项：开关先进入确认页，并显示客户端实际取得途径变化。
-    await gotoUIPath(page, "/ui/servers/web-1?tab=authorization");
-    await page
-      .locator(".auth-row", { hasText: "MATRIX_TOKEN" })
-      .locator(".switch-control")
-      .click();
-    await expect(page.getByRole("heading", { name: "机密项授权预览" })).toBeVisible();
-    const impact = page.getByRole("region", { name: "实际能拿到它的客户端如何变化" });
-    await expect(impact.getByRole("link", { name: "laptop-client" })).toBeVisible();
-    await expect(impact.getByText("提交后经 web-1")).toBeVisible();
-    await page.screenshot({
-      path: path.join(screenshotDirectory, "secret-confirm-390x844.png"),
-      fullPage: true,
-    });
-    await page.getByRole("button", { name: "确认保存授权" }).click();
-    await expect(page.getByText("已保存授权变更。")).toBeVisible();
+    // 旧分段查询地址回到统一详情页。
+    for (const tab of ["connection", "addresses", "authorization", "software"]) {
+      await gotoUIPath(page, `/ui/servers/web-1?tab=${tab}`);
+      await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
+      await expect(page).toHaveURL(/\/ui\/servers\/web-1$/);
+      await expect(page.locator("#server-card-software")).toBeVisible();
+    }
   } finally {
     await ui.close();
   }
 });
 
-const connectionTargetPath = "/ui/servers/connection-target?tab=connection";
+test("服务器详情分区编辑弹层支持打开取消保存与焦点返回", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openDetail(page, ui);
+    const drawers = [
+      { scope: "connection", title: "编辑连接" },
+      { scope: "location", title: "编辑地点" },
+      { scope: "description", title: "编辑说明" },
+      { scope: "accounts", title: "编辑其他账号说明" },
+    ];
+    for (const drawer of drawers) {
+      const editButton = page.locator(`[data-detail-edit-button="${drawer.scope}"]`);
+      await editButton.click();
+      const dialog = page.locator(`[data-server-detail-drawer="${drawer.scope}"]`);
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByRole("heading", { name: drawer.title })).toBeVisible();
+      await expect(
+        dialog.locator("input:visible, select:visible, textarea:visible").first(),
+      ).toBeFocused();
+      await expect(page.locator(`[data-server-detail-drawer="${drawer.scope}"]`)).toHaveCount(1);
+      await dialog.getByRole("link", { name: "取消" }).click();
+      await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
+      await expect(page.locator(`[data-server-detail-drawer="${drawer.scope}"]`)).toHaveCount(0);
+      await expect(editButton).toBeFocused();
+    }
+
+    // 保存地点：回到地点卡片，焦点回到编辑按钮。
+    await page.locator('[data-detail-edit-button="location"]').click();
+    await page.getByRole("radio", { name: "机房", exact: true }).check();
+    await page.getByRole("button", { name: "保存地点" }).click();
+    await expect(page.getByText("已保存机器地点。")).toBeVisible();
+    await expect(page.locator(".location-value")).toHaveText("机房");
+    await expect(page.locator('[data-detail-edit-button="location"]')).toBeFocused();
+
+    // 保存说明：卡片逐行更新。
+    await page.locator('[data-detail-edit-button="description"]').click();
+    await page.locator("#edit-description").fill("浏览器测试备注");
+    await page.getByRole("button", { name: "保存说明" }).click();
+    await expect(page.getByText("已保存说明。")).toBeVisible();
+    await expect(page.locator("#server-card-description")).toContainText("浏览器测试备注");
+    await expect(page.locator('[data-detail-edit-button="description"]')).toBeFocused();
+
+    // 保存同机账号说明：只改显示说明，登录信息仍在各自详情页。
+    await page.locator('[data-detail-edit-button="accounts"]').click();
+    await page.getByLabel("db-1（owner）的显示说明").fill("夜里跑备份任务");
+    await expect(
+      page
+        .locator('[data-server-detail-drawer="accounts"]')
+        .getByRole("link", { name: "db-1 的详情页" }),
+    ).toHaveAttribute("href", /\/ui\/servers\//);
+    await page.getByRole("button", { name: "保存账号说明" }).click();
+    await expect(page.getByText("已保存账号说明。")).toBeVisible();
+    await expect(page.locator("#server-card-accounts")).toContainText("夜里跑备份任务");
+    await expect(page.locator('[data-detail-edit-button="accounts"]')).toBeFocused();
+  } finally {
+    await ui.close();
+  }
+});
+
+test("客户端服务器详情只读并提示到权威端修改", async ({ page }) => {
+  const ui = await startClientUIWithTopology();
+  try {
+    await page.goto(ui.startupURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, "/ui/servers/client-server");
+    await page.getByRole("heading", { name: "客户端服务器", exact: true }).waitFor();
+    await expect(page.locator("[data-detail-edit-button]")).toHaveCount(0);
+    await expect(page.locator("#server-card-connection")).toContainText(
+      "仅显示本地快照，修改请到权威端。",
+    );
+    await expect(page.locator("#server-card-authorization")).toContainText(
+      "仅显示本客户端可用的部分，修改请到权威端。",
+    );
+    await expect(page.locator("#server-card-software")).toBeVisible();
+  } finally {
+    await ui.close();
+  }
+});
+
+const connectionTargetPath = "/ui/servers/connection-target";
 
 async function openConnectionTarget(
   page: import("@playwright/test").Page,
@@ -129,7 +175,6 @@ async function usePrivateKey(
   privateKeyPath: string,
 ): Promise<void> {
   await page.getByRole("region", { name: "连接" }).getByRole("link", { name: "编辑" }).click();
-  await page.locator("#edit-host").fill(host);
   await page.locator("#edit-port").fill(port);
   await page.locator("#edit-credential").selectOption("key");
   await page.locator("#edit-key-file").setInputFiles(privateKeyPath);
@@ -231,13 +276,11 @@ test("服务器详情连接测试端口不通并展示候选地址", async ({ pa
   const ui = await startStandaloneUIWithTopology(undefined, port);
   try {
     await openConnectionTarget(page, ui);
-    await page.getByRole("navigation", { name: "服务器详情分段" }).getByRole("link", { name: "地址与地点" }).click();
     await page
       .locator(".address-card-row", { hasText: "连接测试备用局域网" })
       .getByRole("button", { name: "移除" })
       .click();
     await expect(page.getByText("已移除地址。")).toBeVisible();
-    await page.getByRole("navigation", { name: "服务器详情分段" }).getByRole("link", { name: "连接" }).click();
     await startInlineConnectionTest(page);
     const failure = page.locator(".connection-test-result.is-failed");
     await expect(failure).toContainText("✗");
