@@ -197,7 +197,7 @@ test("手机高级操作改挂需要二次确认并显示结果", async ({ page,
     await confirm.click();
 
     await expect(
-      page.getByText("已改挂到目标设备 NAS。目标机器上没有可复制的主机密钥指纹。"),
+      page.getByText("已改挂到目标设备 NAS。无可复制的主机密钥指纹。"),
     ).toBeVisible();
     await expect(page.locator(".location-value")).toHaveText("未登记地点");
     const addresses = page.locator("#server-card-address");

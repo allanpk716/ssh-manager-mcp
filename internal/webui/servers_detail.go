@@ -600,9 +600,9 @@ func serverDetailMoveNoticeText(device, anchorOutcome string) string {
 		return notice + "同机账号的主机密钥指纹不一致，未复制。"
 	default:
 		if device == "" {
-			return "已改挂到另一台机器。目标机器上没有可复制的主机密钥指纹。"
+			return "已改挂到另一台机器。无可复制的主机密钥指纹。"
 		}
-		return notice + "目标机器上没有可复制的主机密钥指纹。"
+		return notice + "无可复制的主机密钥指纹。"
 	}
 }
 

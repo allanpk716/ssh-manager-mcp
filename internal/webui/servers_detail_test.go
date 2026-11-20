@@ -522,7 +522,7 @@ func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
 		want    string
 	}{
 		{"copied", "已复制同机账号 other-account 的主机密钥锚。", "已改挂到目标设备 NAS。主机密钥指纹已复制。"},
-		{"none", "", "已改挂到目标设备 NAS。目标机器上没有可复制的主机密钥指纹。"},
+		{"none", "", "已改挂到目标设备 NAS。无可复制的主机密钥指纹。"},
 		{"conflict", "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。", "已改挂到目标设备 NAS。同机账号的主机密钥指纹不一致，未复制。"},
 	}
 	for _, testCase := range cases {
