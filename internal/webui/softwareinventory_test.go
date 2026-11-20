@@ -425,12 +425,15 @@ func TestSoftwareInventoryWithdrawsOldReadWritePages(t *testing.T) {
 }
 
 // TestSoftwareInventoryNavigationUsesMeasuredDeviceSummary 钉住首页、更多
-// 菜单与软件清单区域的入口文案：不再暴露旧流程词，摘要改为设备口径。
+// 菜单与软件清单区域的入口文案：不再暴露旧流程词。
 func TestSoftwareInventoryNavigationUsesMeasuredDeviceSummary(t *testing.T) {
 	source := &stubSoftwareInventorySource{
 		devices: []SoftwareInventoryDeviceSummary{
 			{Name: "工作站", Status: SoftwareInventoryStatus{Managed: true}, StatusLabels: []string{"正常"}},
 			{Name: "不受管存储", StatusLabels: []string{"不采集（不受管设备）"}},
+		}, todos: SoftwareInventoryTodos{
+			UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{{DeviceName: "工作站"}},
+			StaleDevices:          []SoftwareInventoryStaleDevice{{DeviceName: "不受管存储"}},
 		},
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
@@ -451,8 +454,8 @@ func TestSoftwareInventoryNavigationUsesMeasuredDeviceSummary(t *testing.T) {
 	}
 	more := doGetWithCookie(t, handler, cookie, "/ui/more/")
 	moreBody := readResponseBody(t, more)
-	if !strings.Contains(moreBody, "2 台设备 · 1 台受管") {
-		t.Fatalf("更多菜单应显示实测设备摘要：\n%s", moreBody)
+	if !strings.Contains(moreBody, "2 项需要处理") {
+		t.Fatalf("更多菜单应显示需要处理的软件清单数量：\n%s", moreBody)
 	}
 }
 

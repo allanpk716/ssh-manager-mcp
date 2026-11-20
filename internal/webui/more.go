@@ -48,18 +48,18 @@ func (h *handler) handleMorePage(w http.ResponseWriter, r *http.Request) {
 func (h *handler) buildMoreView(r *http.Request) (*moreView, error) {
 	view := &moreView{}
 	if h.cfg.SoftwareInventory != nil && h.caps.ShowSoftwareInventoryArea {
-		devices, err := h.cfg.SoftwareInventory.SoftwareInventoryDevices(SoftwareInventoryFilter{})
+		todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos()
 		switch {
 		case err != nil:
 			view.SoftwareInventorySummary = "读取失败"
 		default:
-			managed := 0
-			for _, device := range devices {
-				if device.Status.Managed {
-					managed++
-				}
+			count := len(todos.PendingExposure) + len(todos.UnidentifiedProcesses) +
+				len(todos.Mismatches) + len(todos.StaleDevices)
+			if count == 0 {
+				view.SoftwareInventorySummary = "没有需要处理的内容"
+			} else {
+				view.SoftwareInventorySummary = fmt.Sprintf("%d 项需要处理", count)
 			}
-			view.SoftwareInventorySummary = fmt.Sprintf("%d 台设备 · %d 台受管", len(devices), managed)
 		}
 	}
 	if h.cfg.Topology != nil && h.caps.ShowTopologyArea {
