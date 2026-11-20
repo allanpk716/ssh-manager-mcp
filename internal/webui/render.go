@@ -111,8 +111,8 @@ type pageData struct {
 	SoftwareInventoryDeclaration      *SoftwareInventoryDeclaration
 	SoftwareInventoryDeclarations     []SoftwareInventoryDeclaration
 	SoftwareInventoryDrafts           []SoftwareInventoryDraft
-	SoftwareInventorySettings         *SoftwareInventorySettings
 	SoftwareInventoryCollectorForm    *SoftwareInventoryCollectorForm
+	SoftwareInventoryAdvancedOpen     bool
 	SoftwareInventorySudoServer       string
 	SoftwareInventorySudoEnabled      bool
 	SoftwareInventoryResumeNotice     string

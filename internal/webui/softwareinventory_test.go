@@ -92,7 +92,6 @@ type stubSoftwareInventorySource struct {
 	rejectID       string
 	rejectAddress  string
 	rejectCalled   bool
-	settings       SoftwareInventorySettings
 	declarations   []SoftwareInventoryDeclaration
 	collectorForm  SoftwareInventoryCollectorForm
 	collectorErr   error
@@ -213,10 +212,6 @@ func (s *stubSoftwareInventorySource) RejectSoftwareInventoryDraft(
 	s.rejectID = id
 	s.rejectAddress = source.RemoteAddress
 	return nil
-}
-
-func (s *stubSoftwareInventorySource) SoftwareInventorySettings() (SoftwareInventorySettings, error) {
-	return s.settings, nil
 }
 
 func (s *stubSoftwareInventorySource) SetSoftwareInventoryCollector(
@@ -437,24 +432,41 @@ func newSoftwareInventoryHandler(
 	return handler, cookies[0]
 }
 
-func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
+func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) {
 	collectedAt := time.Date(2026, 11, 1, 10, 30, 0, 0, time.UTC)
-	confirmedAt := time.Date(2026, 11, 2, 11, 0, 0, 0, time.UTC)
+	failedAt := time.Date(2026, 11, 2, 11, 0, 0, 0, time.UTC)
 	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
 		Name: "工作站",
 		Status: SoftwareInventoryStatus{
-			Managed: true, CollectorLabel: "权威端", ServerEntry: "web-1",
+			Managed: true, Collector: "", CollectorLabel: "权威端",
+			PreferredServerEntry: "web-1", ServerEntry: "web-1",
 			LastSuccessAt:     &collectedAt,
-			LastFailureAt:     &confirmedAt,
+			LastFailureAt:     &failedAt,
 			LastFailureReason: "连接超时",
 			Stale:             true,
 		},
+		Summary: SoftwareInventoryDeviceSummary{
+			Name: "工作站", SystemName: "Ubuntu", SystemVersion: "24.04.1 LTS",
+			KernelName: "Linux 内核", KernelVersion: "6.8.0-49-generic",
+			ImportantSoftwareCount: 5, AllSoftwareCount: 8, UnidentifiedProcessCount: 1,
+			StatusLabels: []string{"采集失败", "清单过期"},
+		},
 		Groups: []SoftwareInventoryGroup{
-			{CategoryLabel: "操作系统", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "操作系统", Name: "Ubuntu", Version: "22.04.5 LTS",
+			{CategoryLabel: "操作系统与内核", Items: []SoftwareInventoryItem{
+				{
+					CategoryLabel: "操作系统", Name: "Ubuntu", Version: "24.04.1 LTS",
+					Source: "实测", CollectedAt: &collectedAt,
+				},
+				{
+					CategoryLabel: "驱动与固件", Name: "Linux 内核", Version: "6.8.0-49-generic",
+					Source: "实测", CollectedAt: &collectedAt,
+				},
+			}},
+			{CategoryLabel: "服务程序", Items: []SoftwareInventoryItem{{
+				CategoryLabel: "服务程序", Name: "nginx", Version: "1.24.0",
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
-					Address: "0.0.0.0", Port: 22, Protocol: "tcp", ExposureLabel: "监听所有地址",
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp", ExposureLabel: "监听所有地址",
 				}},
 			}}},
 			{CategoryLabel: "容器镜像", Items: []SoftwareInventoryItem{{
@@ -462,14 +474,34 @@ func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
 				Source: "实测", CollectedAt: &collectedAt, BelongsTo: "Docker",
 				ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef", ContainerRunning: true,
 			}}},
-			{CategoryLabel: "系统包", SystemPackages: true, SystemPackageCount: 2, Items: []SoftwareInventoryItem{
-				{CategoryLabel: "系统包", Name: "curl", Version: "8.9.1-1ubuntu2", Source: "实测", CollectedAt: &collectedAt},
-				{CategoryLabel: "系统包", Name: "openssh-client", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt},
-			}},
-			{CategoryLabel: "服务程序", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "服务程序", Name: "自建网关", Version: "1.2.3+build.7",
-				Source: "声明", ConfirmedAt: &confirmedAt,
+			{CategoryLabel: "驱动与固件", Items: []SoftwareInventoryItem{{
+				CategoryLabel: "驱动与固件", Name: "NVIDIA 显卡驱动", Version: "550.120",
+				Source: "实测", CollectedAt: &collectedAt,
 			}}},
+			{
+				CategoryLabel: "系统包", SystemPackages: true, SystemPackageCount: 2,
+				Items: []SoftwareInventoryItem{
+					{CategoryLabel: "系统包", Name: "curl", Version: "8.9.1-1ubuntu2", Source: "实测", CollectedAt: &collectedAt},
+					{CategoryLabel: "系统包", Name: "openssh-client", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt},
+				},
+			},
+			{CategoryLabel: "未识别进程", Items: []SoftwareInventoryItem{{
+				CategoryLabel: "未识别进程", Name: "unknown-gateway",
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+				Source: "实测", CollectedAt: &collectedAt,
+				ListeningPorts: []SoftwareInventoryPort{{
+					Address: "127.0.0.1", Port: 8443, Protocol: "tcp", ExposureLabel: "仅本机",
+				}},
+			}}},
+		},
+		Advanced: SoftwareInventoryDeviceAdvanced{
+			ClientInstances: []SoftwareInventoryClientInstance{
+				{Name: "笔记本客户端", ProfileName: "运维"},
+			},
+			ServerEntries: []SoftwareInventoryDeviceServerEntry{
+				{Name: "web-1", SudoEnabled: false},
+				{Name: "db-1", SudoEnabled: true},
+			},
 		},
 		History: []SoftwareInventoryChange{{
 			OccurredAt: collectedAt, KindLabel: "版本变化", CategoryLabel: "系统包",
@@ -485,17 +517,42 @@ func TestSoftwareInventoryDevicePageShowsRequiredColumns(t *testing.T) {
 	}
 	for _, wanted := range []string{
 		"<h1>工作站 · 软件清单</h1>",
-		"Ubuntu", "22.04.5 LTS", "实测", "2026-11-01 10:30:00",
-		"0.0.0.0:22/tcp", "监听所有地址",
+		"系统与内核", "Ubuntu 24.04.1 LTS；Linux 内核 6.8.0-49-generic",
+		"重点软件", "全部软件", "未识别进程",
+		"采集时间", "2026-11-01 10:30:00", "采集失败", "清单过期", "连接超时",
+		"0.0.0.0:80/tcp", "监听所有地址",
 		"postgres", "16.4", "Docker", "16-alpine", "sha256:abcdef", "运行中",
-		"权威端", "web-1", "连接超时", "清单已过期",
-		"自建网关", "1.2.3", "build.7", "声明", "2026-11-02 11:00:00",
+		"NVIDIA 显卡驱动", "550.120",
 		"系统包（2 条，默认折叠）", "curl", "openssh-client",
+		"未识别", "gateway", "/opt/gateway/gateway", "8123", "127.0.0.1:8443/tcp", "仅本机",
 		"版本变化", "8.8.0-1", "8.9.1-1ubuntu2",
 		"立即采集",
+		`id="software-inventory-advanced"`, "高级采集设置", "权威端", "笔记本客户端",
+		"web-1", "db-1", "允许用 sudo 采集", "最近 5 分钟内重新验证管理员口令",
 	} {
 		if !strings.Contains(body, wanted) {
 			t.Fatalf("设备清单页缺少 %q：\n%s", wanted, body)
+		}
+	}
+	previous := -1
+	for _, label := range []string{
+		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+	} {
+		position := strings.Index(body, "<h2>"+label)
+		if position < 0 || position < previous {
+			t.Fatalf("设备详情分组 %s 应按固定顺序出现：\n%s", label, body)
+		}
+		previous = position
+	}
+	if !strings.Contains(body, `<details id="software-inventory-advanced">`) {
+		t.Fatalf("高级采集设置应默认折叠（不带 open 属性）：\n%s", body)
+	}
+	if strings.Contains(body, "<details open") {
+		t.Fatalf("默认视图不应有展开的折叠区：\n%s", body)
+	}
+	for _, forbidden := range []string{"声明", "认领", "草稿", "待办", "对不上", "待确认暴露"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("设备清单页不应出现 %q：\n%s", forbidden, body)
 		}
 	}
 }
@@ -538,6 +595,192 @@ func TestSoftwareInventoryImmediateCollectionRequestedForClientCollector(t *test
 	}
 }
 
+// TestSoftwareInventoryDeviceCollectorSettings 覆盖设备页高级区的采集
+// 执行者表单：校验错误回显并展开高级区，成功后回到设备页显示提示。
+func TestSoftwareInventoryDeviceCollectorSettings(t *testing.T) {
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+		Name: "工作站",
+		Status: SoftwareInventoryStatus{
+			Managed: true, CollectorLabel: "权威端", PreferredServerEntry: "web-1",
+		},
+		Advanced: SoftwareInventoryDeviceAdvanced{
+			ClientInstances: []SoftwareInventoryClientInstance{{Name: "laptop-client", ProfileName: "运维"}},
+			ServerEntries:   []SoftwareInventoryDeviceServerEntry{{Name: "web-1"}},
+		},
+	}, collectorErr: &SoftwareInventoryFormError{
+		Message: "客户端实例 \"missing\" 不是有效的活动设备码",
+	}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	page := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("工作站"))
+	pageBody := readResponseBody(t, page)
+	csrf := hiddenInputMetaOrHiddenValue(t, pageBody)
+
+	rejected := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/devices/collector", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "collector": {"missing"},
+			"server_entry": {"web-1"},
+		})
+	rejectedBody := readResponseBody(t, rejected)
+	if rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("采集执行者校验失败应返回 400，实际 %d：\n%s", rejected.StatusCode, rejectedBody)
+	}
+	for _, wanted := range []string{
+		`<details id="software-inventory-advanced" open>`,
+		`value="missing" selected`, `value="web-1" selected`,
+		"不是有效的活动设备码",
+	} {
+		if !strings.Contains(rejectedBody, wanted) {
+			t.Fatalf("采集执行者错误页缺少 %q：\n%s", wanted, rejectedBody)
+		}
+	}
+	if !source.collectorCall || source.collectorAddr != "198.51.100.9" {
+		t.Fatalf("采集执行者登记应交给来源接口：%+v", source)
+	}
+
+	source.collectorErr = nil
+	applied := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/devices/collector", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "collector": {""},
+			"server_entry": {"web-1"},
+		})
+	if applied.StatusCode != http.StatusSeeOther || applied.Header.Get("Location") !=
+		"/ui/software-inventory/devices?device="+url.QueryEscape("工作站")+"&notice=collector-set" {
+		t.Fatalf("采集执行者登记成功响应不符：%d %s", applied.StatusCode, applied.Header.Get("Location"))
+	}
+	resultPage := doGetWithCookie(t, handler, cookie, applied.Header.Get("Location"))
+	resultBody := readResponseBody(t, resultPage)
+	if !strings.Contains(resultBody, "采集执行者已登记。") {
+		t.Fatalf("设备页应显示采集执行者登记提示：\n%s", resultBody)
+	}
+	if source.collectorForm.Device != "工作站" || source.collectorForm.Collector != "" ||
+		source.collectorForm.ServerEntry != "web-1" || !source.collectorForm.Authority {
+		t.Fatalf("采集执行者登记表单应传回权威端与服务器条目：%+v", source.collectorForm)
+	}
+}
+
+// TestSoftwareInventoryDeviceSudoSettings 覆盖设备页 sudo 采集开关：校验
+// 错误回显，成功后给出打开与关闭提示。
+func TestSoftwareInventoryDeviceSudoSettings(t *testing.T) {
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+		Name:   "工作站",
+		Status: SoftwareInventoryStatus{Managed: true, CollectorLabel: "权威端"},
+		Advanced: SoftwareInventoryDeviceAdvanced{
+			ServerEntries: []SoftwareInventoryDeviceServerEntry{{Name: "web-1"}},
+		},
+	}, sudoErr: &SoftwareInventoryFormError{Message: "服务器条目 \"missing\" 不存在"}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	page := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("工作站"))
+	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, page))
+
+	rejected := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/devices/sudo", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "server_entry": {"missing"},
+		})
+	rejectedBody := readResponseBody(t, rejected)
+	if rejected.StatusCode != http.StatusBadRequest {
+		t.Fatalf("sudo 设置校验失败应返回 400，实际 %d：\n%s", rejected.StatusCode, rejectedBody)
+	}
+	if !strings.Contains(rejectedBody, `id="software-inventory-advanced" open`) ||
+		!strings.Contains(rejectedBody, "服务器条目 &#34;missing&#34; 不存在") {
+		t.Fatalf("sudo 错误页应展开高级区并显示原因：\n%s", rejectedBody)
+	}
+	if !source.sudoCalled || source.sudoServer != "missing" {
+		t.Fatalf("sudo 设置应交给来源接口：%+v", source)
+	}
+
+	source.sudoErr = nil
+	enabled := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/devices/sudo", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "server_entry": {"web-1"},
+			"sudo_enabled": {"1"},
+		})
+	if enabled.StatusCode != http.StatusSeeOther || enabled.Header.Get("Location") !=
+		"/ui/software-inventory/devices?device="+url.QueryEscape("工作站")+"&notice=sudo-enabled" {
+		t.Fatalf("sudo 打开成功响应不符：%d %s", enabled.StatusCode, enabled.Header.Get("Location"))
+	}
+	if !source.sudoEnabled || source.sudoAddress != "198.51.100.9" {
+		t.Fatalf("sudo 打开应交给来源接口：%+v", source)
+	}
+	disabled := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/devices/sudo", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "server_entry": {"web-1"},
+		})
+	if disabled.StatusCode != http.StatusSeeOther || disabled.Header.Get("Location") !=
+		"/ui/software-inventory/devices?device="+url.QueryEscape("工作站")+"&notice=sudo-disabled" {
+		t.Fatalf("sudo 关闭成功响应不符：%d %s", disabled.StatusCode, disabled.Header.Get("Location"))
+	}
+}
+
+// TestSoftwareInventoryDeviceSudoEnableRequiresReverify 验证设备页打开
+// sudo 采集开关沿用重新验证要求，回跳后保留服务器条目与开关状态。
+func TestSoftwareInventoryDeviceSudoEnableRequiresReverify(t *testing.T) {
+	auth := &fakeAuthorityAuth{passwordSet: true, password: "correct-password"}
+	now := time.Unix(1800000000, 0)
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+		Name:   "工作站",
+		Status: SoftwareInventoryStatus{Managed: true, CollectorLabel: "权威端"},
+		Advanced: SoftwareInventoryDeviceAdvanced{
+			ServerEntries: []SoftwareInventoryDeviceServerEntry{{Name: "web-1"}},
+		},
+	}}
+	handler, _, err := NewAuthority(Config{
+		Role: RoleServer, Servers: &stubServerSource{}, Access: &stubAccessStore{},
+		Auth: auth, AllowedHosts: []string{"127.0.0.1"}, Port: 7879,
+		SoftwareInventory: source, Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := authoritySuccessfulLogin(t, handler, "127.0.0.1:7879", "correct-password")
+	now = now.Add(6 * time.Minute)
+	devicePath := "/ui/software-inventory/devices?device=" + url.QueryEscape("工作站")
+	page := authorityGet(t, handler, "127.0.0.1:7879", devicePath, cookie)
+	pageBody := readResponseBody(t, page)
+	if page.StatusCode != http.StatusOK {
+		t.Fatalf("设备页状态码 = %d，应为 200：\n%s", page.StatusCode, pageBody)
+	}
+	csrf := hiddenInputMetaOrHiddenValue(t, pageBody)
+
+	rejected := authorityPostForm(t, handler, "127.0.0.1:7879",
+		"/ui/software-inventory/devices/sudo", url.Values{
+			"csrf_token": {csrf}, "device": {"工作站"}, "server_entry": {"web-1"},
+			"sudo_enabled": {"1"},
+		}, cookie)
+	resume := devicePath + "&resume=1&server_entry=web-1&sudo_enabled=1"
+	wantNext := `/ui/reverify?next=` + url.QueryEscape(resume)
+	if rejected.StatusCode != http.StatusSeeOther || rejected.Header.Get("Location") != wantNext {
+		t.Fatalf("未重新验证时打开 sudo 开关应跳转重新验证：%d %s", rejected.StatusCode, rejected.Header.Get("Location"))
+	}
+	reverifyPage := authorityGet(t, handler, "127.0.0.1:7879", wantNext, cookie)
+	reverifyCSRF := hiddenInputValue(t, readResponseBody(t, reverifyPage), "csrf_token")
+	verified := authorityPostForm(t, handler, "127.0.0.1:7879", "/ui/reverify", url.Values{
+		"csrf_token": {reverifyCSRF}, "password": {"correct-password"}, "next": {resume},
+	}, cookie)
+	if verified.StatusCode != http.StatusSeeOther {
+		t.Fatalf("重新验证失败：%d", verified.StatusCode)
+	}
+	resumed := authorityGet(t, handler, "127.0.0.1:7879", verified.Header.Get("Location"), cookie)
+	resumedBody := readResponseBody(t, resumed)
+	if !strings.Contains(resumedBody, `value="web-1" selected`) ||
+		!strings.Contains(resumedBody, `value="1" checked`) ||
+		!strings.Contains(resumedBody, "已保留表单状态，请再次提交") {
+		t.Fatalf("重新验证回跳后应保留 sudo 表单状态：\n%s", resumedBody)
+	}
+	resumedCSRF := hiddenInputMetaOrHiddenValue(t, resumedBody)
+	applied := authorityPostForm(t, handler, "127.0.0.1:7879",
+		"/ui/software-inventory/devices/sudo", url.Values{
+			"csrf_token": {resumedCSRF}, "device": {"工作站"}, "server_entry": {"web-1"},
+			"sudo_enabled": {"1"},
+		}, cookie)
+	if applied.StatusCode != http.StatusSeeOther || applied.Header.Get("Location") !=
+		devicePath+"&notice=sudo-enabled" {
+		t.Fatalf("重新验证后的 sudo 提交应成功：%d %s", applied.StatusCode, applied.Header.Get("Location"))
+	}
+	if !source.sudoCalled || source.sudoServer != "web-1" || !source.sudoEnabled {
+		t.Fatalf("sudo 开关应交给来源接口：%+v", source)
+	}
+}
+
 func postSoftwareInventoryForm(
 	t *testing.T,
 	handler http.Handler,
@@ -567,7 +810,7 @@ func TestSoftwareInventoryTemplatesUseMobileCards(t *testing.T) {
 	for _, name := range []string{
 		"softwareinventory.tmpl", "softwareinventory-device.tmpl",
 		"softwareinventory-search.tmpl", "softwareinventory-declarations.tmpl",
-		"softwareinventory-settings.tmpl", "softwareinventory-todos.tmpl",
+		"softwareinventory-todos.tmpl",
 	} {
 		body, ok := contents[name]
 		if !ok {

@@ -256,6 +256,14 @@ func seed(dir string) error {
 // 络、多版本软件和四种采集状态。默认种子仍保持精简，避免影响其它浏览器
 // 用例的设备数量断言。
 func seedSoftwareInventoryViews(st *store.Store, credentialID, workstationServerID string) error {
+	// build-1 故意不在 laptop-client 绑定的 profile 授权里，供设备详情
+	// 高级区测试采集执行者登记的校验错误提示。
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "build-1", Host: "192.0.2.14", Port: 22, User: "owner",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "工作站"); err != nil {
+		return err
+	}
 	for _, site := range []struct{ name, parent string }{
 		{name: "公司"},
 		{name: "总部机房", parent: "公司"},

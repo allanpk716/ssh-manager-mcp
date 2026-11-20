@@ -3,6 +3,7 @@
 package webuisoftwareinventory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"strconv"
@@ -59,32 +60,40 @@ func (s openerSource) SoftwareInventoryDevices(
 				},
 			}
 		}
-		summary := webui.SoftwareInventoryDeviceSummary{
-			Name: device.DeviceName, Status: statusView(status),
-			StatusLabels:     softwareInventoryStatusLabels(status),
-			AllSoftwareCount: len(device.Items),
-		}
-		for _, item := range device.Items {
-			switch {
-			case item.Category == softwareinventory.CategorySystemPackage:
-			case item.Category == softwareinventory.CategoryOperatingSystem &&
-				summary.SystemName == "":
-				summary.SystemName, summary.SystemVersion = item.Name, item.Version
-				summary.ImportantSoftwareCount++
-			case item.Category == softwareinventory.CategoryDriverFirmware &&
-				strings.HasSuffix(item.Name, "内核") && summary.KernelName == "":
-				summary.KernelName, summary.KernelVersion = item.Name, item.Version
-				summary.ImportantSoftwareCount++
-			case item.Category == softwareinventory.CategoryUnidentified:
-				summary.UnidentifiedProcessCount++
-				summary.ImportantSoftwareCount++
-			default:
-				summary.ImportantSoftwareCount++
-			}
-		}
-		out = append(out, summary)
+		out = append(out, deviceSummary(status, device.Items))
 	}
 	return out, nil
+}
+
+// deviceSummary 是首页设备卡片与设备详情页共用的摘要口径：同一批实测条
+// 目在这两处得到相同的系统、内核、数量与状态结论。
+func deviceSummary(
+	status softwareinventory.CollectionStatusView, items []softwareinventory.QueryItem,
+) webui.SoftwareInventoryDeviceSummary {
+	summary := webui.SoftwareInventoryDeviceSummary{
+		Name: status.DeviceName, Status: statusView(status),
+		StatusLabels:     softwareInventoryStatusLabels(status),
+		AllSoftwareCount: len(items),
+	}
+	for _, item := range items {
+		switch {
+		case item.Category == softwareinventory.CategorySystemPackage:
+		case item.Category == softwareinventory.CategoryOperatingSystem &&
+			summary.SystemName == "":
+			summary.SystemName, summary.SystemVersion = item.Name, item.Version
+			summary.ImportantSoftwareCount++
+		case item.Category == softwareinventory.CategoryDriverFirmware &&
+			strings.HasSuffix(item.Name, "内核") && summary.KernelName == "":
+			summary.KernelName, summary.KernelVersion = item.Name, item.Version
+			summary.ImportantSoftwareCount++
+		case item.Category == softwareinventory.CategoryUnidentified:
+			summary.UnidentifiedProcessCount++
+			summary.ImportantSoftwareCount++
+		default:
+			summary.ImportantSoftwareCount++
+		}
+	}
+	return summary
 }
 
 func (s openerSource) SoftwareInventoryDevice(
@@ -118,10 +127,79 @@ func (s openerSource) SoftwareInventoryDevice(
 		Name: statuses[0].DeviceName, Status: statusView(statuses[0]),
 		History: changeViews(history),
 	}
+	var items []softwareinventory.QueryItem
 	if len(result.Devices) == 1 {
-		device.Groups = groupViews(result.Devices[0].Items)
+		items = result.Devices[0].Items
+		device.Groups = groupViews(items)
 	}
+	device.Summary = deviceSummary(statuses[0], items)
+	advanced, preferredEntry, err := deviceAdvanced(st, statuses[0])
+	if err != nil {
+		return nil, deviceError(deviceName, err)
+	}
+	device.Advanced = advanced
+	device.Status.PreferredServerEntry = cmp.Or(preferredEntry, statuses[0].ServerEntry)
 	return device, nil
+}
+
+// deviceAdvanced 组装设备详情底部高级采集设置的展示数据：可作为采集执
+// 行者的活动客户端实例，以及这台设备的采集用服务器条目与 sudo 开关。
+func deviceAdvanced(
+	st *store.Store, status softwareinventory.CollectionStatusView,
+) (webui.SoftwareInventoryDeviceAdvanced, string, error) {
+	out := webui.SoftwareInventoryDeviceAdvanced{
+		ClientInstances: []webui.SoftwareInventoryClientInstance{},
+		ServerEntries:   []webui.SoftwareInventoryDeviceServerEntry{},
+	}
+	if !status.Managed {
+		return out, "", nil
+	}
+	servers, err := st.FullServersForDevice(status.DeviceName)
+	if err != nil {
+		return out, "", err
+	}
+	sudo, err := st.SoftwareCollectSudoEnabled()
+	if err != nil {
+		return out, "", err
+	}
+	preferred := ""
+	for _, server := range servers {
+		out.ServerEntries = append(out.ServerEntries, webui.SoftwareInventoryDeviceServerEntry{
+			Name: server.Name, SudoEnabled: sudo[server.ID],
+		})
+		if server.ID == status.PreferredServerID {
+			preferred = server.Name
+		}
+	}
+	out.ClientInstances, err = activeClientInstances(st)
+	return out, preferred, err
+}
+
+// activeClientInstances 列出可作为采集执行者的活动客户端实例与它绑定
+// 的 profile 名。
+func activeClientInstances(st *store.Store) ([]webui.SoftwareInventoryClientInstance, error) {
+	profiles, err := st.ListProfiles()
+	if err != nil {
+		return nil, err
+	}
+	profileNames := make(map[string]string, len(profiles))
+	for _, profile := range profiles {
+		profileNames[profile.ID] = profile.Name
+	}
+	tokens, err := st.ListCacheTokens()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.SoftwareInventoryClientInstance, 0)
+	for _, token := range tokens {
+		if token.Status != models.CacheTokenActive {
+			continue
+		}
+		out = append(out, webui.SoftwareInventoryClientInstance{
+			Name: token.Name, ProfileName: profileNames[token.ProfileID],
+		})
+	}
+	return out, nil
 }
 
 func (s openerSource) SearchSoftwareInventory(
@@ -172,6 +250,9 @@ func softwareInventoryStatusLabels(status softwareinventory.CollectionStatusView
 	}
 	if status.Stale {
 		labels = append(labels, "清单过期")
+	}
+	if status.PendingImmediate {
+		labels = append(labels, "等待客户端执行")
 	}
 	if len(labels) == 0 {
 		labels = append(labels, "正常")
@@ -386,63 +467,6 @@ func (s openerSource) RejectSoftwareInventoryDraft(
 	return nil
 }
 
-func (s openerSource) SoftwareInventorySettings() (webui.SoftwareInventorySettings, error) {
-	st, done, err := s.open()
-	if err != nil {
-		return webui.SoftwareInventorySettings{}, err
-	}
-	defer done()
-	statuses, err := softwareinventory.New(st).CollectionStatuses(
-		softwareinventory.AllDevicesVisible(), "",
-	)
-	if err != nil {
-		return webui.SoftwareInventorySettings{}, err
-	}
-	sudo, err := st.SoftwareCollectSudoEnabled()
-	if err != nil {
-		return webui.SoftwareInventorySettings{}, err
-	}
-	settings := webui.SoftwareInventorySettings{
-		Devices: make([]webui.SoftwareInventoryDeviceSummary, 0, len(statuses)),
-		Servers: make([]webui.SoftwareInventorySettingsServer, 0),
-	}
-	for _, status := range statuses {
-		settings.Devices = append(settings.Devices, webui.SoftwareInventoryDeviceSummary{
-			Name: status.DeviceName, Status: statusView(status),
-		})
-		servers, err := st.FullServersForDevice(status.DeviceName)
-		if err != nil {
-			return webui.SoftwareInventorySettings{}, err
-		}
-		for _, server := range servers {
-			settings.Servers = append(settings.Servers, webui.SoftwareInventorySettingsServer{
-				Name: server.Name, DeviceName: status.DeviceName, SudoEnabled: sudo[server.ID],
-			})
-		}
-	}
-	profiles, err := st.ListProfiles()
-	if err != nil {
-		return webui.SoftwareInventorySettings{}, err
-	}
-	profileNames := make(map[string]string, len(profiles))
-	for _, profile := range profiles {
-		profileNames[profile.ID] = profile.Name
-	}
-	tokens, err := st.ListCacheTokens()
-	if err != nil {
-		return webui.SoftwareInventorySettings{}, err
-	}
-	for _, token := range tokens {
-		if token.Status != models.CacheTokenActive {
-			continue
-		}
-		settings.ClientInstances = append(settings.ClientInstances, webui.SoftwareInventoryClientInstance{
-			Name: token.Name, ProfileName: profileNames[token.ProfileID],
-		})
-	}
-	return settings, nil
-}
-
 func (s openerSource) SetSoftwareInventoryCollector(
 	form webui.SoftwareInventoryCollectorForm, source webui.SoftwareInventoryWriteSource,
 ) error {
@@ -633,7 +657,9 @@ func deviceError(deviceName string, err error) error {
 
 func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInventoryStatus {
 	return webui.SoftwareInventoryStatus{
-		Managed: status.Managed, CollectorLabel: status.CollectorLabel, ServerEntry: status.ServerEntry,
+		Managed: status.Managed, Collector: status.Collector,
+		CollectorName: status.CollectorName, CollectorLabel: status.CollectorLabel,
+		ServerEntry:   status.ServerEntry,
 		LastSuccessAt: status.LastSuccessAt, LastFailureAt: status.LastFailureAt,
 		LastFailureReason: status.LastFailureReason, Incomplete: status.Incomplete,
 		NeverCollected: status.NeverCollected, Stale: status.Stale,
@@ -642,21 +668,51 @@ func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInv
 }
 
 func groupViews(items []softwareinventory.QueryItem) []webui.SoftwareInventoryGroup {
-	groups := make([]webui.SoftwareInventoryGroup, 0)
+	// 设备详情的固定分组顺序：操作系统条目与内核条目合并展示，系统包
+	// 排在未识别进程前并默认折叠。
+	labels := []string{"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程"}
+	buckets := make([][]webui.SoftwareInventoryItem, len(labels))
 	for _, item := range items {
-		if len(groups) == 0 || groups[len(groups)-1].CategoryLabel != item.CategoryLabel {
-			groups = append(groups, webui.SoftwareInventoryGroup{
-				CategoryLabel:  item.CategoryLabel,
-				SystemPackages: item.Category == softwareinventory.CategorySystemPackage,
-			})
+		rank := deviceGroupRank(item)
+		buckets[rank] = append(buckets[rank], itemView(item))
+	}
+	groups := make([]webui.SoftwareInventoryGroup, 0, len(labels))
+	for rank, label := range labels {
+		if len(buckets[rank]) == 0 {
+			continue
 		}
-		group := &groups[len(groups)-1]
-		group.Items = append(group.Items, itemView(item))
+		group := webui.SoftwareInventoryGroup{
+			CategoryLabel: label, Items: buckets[rank],
+			SystemPackages: label == "系统包",
+		}
 		if group.SystemPackages {
-			group.SystemPackageCount++
+			group.SystemPackageCount = len(buckets[rank])
 		}
+		groups = append(groups, group)
 	}
 	return groups
+}
+
+// deviceGroupRank 给一条软件条目标出设备详情分组顺序。操作系统条目与
+// 名称以「内核」结尾的驱动固件条目合入第一组。
+func deviceGroupRank(item softwareinventory.QueryItem) int {
+	switch {
+	case item.Category == softwareinventory.CategoryOperatingSystem:
+		return 0
+	case item.Category == softwareinventory.CategoryDriverFirmware &&
+		strings.HasSuffix(item.Name, "内核"):
+		return 0
+	case item.Category == softwareinventory.CategoryServiceProgram:
+		return 1
+	case item.Category == softwareinventory.CategoryContainerImage:
+		return 2
+	case item.Category == softwareinventory.CategoryDriverFirmware:
+		return 3
+	case item.Category == softwareinventory.CategorySystemPackage:
+		return 4
+	default:
+		return 5
+	}
 }
 
 func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
@@ -680,6 +736,8 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 		ListeningPorts: ports, BelongsTo: item.BelongsTo, Note: item.Note,
 		ContainerTag: item.ContainerTag, ContainerDigest: item.ContainerDigest,
 		ContainerRunning: item.ContainerRunning,
+		ProcessName:      item.ProcessName, ExecutablePath: item.ExecutablePath,
+		ProcessID: item.ProcessID,
 	}
 }
 

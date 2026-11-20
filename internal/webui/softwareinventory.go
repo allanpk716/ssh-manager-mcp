@@ -38,6 +38,11 @@ type SoftwareInventoryItem struct {
 	ContainerTag        string
 	ContainerDigest     string
 	ContainerRunning    bool
+	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目的进
+	// 程可得信息；采集时看不到的字段为空。
+	ProcessName    string
+	ExecutablePath string
+	ProcessID      int
 }
 
 // SoftwareInventoryGroup 是设备清单页的一个类别分组。系统包默认只带数
@@ -51,16 +56,21 @@ type SoftwareInventoryGroup struct {
 
 // SoftwareInventoryStatus 是一台设备的采集状态。
 type SoftwareInventoryStatus struct {
-	Managed           bool
-	CollectorLabel    string
-	ServerEntry       string
-	LastSuccessAt     *time.Time
-	LastFailureAt     *time.Time
-	LastFailureReason string
-	Incomplete        bool
-	NeverCollected    bool
-	Stale             bool
-	PendingImmediate  bool
+	Managed bool
+	// Collector 是客户端实例执行者的设备码编号；空串表示权威端执行
+	// 采集。高级区用它区分当前选择。
+	Collector            string
+	CollectorName        string
+	CollectorLabel       string
+	PreferredServerEntry string
+	ServerEntry          string
+	LastSuccessAt        *time.Time
+	LastFailureAt        *time.Time
+	LastFailureReason    string
+	Incomplete           bool
+	NeverCollected       bool
+	Stale                bool
+	PendingImmediate     bool
 }
 
 // SoftwareInventoryChange 是一条变化历史。
@@ -75,10 +85,28 @@ type SoftwareInventoryChange struct {
 
 // SoftwareInventoryDevice 是一台设备的完整页面数据。
 type SoftwareInventoryDevice struct {
-	Name    string
-	Status  SoftwareInventoryStatus
+	Name   string
+	Status SoftwareInventoryStatus
+	// Summary 与首页设备卡片使用同一套摘要与状态口径。
+	Summary SoftwareInventoryDeviceSummary
 	Groups  []SoftwareInventoryGroup
-	History []SoftwareInventoryChange
+	// Advanced 是底部默认折叠的高级采集设置数据；不受管设备为空。
+	Advanced SoftwareInventoryDeviceAdvanced
+	History  []SoftwareInventoryChange
+}
+
+// SoftwareInventoryDeviceServerEntry 是设备详情高级区里一台可用来采集的
+// 服务器条目。
+type SoftwareInventoryDeviceServerEntry struct {
+	Name        string
+	SudoEnabled bool
+}
+
+// SoftwareInventoryDeviceAdvanced 是设备详情底部高级采集设置的展示数
+// 据：可切换的采集执行者与这台设备的采集用服务器条目。
+type SoftwareInventoryDeviceAdvanced struct {
+	ClientInstances []SoftwareInventoryClientInstance
+	ServerEntries   []SoftwareInventoryDeviceServerEntry
 }
 
 // SoftwareInventoryDeviceSummary 是软件清单首页的一台设备。
@@ -195,7 +223,6 @@ type SoftwareInventorySource interface {
 		source SoftwareInventoryWriteSource,
 	) error
 	RejectSoftwareInventoryDraft(id string, source SoftwareInventoryWriteSource) error
-	SoftwareInventorySettings() (SoftwareInventorySettings, error)
 	SetSoftwareInventoryCollector(
 		form SoftwareInventoryCollectorForm,
 		source SoftwareInventoryWriteSource,
@@ -226,6 +253,10 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventoryRoot(w, r)
 	case "/ui/software-inventory/devices":
 		h.handleSoftwareInventoryDevice(w, r)
+	case "/ui/software-inventory/devices/collector":
+		h.handleSoftwareInventoryDeviceCollector(w, r)
+	case "/ui/software-inventory/devices/sudo":
+		h.handleSoftwareInventoryDeviceSudo(w, r)
 	case "/ui/software-inventory/search":
 		h.handleSoftwareInventorySearch(w, r)
 	case "/ui/software-inventory/collect":
@@ -356,8 +387,8 @@ func (h *handler) softwareInventoryPageView(
 	return view, nil
 }
 
-// handleSoftwareInventoryDevice 渲染一台设备的软件清单、采集状态与变化
-// 历史。
+// handleSoftwareInventoryDevice 渲染一台设备的软件清单摘要、类别分组、
+// 采集状态与高级采集设置。
 func (h *handler) handleSoftwareInventoryDevice(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "设备软件清单页只接受 GET 请求。")
@@ -368,6 +399,16 @@ func (h *handler) handleSoftwareInventoryDevice(w http.ResponseWriter, r *http.R
 		http.Redirect(w, r, "/ui/software-inventory/", http.StatusSeeOther)
 		return
 	}
+	h.renderSoftwareInventoryDevice(w, r, http.StatusOK, deviceName, nil, "", false)
+}
+
+// renderSoftwareInventoryDevice 读取设备页面数据并渲染。form 非空时表示
+// 高级设置提交失败后回显；否则用当前登记状态填充默认选择。
+func (h *handler) renderSoftwareInventoryDevice(
+	w http.ResponseWriter, r *http.Request, status int,
+	deviceName string, form *SoftwareInventoryCollectorForm,
+	sudoServer string, sudoEnabled bool,
+) {
 	device, err := h.cfg.SoftwareInventory.SoftwareInventoryDevice(deviceName)
 	if err != nil {
 		var missing *SoftwareInventoryDeviceNotFoundError
@@ -378,12 +419,50 @@ func (h *handler) handleSoftwareInventoryDevice(w http.ResponseWriter, r *http.R
 		h.renderError(w, r, http.StatusInternalServerError, "读取设备软件清单失败", "读取设备软件清单失败，请稍后重试。")
 		return
 	}
+	if form == nil {
+		form = &SoftwareInventoryCollectorForm{
+			Device: device.Name, Collector: device.Status.CollectorName,
+			ServerEntry: device.Status.PreferredServerEntry,
+		}
+	}
+	form.InvalidCollector = form.Collector != "" &&
+		!softwareInventoryClientKnown(device.Advanced.ClientInstances, form.Collector)
 	data := pageData{Title: device.Name + " · 软件清单", SoftwareInventoryDevice: device}
+	query := r.URL.Query()
 	switch r.URL.Query().Get("collect") {
 	case "done":
 		data.SoftwareInventoryNotice = "已采集完成。"
 	case "requested":
 		data.SoftwareInventoryNotice = "已请求，等待客户端执行。"
 	}
-	h.renderPage(w, r, http.StatusOK, "softwareinventory-device.tmpl", data)
+	switch query.Get("notice") {
+	case "collector-set":
+		data.SoftwareInventoryNotice = "采集执行者已登记。"
+	case "sudo-enabled":
+		data.SoftwareInventoryNotice = "sudo 采集开关已打开。"
+	case "sudo-disabled":
+		data.SoftwareInventoryNotice = "sudo 采集开关已关闭。"
+	}
+	if query.Get("resume") == "1" {
+		data.SoftwareInventoryResumeNotice = "已保留表单状态，请再次提交。"
+		sudoServer = query.Get("server_entry")
+		sudoEnabled = query.Get("sudo_enabled") == "1"
+	}
+	data.SoftwareInventoryCollectorForm = form
+	data.SoftwareInventoryAdvancedOpen = form.Error != "" || form.SudoError != ""
+	data.SoftwareInventorySudoServer = sudoServer
+	data.SoftwareInventorySudoEnabled = sudoEnabled
+	h.renderPage(w, r, status, "softwareinventory-device.tmpl", data)
+}
+
+// softwareInventoryClientKnown 判断提交的客户端实例是否仍在有效列表里。
+func softwareInventoryClientKnown(
+	instances []SoftwareInventoryClientInstance, name string,
+) bool {
+	for _, instance := range instances {
+		if instance.Name == name {
+			return true
+		}
+	}
+	return false
 }

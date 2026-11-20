@@ -16,6 +16,7 @@ type CollectionStatus struct {
 	Collector         string     `json:"collector,omitempty"`
 	CollectorName     string     `json:"collector_name,omitempty"`
 	CollectorRevoked  bool       `json:"collector_revoked,omitempty"`
+	PreferredServerID string     `json:"preferred_server_id,omitempty"`
 	ServerEntry       string     `json:"server_entry,omitempty"`
 	LastSuccessAt     *time.Time `json:"last_success_at,omitempty"`
 	LastFailureAt     *time.Time `json:"last_failure_at,omitempty"`
@@ -66,6 +67,11 @@ type QueryItem struct {
 	ContainerTag      string `json:"container_tag,omitempty"`
 	ContainerDigest   string `json:"container_digest,omitempty"`
 	ContainerRunning  bool   `json:"container_running,omitempty"`
+	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目从实测
+	// 采集结果带出的进程可得信息；其余类别的条目为空。
+	ProcessName    string `json:"process_name,omitempty"`
+	ExecutablePath string `json:"executable_path,omitempty"`
+	ProcessID      int    `json:"process_id,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -149,6 +155,8 @@ func queryItemFromObserved(deviceID string, row models.SoftwareObservedItem) Que
 		CollectedAt: &collectedAt, ObservedStableKey: row.StableKey,
 		ContainerTag: row.ContainerTag, ContainerDigest: row.ContainerDigest,
 		ContainerRunning: row.ContainerRunning,
+		ProcessName:      row.ProcessName, ExecutablePath: row.ExecutablePath,
+		ProcessID: row.ProcessID,
 	}
 }
 
