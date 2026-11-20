@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -464,8 +465,44 @@ func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
 	if !strings.Contains(body, "请先勾选「我已了解」。") {
 		t.Fatalf("未勾选确认时缺少服务端拒绝提示：\n%s", body)
 	}
+	if !strings.Contains(body, `data-server-move-confirm`) ||
+		!strings.Contains(body, `<option value="NAS" selected>`) {
+		t.Fatalf("未勾选确认被拒绝后应保留确认框与目标设备：\n%s", body)
+	}
 	if len(writer.serverMoves) != 0 {
 		t.Fatalf("未勾选确认时不应写入，实际调用：%v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveFailureKeepsChoice 校验适配层失败时保留确认框、
+// 目标设备与勾选状态，并显示既有中文错误。
+func TestServerDetailMoveFailureKeepsChoice(t *testing.T) {
+	writer := &stubTopologyWriter{nextPlainError: errors.New("database unavailable")}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+		"device": {"NAS"}, "confirm": {"1"},
+	})
+	if response.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("适配层失败时状态码 = %d，应为 500", response.StatusCode)
+	}
+	body := readResponseBody(t, response)
+	for _, want := range []string{
+		"保存失败，请稍后重试。",
+		`data-server-move-confirm`,
+		`<option value="NAS" selected>`,
+		`name="confirm" value="1" checked`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("适配层失败后的确认框缺少 %q：\n%s", want, body)
+		}
+	}
+	if len(writer.serverMoves) != 1 {
+		t.Fatalf("适配层失败前应尝试一次写入，实际调用：%v", writer.serverMoves)
 	}
 }
 

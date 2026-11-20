@@ -651,21 +651,36 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 	}
 	device := strings.TrimSpace(r.PostFormValue("device"))
 	if device == "" {
-		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择目标机器。")
+		h.renderServerDetailMoveError(w, r, detail, http.StatusBadRequest, "请选择目标机器。", device, false)
 		return
 	}
 	if r.PostFormValue("confirm") != "1" {
-		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请先勾选「我已了解」。")
+		h.renderServerDetailMoveError(w, r, detail, http.StatusBadRequest, "请先勾选「我已了解」。", device, false)
 		return
 	}
-	_, err := h.cfg.TopologyWriter.MoveServerToDevice(
+	result, err := h.cfg.TopologyWriter.MoveServerToDevice(
 		detail.ID, device, TopologyWriteSource{RemoteAddress: remoteIP(r)},
 	)
 	if err != nil {
-		h.renderServerDetailWriteError(w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err))
+		h.renderServerDetailMoveError(
+			w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err), device, true,
+		)
 		return
 	}
+	_ = result
 	serverDetailWriteRedirect(w, r, detail.ID, "server-moved", "#server-advanced-actions")
+}
+
+// renderServerDetailMoveError 带改挂确认状态重新渲染详情页，保留 owner 已
+// 选目标设备与勾选状态。
+func (h *handler) renderServerDetailMoveError(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView,
+	status int, notice, device string, understood bool,
+) {
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice,
+		move: &serverDetailMoveDraft{Device: device, Understood: understood},
+	})
 }
 
 // handleServerDetailTest 启动一次连接测试。局部请求把连接卡片的结果区换
