@@ -144,3 +144,94 @@ END`); err != nil {
 		t.Fatalf("事务失败后快照修订号应保持 %d，实际 %d", revisionBefore, revisionAfter)
 	}
 }
+
+func TestReplaceDeviceAddressListMemberToOtherClearAndMembershipOnly(t *testing.T) {
+	st := newTestStore(t)
+	if _, err := st.AddSite("机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "机房局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "虚拟网", Type: models.NetworkVirtual}); err != nil {
+		t.Fatal(err)
+	}
+	device, err := st.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "机房局域网", "10.0.0.8"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "虚拟网", "100.64.0.8"); err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServer(&models.Server{
+		Name: "web", Host: "203.0.113.10", Port: 22, User: "owner", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	toOther, err := st.ReplaceDeviceAddressList(ReplaceDeviceAddressListRequest{
+		ServerID: added, OtherAddress: "10.0.0.8", Memberships: []NetworkMembershipWrite{
+			{Network: "虚拟网", Address: "100.64.0.8"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("网络成员改成其他地址失败：%v", err)
+	}
+	if toOther.Server.Host != "10.0.0.8" || toOther.Server.Revision != 1 {
+		t.Fatalf("网络成员改成其他地址后的服务器条目不正确：%+v", toOther.Server)
+	}
+
+	cleared, err := st.ReplaceDeviceAddressList(ReplaceDeviceAddressListRequest{
+		ServerID: added, ExpectedRevision: 1, CheckRevision: true,
+		OtherAddress: "", Memberships: []NetworkMembershipWrite{
+			{Network: "虚拟网", Address: "100.64.0.8"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("清空其他地址失败：%v", err)
+	}
+	if cleared.Server.Host != "" || cleared.Server.Revision != 2 {
+		t.Fatalf("清空其他地址后的服务器条目不正确：%+v", cleared.Server)
+	}
+
+	membershipOnly, err := st.ReplaceDeviceAddressList(ReplaceDeviceAddressListRequest{
+		ServerID: added, ExpectedRevision: 2, CheckRevision: true,
+		OtherAddress: "", Memberships: []NetworkMembershipWrite{
+			{Network: "机房局域网", Address: "10.0.0.9"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("只修改网络成员失败：%v", err)
+	}
+	if membershipOnly.Server.Host != "" || membershipOnly.Server.Revision != 2 {
+		t.Fatalf("只修改网络成员不应推进服务器条目修订号：%+v", membershipOnly.Server)
+	}
+	memberships, err := st.ListNetworkMembershipsByRegistration("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(memberships) != 1 || memberships[0].NetworkName != "机房局域网" ||
+		memberships[0].Address != "10.0.0.9" {
+		t.Fatalf("只修改网络成员后的成员不正确：%+v", memberships)
+	}
+	rows, err := st.QueryAudit(AuditFilter{
+		Actions: []string{"device.member-rm", "device.member-add", "device.member-edit", "server.edit"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, row := range rows {
+		counts[row.Action]++
+	}
+	if counts["server.edit"] != 2 || counts["device.member-rm"] != 2 ||
+		counts["device.member-add"] != 3 {
+		t.Fatalf("地址状态转换审计不正确：%+v", rows)
+	}
+}
