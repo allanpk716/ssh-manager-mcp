@@ -23,6 +23,9 @@ type ServerListEntry struct {
 	Host             string
 	Port             int
 	AttentionReasons []string
+	// ConnectionTest 是这台服务器条目最近一次完成的连接测试结果；从未
+	// 测试时为空，列表卡片显示短状态行。
+	ConnectionTest *ServerConnectionTestResultView
 }
 
 // ServerCard 是服务器列表的一张卡片。它在列表行的基础上补充拓扑、授权与

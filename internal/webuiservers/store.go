@@ -109,11 +109,15 @@ func ListEntries(manager *servermanage.Manager, attentionOnly bool) ([]webui.Ser
 	}
 	rows := make([]webui.ServerListEntry, 0, len(items))
 	for _, item := range items {
-		rows = append(rows, webui.ServerListEntry{
+		row := webui.ServerListEntry{
 			ID: item.Server.ID, Name: item.Server.Name, User: item.Server.User,
 			Host: item.Server.Host, Port: item.Server.Port,
 			AttentionReasons: item.AttentionReasons,
-		})
+		}
+		if item.ConnectionTest != nil {
+			row.ConnectionTest = webui.NewServerConnectionTestResultView(*item.ConnectionTest)
+		}
+		rows = append(rows, row)
 	}
 	return rows, nil
 }

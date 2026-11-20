@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -94,6 +95,56 @@ func TestListAttentionReasonTruthTable(t *testing.T) {
 		if item.Server.Name == "fine" {
 			t.Fatal("完整服务器不应出现在需要注意视图")
 		}
+	}
+}
+
+// TestListCarriesConnectionTestResults 覆盖列表公共边界：列表一次带上每台
+// 服务器条目最近一次连接测试结果，从未测试的条目保持为空。
+func TestListCarriesConnectionTestResults(t *testing.T) {
+	m := newTestManager(t)
+	cid, err := m.st.SetCredential(&models.Credential{Type: models.CredPassword, Secret: []byte("pw")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	webID := mustAddServer(t, m, &models.Server{Name: "web", Host: "192.0.2.1", Port: 22, User: "u",
+		CredentialID: cid, Role: "生产数据库"})
+	dbID := mustAddServer(t, m, &models.Server{Name: "db", Host: "192.0.2.2", Port: 22, User: "u",
+		CredentialID: cid, Role: "生产数据库"})
+	success := models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_000, 0), Succeeded: true,
+		SuccessAddress: "192.0.2.1", SuccessNetworkName: "办公网", Duration: 120 * time.Millisecond,
+	}
+	if err := m.st.SaveServerConnectionTestResult(webID, success); err != nil {
+		t.Fatal(err)
+	}
+	failure := models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_100, 0), Succeeded: false,
+		FailureReason: models.ConnectionTestFailurePortUnreachable, Duration: 40 * time.Millisecond,
+	}
+	if err := m.st.SaveServerConnectionTestResult(dbID, failure); err != nil {
+		t.Fatal(err)
+	}
+	mustAddServer(t, m, &models.Server{Name: "cache", Host: "192.0.2.3", Port: 22, User: "u",
+		CredentialID: cid, Role: "缓存"})
+
+	items, err := m.List(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]ListItem{}
+	for _, item := range items {
+		byName[item.Server.Name] = item
+	}
+	if got := byName["web"].ConnectionTest; got == nil || !got.Succeeded ||
+		got.SuccessAddress != "192.0.2.1" || got.Duration != 120*time.Millisecond {
+		t.Fatalf("web 的连接测试结果 = %+v", got)
+	}
+	if got := byName["db"].ConnectionTest; got == nil || got.Succeeded ||
+		got.FailureReason != models.ConnectionTestFailurePortUnreachable {
+		t.Fatalf("db 的连接测试结果 = %+v", got)
+	}
+	if got := byName["cache"].ConnectionTest; got != nil {
+		t.Fatalf("从未测试的 cache 不应有结果：%+v", got)
 	}
 }
 

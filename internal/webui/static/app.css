@@ -3859,3 +3859,61 @@ button.danger {
 .connection-test-candidate .mono {
   overflow-wrap: anywhere;
 }
+
+/* 服务器列表卡片底部的连接测试状态行；三种状态用颜色与小圆点区分，
+   文案本身也写明结论，移动宽度靠换行与任意位置断词避免撑破卡片。 */
+.server-test-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid #f0f1f3;
+  color: var(--color-muted);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.server-test-line.is-succeeded {
+  color: #047857;
+}
+
+.server-test-line.is-failed {
+  color: #b91c1c;
+}
+
+.server-test-line .status-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  margin: 5px 0 0;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.server-test-line.is-succeeded .status-dot {
+  background: #059669;
+}
+
+.server-test-line.is-failed .status-dot {
+  background: #dc2626;
+}
+
+.server-test-copy {
+  min-width: 0;
+}
+
+.server-test-title {
+  display: block;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.server-test-detail {
+  display: block;
+  margin-top: 1px;
+  color: var(--color-muted);
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}

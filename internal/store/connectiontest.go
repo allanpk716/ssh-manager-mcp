@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"ssh-manager-mcp/internal/models"
@@ -61,29 +62,89 @@ func (s *Store) SaveServerConnectionTestResult(
 // ServerConnectionTestResult 读回一个服务器条目最近一次连接测试结果；从未
 // 测试时返回 nil。
 func (s *Store) ServerConnectionTestResult(serverID string) (*models.ServerConnectionTestResult, error) {
-	var result models.ServerConnectionTestResult
-	var completedAt, duration int64
-	var failure, successSource, attemptsJSON string
+	var row serverConnectionTestResultRow
 	err := s.db.QueryRow(`
 		SELECT completed_at,succeeded,failure_reason,success_address,
 		       success_network_name,success_source,duration_ns,attempts_json
 		FROM server_connection_test_results WHERE server_id=?`, serverID,
-	).Scan(
-		&completedAt, &result.Succeeded, &failure, &result.SuccessAddress,
-		&result.SuccessNetworkName, &successSource, &duration, &attemptsJSON,
-	)
+	).Scan(row.scanTargets()...)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	result.CompletedAt = time.Unix(completedAt, 0)
-	result.Duration = time.Duration(duration)
-	result.FailureReason = models.ConnectionTestFailureReason(failure)
-	result.SuccessSource = models.DialAddressSource(successSource)
-	if err := json.Unmarshal([]byte(attemptsJSON), &result.Attempts); err != nil {
+	return row.result()
+}
+
+// ServerConnectionTestResults 一次读取多个服务器条目的最近一次连接测试
+// 结果；从未测试的条目不出现在返回值里。服务器列表用这个批量入口组装
+// 卡片，不逐条查询。
+func (s *Store) ServerConnectionTestResults(
+	serverIDs []string,
+) (map[string]*models.ServerConnectionTestResult, error) {
+	results := make(map[string]*models.ServerConnectionTestResult, len(serverIDs))
+	if len(serverIDs) == 0 {
+		return results, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(serverIDs)), ",")
+	args := make([]any, 0, len(serverIDs))
+	for _, serverID := range serverIDs {
+		args = append(args, serverID)
+	}
+	rows, err := s.db.Query(`
+		SELECT server_id,completed_at,succeeded,failure_reason,success_address,
+		       success_network_name,success_source,duration_ns,attempts_json
+		FROM server_connection_test_results WHERE server_id IN (`+placeholders+`)`, args...)
+	if err != nil {
 		return nil, err
 	}
-	return &result, nil
+	defer rows.Close()
+	for rows.Next() {
+		var serverID string
+		var row serverConnectionTestResultRow
+		if err := rows.Scan(append([]any{&serverID}, row.scanTargets()...)...); err != nil {
+			return nil, err
+		}
+		result, err := row.result()
+		if err != nil {
+			return nil, err
+		}
+		results[serverID] = result
+	}
+	return results, rows.Err()
+}
+
+// serverConnectionTestResultRow 是连接测试结果表一行的原始扫描值；单条
+// 与批量读取共用它，再统一换成结构化结果。
+type serverConnectionTestResultRow struct {
+	completedAt    int64
+	succeeded      bool
+	failureReason  string
+	successAddress string
+	successNetwork string
+	successSource  string
+	duration       int64
+	attemptsJSON   string
+}
+
+func (r *serverConnectionTestResultRow) scanTargets() []any {
+	return []any{
+		&r.completedAt, &r.succeeded, &r.failureReason, &r.successAddress,
+		&r.successNetwork, &r.successSource, &r.duration, &r.attemptsJSON,
+	}
+}
+
+func (r serverConnectionTestResultRow) result() (*models.ServerConnectionTestResult, error) {
+	result := &models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(r.completedAt, 0), Succeeded: r.succeeded,
+		FailureReason:  models.ConnectionTestFailureReason(r.failureReason),
+		SuccessAddress: r.successAddress, SuccessNetworkName: r.successNetwork,
+		SuccessSource: models.DialAddressSource(r.successSource),
+		Duration:      time.Duration(r.duration),
+	}
+	if err := json.Unmarshal([]byte(r.attemptsJSON), &result.Attempts); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
