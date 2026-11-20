@@ -1,0 +1,1544 @@
+<!-- PROTOTYPE（抛弃式原型）：设备优先 + 全局搜索 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f8">
+<title>软件清单 · sshmgr</title>
+<style>
+  :root {
+    color-scheme: light;
+    --color-background: #f5f6f8;
+    --color-panel: #ffffff;
+    --color-panel-border: #e5e7eb;
+    --color-text: #111827;
+    --color-muted: #676e7c;
+    --color-accent: #2563eb;
+    --color-accent-soft: #eff6ff;
+    --color-accent-dark: #1d4ed8;
+    --color-warning-background: #fef3c7;
+    --color-warning-border: #f3d9a4;
+    --color-warning-text: #92400e;
+    --color-danger: #dc2626;
+    --color-danger-background: #fef2f2;
+    --color-danger-border: #fecaca;
+    --color-success: #059669;
+    --color-success-background: #ecfdf5;
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.06);
+    --space-small: 8px;
+    --space-medium: 16px;
+    --space-large: 24px;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  [hidden] {
+    display: none !important;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-background);
+    color: var(--color-text);
+    font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body.modal-open {
+    overflow: hidden;
+  }
+
+  button,
+  input {
+    font: inherit;
+  }
+
+  button {
+    color: inherit;
+  }
+
+  button,
+  a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible {
+    outline: 3px solid rgba(37, 99, 235, 0.25);
+    outline-offset: 2px;
+  }
+
+  button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+
+  .site-header {
+    background: var(--color-panel);
+    border-bottom: 1px solid var(--color-panel-border);
+    padding: 0 var(--space-medium);
+  }
+
+  .site-header-main {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: var(--space-small);
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 9px 0;
+  }
+
+  .brand {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 700;
+  }
+
+  .role {
+    margin: 0;
+    color: var(--color-accent);
+    font-size: 13px;
+  }
+
+  main {
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 18px var(--space-medium) calc(104px + env(safe-area-inset-bottom));
+  }
+
+  .title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-medium);
+  }
+
+  h1 {
+    margin: 0;
+    font-size: 22px;
+    line-height: 30px;
+    font-weight: 700;
+  }
+
+  .page-caption {
+    margin: 4px 0 0;
+    color: var(--color-muted);
+    font-size: 13px;
+  }
+
+  .management-card,
+  .search-card,
+  .device-card,
+  .result-card,
+  .detail-card,
+  .empty-state {
+    background: var(--color-panel);
+    border: 1px solid var(--color-panel-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-card);
+  }
+
+  .management-card {
+    margin-top: 16px;
+    padding: 12px;
+  }
+
+  .schedule-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 9px;
+    background: var(--color-accent-soft);
+    color: var(--color-text);
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .schedule-button strong {
+    color: var(--color-accent-dark);
+  }
+
+  .schedule-button span {
+    color: var(--color-accent-dark);
+    font-weight: 600;
+  }
+
+  .global-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .primary-button,
+  .secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 42px;
+    padding: 0 10px;
+    border-radius: 9px;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .primary-button {
+    border: 0;
+    background: var(--color-accent);
+    color: #fff;
+    box-shadow: 0 1px 2px rgba(37, 99, 235, 0.2);
+  }
+
+  .primary-button:active {
+    background: var(--color-accent-dark);
+  }
+
+  .secondary-button {
+    border: 1px solid var(--color-panel-border);
+    background: var(--color-panel);
+    color: #374151;
+  }
+
+  .search-card {
+    margin-top: 12px;
+    padding: 12px;
+  }
+
+  .search-label {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--color-muted);
+    font-size: 12px;
+    font-weight: 650;
+  }
+
+  .search-input {
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+    background: #fff;
+    color: var(--color-text);
+  }
+
+  .search-input::placeholder {
+    color: #8b95a4;
+  }
+
+  .search-fields {
+    display: grid;
+    gap: 8px;
+  }
+
+  .search-note {
+    margin: 8px 2px 0;
+    color: var(--color-muted);
+    font-size: 12px;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 20px 2px 8px;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 17px;
+    line-height: 24px;
+  }
+
+  .section-meta {
+    color: var(--color-muted);
+    font-size: 13px;
+    text-align: right;
+  }
+
+  .device-list,
+  .result-list {
+    display: grid;
+    gap: 10px;
+  }
+
+  .device-card {
+    overflow: hidden;
+    padding: 0;
+    text-align: left;
+  }
+
+  .device-main {
+    width: 100%;
+    display: block;
+    padding: 12px 12px 10px;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .device-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .device-name {
+    display: block;
+    margin: 0;
+    font-size: 16px;
+    line-height: 22px;
+    font-weight: 700;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-size: 12px;
+    font-weight: 650;
+    white-space: nowrap;
+  }
+
+  .status-pill.normal {
+    background: var(--color-success-background);
+    color: var(--color-success);
+  }
+
+  .status-pill.stale {
+    background: var(--color-warning-background);
+    color: var(--color-warning-text);
+  }
+
+  .status-pill.failed {
+    background: var(--color-danger-background);
+    color: var(--color-danger);
+  }
+
+  .device-system {
+    margin: 7px 0 0;
+    color: #374151;
+    font-size: 13px;
+  }
+
+  .device-metrics {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .metric {
+    min-width: 0;
+    padding: 7px;
+    border-radius: 8px;
+    background: #f8fafc;
+  }
+
+  .metric-value {
+    display: block;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .metric-label {
+    display: block;
+    margin-top: 1px;
+    color: var(--color-muted);
+    font-size: 11px;
+  }
+
+  .device-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 12px 12px;
+  }
+
+  .collection-text {
+    min-width: 0;
+    color: var(--color-muted);
+    font-size: 12px;
+  }
+
+  .collection-text.problem {
+    color: var(--color-warning-text);
+  }
+
+  .collection-text.failed {
+    color: var(--color-danger);
+  }
+
+  .mini-button {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 0 10px;
+    border: 1px solid #bfdbfe;
+    border-radius: 8px;
+    background: var(--color-accent-soft);
+    color: var(--color-accent-dark);
+    font-size: 13px;
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .category-bar {
+    display: flex;
+    gap: 6px;
+    margin-top: 12px;
+    overflow-x: auto;
+    padding: 2px 1px 4px;
+    scrollbar-width: none;
+  }
+
+  .category-bar::-webkit-scrollbar {
+    display: none;
+  }
+
+  .category-chip {
+    flex: 0 0 auto;
+    min-height: 34px;
+    padding: 5px 10px;
+    border: 1px solid var(--color-panel-border);
+    border-radius: 999px;
+    background: var(--color-panel);
+    color: #4b5563;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .category-chip[aria-pressed="true"] {
+    border-color: #bfdbfe;
+    background: var(--color-accent-soft);
+    color: var(--color-accent-dark);
+  }
+
+  .result-card {
+    overflow: hidden;
+  }
+
+  .result-device {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 9px 12px;
+    border: 0;
+    border-bottom: 1px solid #f0f1f3;
+    background: #f8fafc;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .result-device strong {
+    font-size: 14px;
+  }
+
+  .result-device span {
+    color: var(--color-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .software-row {
+    padding: 10px 12px;
+    border-bottom: 1px solid #f0f1f3;
+  }
+
+  .software-row:last-child {
+    border-bottom: 0;
+  }
+
+  .software-name {
+    display: block;
+    overflow-wrap: anywhere;
+    font-weight: 650;
+  }
+
+  .software-version {
+    display: block;
+    margin-top: 2px;
+    color: #374151;
+    overflow-wrap: anywhere;
+  }
+
+  .software-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 7px;
+  }
+
+  .tag {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 7px;
+    border-radius: 999px;
+    background: #f3f4f6;
+    color: #4b5563;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .tag.blue {
+    background: var(--color-accent-soft);
+    color: var(--color-accent-dark);
+  }
+
+  .tag.amber {
+    background: var(--color-warning-background);
+    color: var(--color-warning-text);
+  }
+
+  .empty-state {
+    padding: 22px 16px;
+    text-align: center;
+  }
+
+  .empty-state strong {
+    display: block;
+  }
+
+  .empty-state p {
+    margin: 5px 0 0;
+    color: var(--color-muted);
+    font-size: 13px;
+  }
+
+  .back-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    min-height: 42px;
+    margin: -6px 0 8px -12px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font-weight: 650;
+    cursor: pointer;
+  }
+
+  .detail-summary {
+    padding: 13px;
+  }
+
+  .detail-title-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .detail-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 11px;
+  }
+
+  .detail-card {
+    margin-top: 10px;
+    overflow: hidden;
+  }
+
+  .group-button {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    min-height: 50px;
+    padding: 9px 12px;
+    border: 0;
+    border-bottom: 1px solid #f0f1f3;
+    background: #f8fafc;
+    text-align: left;
+    cursor: pointer;
+  }
+
+  .group-button strong {
+    font-size: 14px;
+  }
+
+  .group-button span {
+    color: var(--color-muted);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .group-chevron {
+    color: #9ca3af;
+  }
+
+  .group-content {
+    border-bottom: 1px solid #f0f1f3;
+  }
+
+  .detail-card > :last-child,
+  .detail-card > :last-child .software-row:last-child {
+    border-bottom: 0;
+  }
+
+  .primary-nav {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    max-width: none;
+    padding: 5px 8px calc(5px + env(safe-area-inset-bottom));
+    background: rgba(255, 255, 255, 0.98);
+    border-top: 1px solid var(--color-panel-border);
+  }
+
+  .primary-nav a {
+    display: flex;
+    min-width: 0;
+    min-height: 56px;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    color: var(--color-muted);
+    font-size: 11px;
+    text-decoration: none;
+  }
+
+  .primary-nav a[aria-current="page"] {
+    color: var(--color-accent);
+    font-weight: 650;
+  }
+
+  .primary-nav svg {
+    width: 22px;
+    height: 22px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+
+  .modal-shell {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+  }
+
+  .modal-backdrop {
+    position: absolute;
+    inset: 0;
+    border: 0;
+    padding: 0;
+    background: rgba(17, 24, 39, 0.46);
+    cursor: pointer;
+  }
+
+  .modal {
+    position: relative;
+    width: 100%;
+    max-width: 520px;
+    max-height: 88vh;
+    overflow: auto;
+    padding: 18px 16px calc(20px + env(safe-area-inset-bottom));
+    border: 0;
+    border-radius: 18px 18px 0 0;
+    background: var(--color-panel);
+    box-shadow: 0 -8px 30px rgba(17, 24, 39, 0.18);
+  }
+
+  .modal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .modal-title {
+    margin: 0;
+    font-size: 18px;
+  }
+
+  .close-button {
+    display: grid;
+    place-items: center;
+    width: 38px;
+    height: 38px;
+    border: 0;
+    border-radius: 9px;
+    background: #f3f4f6;
+    color: #4b5563;
+    cursor: pointer;
+  }
+
+  .field {
+    margin-top: 12px;
+  }
+
+  .field label {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--color-muted);
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .time-input {
+    width: 100%;
+    min-height: 44px;
+    padding: 8px 10px;
+    border: 1px solid #cbd5e1;
+    border-radius: 9px;
+    background: #fff;
+  }
+
+  .help-text {
+    margin: 8px 2px 0;
+    color: var(--color-muted);
+    font-size: 12px;
+  }
+
+  .modal-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 18px;
+  }
+
+  .progress-shell {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 40;
+    padding: 14px 16px calc(16px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--color-panel-border);
+    background: var(--color-panel);
+    box-shadow: 0 -6px 24px rgba(17, 24, 39, 0.10);
+  }
+
+  .progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .progress-title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .progress-number {
+    color: var(--color-muted);
+    font-size: 13px;
+  }
+
+  .progress-track {
+    width: 100%;
+    height: 8px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: #e5e7eb;
+  }
+
+  .progress-fill {
+    width: 0%;
+    height: 100%;
+    border-radius: inherit;
+    background: var(--color-accent);
+    transition: width 0.15s linear;
+  }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: calc(78px + env(safe-area-inset-bottom));
+    z-index: 60;
+    max-width: calc(100vw - 32px);
+    padding: 9px 13px;
+    border-radius: 9px;
+    background: rgba(17, 24, 39, 0.92);
+    color: #fff;
+    font-size: 13px;
+    text-align: center;
+    transform: translateX(-50%);
+  }
+
+  @media (min-width: 700px) {
+    main {
+      padding-top: 28px;
+    }
+
+    .device-list,
+    .result-list {
+      grid-template-columns: repeat(2, 1fr);
+    }
+
+    .search-fields {
+      grid-template-columns: 2fr 1fr;
+    }
+  }
+</style>
+</head>
+<body>
+<header class="site-header">
+  <div class="site-header-main">
+    <p class="brand">sshmgr 管理界面</p>
+    <p class="role">软件清单</p>
+  </div>
+</header>
+
+<main>
+  <div class="title-row">
+    <div>
+      <h1>软件清单</h1>
+      <p class="page-caption">先看设备，再用全局搜索跨设备找软件。</p>
+    </div>
+  </div>
+
+  <section class="management-card" aria-label="全局采集与导出">
+    <button class="schedule-button" id="scheduleButton" type="button">
+      <span>定时采集：<strong id="scheduleText">每天 01:00</strong></span>
+      <span>修改</span>
+    </button>
+    <div class="global-actions">
+      <button class="primary-button" id="collectAllButton" type="button">立即全部采集</button>
+      <button class="secondary-button" id="exportAllButton" type="button">导出全部 CSV</button>
+    </div>
+  </section>
+
+  <section class="search-card" aria-label="全局软件搜索">
+    <div class="search-fields">
+      <div>
+        <label class="search-label" for="softwareSearch">软件名（子串）</label>
+        <input class="search-input" id="softwareSearch" type="search" placeholder="例如：openssl、xz-utils、nginx" autocomplete="off">
+      </div>
+      <div>
+        <label class="search-label" for="versionFilter">精确版本（可选）</label>
+        <input class="search-input" id="versionFilter" type="search" placeholder="留空表示不筛选版本" autocomplete="off" list="versionOptions">
+      </div>
+    </div>
+    <p class="search-note">搜索范围始终包含全部软件包和底层库。</p>
+  </section>
+
+  <section id="homeView">
+    <div class="section-head">
+      <h2>设备清单</h2>
+      <span class="section-meta" id="homeSummary"></span>
+    </div>
+    <div class="device-list" id="deviceList"></div>
+  </section>
+
+  <section id="searchView" hidden>
+    <div class="section-head">
+      <h2>跨设备搜索结果</h2>
+      <span class="section-meta" id="searchSummary"></span>
+    </div>
+    <div class="category-bar" id="searchCategories" role="group" aria-label="搜索结果类别"></div>
+    <div class="result-list" id="searchResults" style="margin-top: 10px;"></div>
+  </section>
+
+  <section id="detailView" hidden>
+    <button class="back-button" id="backButton" type="button">
+      <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      返回设备清单
+    </button>
+    <div class="detail-card detail-summary" id="detailSummary"></div>
+    <div class="section-head">
+      <h2>按类别查看</h2>
+      <span class="section-meta" id="detailSummaryCount"></span>
+    </div>
+    <div class="category-bar" id="detailCategories" role="group" aria-label="设备软件类别"></div>
+    <div id="detailGroups" style="margin-top: 10px;"></div>
+  </section>
+</main>
+
+<nav class="primary-nav" aria-label="一级导航">
+  <a href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/></svg>主页</a>
+  <a href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>服务器</a>
+  <a href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8M12 16v5"/></svg>客户端</a>
+  <a href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="8" cy="15" r="4"/><path d="m11 12 9-9M16 4l4 4M14 6l4 4"/></svg>授权</a>
+  <a href="#" aria-current="page"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h.01M12 12h.01M19 12h.01"/></svg>更多</a>
+</nav>
+
+<div class="modal-shell" id="scheduleModal" hidden>
+  <button class="modal-backdrop" id="scheduleBackdrop" type="button" aria-label="关闭定时采集设置" tabindex="-1"></button>
+  <section class="modal" role="dialog" aria-modal="true" aria-labelledby="scheduleModalTitle">
+    <div class="modal-head">
+      <h2 class="modal-title" id="scheduleModalTitle">定时采集设置</h2>
+      <button class="close-button" id="scheduleClose" type="button" aria-label="关闭">
+        <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <form id="scheduleForm">
+      <div class="field">
+        <label for="scheduleTime">每天采集时间</label>
+        <input class="time-input" id="scheduleTime" type="time" value="01:00" required>
+      </div>
+      <p class="help-text">保存后，所有受管设备都会在这个时间自动采集软件清单。</p>
+      <div class="modal-actions">
+        <button class="secondary-button" id="scheduleCancel" type="button">取消</button>
+        <button class="primary-button" type="submit">保存时间</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<div class="progress-shell" id="progressPanel" hidden>
+  <div class="progress-head">
+    <p class="progress-title">正在采集全部设备</p>
+    <span class="progress-number" id="progressNumber">0%</span>
+  </div>
+  <div class="progress-track" aria-hidden="true"><div class="progress-fill" id="progressFill"></div></div>
+</div>
+
+<div class="toast" id="toast" hidden></div>
+<datalist id="versionOptions"></datalist>
+
+<script>
+"use strict";
+
+const categoryOrder = [
+  { id: "os-kernel", label: "操作系统与内核", short: "系统与内核" },
+  { id: "service", label: "服务程序", short: "服务程序" },
+  { id: "container-image", label: "容器镜像", short: "容器镜像" },
+  { id: "driver-firmware", label: "驱动与固件", short: "驱动与固件" },
+  { id: "unidentified", label: "未识别进程", short: "未识别进程" },
+  { id: "package", label: "全部软件包", short: "全部软件包" }
+];
+
+const categoryNames = Object.fromEntries(categoryOrder.map(item => [item.id, item.label]));
+const importantCategoryIds = new Set(["os-kernel", "service", "container-image", "driver-firmware", "unidentified"]);
+
+const state = {
+  scheduleTime: "01:00",
+  query: "",
+  version: "",
+  searchCategory: "all",
+  currentDeviceId: null,
+  detailCategory: "all",
+  packageOpen: false,
+  collectingAll: false,
+  collectingDevices: new Set()
+};
+
+const now = new Date();
+const hoursAgo = count => new Date(now.getTime() - count * 3600 * 1000);
+
+const devices = [
+  { id: "4090x2", name: "4090x2", system: "Ubuntu 24.04.1 · 内核 6.8.0-49-generic", kernel: "6.8.0-49-generic", managed: true, status: "normal", collectedAt: hoursAgo(10), failureReason: "" },
+  { id: "3090x2", name: "3090x2", system: "Ubuntu 22.04.4 · 内核 5.15.0-125-generic", kernel: "5.15.0-125-generic", managed: true, status: "normal", collectedAt: hoursAgo(10), failureReason: "" },
+  { id: "NUC10", name: "NUC10", system: "Debian 12.7 · 内核 6.1.0-27-amd64", kernel: "6.1.0-27-amd64", managed: true, status: "normal", collectedAt: hoursAgo(9), failureReason: "" },
+  { id: "gitlab-urit", name: "gitlab-urit", system: "Ubuntu 22.04.4 · 内核 5.15.0-125-generic", kernel: "5.15.0-125-generic", managed: true, status: "normal", collectedAt: hoursAgo(9), failureReason: "" },
+  { id: "router", name: "软路由", system: "OpenWrt 23.05.5 · 内核 5.15.167", kernel: "5.15.167", managed: true, status: "stale", collectedAt: hoursAgo(9 * 24 + 2), failureReason: "" },
+  { id: "mini6", name: "mini6", system: "macOS 15.1 · Darwin 内核 24.1.0", kernel: "24.1.0", managed: true, status: "normal", collectedAt: hoursAgo(8), failureReason: "" },
+  { id: "win-build", name: "win-build", system: "Windows Server 2022 · 内核 10.0.20348.2760", kernel: "10.0.20348.2760", managed: true, status: "failed", collectedAt: hoursAgo(2), failureReason: "连不上，端口不通" },
+  { id: "nas", name: "NAS", system: "不受管设备", kernel: "—", managed: false, status: "unmanaged", collectedAt: null, failureReason: "" }
+];
+
+const deviceById = new Map(devices.map(device => [device.id, device]));
+
+const inventory = [
+  { deviceId: "4090x2", name: "Ubuntu", version: "24.04.1 LTS", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "4090x2", name: "Linux 内核", version: "6.8.0-49-generic", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "4090x2", name: "openssh-server", version: "1:9.6p1-3ubuntu13.5", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "4090x2", name: "nginx", version: "1.24.0", category: "service", kind: "服务程序", port: "80、443", exposure: "监听所有地址" },
+  { deviceId: "4090x2", name: "nvidia/cuda", version: "12.4.1-base-ubuntu24.04", category: "container-image", kind: "容器镜像" },
+  { deviceId: "4090x2", name: "pytorch/pytorch", version: "2.4.1-cuda12.1-cudnn9-runtime", category: "container-image", kind: "容器镜像" },
+  { deviceId: "4090x2", name: "NVIDIA 驱动", version: "550.120", category: "driver-firmware", kind: "驱动与固件" },
+  { deviceId: "4090x2", name: "NVIDIA GPU 固件", version: "2024.4.1", category: "driver-firmware", kind: "驱动与固件" },
+  { deviceId: "4090x2", name: "python3", version: "进程名不可见", category: "unidentified", kind: "未识别", port: "8188", exposure: "监听所有地址" },
+  { deviceId: "4090x2", name: "openssl", version: "3.0.13-0ubuntu3.4", category: "package", kind: "底层库" },
+  { deviceId: "4090x2", name: "libssl3", version: "3.0.13-0ubuntu3.4", category: "package", kind: "底层库" },
+  { deviceId: "4090x2", name: "libc6", version: "2.39-0ubuntu8.3", category: "package", kind: "底层库" },
+  { deviceId: "4090x2", name: "xz-utils", version: "5.4.5-0.3", category: "package", kind: "底层库" },
+  { deviceId: "4090x2", name: "docker-ce", version: "5:27.3.1-1~ubuntu24.04~noble", category: "package", kind: "软件包" },
+  { deviceId: "4090x2", name: "containerd", version: "1.7.22-1", category: "package", kind: "软件包" },
+
+  { deviceId: "3090x2", name: "Ubuntu", version: "22.04.4 LTS", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "3090x2", name: "Linux 内核", version: "5.15.0-125-generic", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "3090x2", name: "openssh-server", version: "1:8.9p1-3ubuntu0.10", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "3090x2", name: "pytorch/pytorch", version: "2.2.2-cuda12.1-cudnn8-runtime", category: "container-image", kind: "容器镜像" },
+  { deviceId: "3090x2", name: "NVIDIA 驱动", version: "535.183.06", category: "driver-firmware", kind: "驱动与固件" },
+  { deviceId: "3090x2", name: "进程名不可见（权限不足）", version: "—", category: "unidentified", kind: "未识别", port: "7860", exposure: "仅本机" },
+  { deviceId: "3090x2", name: "openssl", version: "3.0.2-0ubuntu1.18", category: "package", kind: "底层库" },
+  { deviceId: "3090x2", name: "libssl3", version: "3.0.2-0ubuntu1.18", category: "package", kind: "底层库" },
+  { deviceId: "3090x2", name: "libc6", version: "2.35-0ubuntu3.8", category: "package", kind: "底层库" },
+  { deviceId: "3090x2", name: "xz-utils", version: "5.2.5-2ubuntu1", category: "package", kind: "底层库" },
+  { deviceId: "3090x2", name: "docker-ce", version: "5:27.3.1-1~ubuntu22.04~jammy", category: "package", kind: "软件包" },
+  { deviceId: "3090x2", name: "containerd", version: "1.7.22-1", category: "package", kind: "软件包" },
+
+  { deviceId: "NUC10", name: "Debian GNU/Linux", version: "12.7", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "NUC10", name: "Linux 内核", version: "6.1.0-27-amd64", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "NUC10", name: "openssh-server", version: "1:9.2p1-2+deb12u3", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "NUC10", name: "nginx", version: "1.24.0-1~deb12u1", category: "service", kind: "服务程序", port: "80、443", exposure: "监听特定地址" },
+  { deviceId: "NUC10", name: "Intel 无线网卡固件", version: "20231211-1", category: "driver-firmware", kind: "驱动与固件" },
+  { deviceId: "NUC10", name: "openssl", version: "3.0.15-1~deb12u1", category: "package", kind: "底层库" },
+  { deviceId: "NUC10", name: "libssl3", version: "3.0.15-1~deb12u1", category: "package", kind: "底层库" },
+  { deviceId: "NUC10", name: "libc6", version: "2.36-9+deb12u8", category: "package", kind: "底层库" },
+  { deviceId: "NUC10", name: "xz-utils", version: "5.4.5-0.3", category: "package", kind: "底层库" },
+
+  { deviceId: "gitlab-urit", name: "Ubuntu", version: "22.04.5 LTS", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "gitlab-urit", name: "Linux 内核", version: "5.15.0-125-generic", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "gitlab-urit", name: "openssh-server", version: "1:8.9p1-3ubuntu0.10", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "gitlab-urit", name: "nginx（GitLab 容器内）", version: "1.24.0", category: "service", kind: "服务程序", port: "80、443", exposure: "监听所有地址" },
+  { deviceId: "gitlab-urit", name: "postgres（容器）", version: "16.4", category: "service", kind: "服务程序", port: "5432", exposure: "仅本机" },
+  { deviceId: "gitlab-urit", name: "redis（容器）", version: "7.2.5", category: "service", kind: "服务程序", port: "6379", exposure: "仅本机" },
+  { deviceId: "gitlab-urit", name: "gitlab/gitlab-ce", version: "17.5.1-ce.0", category: "container-image", kind: "容器镜像" },
+  { deviceId: "gitlab-urit", name: "postgres", version: "16.4", category: "container-image", kind: "容器镜像" },
+  { deviceId: "gitlab-urit", name: "redis", version: "7.2.5", category: "container-image", kind: "容器镜像" },
+  { deviceId: "gitlab-urit", name: "openssl", version: "3.0.2-0ubuntu1.18", category: "package", kind: "底层库" },
+  { deviceId: "gitlab-urit", name: "libssl3", version: "3.0.2-0ubuntu1.18", category: "package", kind: "底层库" },
+  { deviceId: "gitlab-urit", name: "libc6", version: "2.35-0ubuntu3.8", category: "package", kind: "底层库" },
+  { deviceId: "gitlab-urit", name: "xz-utils", version: "5.2.5-2ubuntu1", category: "package", kind: "底层库" },
+  { deviceId: "gitlab-urit", name: "docker-ce", version: "5:27.3.1-1~ubuntu22.04~jammy", category: "package", kind: "软件包" },
+  { deviceId: "gitlab-urit", name: "containerd", version: "1.7.22-1", category: "package", kind: "软件包" },
+
+  { deviceId: "router", name: "OpenWrt", version: "23.05.5", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "router", name: "Linux 内核", version: "5.15.167", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "router", name: "dropbear", version: "2022.83", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "router", name: "openssl", version: "3.0.12", category: "package", kind: "底层库" },
+  { deviceId: "router", name: "xz-utils", version: "5.4.5", category: "package", kind: "底层库" },
+
+  { deviceId: "mini6", name: "macOS", version: "15.1", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "mini6", name: "Darwin 内核", version: "24.1.0", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "mini6", name: "OpenSSH", version: "9.8p1", category: "service", kind: "服务程序", port: "22", exposure: "监听特定地址" },
+  { deviceId: "mini6", name: "openssl", version: "3.4.0", category: "package", kind: "底层库" },
+  { deviceId: "mini6", name: "xz", version: "5.6.1", category: "package", kind: "底层库" },
+
+  { deviceId: "win-build", name: "Windows Server", version: "2022", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "win-build", name: "Windows 内核", version: "10.0.20348.2760", category: "os-kernel", kind: "操作系统" },
+  { deviceId: "win-build", name: "OpenSSH for Windows", version: "9.5p1", category: "service", kind: "服务程序", port: "22", exposure: "监听所有地址" },
+  { deviceId: "win-build", name: "7-Zip", version: "23.01", category: "package", kind: "软件包" }
+];
+
+const elements = {
+  homeView: document.getElementById("homeView"),
+  searchView: document.getElementById("searchView"),
+  detailView: document.getElementById("detailView"),
+  deviceList: document.getElementById("deviceList"),
+  homeSummary: document.getElementById("homeSummary"),
+  searchResults: document.getElementById("searchResults"),
+  searchSummary: document.getElementById("searchSummary"),
+  searchCategories: document.getElementById("searchCategories"),
+  softwareSearch: document.getElementById("softwareSearch"),
+  versionFilter: document.getElementById("versionFilter"),
+  versionOptions: document.getElementById("versionOptions"),
+  detailSummary: document.getElementById("detailSummary"),
+  detailGroups: document.getElementById("detailGroups"),
+  detailCategories: document.getElementById("detailCategories"),
+  detailSummaryCount: document.getElementById("detailSummaryCount"),
+  scheduleButton: document.getElementById("scheduleButton"),
+  scheduleText: document.getElementById("scheduleText"),
+  scheduleModal: document.getElementById("scheduleModal"),
+  scheduleForm: document.getElementById("scheduleForm"),
+  scheduleTime: document.getElementById("scheduleTime"),
+  scheduleClose: document.getElementById("scheduleClose"),
+  scheduleCancel: document.getElementById("scheduleCancel"),
+  scheduleBackdrop: document.getElementById("scheduleBackdrop"),
+  collectAllButton: document.getElementById("collectAllButton"),
+  exportAllButton: document.getElementById("exportAllButton"),
+  progressPanel: document.getElementById("progressPanel"),
+  progressFill: document.getElementById("progressFill"),
+  progressNumber: document.getElementById("progressNumber"),
+  toast: document.getElementById("toast"),
+  backButton: document.getElementById("backButton")
+};
+
+let toastTimer = 0;
+let lastFocused = null;
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, character => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;"
+  })[character]);
+}
+
+function pad(number) {
+  return String(number).padStart(2, "0");
+}
+
+function formatClock(date) {
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function formatCollectionTime(date) {
+  if (!date) return "未采集";
+  const diff = Date.now() - date.getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes} 分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24 && new Date(date).toDateString() === new Date().toDateString()) return `今天 ${formatClock(date)}`;
+  if (hours < 48 && new Date(Date.now() - 86400000).toDateString() === new Date(date).toDateString()) return `昨天 ${formatClock(date)}`;
+  const days = Math.round(hours / 24);
+  return `${days} 天前`;
+}
+
+function formatExportTime(date) {
+  if (!date) return "";
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function inventoryFor(deviceId) {
+  return inventory.filter(item => item.deviceId === deviceId);
+}
+
+function deviceCounts(device) {
+  if (!device.managed) return { important: 0, total: 0, unidentified: 0 };
+  const records = inventoryFor(device.id);
+  return {
+    important: records.filter(item => importantCategoryIds.has(item.category)).length,
+    total: records.length,
+    unidentified: records.filter(item => item.category === "unidentified").length
+  };
+}
+
+function statusLabel(status) {
+  if (status === "normal") return "正常";
+  if (status === "stale") return "清单过期";
+  if (status === "failed") return "采集失败";
+  return "不受管设备";
+}
+
+function collectionText(device) {
+  if (!device.managed) return { text: "不采集（不受管设备）", className: "collection-text" };
+  if (device.status === "failed") return { text: `上次采集失败：${device.failureReason}`, className: "collection-text failed" };
+  if (device.status === "stale") return { text: `${formatCollectionTime(device.collectedAt)}采集，超过 7 天未更新`, className: "collection-text problem" };
+  return { text: `采集时间：${formatCollectionTime(device.collectedAt)}`, className: "collection-text" };
+}
+
+function softwareRow(item, options = {}) {
+  const device = deviceById.get(item.deviceId);
+  const tags = [
+    `<span class="tag blue">${escapeHtml(categoryNames[item.category])}</span>`,
+    item.port ? `<span class="tag">端口 ${escapeHtml(item.port)}</span>` : "",
+    item.exposure ? `<span class="tag">${escapeHtml(item.exposure)}</span>` : "",
+    item.kind ? `<span class="tag">${escapeHtml(item.kind)}</span>` : ""
+  ].filter(Boolean);
+  const collection = device && device.managed && device.collectedAt
+    ? `<span class="tag">采集时间：${escapeHtml(formatCollectionTime(device.collectedAt))}</span>`
+    : "";
+  return `<article class="software-row">
+    <strong class="software-name">${escapeHtml(item.name)}</strong>
+    <span class="software-version">版本：${escapeHtml(item.version)}</span>
+    <div class="software-meta">${tags.join("")}${collection}</div>
+    ${options.showDevice && device ? `<p class="device-system">设备：${escapeHtml(device.name)}</p>` : ""}
+  </article>`;
+}
+
+function renderDevices() {
+  elements.deviceList.innerHTML = devices.map(device => {
+    const counts = deviceCounts(device);
+    const collection = collectionText(device);
+    const busy = state.collectingDevices.has(device.id);
+    return `<article class="device-card">
+      <button class="device-main" type="button" data-open-device="${escapeHtml(device.id)}">
+        <span class="device-top">
+          <span class="device-name">${escapeHtml(device.name)}</span>
+          <span class="status-pill ${escapeHtml(device.status)}">${escapeHtml(statusLabel(device.status))}</span>
+        </span>
+        <span class="device-system">${escapeHtml(device.system)}</span>
+        <span class="device-metrics">
+          <span class="metric"><strong class="metric-value">${counts.important}</strong><span class="metric-label">重点软件</span></span>
+          <span class="metric"><strong class="metric-value">${counts.total}</strong><span class="metric-label">全部软件</span></span>
+          <span class="metric"><strong class="metric-value">${counts.unidentified}</strong><span class="metric-label">未识别</span></span>
+        </span>
+      </button>
+      <div class="device-foot">
+        <span class="${collection.className}">${escapeHtml(collection.text)}</span>
+        <button class="mini-button" type="button" data-collect-device="${escapeHtml(device.id)}" ${!device.managed || busy ? "disabled" : ""}>
+          ${busy ? "采集中…" : "立即采集"}
+        </button>
+      </div>
+    </article>`;
+  }).join("");
+  const managed = devices.filter(device => device.managed).length;
+  elements.homeSummary.textContent = `${managed} 台受管 · ${devices.length - managed} 台不受管`;
+}
+
+function renderCategoryButtons(container, selected, purpose) {
+  const categories = [{ id: "all", label: "全部" }, ...categoryOrder];
+  container.innerHTML = categories.map(category => `
+    <button class="category-chip" type="button" data-category="${category.id}" data-purpose="${purpose}" aria-pressed="${selected === category.id ? "true" : "false"}">
+      ${escapeHtml(category.label)}
+    </button>
+  `).join("");
+}
+
+function matchedRecords() {
+  const query = state.query.trim().toLowerCase();
+  const version = state.version.trim();
+  if (!query) return [];
+  return inventory.filter(item => {
+    const nameMatches = item.name.toLowerCase().includes(query);
+    const versionMatches = !version || item.version === version;
+    return nameMatches && versionMatches;
+  });
+}
+
+function renderSearch() {
+  const active = Boolean(state.query.trim());
+  elements.homeView.hidden = active;
+  elements.searchView.hidden = !active;
+  elements.detailView.hidden = true;
+  if (!active) return;
+
+  renderCategoryButtons(elements.searchCategories, state.searchCategory, "search");
+  const matches = matchedRecords();
+  const visible = state.searchCategory === "all" ? matches : matches.filter(item => item.category === state.searchCategory);
+  const queryText = state.version.trim() ? `软件名含「${state.query.trim()}」且版本为「${state.version.trim()}」` : `软件名含「${state.query.trim()}」`;
+  elements.searchSummary.textContent = `${visible.length} 条记录`;
+
+  if (!visible.length) {
+    elements.searchResults.innerHTML = `<div class="empty-state">
+      <strong>没有匹配的软件</strong>
+      <p>${escapeHtml(queryText)}，请换一个名称或版本。</p>
+    </div>`;
+    return;
+  }
+
+  const grouped = devices.map(device => ({
+    device,
+    records: visible.filter(item => item.deviceId === device.id)
+  })).filter(group => group.records.length);
+  elements.searchResults.innerHTML = grouped.map(group => `
+    <section class="result-card">
+      <button class="result-device" type="button" data-open-device="${escapeHtml(group.device.id)}">
+        <strong>${escapeHtml(group.device.name)}</strong>
+        <span>${group.records.length} 条</span>
+      </button>
+      ${group.records.map(item => softwareRow(item, { showDevice: false })).join("")}
+    </section>
+  `).join("");
+}
+
+function renderDetail() {
+  const device = deviceById.get(state.currentDeviceId);
+  if (!device) return;
+  const counts = deviceCounts(device);
+  const collection = collectionText(device);
+  const busy = state.collectingDevices.has(device.id);
+  elements.detailSummary.innerHTML = `
+    <div class="detail-title-row">
+      <div>
+        <h2>${escapeHtml(device.name)}</h2>
+        <p class="device-system">${escapeHtml(device.system)}</p>
+      </div>
+      <span class="status-pill ${escapeHtml(device.status)}">${escapeHtml(statusLabel(device.status))}</span>
+    </div>
+    <div class="device-metrics">
+      <span class="metric"><strong class="metric-value">${counts.important}</strong><span class="metric-label">重点软件</span></span>
+      <span class="metric"><strong class="metric-value">${counts.total}</strong><span class="metric-label">全部软件</span></span>
+      <span class="metric"><strong class="metric-value">${counts.unidentified}</strong><span class="metric-label">未识别</span></span>
+    </div>
+    <p class="${collection.className}">${escapeHtml(collection.text)}</p>
+    <div class="detail-actions">
+      <button class="primary-button" type="button" data-collect-device="${escapeHtml(device.id)}" ${!device.managed || busy ? "disabled" : ""}>${busy ? "采集中…" : "立即采集"}</button>
+      <button class="secondary-button" type="button" data-export-device="${escapeHtml(device.id)}" ${device.managed ? "" : "disabled"}>导出这台设备 CSV</button>
+    </div>`;
+
+  renderCategoryButtons(elements.detailCategories, state.detailCategory, "detail");
+  const records = inventoryFor(device.id);
+  const visibleCategories = state.detailCategory === "all"
+    ? categoryOrder
+    : categoryOrder.filter(category => category.id === state.detailCategory);
+  const visibleRecords = state.detailCategory === "all"
+    ? records
+    : records.filter(item => item.category === state.detailCategory);
+  elements.detailSummaryCount.textContent = `${visibleRecords.length} 条记录`;
+
+  elements.detailGroups.innerHTML = visibleCategories.map(category => {
+    const categoryRecords = records.filter(item => item.category === category.id);
+    if (!categoryRecords.length) return "";
+    const isOpen = category.id !== "package" || state.packageOpen;
+    const chevron = `<svg class="group-chevron" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    if (category.id === "package") {
+      return `<section class="detail-card">
+        <button class="group-button" type="button" data-toggle-packages="true" aria-expanded="${isOpen ? "true" : "false"}">
+          <strong>${escapeHtml(category.label)}（${categoryRecords.length}）</strong>
+          <span>${isOpen ? "点击折叠" : "点击展开"}</span>${chevron}
+        </button>
+        ${isOpen ? `<div class="group-content">${categoryRecords.map(item => softwareRow(item)).join("")}</div>` : ""}
+      </section>`;
+    }
+    return `<section class="detail-card">
+      <div class="group-button">
+        <strong>${escapeHtml(category.label)}（${categoryRecords.length}）</strong>
+      </div>
+      <div class="group-content">${categoryRecords.map(item => softwareRow(item)).join("")}</div>
+    </section>`;
+  }).join("") || `<div class="empty-state"><strong>这个类别没有记录</strong><p>可以切换到其他类别继续查看。</p></div>`;
+}
+
+function render() {
+  renderDevices();
+  if (!elements.detailView.hidden) renderDetail();
+  else if (!elements.searchView.hidden) renderSearch();
+}
+
+function showToast(message) {
+  window.clearTimeout(toastTimer);
+  elements.toast.textContent = message;
+  elements.toast.hidden = false;
+  toastTimer = window.setTimeout(() => {
+    elements.toast.hidden = true;
+  }, 3200);
+}
+
+function updateSearchFromInputs() {
+  state.query = elements.softwareSearch.value;
+  state.version = elements.versionFilter.value;
+  state.searchCategory = "all";
+  renderSearch();
+}
+
+function openDevice(deviceId) {
+  const device = deviceById.get(deviceId);
+  if (!device) return;
+  state.currentDeviceId = deviceId;
+  state.detailCategory = "all";
+  state.packageOpen = false;
+  elements.homeView.hidden = true;
+  elements.searchView.hidden = true;
+  elements.detailView.hidden = false;
+  renderDetail();
+  window.scrollTo({ top: 0 });
+}
+
+function closeDevice() {
+  elements.detailView.hidden = true;
+  if (state.query.trim()) renderSearch();
+  else {
+    elements.homeView.hidden = false;
+    renderDevices();
+  }
+  window.scrollTo({ top: 0 });
+}
+
+function collectDevice(deviceId) {
+  const device = deviceById.get(deviceId);
+  if (!device || !device.managed || state.collectingDevices.has(deviceId)) return;
+  state.collectingDevices.add(deviceId);
+  render();
+  window.setTimeout(() => {
+    device.collectedAt = new Date();
+    device.status = "normal";
+    device.failureReason = "";
+    state.collectingDevices.delete(deviceId);
+    render();
+    showToast(`已采集「${device.name}」的软件清单`);
+  }, 900);
+}
+
+function collectAllDevices() {
+  if (state.collectingAll) return;
+  const managedDevices = devices.filter(device => device.managed);
+  state.collectingAll = true;
+  elements.collectAllButton.disabled = true;
+  elements.collectAllButton.textContent = "采集中…";
+  elements.progressPanel.hidden = false;
+  let progress = 0;
+  const timer = window.setInterval(() => {
+    progress += 10;
+    elements.progressFill.style.width = `${Math.min(progress, 100)}%`;
+    elements.progressNumber.textContent = `${Math.min(progress, 100)}%`;
+    if (progress < 100) return;
+    window.clearInterval(timer);
+    managedDevices.forEach(device => {
+      device.collectedAt = new Date();
+      device.status = "normal";
+      device.failureReason = "";
+    });
+    render();
+    showToast("全部受管设备采集完成");
+    window.setTimeout(() => {
+      elements.progressPanel.hidden = true;
+      elements.progressFill.style.width = "0%";
+      elements.progressNumber.textContent = "0%";
+      elements.collectAllButton.disabled = false;
+      elements.collectAllButton.textContent = "立即全部采集";
+      state.collectingAll = false;
+    }, 700);
+  }, 140);
+}
+
+function csvCell(value) {
+  return `"${String(value === null || value === undefined ? "" : value).replace(/"/g, '""')}"`;
+}
+
+function downloadCsv(filename, rows) {
+  const header = ["设备", "软件名", "版本", "类别", "监听端口", "暴露级别", "采集时间"];
+  const lines = [header, ...rows].map(row => row.map(csvCell).join(","));
+  const blob = new Blob(["\ufeff" + lines.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function recordsToRows(records) {
+  return records.map(item => {
+    const device = deviceById.get(item.deviceId);
+    return [
+      device.name,
+      item.name,
+      item.version,
+      categoryNames[item.category],
+      item.port || "",
+      item.exposure || "",
+      device.collectedAt ? formatExportTime(device.collectedAt) : ""
+    ];
+  });
+}
+
+function exportAll() {
+  const rows = recordsToRows(inventory);
+  downloadCsv(`软件清单-设备优先-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  showToast(`已导出 ${rows.length} 行软件清单`);
+}
+
+function exportDevice(deviceId) {
+  const device = deviceById.get(deviceId);
+  if (!device || !device.managed) return;
+  const rows = recordsToRows(inventoryFor(deviceId));
+  downloadCsv(`软件清单-${device.name}-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  showToast(`已导出「${device.name}」的 ${rows.length} 行软件清单`);
+}
+
+function openScheduleModal() {
+  lastFocused = document.activeElement;
+  elements.scheduleTime.value = state.scheduleTime;
+  elements.scheduleModal.hidden = false;
+  document.body.classList.add("modal-open");
+  elements.scheduleTime.focus();
+}
+
+function closeScheduleModal() {
+  elements.scheduleModal.hidden = true;
+  document.body.classList.remove("modal-open");
+  if (lastFocused && lastFocused.isConnected) lastFocused.focus();
+}
+
+elements.softwareSearch.addEventListener("input", updateSearchFromInputs);
+elements.versionFilter.addEventListener("input", updateSearchFromInputs);
+
+document.addEventListener("click", event => {
+  const openDeviceButton = event.target.closest("[data-open-device]");
+  if (openDeviceButton) {
+    openDevice(openDeviceButton.dataset.openDevice);
+    return;
+  }
+
+  const collectButton = event.target.closest("[data-collect-device]");
+  if (collectButton) {
+    event.stopPropagation();
+    collectDevice(collectButton.dataset.collectDevice);
+    return;
+  }
+
+  const exportDeviceButton = event.target.closest("[data-export-device]");
+  if (exportDeviceButton) {
+    exportDevice(exportDeviceButton.dataset.exportDevice);
+    return;
+  }
+
+  const categoryButton = event.target.closest("[data-category]");
+  if (categoryButton) {
+    const category = categoryButton.dataset.category;
+    if (categoryButton.dataset.purpose === "search") {
+      state.searchCategory = category;
+      renderSearch();
+    } else {
+      state.detailCategory = category;
+      if (category === "package") state.packageOpen = true;
+      renderDetail();
+    }
+    return;
+  }
+
+  if (event.target.closest("[data-toggle-packages]")) {
+    state.packageOpen = !state.packageOpen;
+    renderDetail();
+  }
+});
+
+elements.backButton.addEventListener("click", closeDevice);
+elements.scheduleButton.addEventListener("click", openScheduleModal);
+elements.scheduleClose.addEventListener("click", closeScheduleModal);
+elements.scheduleCancel.addEventListener("click", closeScheduleModal);
+elements.scheduleBackdrop.addEventListener("click", closeScheduleModal);
+elements.scheduleForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const value = elements.scheduleTime.value;
+  if (!value) return;
+  state.scheduleTime = value;
+  elements.scheduleText.textContent = `每天 ${value}`;
+  closeScheduleModal();
+  showToast(`定时采集已改为每天 ${value}`);
+});
+
+elements.collectAllButton.addEventListener("click", collectAllDevices);
+elements.exportAllButton.addEventListener("click", exportAll);
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && !elements.scheduleModal.hidden) closeScheduleModal();
+});
+
+document.querySelectorAll('a[href="#"]').forEach(link => {
+  link.addEventListener("click", event => event.preventDefault());
+});
+
+elements.versionOptions.innerHTML = Array.from(new Set(inventory.map(item => item.version)))
+  .sort((first, second) => first.localeCompare(second, "zh-CN"))
+  .map(version => `<option value="${escapeHtml(version)}"></option>`)
+  .join("");
+
+renderDevices();
+</script>
+</body>
+</html>
