@@ -15,14 +15,14 @@ function serverCard(page: import("@playwright/test").Page, name: string) {
 }
 
 // usePrivateKey 把第一台批量测试条目改成私钥登录，指向本次启动的 SSH 测
-// 试服务；后两台保持失败端口，浏览器层不重复验证 SSH 细节。
+// 试服务；主机地址由种子数据提供，后两台保持失败端口，浏览器层不重复
+// 验证 SSH 细节。
 async function usePrivateKey(
   page: import("@playwright/test").Page,
   port: string,
   privateKeyPath: string,
 ): Promise<void> {
   await page.getByRole("region", { name: "连接" }).getByRole("link", { name: "编辑" }).click();
-  await page.locator("#edit-host").fill("127.0.0.1");
   await page.locator("#edit-port").fill(port);
   await page.locator("#edit-credential").selectOption("key");
   await page.locator("#edit-key-file").setInputFiles(privateKeyPath);
