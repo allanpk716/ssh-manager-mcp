@@ -271,6 +271,10 @@ type TopologyWriter interface {
 	// EditDeviceSite 修改一台机器直接登记的地点；实现必须复用存储层的设
 	// 备编辑函数，保证地点引用解析、审计与快照修订号一致。
 	EditDeviceSite(device, siteRef string, source TopologyWriteSource) (string, error)
+	// EditDeviceSites 把多台机器的地点改为同一个目标；实现必须在一次事
+	// 务里写完全部设备并各写一条现有机器地点修改审计，任一台失败整批
+	// 不变。
+	EditDeviceSites(devices []string, siteRef string, source TopologyWriteSource) error
 	// MoveServerToDevice 把服务器条目改挂到另一台机器，与命令行
 	// devices move-server 走同一个存储函数。
 	MoveServerToDevice(serverIdentifier, device string, source TopologyWriteSource) (TopologyServerMoveResult, error)

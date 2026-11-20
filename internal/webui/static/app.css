@@ -1961,6 +1961,149 @@ button.danger {
   min-width: 170px;
 }
 
+.server-filter-selects {
+  display: flex;
+  align-items: center;
+  gap: var(--space-small);
+}
+
+.server-filter-selects[hidden],
+.server-filter-buttons[hidden] {
+  display: none;
+}
+
+.server-filter-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-small);
+  margin-top: var(--space-small);
+}
+
+.filter-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+  min-height: 44px;
+  padding: 0 11px;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 10px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  box-shadow: var(--shadow-card);
+  cursor: pointer;
+  font-size: 14px;
+  text-align: left;
+}
+
+.filter-button strong {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-button.active {
+  border-color: #bfdbfe;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.active-filters {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-top: var(--space-small);
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: none;
+}
+
+.active-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.active-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 8px 0 10px;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  background: var(--color-accent-soft);
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.active-pill a {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--color-accent);
+  text-decoration: none;
+}
+
+.clear-all {
+  flex: 0 0 auto;
+  min-height: 34px;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.server-filter-options {
+  display: grid;
+  gap: var(--space-small);
+}
+
+.filter-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+  min-height: 56px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-panel-border);
+  border-radius: 10px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.filter-option.selected {
+  border-color: #93c5fd;
+  background: var(--color-accent-soft);
+}
+
+.filter-option-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.filter-option-copy strong {
+  overflow-wrap: anywhere;
+}
+
+.filter-option-copy small {
+  color: var(--color-muted);
+  line-height: 18px;
+}
+
+.filter-option-count {
+  flex: 0 0 auto;
+  color: var(--color-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .server-filter-pills .form-field label {
   position: absolute;
   width: 1px;
@@ -2169,10 +2312,7 @@ button.danger {
   bottom: 0;
   left: 0;
   z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-small);
+  display: block;
   padding: calc(var(--space-small) + env(safe-area-inset-bottom)) var(--space-medium);
   background: var(--color-panel);
   border-top: 1px solid var(--color-panel-border);
@@ -2190,6 +2330,92 @@ button.danger {
   border-radius: 8px;
   background: var(--color-background);
   cursor: pointer;
+}
+
+/* 多选模式：复选框只在选择时可见；点卡片即切换，卡片里的链接不再进入
+   详情，行内操作让位给底部操作条。 */
+.server-list-page .server-select-control {
+  display: none;
+}
+
+.server-list-page.server-selecting .server-select-control {
+  display: inline-flex;
+}
+
+.server-list-page.server-selecting .server-card {
+  cursor: pointer;
+}
+
+.server-list-page.server-selecting .server-row-actions {
+  display: none;
+}
+
+.server-batch-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+}
+
+.server-batch-summary strong {
+  flex: 0 0 auto;
+}
+
+.server-batch-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.server-batch-tools button {
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font-weight: 650;
+}
+
+.server-batch-tools button[data-server-cancel-selection] {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.server-batch-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-small);
+  margin-top: var(--space-small);
+}
+
+.server-batch-actions button {
+  border-color: #bfdbfe;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+body.server-selecting main {
+  padding-bottom: calc(190px + env(safe-area-inset-bottom));
+}
+
+/* 手机上底部操作条取代一级导航的位置，避免两层底栏叠在一起。 */
+@media (max-width: 767px) {
+  body.server-selecting .primary-nav {
+    display: none;
+  }
+}
+
+.server-more-list {
+  display: grid;
+  gap: var(--space-small);
+  margin-top: var(--space-medium);
+}
+
+.server-more-list .resource-card {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
 }
 
 /* 服务器分步新增：步骤条、地址行、同机识别与地点树。 */
@@ -2384,8 +2610,9 @@ button.danger {
     grid-auto-flow: row;
   }
 
-  .server-selection-bar {
-    flex-wrap: wrap;
+  .server-batch-actions button {
+    padding: 0 4px;
+    font-size: 13px;
   }
 }
 
@@ -3924,4 +4151,75 @@ button.danger {
   font-size: 12px;
   line-height: 18px;
   overflow-wrap: anywhere;
+}
+
+/* 批量测试连接（#336）：进行中沿用连接测试的蓝色与旋转标识，完成态复
+   用 #326 的服务器卡片状态行，不新增第二套状态视觉；汇总提示复用页内
+   通知样式。 */
+.server-test-line.is-running {
+  color: #1d4ed8;
+}
+
+.server-test-line.is-running .connection-test-spinner {
+  margin: 2px 0 0;
+}
+
+.server-batch-connection-summary {
+  margin: 0 0 12px;
+}
+
+/* 批量设置地点（#335）：地点弹层复用地点树单选样式；后果确认页用卡片
+   与分组清单呈现会一起变化的机器和无法设置的条目。 */
+.batch-location-summary .batch-location-main {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.batch-location-devices,
+.batch-location-unassociated {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.batch-location-device {
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.batch-location-device > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.batch-location-device small {
+  color: var(--color-muted);
+}
+
+.batch-location-device p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.batch-location-unassociated li {
+  padding-left: 18px;
+  position: relative;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.batch-location-unassociated li::before {
+  content: "!";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #b45309;
+  font-weight: 700;
 }

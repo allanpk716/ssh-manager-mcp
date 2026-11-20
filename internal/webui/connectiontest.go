@@ -196,3 +196,79 @@ type ServerConnectionTester interface {
 	StartServerTest(serverID string, probeShell bool, source ServerWriteSource, anchor ServerConnectionAnchor) (string, error)
 	ServerTestStatus(taskID string) (*ServerConnectionTestStatus, bool)
 }
+
+// ServerConnectionTestBatchTask 是批量启动结果里一台服务器条目对应的任
+// 务；页面用它在内存里保存服务器条目到任务的映射。
+type ServerConnectionTestBatchTask struct {
+	ServerID string `json:"server_id"`
+	TaskID   string `json:"task_id"`
+	// Error 为空表示任务已启动；不为空时是这台服务器条目未能启动连接测
+	// 试的白话说明。
+	Error string `json:"error,omitempty"`
+}
+
+// ServerConnectionTestBatchStart 是批量启动接口的返回值；只携带服务器条
+// 目到任务的映射与启动失败说明，不等待任何 SSH 连接完成。
+type ServerConnectionTestBatchStart struct {
+	Tasks []ServerConnectionTestBatchTask `json:"tasks"`
+}
+
+// ServerConnectionTestBatchCard 是批量轮询里一台服务器条目的卡片短状态。
+// 文案由服务器列表卡片既有的短状态规则生成，页面只负责替换显示。
+type ServerConnectionTestBatchCard struct {
+	ServerID string                    `json:"server_id"`
+	TaskID   string                    `json:"task_id"`
+	State    ServerConnectionTestState `json:"state"`
+	Title    string                    `json:"title"`
+	Detail   string                    `json:"detail,omitempty"`
+	// Untested 表示这不是一次失败测试，而是服务器条目从未测试；状态仍按
+	// 已完成归档，页面沿用列表卡片的「从未测试」短状态。
+	Untested bool `json:"untested,omitempty"`
+}
+
+// ServerConnectionTestBatchStatus 是批量轮询接口的返回值：逐卡状态加汇总
+// 计数；Done 表示这一批没有仍在运行的任务。
+type ServerConnectionTestBatchStatus struct {
+	Cards     []ServerConnectionTestBatchCard `json:"cards"`
+	Done      bool                            `json:"done"`
+	Total     int                             `json:"total"`
+	Running   int                             `json:"running"`
+	Succeeded int                             `json:"succeeded"`
+	Failed    int                             `json:"failed"`
+}
+
+// NewServerConnectionTestBatchCard 把一台任务状态换成服务器列表卡片的短
+// 状态数据；进行中、成功与失败共用既有文案映射，不另建第二套状态。
+func NewServerConnectionTestBatchCard(
+	status *ServerConnectionTestStatus, now time.Time,
+) ServerConnectionTestBatchCard {
+	if status == nil {
+		return ServerConnectionTestBatchCard{
+			State: ServerConnectionTestFailed, Title: "从未测试", Untested: true,
+		}
+	}
+	card := ServerConnectionTestBatchCard{
+		ServerID: status.ServerID, TaskID: status.ID, State: status.State,
+	}
+	if status.State == ServerConnectionTestRunning {
+		card.Title = status.State.StatusText()
+		return card
+	}
+	if status.Result == nil {
+		card.Title = ServerConnectionTestFailed.StatusText()
+		return card
+	}
+	card.State = status.Result.State
+	card.Title = status.Result.ShortStatusText()
+	if !status.Result.CompletedAt.IsZero() {
+		card.Title = formatConnectionTestCardTime(status.Result.CompletedAt, now) + " " + card.Title
+	}
+	if status.Result.Succeeded {
+		card.Detail = status.Result.SuccessSummaryText()
+		return card
+	}
+	if status.Result.FailureLabel != "" {
+		card.Title += "：" + status.Result.FailureLabel
+	}
+	return card
+}

@@ -45,17 +45,40 @@ type ServerCard struct {
 
 // ServerListFilterView 是服务器列表搜索与筛选的当前值与可选项。
 type ServerListFilterView struct {
-	Query       string
-	Site        string
-	Network     string
-	Attention   bool
-	Sites       []ServerSelectionOption
-	Networks    []ServerSelectionOption
-	HasTopology bool
+	Query        string
+	Site         string
+	Network      string
+	Attention    bool
+	Sites        []ServerListOption
+	Networks     []ServerListOption
+	HasTopology  bool
+	SiteLabel    string
+	NetworkLabel string
+	Pills        []ServerListFilterPill
+	ClearAllHref string
 }
 
-// ServerBatchResourceView 是批量操作抽屉里一个可继续选择的资源；Path 指向
-// #301 的共用服务器勾选页。
+// ServerListOption 是服务器列表一个筛选选项；Note 说明地点层级或网络类
+// 型，Count 是在其它条件不变时选择它会留下的服务器条目数。
+type ServerListOption struct {
+	Value string
+	Label string
+	Note  string
+	Count int
+}
+
+// ServerListFilterPill 是列表上方一个可单独清除的当前筛选条件。
+type ServerListFilterPill struct {
+	Label string
+	Href  string
+}
+
+// serverListUnregisteredSite 是「未登记地点」选项的保留值；真实地点标识
+// 符不会使用两侧双下划线包裹的形式。
+const serverListUnregisteredSite = "__unregistered__"
+
+// ServerBatchResourceView 是批量操作抽屉里一个可继续选择的资源；Path 指
+// 向加入 profile、授权机密项与授权共享存储共用的服务器勾选页。
 type ServerBatchResourceView struct {
 	ID   string
 	Name string
@@ -616,24 +639,27 @@ func (h *handler) serverListViews(
 		}
 		filter.HasTopology = true
 	}
-	deviceByServer, networkIndexes, options := serverListTopologyIndexes(topology)
-	filter.Sites, filter.Networks = options.sites, options.networks
+	if !filter.HasTopology {
+		filter.Site, filter.Network = "", ""
+	}
+	indexes := serverListTopologyIndexes(topology)
+	filter.Sites, filter.Networks = indexes.siteOptions(topology), indexes.networkOptions(topology)
 	profiles, clients, secrets, shares, err := h.serverListAuthorizationRows(r)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	profileIDsByServer, clientCountByProfile := serverProfileAuthorizationIndexes(profiles, clients)
 	secretCounts, shareCounts := serverResourceCounts(secrets, shares)
-	cards := make([]ServerCard, 0, len(rows))
+	allCards := make([]ServerCard, 0, len(rows))
 	for _, row := range rows {
 		card := ServerCard{
 			ServerListEntry: row, SecretCount: secretCounts[row.Name],
 			SharedStoreCount: shareCounts[row.ID],
 		}
-		if device, ok := deviceByServer[row.ID]; ok {
+		if device, ok := indexes.deviceByServer[row.ID]; ok {
 			card.SiteID, card.SitePath = device.SiteID, device.LocationPath
-			card.NetworkIDs = networkIndexes.idsByDevice[device.ID]
-			card.NetworkNames = networkIndexes.namesByDevice[device.ID]
+			card.NetworkIDs = indexes.networkIndexes.idsByDevice[device.ID]
+			card.NetworkNames = indexes.networkIndexes.namesByDevice[device.ID]
 			card.SameMachineCount = len(device.Servers)
 		}
 		for _, profileID := range profileIDsByServer[row.ID] {
@@ -643,10 +669,19 @@ func (h *handler) serverListViews(
 			row.Name, row.User, row.Host, strconv.Itoa(row.Port), card.SitePath,
 			strings.Join(card.NetworkNames, " "), strings.Join(row.AttentionReasons, " "),
 		}, " "))
-		if serverCardMatches(card, filter) {
+		allCards = append(allCards, card)
+	}
+	cards := make([]ServerCard, 0, len(allCards))
+	for _, card := range allCards {
+		if serverCardMatches(card, filter, indexes.siteTree) {
 			cards = append(cards, card)
 		}
 	}
+	countServerListOptions(allCards, filter, indexes.siteTree)
+	filter.SiteLabel = serverListSelectedOptionLabel(filter.Sites, filter.Site)
+	filter.NetworkLabel = serverListSelectedOptionLabel(filter.Networks, filter.Network)
+	filter.Pills = serverListFilterPills(filter)
+	filter.ClearAllHref = serverListFilterHref(filter, "all")
 	return cards, filter, h.serverBatchView(profiles, secrets, shares), nil
 }
 
@@ -656,48 +691,197 @@ type serverListNetworkIndexes struct {
 }
 
 type serverListTopologyOptions struct {
-	sites    []ServerSelectionOption
-	networks []ServerSelectionOption
+	sites          []ServerListOption
+	networks       []ServerListOption
+	siteTree       *models.SiteTree
+	deviceByServer map[string]TopologyDevice
+	networkIndexes serverListNetworkIndexes
 }
 
-func serverListTopologyIndexes(topology *TopologyData) (
-	map[string]TopologyDevice, serverListNetworkIndexes, serverListTopologyOptions,
-) {
-	deviceByServer := map[string]TopologyDevice{}
+func serverListTopologyIndexes(topology *TopologyData) serverListTopologyOptions {
 	networks := map[string]TopologyNetwork{}
-	indexes := serverListNetworkIndexes{
-		idsByDevice: map[string][]string{}, namesByDevice: map[string][]string{},
-	}
-	var options serverListTopologyOptions
+	options := serverListTopologyOptions{}
 	if topology == nil {
-		return deviceByServer, indexes, options
+		return options
 	}
+	siteModels := make([]*models.Site, 0, len(topology.Sites))
 	for _, site := range topology.Sites {
-		if site.ID != "" {
-			options.sites = append(options.sites, ServerSelectionOption{Value: site.ID, Label: site.LocationPath})
+		if site.ID == "" {
+			continue
 		}
+		siteModels = append(siteModels, &models.Site{ID: site.ID, ParentID: site.ParentID, Name: site.Name})
 	}
+	// 地点包含判断复用领域层的 SiteTree，不另写一套父子遍历；页面选项
+	// 顺序复用 eachSiteTreeNode，让下级地点跟在自己的上级后面。
+	options.siteTree = models.NewSiteTree(siteModels)
 	for _, network := range topology.Networks {
 		networks[network.ID] = network
 		if network.ID != "" {
-			options.networks = append(options.networks, ServerSelectionOption{Value: network.ID, Label: network.Name})
+			options.networks = append(options.networks, ServerListOption{
+				Value: network.ID, Label: network.Name, Note: serverListNetworkNote(network),
+			})
 		}
 	}
-	for _, membership := range topology.Memberships {
-		if network, ok := networks[membership.NetworkID]; ok {
-			indexes.idsByDevice[membership.DeviceID] = append(indexes.idsByDevice[membership.DeviceID], network.ID)
-			indexes.namesByDevice[membership.DeviceID] = append(indexes.namesByDevice[membership.DeviceID], network.Name)
+	options.deviceByServer = serverDeviceIndex(topology)
+	options.networkIndexes = networkIndexesByDevice(topology.Memberships, networks)
+	hasChildren := map[string]bool{}
+	for _, site := range topology.Sites {
+		hasChildren[site.ParentID] = true
+	}
+	eachSiteTreeNode(topology.Sites, func(site TopologySite, depth int) {
+		note := ""
+		if hasChildren[site.ID] {
+			note = "包含全部下级地点"
+		}
+		options.sites = append(options.sites, ServerListOption{
+			Value: site.ID, Label: site.LocationPath, Note: note,
+		})
+	})
+	sort.Slice(options.networks, func(i, j int) bool { return options.networks[i].Label < options.networks[j].Label })
+	return options
+}
+
+func (options serverListTopologyOptions) siteOptions(topology *TopologyData) []ServerListOption {
+	if topology == nil {
+		return nil
+	}
+	out := []ServerListOption{{Value: "", Label: "全部地点", Note: "不按地点限制"}}
+	out = append(out, options.sites...)
+	out = append(out, ServerListOption{
+		Value: serverListUnregisteredSite, Label: "未登记地点",
+		Note: "没有关联机器，或机器尚未选择地点",
+	})
+	return out
+}
+
+func (options serverListTopologyOptions) networkOptions(topology *TopologyData) []ServerListOption {
+	if topology == nil {
+		return nil
+	}
+	out := []ServerListOption{{Value: "", Label: "全部网络", Note: "不按网络限制"}}
+	return append(out, options.networks...)
+}
+
+func serverListSelectedOptionLabel(options []ServerListOption, value string) string {
+	if value == "" && len(options) > 0 {
+		return options[0].Label
+	}
+	for _, option := range options {
+		if option.Value == value {
+			return option.Label
 		}
 	}
+	return value
+}
+
+func serverListFilterPills(filter *ServerListFilterView) []ServerListFilterPill {
+	var pills []ServerListFilterPill
+	if filter.Site != "" {
+		pills = append(pills, ServerListFilterPill{
+			Label: "地点：" + serverListSelectedOptionLabel(filter.Sites, filter.Site),
+			Href:  serverListFilterHref(filter, "site"),
+		})
+	}
+	if filter.Network != "" {
+		pills = append(pills, ServerListFilterPill{
+			Label: "网络：" + serverListSelectedOptionLabel(filter.Networks, filter.Network),
+			Href:  serverListFilterHref(filter, "network"),
+		})
+	}
+	if filter.Query != "" {
+		pills = append(pills, ServerListFilterPill{
+			Label: "搜索：" + filter.Query,
+			Href:  serverListFilterHref(filter, "query"),
+		})
+	}
+	return pills
+}
+
+// serverListFilterHref 返回清掉 omit 后仍会生效的列表网址。omit 为
+// query、site、network 时只清对应一项；omit 为 all 时清掉地点、网络与
+// 搜索，保留不在胶囊里的「只看需要注意」开关。
+func serverListFilterHref(filter *ServerListFilterView, omit string) string {
+	values := url.Values{}
+	if filter.Query != "" && omit != "query" && omit != "all" {
+		values.Set("query", filter.Query)
+	}
+	if filter.Site != "" && omit != "site" && omit != "all" {
+		values.Set("site", filter.Site)
+	}
+	if filter.Network != "" && omit != "network" && omit != "all" {
+		values.Set("network", filter.Network)
+	}
+	if filter.Attention {
+		values.Set("attention", "1")
+	}
+	if len(values) == 0 {
+		return "/ui/servers/"
+	}
+	return "/ui/servers/?" + values.Encode()
+}
+
+func serverDeviceIndex(topology *TopologyData) map[string]TopologyDevice {
+	deviceByServer := map[string]TopologyDevice{}
 	for _, device := range topology.Devices {
 		deviceByServer[device.ID] = device
 		for _, server := range device.Servers {
 			deviceByServer[server.ID] = device
 		}
 	}
-	sort.Slice(options.sites, func(i, j int) bool { return options.sites[i].Label < options.sites[j].Label })
-	sort.Slice(options.networks, func(i, j int) bool { return options.networks[i].Label < options.networks[j].Label })
-	return deviceByServer, indexes, options
+	return deviceByServer
+}
+
+func networkIndexesByDevice(
+	memberships []TopologyMembership, networks map[string]TopologyNetwork,
+) serverListNetworkIndexes {
+	indexes := serverListNetworkIndexes{
+		idsByDevice: map[string][]string{}, namesByDevice: map[string][]string{},
+	}
+	for _, membership := range memberships {
+		if network, ok := networks[membership.NetworkID]; ok {
+			indexes.idsByDevice[membership.DeviceID] = append(indexes.idsByDevice[membership.DeviceID], network.ID)
+			indexes.namesByDevice[membership.DeviceID] = append(indexes.namesByDevice[membership.DeviceID], network.Name)
+		}
+	}
+	return indexes
+}
+
+func serverListNetworkNote(network TopologyNetwork) string {
+	if network.Type != string(models.NetworkPhysical) {
+		return "虚拟局域网 · 横跨多个地点"
+	}
+	networkRange := network.NetworkRange
+	if networkRange == "" {
+		networkRange = "未登记网段"
+	}
+	location := network.LocationPath
+	if location == "" {
+		location = "未登记覆盖地点"
+	}
+	return "物理局域网 · 网段 " + networkRange + " · 覆盖 " + location
+}
+
+func countServerListOptions(cards []ServerCard, filter *ServerListFilterView, siteTree *models.SiteTree) {
+	for index, option := range filter.Sites {
+		candidate := *filter
+		candidate.Site = option.Value
+		filter.Sites[index].Count = countServerCards(cards, &candidate, siteTree)
+	}
+	for index, option := range filter.Networks {
+		candidate := *filter
+		candidate.Network = option.Value
+		filter.Networks[index].Count = countServerCards(cards, &candidate, siteTree)
+	}
+}
+
+func countServerCards(cards []ServerCard, filter *ServerListFilterView, siteTree *models.SiteTree) int {
+	count := 0
+	for _, card := range cards {
+		if serverCardMatches(card, filter, siteTree) {
+			count++
+		}
+	}
+	return count
 }
 
 func (h *handler) serverListAuthorizationRows(
@@ -763,15 +947,21 @@ func serverResourceCounts(secrets []SecretRow, shares []ShareRow) (map[string]in
 	return secretCounts, shareCounts
 }
 
-func serverCardMatches(card ServerCard, filter *ServerListFilterView) bool {
+func serverCardMatches(card ServerCard, filter *ServerListFilterView, siteTree *models.SiteTree) bool {
 	if filter.Attention && len(card.AttentionReasons) == 0 {
 		return false
 	}
 	if filter.Query != "" && !strings.Contains(card.SearchText, strings.ToLower(filter.Query)) {
 		return false
 	}
-	if filter.Site != "" && card.SiteID != filter.Site {
-		return false
+	if filter.Site != "" {
+		if filter.Site == serverListUnregisteredSite {
+			if card.SiteID != "" {
+				return false
+			}
+		} else if siteTree == nil || !siteTree.Covers(filter.Site, card.SiteID) {
+			return false
+		}
 	}
 	if filter.Network != "" && !serverCardContains(card.NetworkIDs, filter.Network) {
 		return false
@@ -835,6 +1025,26 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 	if id == "" || strings.Contains(id, "/") {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
+	}
+	// batch 是服务器列表批量入口的保留路径段；存储生成的服务器条目标识
+	// 符是 11 位 base64url 随机串，不会正好等于这个固定英文单词。
+	if id == "batch" && hasAction {
+		switch action {
+		case "connection-test":
+			if h.cfg.ServerWriter == nil || !h.caps.CanWrite {
+				h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+				return
+			}
+			h.handleServerBatchConnectionTest(w, r)
+			return
+		case "location":
+			if h.cfg.TopologyWriter == nil || !h.caps.CanWrite {
+				h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+				return
+			}
+			h.handleServerBatchLocation(w, r)
+			return
+		}
 	}
 	if !hasAction {
 		h.handleServerDetail(w, r, id)

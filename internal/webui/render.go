@@ -38,6 +38,7 @@ type pageData struct {
 	ServerCards                       []ServerCard
 	ServerListFilter                  *ServerListFilterView
 	ServerBatch                       *ServerBatchView
+	ServerBatchLocation               *ServerBatchLocationView
 	ServerAdd                         *serverAddView
 	ServerWizard                      *serverWizardView
 	ServerAddResult                   *ServerAddResultView

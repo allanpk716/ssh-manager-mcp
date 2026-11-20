@@ -257,7 +257,10 @@ func seed(dir string) error {
 	if err := seedTopology(st); err != nil {
 		return err
 	}
-	return seedConnectionTestTarget(st)
+	if err := seedConnectionTestTarget(st); err != nil {
+		return err
+	}
+	return seedBatchConnectionTargets(st)
 }
 
 // seedSoftwareInventoryViews 给设备优先界面测试种入多地点、物理与虚拟网
@@ -474,6 +477,16 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SERVER_FILTERS")) == "1" {
+		if err := seedServerFilterTopology(st); err != nil {
+			return err
+		}
+	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SERVER_BATCH_LOCATION")) == "1" {
+		if err := seedServerBatchLocationTopology(st); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS")) == "1" {
 		if _, err := st.AddNetwork(models.Network{
 			Name: "家A备用局域网", Type: models.NetworkPhysical, SiteName: "家A",
@@ -575,6 +588,117 @@ func seedTopology(st *store.Store) error {
 	return seedProbeResults(st, workstation.ID)
 }
 
+// seedServerFilterTopology 为服务器列表筛选浏览器用例准备多级地点、未登记
+// 地点与两类网络的成员数据；只在显式设置开关时改变种子库。
+func seedServerFilterTopology(st *store.Store) error {
+	company, err := st.AddSite("公司", "服务器筛选测试总部")
+	if err != nil {
+		return err
+	}
+	factory, err := st.AddSiteWithParent("一厂区", "", company.Name)
+	if err != nil {
+		return err
+	}
+	if _, err := st.AddSiteWithParent("3 号楼", "", factory.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "公司办公局域网", Type: models.NetworkPhysical, SiteName: company.Name,
+		NetworkRange: "10.20.0.0/16",
+	}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetwork(models.Network{Name: "跨地点虚拟局域网", Type: models.NetworkVirtual}); err != nil {
+		return err
+	}
+	devices := []struct {
+		name       string
+		site       string
+		serverName string
+		host       string
+		network    string
+	}{
+		{name: "公司总部机器", site: company.Name, serverName: "company-root", host: "10.20.0.10", network: "公司办公局域网"},
+		{name: "一厂区机器", site: factory.Name, serverName: "factory-web", host: "10.20.1.10", network: "公司办公局域网"},
+		{name: "三号楼机器", site: "公司 / 一厂区 / 3 号楼", serverName: "building-db", host: "10.20.2.10", network: "跨地点虚拟局域网"},
+		{name: "未登记地点机器", site: "", serverName: "missing-site", host: "10.20.3.10", network: "公司办公局域网"},
+	}
+	for _, item := range devices {
+		if _, err := st.AddDeviceAtSite(item.name, "服务器筛选浏览器测试设备", "", item.site); err != nil {
+			return err
+		}
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: item.serverName, Host: item.host, Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, item.name); err != nil {
+			return err
+		}
+		if _, err := st.AddNetworkMembership(item.name, item.network, item.host); err != nil {
+			return err
+		}
+	}
+	if _, err := st.AddDeviceAtSite("家里备用机器", "服务器筛选浏览器测试设备", "", "家A"); err != nil {
+		return err
+	}
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "home-machine", Host: "192.168.1.21", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "家里备用机器"); err != nil {
+		return err
+	}
+	_, err = st.AddServerWithCredentials(&models.Server{
+		Name: "no-device", Host: "203.0.113.20", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil)
+	return err
+}
+
+// seedServerBatchLocationTopology 为服务器列表批量设置地点浏览器用例准备
+// 数据：一台机器上的三个服务器条目、未登记地点的机器与未关联机器的服
+// 务器条目；只在显式设置开关时改变种子库。
+func seedServerBatchLocationTopology(st *store.Store) error {
+	park, err := st.AddSite("园区A", "批量设置地点浏览器测试")
+	if err != nil {
+		return err
+	}
+	if _, err := st.AddSiteWithParent("一号机房", "", park.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddDeviceAtSite("批量机器甲", "批量设置地点浏览器测试设备", "", park.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddDeviceAtSite("批量机器乙", "批量设置地点浏览器测试设备", "", ""); err != nil {
+		return err
+	}
+	devices := []struct {
+		device string
+		name   string
+		host   string
+	}{
+		{device: "批量机器甲", name: "batch-a-web", host: "10.30.0.11"},
+		{device: "批量机器甲", name: "batch-a-db", host: "10.30.0.12"},
+		{device: "批量机器甲", name: "batch-a-extra", host: "10.30.0.13"},
+		{device: "批量机器乙", name: "batch-b-tool", host: "10.30.0.21"},
+	}
+	for _, item := range devices {
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: item.name, Host: item.host, Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, item.device); err != nil {
+			return err
+		}
+	}
+	// 用不生成所属设备的直接插入形态造「未关联机器」条目；其余条目都会
+	// 自动登记设备，覆盖不了这条分支。
+	credentialID, err := st.SetCredential(&models.Credential{
+		Type: models.CredPassword, Secret: []byte("browser-test-password"),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = st.AddServer(&models.Server{
+		Name: "batch-no-device", Host: "10.30.0.99", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	})
+	return err
+}
+
 // seedConnectionTestTarget 为服务器详情的连接测试浏览器用例准备专用条
 // 目。它在两个物理局域网里各登记一个本机回环地址，让端口不通与超时用例
 // 都能覆盖多候选地址；实际端口由测试进程通过环境变量提供。
@@ -623,6 +747,41 @@ func seedConnectionTestTarget(st *store.Store) error {
 		ShellType: models.ShellPOSIX,
 	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, target.Name)
 	return err
+}
+
+// seedBatchConnectionTargets 为批量连接测试浏览器用例准备三台服务器条
+// 目。实际端口由测试进程通过环境变量提供；第一台指向可完成真实登录的
+// SSH 测试服务，后两台指向必然失败的端口，让一次批量测试得到各自不同
+// 的结果。
+func seedBatchConnectionTargets(st *store.Store) error {
+	portsText := strings.TrimSpace(os.Getenv("SSHMGR_E2E_BATCH_CONNECTION_PORTS"))
+	if portsText == "" {
+		return nil
+	}
+	parts := strings.Split(portsText, ",")
+	ports := make([]int, 0, len(parts))
+	for _, part := range parts {
+		port, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			return fmt.Errorf("SSHMGR_E2E_BATCH_CONNECTION_PORTS 不是端口号列表：%w", err)
+		}
+		ports = append(ports, port)
+	}
+	if len(ports) != 3 {
+		return fmt.Errorf("SSHMGR_E2E_BATCH_CONNECTION_PORTS 需要 3 个端口号（1 台可连、2 台不可连），实际 %d 个", len(ports))
+	}
+	if _, err := st.AddDevice("批量连接测试机", "批量连接测试浏览器目标", ""); err != nil {
+		return err
+	}
+	for index, port := range ports {
+		name := fmt.Sprintf("batch-connection-%d", index+1)
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: name, Host: "127.0.0.1", Port: port, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "批量连接测试机"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // seedProbeResults 为浏览器测试写一份本机起点的本地探测结果：NAS 家A局域

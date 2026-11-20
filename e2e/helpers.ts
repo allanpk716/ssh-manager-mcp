@@ -360,6 +360,7 @@ async function startEmptyMachineUI(): Promise<standaloneUI> {
 // startStandaloneUIWithTopology 用带拓扑数据的种子库启动单机 Web UI，供网
 // 络拓扑浏览器测试使用；其它用例的种子数据保持不变。probePort 提供时，种
 // 子库给探测目标登记该端口，用例在本地监听它完成真实触发探测。
+// environment 会同时传给种子进程和 Web UI 进程，供专用种子开关使用。
 export async function startStandaloneUIWithTopology(
   probePort?: number,
   connectionTestPort?: number,
@@ -379,6 +380,7 @@ export async function startStandaloneUIWithTopology(
     env: {
       ...seedVaultEnvironment(runDir),
       ...seedEnv,
+      ...environment,
     },
   });
   if (seed.status !== 0) {
