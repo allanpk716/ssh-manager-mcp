@@ -221,6 +221,14 @@ type SoftwareInventoryFormError struct {
 
 func (e *SoftwareInventoryFormError) Error() string { return e.Message }
 
+func softwareInventoryFormMessage(err error) (string, bool) {
+	var formErr *SoftwareInventoryFormError
+	if errors.As(err, &formErr) {
+		return formErr.Message, true
+	}
+	return "", false
+}
+
 // SoftwareInventorySource 是软件清单页读取与立即采集的唯一入口。单机与
 // 权威端由软件清单领域模块适配；客户端不提供。
 type SoftwareInventorySource interface {
@@ -229,29 +237,6 @@ type SoftwareInventorySource interface {
 	SearchSoftwareInventory(filter SoftwareInventoryFilter) ([]SoftwareInventorySearchDevice, error)
 	ExportSoftwareInventoryCSV(filter SoftwareInventoryFilter) ([]byte, error)
 	SoftwareInventoryTodos() (SoftwareInventoryTodos, error)
-	SoftwareInventoryDeclaration(id string) (*SoftwareInventoryDeclaration, error)
-	SoftwareInventoryDeclarations() ([]SoftwareInventoryDeclaration, error)
-	AddSoftwareInventoryDeclaration(
-		form SoftwareInventoryDeclarationForm,
-		source SoftwareInventoryWriteSource,
-	) (string, error)
-	EditSoftwareInventoryDeclaration(
-		id string,
-		form SoftwareInventoryDeclarationForm,
-		source SoftwareInventoryWriteSource,
-	) error
-	ClaimSoftwareInventoryDeclaration(
-		id, observedStableKey string,
-		source SoftwareInventoryWriteSource,
-	) error
-	DeleteSoftwareInventoryDeclaration(id string, source SoftwareInventoryWriteSource) error
-	SoftwareInventoryDrafts() ([]SoftwareInventoryDraft, error)
-	ConfirmSoftwareInventoryDraft(
-		id string,
-		form *SoftwareInventoryDeclarationForm,
-		source SoftwareInventoryWriteSource,
-	) error
-	RejectSoftwareInventoryDraft(id string, source SoftwareInventoryWriteSource) error
 	SetSoftwareInventoryCollector(
 		form SoftwareInventoryCollectorForm,
 		source SoftwareInventoryWriteSource,

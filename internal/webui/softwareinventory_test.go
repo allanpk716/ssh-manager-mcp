@@ -81,31 +81,6 @@ type stubSoftwareInventorySource struct {
 	collectAllAddress  string
 	collectAllCalled   bool
 	todos              SoftwareInventoryTodos
-	declaration        *SoftwareInventoryDeclaration
-	addedForm          SoftwareInventoryDeclarationForm
-	addAddress         string
-	addCalled          bool
-	addID              string
-	editCalled         bool
-	editID             string
-	editForm           SoftwareInventoryDeclarationForm
-	editAddress        string
-	claimCalled        bool
-	claimID            string
-	claimKey           string
-	claimAddress       string
-	deleteCalled       bool
-	deleteID           string
-	deleteAddress      string
-	drafts             []SoftwareInventoryDraft
-	confirmID          string
-	confirmForm        *SoftwareInventoryDeclarationForm
-	confirmAddress     string
-	confirmCalled      bool
-	rejectID           string
-	rejectAddress      string
-	rejectCalled       bool
-	declarations       []SoftwareInventoryDeclaration
 	collectorForm      SoftwareInventoryCollectorForm
 	collectorErr       error
 	collectorAddr      string
@@ -185,78 +160,6 @@ func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollectionAll(
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryTodos() (SoftwareInventoryTodos, error) {
 	return s.todos, nil
-}
-
-func (s *stubSoftwareInventorySource) SoftwareInventoryDeclaration(id string) (*SoftwareInventoryDeclaration, error) {
-	if s.declaration == nil || s.declaration.ID != id {
-		return nil, &SoftwareInventoryDeclarationNotFoundError{ID: id}
-	}
-	return s.declaration, nil
-}
-
-func (s *stubSoftwareInventorySource) SoftwareInventoryDeclarations() ([]SoftwareInventoryDeclaration, error) {
-	return s.declarations, nil
-}
-
-func (s *stubSoftwareInventorySource) AddSoftwareInventoryDeclaration(
-	form SoftwareInventoryDeclarationForm, source SoftwareInventoryWriteSource,
-) (string, error) {
-	s.addCalled = true
-	s.addedForm = form
-	s.addAddress = source.RemoteAddress
-	return s.addID, nil
-}
-
-func (s *stubSoftwareInventorySource) EditSoftwareInventoryDeclaration(
-	id string, form SoftwareInventoryDeclarationForm, source SoftwareInventoryWriteSource,
-) error {
-	s.editCalled = true
-	s.editID = id
-	s.editForm = form
-	s.editAddress = source.RemoteAddress
-	return nil
-}
-
-func (s *stubSoftwareInventorySource) ClaimSoftwareInventoryDeclaration(
-	id, observedStableKey string, source SoftwareInventoryWriteSource,
-) error {
-	s.claimCalled = true
-	s.claimID = id
-	s.claimKey = observedStableKey
-	s.claimAddress = source.RemoteAddress
-	return nil
-}
-
-func (s *stubSoftwareInventorySource) DeleteSoftwareInventoryDeclaration(
-	id string, source SoftwareInventoryWriteSource,
-) error {
-	s.deleteCalled = true
-	s.deleteID = id
-	s.deleteAddress = source.RemoteAddress
-	return nil
-}
-
-func (s *stubSoftwareInventorySource) SoftwareInventoryDrafts() ([]SoftwareInventoryDraft, error) {
-	return s.drafts, nil
-}
-
-func (s *stubSoftwareInventorySource) ConfirmSoftwareInventoryDraft(
-	id string, form *SoftwareInventoryDeclarationForm, source SoftwareInventoryWriteSource,
-) error {
-	s.confirmCalled = true
-	s.confirmID = id
-	s.confirmForm = form
-	s.confirmAddress = source.RemoteAddress
-	return nil
-}
-
-func (s *stubSoftwareInventorySource) RejectSoftwareInventoryDraft(
-	id string, source SoftwareInventoryWriteSource,
-) error {
-	s.rejectCalled = true
-	s.rejectID = id
-	s.rejectAddress = source.RemoteAddress
-	return nil
 }
 
 func (s *stubSoftwareInventorySource) SetSoftwareInventoryCollector(
@@ -516,8 +419,7 @@ func TestSoftwareInventoryWithdrawsOldReadWritePages(t *testing.T) {
 			t.Fatalf("旧写入地址 %s 应返回 404，实际 %d：\n%s", path, response.StatusCode, body)
 		}
 	}
-	if source.addCalled || source.editCalled || source.claimCalled || source.deleteCalled ||
-		source.confirmCalled || source.rejectCalled || source.collectorCall || source.sudoCalled {
+	if source.collectorCall || source.sudoCalled {
 		t.Fatalf("旧写入地址不应调用来源接口：%+v", source)
 	}
 }
@@ -970,8 +872,6 @@ func TestSoftwareInventoryTemplatesUseMobileCards(t *testing.T) {
 	}
 	for _, name := range []string{
 		"softwareinventory.tmpl", "softwareinventory-device.tmpl",
-		"softwareinventory-search.tmpl", "softwareinventory-declarations.tmpl",
-		"softwareinventory-todos.tmpl",
 	} {
 		body, ok := contents[name]
 		if !ok {
