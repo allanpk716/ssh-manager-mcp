@@ -140,6 +140,228 @@
     });
   }
 
+  // 批量测试连接（#336）：提交选中集合后立即把每张卡片换成进行中状态，
+  // 之后逐秒读取每台任务的状态。卡片完成文案由服务器按 #326 的列表短状
+  // 态规则生成，页面只负责替换显示，不另建第二套状态或文案。
+  function initServerListBatchConnection(root, selected) {
+    var bar = document.querySelector("[data-server-selection-bar]");
+    var button = bar === null ? null : bar.querySelector("[data-server-test-connection-action]");
+    if (button === null) {
+      return { refresh: function () {} };
+    }
+    var path = "/ui/servers/batch/connection-test";
+    var testing = false;
+    var testingCount = 0;
+    var originalLines = {};
+    var summary = null;
+
+    function cardsById() {
+      var cards = {};
+      root.querySelectorAll("[data-server-card]").forEach(function (card) {
+        var box = card.querySelector('input[type="checkbox"]');
+        if (box !== null) {
+          cards[box.value] = card;
+        }
+      });
+      return cards;
+    }
+
+    function makeLine(state, title, detail) {
+      var line = document.createElement("p");
+      line.className = state === "running"
+        ? "server-test-line is-running"
+        : state === "succeeded"
+          ? "server-test-line is-succeeded"
+          : "server-test-line is-failed";
+      line.setAttribute("data-server-connection-status", "");
+      var mark = document.createElement("span");
+      mark.className = state === "running" ? "connection-test-spinner" : "status-dot";
+      mark.setAttribute("aria-hidden", "true");
+      var copy = document.createElement("span");
+      copy.className = "server-test-copy";
+      var heading = document.createElement("strong");
+      heading.className = "server-test-title";
+      heading.textContent = title;
+      copy.appendChild(heading);
+      if (detail) {
+        var detailElement = document.createElement("span");
+        detailElement.className = "server-test-detail";
+        detailElement.textContent = detail;
+        copy.appendChild(detailElement);
+      }
+      line.appendChild(mark);
+      line.appendChild(copy);
+      return line;
+    }
+
+    function replaceLine(card, line) {
+      var old = card.querySelector("[data-server-connection-status]");
+      if (old === null || old.parentNode === null) {
+        return;
+      }
+      old.parentNode.replaceChild(line, old);
+    }
+
+    function showSummary(kind, message) {
+      if (summary === null) {
+        summary = document.createElement("div");
+        summary.setAttribute("data-server-batch-connection-summary", "");
+        summary.setAttribute("role", "status");
+        summary.setAttribute("aria-live", "polite");
+        var paragraph = document.createElement("p");
+        summary.appendChild(paragraph);
+        var list = root.querySelector(".server-card-list");
+        if (list !== null && list.parentNode !== null) {
+          list.parentNode.insertBefore(summary, list);
+        } else {
+          root.appendChild(summary);
+        }
+      }
+      summary.className = "notice " + kind + " server-batch-connection-summary";
+      summary.firstChild.textContent = message;
+    }
+
+    function refresh() {
+      button.disabled = testing || selected.size === 0;
+      button.textContent = testing ? "测试中 " + testingCount + " 台" : "测试连接";
+    }
+
+    function finish(message) {
+      testing = false;
+      testingCount = 0;
+      refresh();
+      if (message !== "") {
+        showSummary("notice-error", message);
+      }
+    }
+
+    function restoreLines(ids, message) {
+      var cards = cardsById();
+      ids.forEach(function (id) {
+        var saved = originalLines[id];
+        if (saved !== undefined && cards[id] !== undefined) {
+          replaceLine(cards[id], saved.cloneNode(true));
+        }
+      });
+      finish(message);
+    }
+
+    function renderStatus(tasks, body) {
+      var cards = cardsById();
+      var serverByTask = {};
+      tasks.forEach(function (task) {
+        serverByTask[task.task_id] = task.server_id;
+      });
+      (body.cards || []).forEach(function (card) {
+        var target = cards[card.server_id || serverByTask[card.task_id]];
+        if (target === undefined) {
+          return;
+        }
+        if (card.state === "running" || card.state === "succeeded" || card.state === "failed") {
+          replaceLine(target, makeLine(card.state, card.title, card.detail));
+        }
+        // 已被保留策略回收的任务交给整页刷新读取持久结果，不在这里猜测。
+      });
+      if (!body.done) {
+        window.setTimeout(function () {
+          pollStatus(tasks);
+        }, 1000);
+        return;
+      }
+      testing = false;
+      testingCount = 0;
+      refresh();
+      if (body.reload) {
+        window.location.reload();
+        return;
+      }
+      showSummary(
+        "notice-info",
+        "连接测试完成：" + body.total + " 台，已连上 " + body.succeeded + " 台，连不上 " + body.failed + " 台。",
+      );
+    }
+
+    function pollStatus(tasks) {
+      var params = new URLSearchParams();
+      tasks.forEach(function (task) {
+        params.append("task", task.task_id);
+      });
+      window
+        .fetch(path + "?" + params.toString(), { headers: { Accept: "application/json" } })
+        .then(function (response) {
+          return response.json().then(function (body) {
+            return { ok: response.ok, body: body };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            throw new Error(result.body.error);
+          }
+          renderStatus(tasks, result.body);
+        })
+        .catch(function () {
+          finish("读取连接测试状态失败，请刷新页面查看最新结果。");
+        });
+    }
+
+    function start() {
+      if (testing || selected.size === 0) {
+        return;
+      }
+      var ids = [];
+      selected.forEach(function (id) {
+        ids.push(id);
+      });
+      var cards = cardsById();
+      var usable = ids.every(function (id) {
+        return cards[id] !== undefined && cards[id].querySelector("[data-server-connection-status]") !== null;
+      });
+      if (!usable) {
+        showSummary("notice-error", "选中的服务器不在当前列表里，请刷新页面后重试。");
+        return;
+      }
+      testing = true;
+      testingCount = ids.length;
+      originalLines = {};
+      refresh();
+      ids.forEach(function (id) {
+        originalLines[id] = cards[id].querySelector("[data-server-connection-status]").cloneNode(true);
+        replaceLine(cards[id], makeLine("running", "正在连接", ""));
+      });
+      var form = new URLSearchParams();
+      ids.forEach(function (id) {
+        form.append("server", id);
+      });
+      window
+        .fetch(path, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+            "X-CSRF-Token": token,
+          },
+          body: form.toString(),
+        })
+        .then(function (response) {
+          return response.json().then(function (body) {
+            return { ok: response.ok, body: body };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            throw new Error(result.body.error);
+          }
+          pollStatus(result.body.tasks || []);
+        })
+        .catch(function (error) {
+          var message = error && error.message ? error.message : "批量连接测试没有启动，请稍后重试。";
+          restoreLines(ids, message);
+        });
+    }
+
+    button.addEventListener("click", start);
+    return { refresh: refresh };
+  }
+
   // 服务器列表多选：进入选择模式后点卡片或复选框都能勾选，全选只取当
   // 前筛选结果。选择模式与选中集合保存在会话存储里，筛选整页刷新和批
   // 量授权往返后都能恢复；「更多 ⋯」里的资源链接把选中标识符以重复的
@@ -165,6 +387,7 @@
     var selectedKey = "sshmgr-servers-selected";
     var selecting = false;
     var selected = new Set();
+    var connectionTests = initServerListBatchConnection(root, selected);
 
     function persist() {
       try {
@@ -213,6 +436,7 @@
       if (moreButton !== null) {
         moreButton.disabled = selected.size === 0;
       }
+      connectionTests.refresh();
       bar.hidden = !selecting;
       root.classList.toggle("server-selecting", selecting);
       document.body.classList.toggle("server-selecting", selecting);

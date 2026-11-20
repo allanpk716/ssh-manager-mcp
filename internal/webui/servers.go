@@ -1026,6 +1026,14 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
+	if id == "batch" && action == "connection-test" {
+		if h.cfg.ServerWriter == nil {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerBatchConnectionTest(w, r)
+		return
+	}
 	if !hasAction {
 		h.handleServerDetail(w, r, id)
 		return

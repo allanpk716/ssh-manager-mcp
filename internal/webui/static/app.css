@@ -4152,3 +4152,18 @@ body.server-selecting main {
   line-height: 18px;
   overflow-wrap: anywhere;
 }
+
+/* 批量测试连接（#336）：进行中沿用连接测试的蓝色与旋转标识，完成态复
+   用 #326 的服务器卡片状态行，不新增第二套状态视觉；汇总提示复用页内
+   通知样式。 */
+.server-test-line.is-running {
+  color: #1d4ed8;
+}
+
+.server-test-line.is-running .connection-test-spinner {
+  margin: 2px 0 0;
+}
+
+.server-batch-connection-summary {
+  margin: 0 0 12px;
+}

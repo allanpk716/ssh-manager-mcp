@@ -50,9 +50,10 @@ func TestServerListBatchSelectionEntrances(t *testing.T) {
 		}
 	}
 
-	// 本票不实现设置地点与测试连接：入口只能是禁用的普通按钮，页面不提
-	// 供任何可触发写入的表单字段，既有写路由仍统一走防跨站请求伪造中间件。
-	for _, attribute := range []string{"data-server-set-location-action", "data-server-test-connection-action"} {
+	// 设置地点仍属于后续票：入口只能是禁用的普通按钮。测试连接已由
+	// #336 提供，必须是可用按钮；页面不提供可触发写入的表单字段，写路由
+	// 仍统一走防跨站请求伪造中间件。
+	for _, attribute := range []string{"data-server-set-location-action"} {
 		button := regexp.MustCompile(`<button[^>]*` + attribute + `[^>]*>`).FindString(page)
 		if button == "" {
 			t.Fatalf("缺少 %s 按钮：\n%s", attribute, page)
@@ -60,6 +61,14 @@ func TestServerListBatchSelectionEntrances(t *testing.T) {
 		if !strings.Contains(button, `type="button"`) || !strings.Contains(button, "disabled") {
 			t.Fatalf("%s 必须是禁用的普通按钮，实际 %q", attribute, button)
 		}
+	}
+	testButton := regexp.MustCompile(`<button[^>]*data-server-test-connection-action[^>]*>`).FindString(page)
+	if testButton == "" {
+		t.Fatalf("缺少测试连接按钮：\n%s", page)
+	}
+	if !strings.Contains(testButton, `type="button"`) || strings.Contains(testButton, "disabled") ||
+		strings.Contains(testButton, "尚未开放") {
+		t.Fatalf("测试连接必须是已启用的普通按钮，实际 %q", testButton)
 	}
 	barStart := strings.Index(page, "data-server-selection-bar")
 	if barStart < 0 {

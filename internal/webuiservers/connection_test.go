@@ -3,6 +3,7 @@ package webuiservers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -116,6 +117,156 @@ func TestConnectionTesterFromOpenerUsesShutdownContext(t *testing.T) {
 	status := waitConnectionTestStatus(t, tester, taskID)
 	if status.State != webui.ServerConnectionTestFailed || status.Message != "连接被取消" {
 		t.Fatalf("已关闭的任务应继承关闭上下文并立即失败：%+v", status)
+	}
+}
+
+// TestConnectionTesterRunsBatchTasksIndependently 用真实 vault、进程内
+// SSH 服务器与两个失败端口覆盖批量公共边界：每台任务启动后立即可读、快
+// 失败端口不被慢握手阻塞、完成结果按服务器条目互不覆盖、每台一条审计且
+// 不泄露登录密码。
+func TestConnectionTesterRunsBatchTasksIndependently(t *testing.T) {
+	manager, st := newAdapterManager(t)
+	address, _, stopServer := testsshd.Start(t, testsshd.Options{
+		Password:  "login-secret",
+		AuthDelay: 600 * time.Millisecond,
+	})
+	defer stopServer()
+	host, okPort := splitConnectionTestAddress(t, address)
+	batch := []struct {
+		name string
+		port int
+	}{
+		{name: "batch-ok", port: okPort},
+		{name: "batch-down-1", port: 1},
+		{name: "batch-down-2", port: 2},
+	}
+	serverIDs := make(map[string]string, len(batch))
+	for _, item := range batch {
+		added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: item.name, Host: host, Port: item.port, User: "deploy",
+			ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("login-secret")}, nil, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		serverIDs[item.name] = added.ServerID
+	}
+
+	tester := ConnectionTesterFromManager(manager)
+	source := webui.ServerWriteSource{RemoteAddress: "192.0.2.9"}
+	taskIDs := make(map[string]string, len(batch))
+	for _, item := range batch {
+		taskID, err := tester.StartServerTest(
+			serverIDs[item.name], false, source, webui.ServerConnectionAnchor{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		taskIDs[item.name] = taskID
+	}
+	for _, item := range batch {
+		status, ok := tester.ServerTestStatus(taskIDs[item.name])
+		if !ok || status.State != webui.ServerConnectionTestRunning ||
+			status.ServerID != serverIDs[item.name] {
+			t.Fatalf("%s 启动后应立即可读自己的进行中状态：%+v ok=%v", item.name, status, ok)
+		}
+	}
+
+	for _, name := range []string{"batch-down-1", "batch-down-2"} {
+		finished := waitConnectionTestStatus(t, tester, taskIDs[name])
+		if finished.State != webui.ServerConnectionTestFailed || finished.Result == nil ||
+			finished.Result.Succeeded || finished.Result.FailureLabel == "" {
+			t.Fatalf("%s 应失败并带白话分类：%+v", name, finished.Result)
+		}
+	}
+	slow, ok := tester.ServerTestStatus(taskIDs["batch-ok"])
+	if !ok || slow.State != webui.ServerConnectionTestRunning {
+		t.Fatalf("慢握手未完成前不应被其他失败任务阻塞：%+v ok=%v", slow, ok)
+	}
+	success := waitConnectionTestStatus(t, tester, taskIDs["batch-ok"])
+	if success.State != webui.ServerConnectionTestSucceeded || success.Result == nil ||
+		!success.Result.Succeeded || success.Result.SuccessAddress != host {
+		t.Fatalf("可连服务器应完成自己的成功结果：%+v", success.Result)
+	}
+
+	for _, item := range batch {
+		persisted, err := st.ServerConnectionTestResult(serverIDs[item.name])
+		if err != nil || persisted == nil {
+			t.Fatalf("%s 应持久保存最近一次结果：%v %+v", item.name, err, persisted)
+		}
+		wantSucceeded := item.name == "batch-ok"
+		if persisted.Succeeded != wantSucceeded {
+			t.Fatalf("%s 的持久结果应为 succeeded=%v：%+v", item.name, wantSucceeded, persisted)
+		}
+		if persisted.SuccessAddress != "" && persisted.SuccessAddress != host ||
+			len(persisted.Attempts) != 1 || persisted.Attempts[0].Address != host ||
+			persisted.Attempts[0].OK != wantSucceeded {
+			t.Fatalf("%s 的候选地址结论应属于本台：%+v", item.name, persisted.Attempts)
+		}
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"server.connect-test"}})
+	if err != nil || len(rows) != len(batch) {
+		t.Fatalf("每台服务器条目应各写一条连接测试审计：%v %+v", err, rows)
+	}
+	for _, row := range rows {
+		if row.Source != store.AuditSourceWebUI || row.SourceIP != "192.0.2.9" {
+			t.Fatalf("批量连接测试审计应沿用 Web UI 来源：%+v", row)
+		}
+		if strings.Contains(row.Command, "login-secret") {
+			t.Fatalf("连接测试审计不得包含登录密码：%s", row.Command)
+		}
+	}
+}
+
+// TestConnectionTesterKeepsRunningTasksBeyondRetention 覆盖保留策略的批量
+// 边界：任务数超过保留数量时，仍在运行的任务不会被清理，页面仍能读到每
+// 台状态；全部结束后只回收最早完成的部分。
+func TestConnectionTesterKeepsRunningTasksBeyondRetention(t *testing.T) {
+	const taskCount = connectionTaskRetention + 8
+	release := make(chan struct{})
+	tester := ConnectionTesterFromOpener(func() (*servermanage.Manager, func(), error) {
+		<-release
+		return nil, func() {}, errors.New("加密库暂不可用")
+	})
+	taskIDs := make([]string, 0, taskCount)
+	for i := 0; i < taskCount; i++ {
+		taskID, err := tester.StartServerTest(
+			fmt.Sprintf("srv-batch-%d", i), false, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	for _, taskID := range taskIDs {
+		status, ok := tester.ServerTestStatus(taskID)
+		if !ok || status.State != webui.ServerConnectionTestRunning {
+			t.Fatalf("运行中的任务不应因保留数量被清理：%+v ok=%v", status, ok)
+		}
+	}
+
+	close(release)
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		missing, running := 0, 0
+		for _, taskID := range taskIDs {
+			status, ok := tester.ServerTestStatus(taskID)
+			if !ok {
+				missing++
+				continue
+			}
+			if status.State == webui.ServerConnectionTestRunning {
+				running++
+			}
+		}
+		if missing >= taskCount-connectionTaskRetention && running == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("全部结束后应只保留 %d 条状态，实际缺失 %d、运行中 %d",
+				connectionTaskRetention, missing, running)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

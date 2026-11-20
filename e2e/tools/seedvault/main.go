@@ -248,7 +248,10 @@ func seed(dir string) error {
 	if err := seedTopology(st); err != nil {
 		return err
 	}
-	return seedConnectionTestTarget(st)
+	if err := seedConnectionTestTarget(st); err != nil {
+		return err
+	}
+	return seedBatchConnectionTargets(st)
 }
 
 // writeBrowserTestCertificate 给权威端浏览器测试生成一张 P-256 椭圆曲线
@@ -525,6 +528,41 @@ func seedConnectionTestTarget(st *store.Store) error {
 		ShellType: models.ShellPOSIX,
 	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, target.Name)
 	return err
+}
+
+// seedBatchConnectionTargets 为批量连接测试浏览器用例准备三台服务器条
+// 目。实际端口由测试进程通过环境变量提供；第一台指向可完成真实登录的
+// SSH 测试服务，后两台指向必然失败的端口，让一次批量测试得到各自不同
+// 的结果。
+func seedBatchConnectionTargets(st *store.Store) error {
+	portsText := strings.TrimSpace(os.Getenv("SSHMGR_E2E_BATCH_CONNECTION_PORTS"))
+	if portsText == "" {
+		return nil
+	}
+	parts := strings.Split(portsText, ",")
+	ports := make([]int, 0, len(parts))
+	for _, part := range parts {
+		port, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil {
+			return fmt.Errorf("SSHMGR_E2E_BATCH_CONNECTION_PORTS 不是端口号列表：%w", err)
+		}
+		ports = append(ports, port)
+	}
+	if len(ports) != 3 {
+		return fmt.Errorf("SSHMGR_E2E_BATCH_CONNECTION_PORTS 需要 3 个端口号（1 台可连、2 台不可连），实际 %d 个", len(ports))
+	}
+	if _, err := st.AddDevice("批量连接测试机", "批量连接测试浏览器目标", ""); err != nil {
+		return err
+	}
+	for index, port := range ports {
+		name := fmt.Sprintf("batch-connection-%d", index+1)
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: name, Host: "127.0.0.1", Port: port, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, "批量连接测试机"); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // seedProbeResults 为浏览器测试写一份本机起点的本地探测结果：NAS 家A局域
