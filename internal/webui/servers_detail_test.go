@@ -579,7 +579,7 @@ func TestServerDetailMoveConfirmationDialog(t *testing.T) {
 		`name="confirm" value="1"`,
 		">我已了解</label>",
 		`data-move-submit disabled`,
-		`href="/ui/servers/srv-fine#server-advanced-actions"`,
+		`href="/ui/servers/srv-fine?advanced=open#server-advanced-actions"`,
 	} {
 		if !strings.Contains(confirmed, want) {
 			t.Fatalf("改挂确认框缺少 %q：\n%s", want, confirmed)

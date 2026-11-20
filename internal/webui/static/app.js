@@ -57,6 +57,63 @@
     });
   }
 
+  // 改挂确认框：勾选「我已了解」后才允许提交；Escape 与遮罩只关闭，
+  // 不发起写入，关闭后焦点回到高级操作里的原入口。
+  function initServerMoveConfirm() {
+    var shell = document.querySelector("[data-server-move-confirm]");
+    if (shell === null) {
+      return;
+    }
+    var dialog = shell.querySelector("[data-server-move-dialog]");
+    var checkbox = shell.querySelector('input[name="confirm"]');
+    var submit = shell.querySelector("[data-move-submit]");
+    if (dialog === null || checkbox === null || submit === null) {
+      return;
+    }
+    function focusableElements() {
+      return Array.prototype.slice.call(
+        dialog.querySelectorAll(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled])'
+        )
+      ).filter(function (element) {
+        return element.offsetParent !== null || element === document.activeElement;
+      });
+    }
+    document.body.classList.add("modal-open");
+    checkbox.addEventListener("change", function () {
+      submit.disabled = !checkbox.checked;
+    });
+    dialog.addEventListener("keydown", function (event) {
+      if (event.key !== "Tab") {
+        return;
+      }
+      var elements = focusableElements();
+      if (elements.length === 0) {
+        return;
+      }
+      var firstElement = elements[0];
+      var lastElement = elements[elements.length - 1];
+      if (event.shiftKey && document.activeElement === firstElement) {
+        event.preventDefault();
+        lastElement.focus();
+      } else if (!event.shiftKey && document.activeElement === lastElement) {
+        event.preventDefault();
+        firstElement.focus();
+      }
+    });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        window.location.assign(shell.getAttribute("data-close-move"));
+      }
+    });
+    window.requestAnimationFrame(function () {
+      var target = shell.querySelector("select");
+      if (target !== null) {
+        target.focus();
+      }
+    });
+  }
+
   // 服务器列表多选：勾选卡片后打开底部批量操作栏。资源链接把选中标识符
   // 带到 #301 的共用服务器勾选页，仍由既有确认流程执行写入。
   function initServerListBatch(root) {
@@ -447,6 +504,17 @@
     if (shell === null) {
       var anchorMatch = /^#server-card-([a-z]+)$/.exec(window.location.hash);
       if (anchorMatch === null) {
+        var advancedOpen =
+          window.location.hash === "#server-advanced-actions" ||
+          window.location.search.indexOf("advanced=open") >= 0;
+        if (advancedOpen) {
+          var moveEntry = document.querySelector("[data-move-entry]");
+          if (moveEntry !== null) {
+            window.requestAnimationFrame(function () {
+              moveEntry.focus();
+            });
+          }
+        }
         return;
       }
       var editButton = document.querySelector(
@@ -514,6 +582,7 @@
   }
 
   initServerDetailDrawer();
+  initServerMoveConfirm();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);

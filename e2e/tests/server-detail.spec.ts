@@ -156,6 +156,59 @@ test("客户端服务器详情只读并提示到权威端修改", async ({ page 
   }
 });
 
+test("手机高级操作改挂需要二次确认并显示结果", async ({ page, isMobile }, testInfo) => {
+  testInfo.skip(!isMobile, "这个用例按 390 视口验证手机流程");
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openDetail(page, ui);
+    const advanced = page.locator("#server-advanced-actions");
+    await expect(advanced).not.toHaveAttribute("open", "");
+    await advanced.locator("summary").click();
+    await expect(advanced).toContainText(
+      "这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。",
+    );
+    await expect(advanced.getByRole("link", { name: "改挂到另一台设备" })).toBeVisible();
+    await expect(advanced.getByRole("link", { name: "删除服务器条目" })).toBeVisible();
+    await expect(
+      page.locator("#server-card-address").getByRole("button", { name: /改挂/ }),
+    ).toHaveCount(0);
+
+    const entry = advanced.getByRole("link", { name: "改挂到另一台设备" });
+    await entry.click();
+    const dialog = page.locator("[data-server-move-dialog]");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText(
+      "改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。",
+    );
+    await dialog.getByLabel("目标设备").selectOption("NAS");
+    const confirm = dialog.getByRole("button", { name: "确认改挂" });
+    await expect(confirm).toBeDisabled();
+
+    await dialog.getByRole("link", { name: "取消" }).click();
+    await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
+    await expect(page.locator("[data-server-move-dialog]")).toHaveCount(0);
+    await expect(entry).toBeFocused();
+
+    await entry.click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByLabel("目标设备").selectOption("NAS");
+    await dialog.getByLabel("我已了解").check();
+    await expect(confirm).toBeEnabled();
+    await confirm.click();
+
+    await expect(
+      page.getByText("已改挂到目标设备 NAS。目标机器上没有可复制的主机密钥指纹。"),
+    ).toBeVisible();
+    await expect(page.locator(".location-value")).toHaveText("未登记地点");
+    const addresses = page.locator("#server-card-address");
+    await expect(addresses).toContainText("192.168.1.30");
+    await expect(addresses).toContainText("100.64.0.30");
+    await expect(page.locator("[data-server-move-dialog]")).toHaveCount(0);
+  } finally {
+    await ui.close();
+  }
+});
+
 const connectionTargetPath = "/ui/servers/connection-target";
 
 async function openConnectionTarget(

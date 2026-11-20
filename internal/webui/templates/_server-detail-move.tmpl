@@ -2,7 +2,7 @@
 {{with .ServerDetailPage.Move}}
 {{$draft := .}}
 {{$detail := $.ServerDetail}}
-{{$closeHref := printf "/ui/servers/%s#server-advanced-actions" $detail.ID}}
+{{$closeHref := printf "/ui/servers/%s?advanced=open#server-advanced-actions" $detail.ID}}
 <div class="confirm-shell server-move-confirm" data-server-move-confirm data-close-move="{{$closeHref}}">
 <a class="confirm-backdrop" href="{{$closeHref}}" aria-label="关闭改挂确认" tabindex="-1"></a>
 <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="server-move-confirm-title" data-server-move-dialog>

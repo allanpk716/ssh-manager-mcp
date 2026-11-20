@@ -129,6 +129,7 @@ type serverDetailPageView struct {
 	Topology      *serverDetailTopologyView
 	Software      *serverDetailSoftwareView
 	Move          *serverDetailMoveDraft
+	AdvancedOpen  bool
 }
 
 // serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标设备与确认状态。
@@ -211,6 +212,8 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		if r.URL.Query().Get("move") == "confirm" {
 			options.move = &serverDetailMoveDraft{}
+		} else if r.URL.Query().Get("advanced") == "open" {
+			options.advancedOpen = true
 		}
 	}
 	h.renderServerDetailPageView(w, r, detail, options)
@@ -236,6 +239,7 @@ type serverDetailRenderOptions struct {
 	edit          *serverEditView
 	accountDrafts map[string]string
 	move          *serverDetailMoveDraft
+	advancedOpen  bool
 }
 
 // renderServerDetailPageView 渲染详情页；drawer 非空时打开对应编辑弹层，
@@ -259,6 +263,7 @@ func (h *handler) renderServerDetailPageView(
 		return
 	}
 	view.Move = options.move
+	view.AdvancedOpen = options.advancedOpen
 	if options.edit != nil && options.edit.Notice != "" && options.notice == "" {
 		options.notice = options.edit.Notice
 	}

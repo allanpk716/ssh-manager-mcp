@@ -266,7 +266,7 @@
 </section>
 
 <section aria-label="高级操作">
-<details class="advanced-card" id="server-advanced-actions"{{if .ServerDetailPage.Move}} open{{end}}>
+<details class="advanced-card" id="server-advanced-actions"{{if or .ServerDetailPage.Move .ServerDetailPage.AdvancedOpen}} open{{end}}>
 <summary>展开高级操作</summary>
 <div class="advanced-card-body">
 <h2>高级操作</h2>
