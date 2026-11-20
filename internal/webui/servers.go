@@ -1030,6 +1030,14 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 		h.handleServerDetail(w, r, id)
 		return
 	}
+	if id == "batch" && action == "location" {
+		if h.cfg.TopologyWriter == nil || !h.caps.CanWrite {
+			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+			return
+		}
+		h.handleServerBatchLocation(w, r)
+		return
+	}
 	switch action {
 	case "edit":
 		if h.cfg.ServerWriter == nil {

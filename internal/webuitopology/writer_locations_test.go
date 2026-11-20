@@ -184,3 +184,54 @@ func TestTopologyWriterEditsDeviceSiteAndMovesServer(t *testing.T) {
 		t.Fatalf("机器地点写入审计应记录 Web UI 来源：%+v", rows)
 	}
 }
+
+// TestTopologyWriterEditsDeviceSitesInOneBatch 校验批量设置地点的适配层：
+// 设备与地点引用交给存储层一次事务写入，每台设备各有一条来源为 Web UI
+// 并带来源地址的现有机器地点修改审计。
+func TestTopologyWriterEditsDeviceSitesInOneBatch(t *testing.T) {
+	st := newWriterTestStore(t)
+	writer := WriterFromStore(st)
+	source := webui.TopologyWriteSource{RemoteAddress: "192.0.2.9"}
+	company, err := st.AddSite("公司", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSiteWithParent("一厂区", "", company.Name); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writer.EditDeviceSites([]string{"工作站", "NAS", "工作站"}, "公司 / 一厂区", source); err != nil {
+		t.Fatalf("批量设置设备地点失败：%v", err)
+	}
+	for _, name := range []string{"工作站", "NAS"} {
+		device, err := st.GetDevice(name)
+		if err != nil || device.SiteName != "一厂区" {
+			t.Fatalf("设备 %s 的地点应为一厂区：%+v %v", name, device, err)
+		}
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{
+		Actions: []string{"device.edit"}, Source: store.AuditSourceWebUI, SourceIP: "192.0.2.9",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("两台设备应各写一条机器地点审计，实际 %d 条：%+v", len(rows), rows)
+	}
+
+	// 空地点引用表示选择「未登记地点」，清空所涉设备的地点。
+	if err := writer.EditDeviceSites([]string{"工作站", "NAS"}, "", source); err != nil {
+		t.Fatalf("清空设备地点失败：%v", err)
+	}
+	for _, name := range []string{"工作站", "NAS"} {
+		device, err := st.GetDevice(name)
+		if err != nil || device.SiteName != "" {
+			t.Fatalf("设备 %s 的地点应已清空：%+v %v", name, device, err)
+		}
+	}
+
+	var missing *webui.TopologyNameNotFoundError
+	if err := writer.EditDeviceSites([]string{"工作站", "不存在的机器"}, "公司", source); !errors.As(err, &missing) {
+		t.Fatalf("设备不存在应按名称不存在错误返回：%v", err)
+	}
+}

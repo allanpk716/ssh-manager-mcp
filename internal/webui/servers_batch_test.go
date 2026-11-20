@@ -26,8 +26,8 @@ func newServerBatchTestHandler(t *testing.T, role Role) (http.Handler, *http.Coo
 }
 
 // TestServerListBatchSelectionEntrances 校验可写角色的多选入口：进入与退
-// 出按钮、全选当前筛选结果、取消、设置地点与测试连接的禁用占位，以及收
-// 进「更多 ⋯」弹层的三项既有批量授权。
+// 出按钮、全选当前筛选结果、取消、测试连接的禁用占位，以及收进「更
+// 多 ⋯」弹层的三项既有批量授权。
 func TestServerListBatchSelectionEntrances(t *testing.T) {
 	handler, cookie := newServerBatchTestHandler(t, RoleStandalone)
 	page := serversGet(t, handler, cookie, "/ui/servers/")
@@ -50,9 +50,10 @@ func TestServerListBatchSelectionEntrances(t *testing.T) {
 		}
 	}
 
-	// 本票不实现设置地点与测试连接：入口只能是禁用的普通按钮，页面不提
-	// 供任何可触发写入的表单字段，既有写路由仍统一走防跨站请求伪造中间件。
-	for _, attribute := range []string{"data-server-set-location-action", "data-server-test-connection-action"} {
+	// #336 未实现批量测试连接：入口只能是禁用的普通按钮。设置地点已由
+	// #335 接入后果确认页，其可提交内容只出现在独立确认页，底部操作条
+	// 仍不直接携带表单。
+	for _, attribute := range []string{"data-server-test-connection-action"} {
 		button := regexp.MustCompile(`<button[^>]*` + attribute + `[^>]*>`).FindString(page)
 		if button == "" {
 			t.Fatalf("缺少 %s 按钮：\n%s", attribute, page)
