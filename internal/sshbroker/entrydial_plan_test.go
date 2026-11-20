@@ -116,3 +116,20 @@ func TestPlanServerDialAddressesFallbackDuplicateKeepsTopologySource(t *testing.
 		t.Fatalf("plan = %+v, want one physical candidate and no fallback-only reason", got)
 	}
 }
+
+// TestPlanServerDialAddressesSkipsEmptyFallback: 其他地址清空后，空字符
+// 串表示「没有兜底候选」，不能变成一个空主机参与连接。
+func TestPlanServerDialAddressesSkipsEmptyFallback(t *testing.T) {
+	target := []*models.NetworkMembership{
+		membershipAt("device-target", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.10", 1),
+	}
+	dialer := []*models.NetworkMembership{
+		membershipAt("device-dialer", "network-home", "家A局域网", models.NetworkPhysical, "192.0.2.2", 2),
+	}
+
+	got := PlanServerDialAddresses(target, dialer, "")
+	if len(got.Candidates) != 1 || got.Candidates[0].Address != "192.0.2.10" ||
+		got.Candidates[0].Source != DialAddressPhysical {
+		t.Fatalf("plan = %+v, want only the physical membership address", got.Candidates)
+	}
+}

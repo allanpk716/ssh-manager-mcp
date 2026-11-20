@@ -130,6 +130,40 @@ func TestEntryVirtualLanAddressesReadsDeviceMemberships(t *testing.T) {
 	}
 }
 
+// TestEntryCandidateAddressesSkipsEmptyFallback：其他地址清空后，锚定转发
+// 的候选校验不应出现 `:端口` 形式的空主机。
+func TestEntryCandidateAddressesSkipsEmptyFallback(t *testing.T) {
+	s := newTestStore(t)
+	if _, err := s.AddSite("家A", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetwork(models.Network{
+		Name: "家A局域网", Type: models.NetworkPhysical, SiteName: "家A",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	result, err := s.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "工作站 SSH", Host: "", Port: 22, User: "u", AuthMethod: models.AuthPassword,
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AddNetworkMembership("工作站", "家A局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := s.EntryCandidateAddresses(serverOf(t, s, result.ServerID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != "192.0.2.10:22" {
+		t.Fatalf("条目候选地址 = %v, want [192.0.2.10:22]", got)
+	}
+}
+
 // TestSaveEntryPinRecordsHandshakeAddressAndAudit：单机与权威端的直接首次
 // 锚定必须把实际握手地址写进锚来源和审计。
 func TestSaveEntryPinRecordsHandshakeAddressAndAudit(t *testing.T) {

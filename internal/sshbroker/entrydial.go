@@ -234,9 +234,11 @@ func PlanServerDialAddresses(targetMemberships, dialerMemberships []*models.Netw
 	plan := PlanCommonNetworkAddresses(targetMemberships, dialerMemberships)
 	prepared := make([]DialAddress, 0, len(plan.Candidates)+1)
 	prepared = append(prepared, plan.Candidates...)
-	prepared = append(prepared, DialAddress{
-		Address: fallbackHost, Source: DialAddressFallback,
-	})
+	if fallbackHost != "" {
+		prepared = append(prepared, DialAddress{
+			Address: fallbackHost, Source: DialAddressFallback,
+		})
+	}
 	// 兜底主机排在共同网络地址之后；与拓扑地址重复时只保留优先级更高
 	// 的那份，与共享规划使用同一条等价地址去重规则。
 	out := make([]DialAddress, 0, len(prepared))
