@@ -199,7 +199,8 @@ func TestTopologyWriterEditsDeviceSiteAndMovesServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("改挂服务器失败：%v", err)
 	}
-	if move.ServerName != "web" || move.ToDevice != "NAS" || move.FromDevice != "web" || move.AnchorNotice != "" {
+	if move.ServerName != "web" || move.ToDevice != "NAS" || move.FromDevice != "web" ||
+		move.AnchorNotice != "" || move.AnchorCopyOutcome != webui.TopologyAnchorCopyNone {
 		t.Fatalf("改挂结果不正确：%+v", move)
 	}
 	movedServers, err := st.ListServersForDevice("NAS")

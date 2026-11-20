@@ -195,6 +195,12 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 		noticeParam = "saved-" + r.URL.Query().Get("saved")
 	}
 	notice := serverDetailNoticeText(noticeParam)
+	if noticeParam == "server-moved" {
+		noticeKind = "success"
+		notice = serverDetailMoveNoticeText(
+			r.URL.Query().Get("moved-device"), r.URL.Query().Get("anchor-copy"),
+		)
+	}
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
 		notice, noticeKind = "已覆盖主机密钥锚。", "success"
@@ -562,6 +568,39 @@ func serverDetailWriteRedirect(w http.ResponseWriter, r *http.Request, id, notic
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
+// serverDetailMoveRedirect 回到详情页高级操作，并携带生成成功提示所需的
+// 目标设备与主机密钥指纹复制结论。
+func serverDetailMoveRedirect(w http.ResponseWriter, r *http.Request, id string, result TopologyServerMoveResult) {
+	outcome := result.AnchorCopyOutcome
+	switch outcome {
+	case TopologyAnchorCopyCopied, TopologyAnchorCopyNone, TopologyAnchorCopyConflict:
+	default:
+		outcome = TopologyAnchorCopyNone
+	}
+	query := url.Values{
+		"notice":       {"server-moved"},
+		"moved-device": {result.ToDevice},
+		"anchor-copy":  {outcome},
+	}
+	http.Redirect(w, r, serverDetailPath(id)+"?"+query.Encode()+"#server-advanced-actions", http.StatusSeeOther)
+}
+
+// serverDetailMoveNoticeText 生成改挂成功后的完整提示。
+func serverDetailMoveNoticeText(device, anchorOutcome string) string {
+	notice := "已改挂到目标设备 " + device + "。"
+	switch anchorOutcome {
+	case TopologyAnchorCopyCopied:
+		return notice + "主机密钥指纹已复制。"
+	case TopologyAnchorCopyConflict:
+		return notice + "同机账号的主机密钥指纹不一致，未复制。"
+	default:
+		if device == "" {
+			return "已改挂到另一台机器。目标机器上没有可复制的主机密钥指纹。"
+		}
+		return notice + "目标机器上没有可复制的主机密钥指纹。"
+	}
+}
+
 // handleServerDetailLocation 处理机器地点保存表单。
 func (h *handler) handleServerDetailLocation(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
@@ -667,8 +706,7 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 		)
 		return
 	}
-	_ = result
-	serverDetailWriteRedirect(w, r, detail.ID, "server-moved", "#server-advanced-actions")
+	serverDetailMoveRedirect(w, r, detail.ID, result)
 }
 
 // renderServerDetailMoveError 带改挂确认状态重新渲染详情页，保留 owner 已

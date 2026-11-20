@@ -248,10 +248,11 @@ func (w openerWriter) MoveServerToDevice(
 			return "", topologyWriteError(err)
 		}
 		result = webui.TopologyServerMoveResult{
-			ServerName:   move.Server.Name,
-			FromDevice:   deviceNameOrEmpty(move.FromDevice),
-			ToDevice:     move.ToDevice.Name,
-			AnchorNotice: anchorCopyNotice(move.AnchorCopy),
+			ServerName:        move.Server.Name,
+			FromDevice:        deviceNameOrEmpty(move.FromDevice),
+			ToDevice:          move.ToDevice.Name,
+			AnchorNotice:      anchorCopyNotice(move.AnchorCopy),
+			AnchorCopyOutcome: anchorCopyOutcome(move.AnchorCopy),
 		}
 		return "", nil
 	})
@@ -276,6 +277,19 @@ func anchorCopyNotice(anchor *store.ServerAnchorCopy) string {
 		return "已复制同机账号 " + anchor.FromServerName + " 的主机密钥锚。"
 	}
 	return ""
+}
+
+func anchorCopyOutcome(anchor *store.ServerAnchorCopy) string {
+	if anchor == nil {
+		return webui.TopologyAnchorCopyNone
+	}
+	if anchor.AnchorConflict {
+		return webui.TopologyAnchorCopyConflict
+	}
+	if anchor.Copied {
+		return webui.TopologyAnchorCopyCopied
+	}
+	return webui.TopologyAnchorCopyNone
 }
 
 func networkTypeLabel(networkType models.NetworkType) string {

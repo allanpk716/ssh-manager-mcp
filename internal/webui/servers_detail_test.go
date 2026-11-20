@@ -424,7 +424,7 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 			t.Fatalf("%s 状态码 = %d，应为 303", testCase.target, response.StatusCode)
 		}
 		location := response.Header.Get("Location")
-		if !strings.HasPrefix(location, "/ui/servers/srv-fine?notice=") {
+		if !strings.HasPrefix(location, "/ui/servers/srv-fine?") {
 			t.Fatalf("%s 跳转地址 = %q，应回到统一详情页", testCase.target, location)
 		}
 	}
@@ -503,6 +503,46 @@ func TestServerDetailMoveFailureKeepsChoice(t *testing.T) {
 	}
 	if len(writer.serverMoves) != 1 {
 		t.Fatalf("适配层失败前应尝试一次写入，实际调用：%v", writer.serverMoves)
+	}
+}
+
+// TestServerDetailMoveSuccessNoticeShowsAnchorResult 校验改挂成功提示包含
+// 目标设备与主机密钥指纹三种复制结果。
+func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
+	writer := &stubTopologyWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	cases := []struct {
+		outcome string
+		notice  string
+		want    string
+	}{
+		{"copied", "已复制同机账号 other-account 的主机密钥锚。", "已改挂到目标设备 NAS。主机密钥指纹已复制。"},
+		{"none", "", "已改挂到目标设备 NAS。目标机器上没有可复制的主机密钥指纹。"},
+		{"conflict", "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。", "已改挂到目标设备 NAS。同机账号的主机密钥指纹不一致，未复制。"},
+	}
+	for _, testCase := range cases {
+		writer.nextMoveResult = TopologyServerMoveResult{
+			ToDevice: "NAS", AnchorNotice: testCase.notice, AnchorCopyOutcome: testCase.outcome,
+		}
+		response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+			"device": {"NAS"}, "confirm": {"1"},
+		})
+		if response.StatusCode != http.StatusSeeOther {
+			t.Fatalf("%s 改挂状态码 = %d，应为 303", testCase.outcome, response.StatusCode)
+		}
+		location := strings.SplitN(response.Header.Get("Location"), "#", 2)[0]
+		body := serversGet(t, handler, cookie, location)
+		if !strings.Contains(body, `<div class="notice notice-success"><p>`+testCase.want+`</p></div>`) {
+			t.Fatalf("指纹结果 %s 的成功提示不正确：\n%s", testCase.outcome, body)
+		}
+	}
+	if len(writer.serverMoves) != 3 {
+		t.Fatalf("三种指纹结果应分别调用一次写入，实际调用：%v", writer.serverMoves)
 	}
 }
 
