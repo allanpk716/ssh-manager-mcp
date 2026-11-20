@@ -326,8 +326,8 @@
     }
   }
 
-  // 服务器详情地址弹层：加行、删行与「其他地址最多一行」都在浏览器内即
-  // 时更新；最终校验与写入仍由服务器处理整份表单。
+  // 服务器详情地址弹层：加行、删行、改选与「每个网络最多一行」都在浏览器
+  // 内即时更新；最终校验与写入仍由服务器处理整份表单。
   function initServerDetailAddressEditor(root) {
     var list = root.querySelector("[data-address-list]");
     var template = list === null ? null : list.querySelector("[data-address-row]");
@@ -373,10 +373,10 @@
 
     function refresh() {
       var selects = list.querySelectorAll("[data-address-network]");
-      var otherSelected = 0;
+      var selectedNetworks = {};
       selects.forEach(function (select) {
-        if (select.value === "other") {
-          otherSelected += 1;
+        if (select.value !== "") {
+          selectedNetworks[select.value] = (selectedNetworks[select.value] || 0) + 1;
         }
       });
       selects.forEach(function (select, index) {
@@ -399,10 +399,13 @@
         if (remove !== null) {
           remove.setAttribute("aria-label", "删除第" + rowNumber + "行地址");
         }
-        var otherOption = select.querySelector('option[value="other"]');
-        if (otherOption !== null) {
-          otherOption.disabled = otherSelected > 0 && select.value !== "other";
-        }
+        select.querySelectorAll("option").forEach(function (option) {
+          if (option.value === "") {
+            return;
+          }
+          var selectedHere = select.value === option.value ? 1 : 0;
+          option.disabled = (selectedNetworks[option.value] || 0) > selectedHere;
+        });
         updateSuggestions(select);
       });
     }
@@ -420,6 +423,12 @@
     if (addButton !== null) {
       addButton.addEventListener("click", function (event) {
         event.preventDefault();
+        var usedNetworks = {};
+        list.querySelectorAll("[data-address-network]").forEach(function (current) {
+          if (current.value !== "") {
+            usedNetworks[current.value] = true;
+          }
+        });
         var row = clone.cloneNode(true);
         var select = row.querySelector("[data-address-network]");
         var input = row.querySelector("[data-address-input]");
@@ -430,7 +439,7 @@
         if (select !== null) {
           var chosen = null;
           select.querySelectorAll("option").forEach(function (option) {
-            if (chosen === null && !option.disabled && option.value !== "other") {
+            if (chosen === null && option.value !== "other" && !usedNetworks[option.value]) {
               chosen = option.value;
             }
           });

@@ -173,6 +173,29 @@ test("服务器详情地址统一列表支持改归网络与删除行", async ({
     await expect(
       drawer.locator('[data-address-row]:has(input[value="192.168.1.20"]) option[value="other"]'),
     ).toBeDisabled();
+
+    // 已被其他行选中的网络不能再次选择；行增删与改选后即时刷新。
+    const physicalRow = drawer.locator('[data-address-row]:has(input[value="192.168.1.20"])');
+    const virtualBRow = drawer.locator('[data-address-row]:has(input[value="100.65.0.20"])');
+    await expect(physicalRow.locator('option[value="虚拟网"]')).toBeDisabled();
+    await expect(physicalRow.locator('option[value="虚拟网B"]')).toBeDisabled();
+    await expect(physicalRow.locator('option[value="家A局域网"]')).toBeEnabled();
+    await drawer.getByRole("button", { name: "加一行地址" }).click();
+    const addedRow = drawer.locator("[data-address-row]").last();
+    await expect(addedRow.locator('[data-address-network]')).toHaveValue("机房局域网");
+    await expect(addedRow.locator('option[value="家A局域网"]')).toBeDisabled();
+    await drawer
+      .locator('[data-address-row]:has(input[value="100.64.0.20"])')
+      .getByRole("button", { name: /删除第\d+行地址/ })
+      .click();
+    await expect(physicalRow.locator('option[value="虚拟网"]')).toBeEnabled();
+    await physicalRow.locator('[data-address-network]').selectOption("虚拟网");
+    await expect(virtualBRow.locator('option[value="家A局域网"]')).toBeEnabled();
+    await physicalRow.locator('[data-address-network]').selectOption("家A局域网");
+    await expect(virtualBRow.locator('option[value="家A局域网"]')).toBeDisabled();
+    await addedRow.getByRole("button", { name: /删除第\d+行地址/ }).click();
+    await expect(drawer.locator('[data-address-row]')).toHaveCount(3);
+
     await otherRow.locator('[data-address-network]').selectOption("机房局域网");
     await drawer.getByRole("button", { name: "保存地址" }).click();
 
@@ -185,9 +208,10 @@ test("服务器详情地址统一列表支持改归网络与删除行", async ({
 
     await page.locator('[data-detail-edit-button="address"]').click();
     const deleteRow = drawer.locator('[data-address-row]:has(input[value="192.0.2.10"])');
-    await deleteRow.getByRole("button", { name: "删除第4行地址" }).click();
+    await deleteRow.getByRole("button", { name: /删除第\d+行地址/ }).click();
     await drawer.getByRole("button", { name: "保存地址" }).click();
     await expect(page.getByText("已保存地址。")).toBeVisible();
+    await expect(page.locator(".detail-subtitle")).toHaveText("owner@192.168.1.20:22");
     await expect(card).not.toContainText("192.0.2.10");
     await expect(card).toContainText("192.168.1.20");
   } finally {
