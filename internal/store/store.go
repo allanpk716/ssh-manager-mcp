@@ -89,6 +89,9 @@ func (s *Store) nowTime() time.Time {
 	return time.Now()
 }
 
+// NowTime 返回存储对象使用的当前时间，让调用方不必读取测试时钟字段。
+func (s *Store) NowTime() time.Time { return s.nowTime() }
+
 // nowUnix is nowTime as unix seconds — the form every pairing time predicate uses.
 func (s *Store) nowUnix() int64 { return s.nowTime().Unix() }
 

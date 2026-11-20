@@ -94,6 +94,24 @@ func TestSoftwareCollectionDailyTimeSettingPersistsChangedAt(t *testing.T) {
 	}
 }
 
+// TestStoreNowTimeUsesPublicClockReader 验证调用方不读取测试时钟字段，而
+// 是通过存储对象的公开方法取得当前时间。
+func TestStoreNowTimeUsesPublicClockReader(t *testing.T) {
+	st := newCollectTestStore(t)
+	fixed := time.Date(2026, 1, 2, 2, 0, 0, 0, time.Local)
+	st.NowFn = func() time.Time { return fixed }
+	if got := st.NowTime(); !got.Equal(fixed) {
+		t.Fatalf("注入时钟时应返回固定时间，得到 %v", got)
+	}
+
+	st.NowFn = nil
+	before := time.Now()
+	got := st.NowTime()
+	if got.Before(before) {
+		t.Fatalf("未注入时钟应使用真实时间：%v 早于 %v", got, before)
+	}
+}
+
 // TestSoftwareImmediateCollectionRequest 验证立即采集请求的登记与清除：登
 // 记后状态带待执行标记并写审计；成功或失败的采集落库都把请求当作已处
 // 理。
