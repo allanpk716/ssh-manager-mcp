@@ -240,10 +240,10 @@
 <summary>展开高级操作</summary>
 <div class="advanced-card-body">
 <h2>高级操作</h2>
-<p>这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。</p>
+<p>这里只放低频且有风险的操作。改挂会改变这个条目关联的机器。</p>
 <div class="advanced-actions">
 {{with .ServerDetailPage.Topology}}{{if and .CanWrite .MoveChoices}}
-<a class="secondary-button button-link" href="/ui/servers/{{$.ServerDetail.ID}}?move=confirm#server-advanced-actions" data-move-entry>改挂到另一台设备</a>
+<a class="secondary-button button-link" href="/ui/servers/{{$.ServerDetail.ID}}?move=confirm#server-advanced-actions" data-move-entry>改挂到另一台机器</a>
 {{end}}{{end}}
 {{if .Caps.CanWrite}}<a class="danger-button button-link" href="/ui/servers/{{.ServerDetail.ID}}/delete">删除服务器条目</a>{{end}}
 </div>

@@ -155,7 +155,7 @@ type serverDetailPageView struct {
 	AdvancedOpen            bool
 }
 
-// serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标设备与确认状态。
+// serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标机器与确认状态。
 type serverDetailMoveDraft struct {
 	Device     string
 	Understood bool
@@ -224,10 +224,11 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 	}
 	notice := serverDetailNoticeText(noticeParam)
 	if noticeParam == "server-moved" {
+		notice = serverDetailMoveNoticeText(detail.DeviceName, r.URL.Query().Get("anchor-copy"))
 		noticeKind = "success"
-		notice = serverDetailMoveNoticeText(
-			r.URL.Query().Get("moved-device"), r.URL.Query().Get("anchor-copy"),
-		)
+		if notice == "" {
+			noticeKind = ""
+		}
 	}
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
@@ -481,9 +482,9 @@ func (h *handler) serverDetailTopologyView(
 	}
 	if detail.Host != "" {
 		view.Addresses = append(view.Addresses, serverDetailAddressRow{
-			NetworkName: "其他（公网或未登记网络）", NetworkValue: "other",
+			NetworkName: "其他（公网或未登记网络）", NetworkValue: ServerAddressNetworkOther,
 			TypeLabel: "其他地址", Address: detail.Host,
-			RangeSuggestions: rangeSuggestions(detail.Host, "other"),
+			RangeSuggestions: rangeSuggestions(detail.Host, ServerAddressNetworkOther),
 		})
 	}
 	for _, network := range data.Networks {
@@ -643,8 +644,8 @@ func serverDetailWriteRedirect(w http.ResponseWriter, r *http.Request, id, notic
 	http.Redirect(w, r, target, http.StatusSeeOther)
 }
 
-// serverDetailMoveRedirect 回到详情页高级操作，并携带生成成功提示所需的
-// 目标设备与主机密钥指纹复制结论。
+// serverDetailMoveRedirect 回到详情页高级操作，只携带主机密钥指纹复制结
+// 论；目标机器名由详情页读取当前存储数据得到，不经过跳转参数。
 func serverDetailMoveRedirect(w http.ResponseWriter, r *http.Request, id string, result TopologyServerMoveResult) {
 	outcome := result.AnchorCopyOutcome
 	switch outcome {
@@ -653,27 +654,33 @@ func serverDetailMoveRedirect(w http.ResponseWriter, r *http.Request, id string,
 		outcome = TopologyAnchorCopyNone
 	}
 	query := url.Values{
-		"notice":       {"server-moved"},
-		"moved-device": {result.ToDevice},
-		"anchor-copy":  {outcome},
+		"notice":      {"server-moved"},
+		"anchor-copy": {outcome},
 	}
 	http.Redirect(w, r, serverDetailPath(id)+"?"+query.Encode()+"#server-advanced-actions", http.StatusSeeOther)
 }
 
-// serverDetailMoveNoticeText 生成改挂成功后的完整提示。
+// serverDetailMoveNoticeText 生成改挂成功后的完整提示。机器名必须来自当前
+// 存储数据；未知指纹结论返回空串，页面不显示成功提示。
 func serverDetailMoveNoticeText(device, anchorOutcome string) string {
-	notice := "已改挂到目标设备 " + device + "。"
+	if device == "" {
+		return ""
+	}
+	notice := "已改挂到目标机器 " + device + "。"
+	suffix := ""
+	validOutcome := false
 	switch anchorOutcome {
 	case TopologyAnchorCopyCopied:
-		return notice + "主机密钥指纹已复制。"
+		suffix, validOutcome = "主机密钥指纹已复制。", true
 	case TopologyAnchorCopyConflict:
-		return notice + "同机账号的主机密钥指纹不一致，未复制。"
-	default:
-		if device == "" {
-			return "已改挂到另一台机器。无可复制的主机密钥指纹。"
-		}
-		return notice + "无可复制的主机密钥指纹。"
+		suffix, validOutcome = "同机账号的主机密钥指纹不一致，未复制。", true
+	case TopologyAnchorCopyNone:
+		suffix, validOutcome = "无可复制的主机密钥指纹。", true
 	}
+	if !validOutcome {
+		return ""
+	}
+	return notice + suffix
 }
 
 // handleServerDetailLocation 处理机器地点保存表单。
@@ -811,7 +818,7 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 }
 
 // renderServerDetailMoveError 带改挂确认状态重新渲染详情页，保留 owner 已
-// 选目标设备与勾选状态。
+// 选目标机器与勾选状态。
 func (h *handler) renderServerDetailMoveError(
 	w http.ResponseWriter, r *http.Request, detail *ServerDetailView,
 	status int, notice, device string, understood bool,

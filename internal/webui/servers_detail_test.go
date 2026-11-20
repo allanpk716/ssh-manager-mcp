@@ -815,7 +815,7 @@ func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
 	}
 	if !strings.Contains(body, `data-server-move-confirm`) ||
 		!strings.Contains(body, `<option value="NAS" selected>`) {
-		t.Fatalf("未勾选确认被拒绝后应保留确认框与目标设备：\n%s", body)
+		t.Fatalf("未勾选确认被拒绝后应保留确认框与目标机器：\n%s", body)
 	}
 	if len(writer.serverMoves) != 0 {
 		t.Fatalf("未勾选确认时不应写入，实际调用：%v", writer.serverMoves)
@@ -823,7 +823,7 @@ func TestServerDetailMoveRequiresUnderstanding(t *testing.T) {
 }
 
 // TestServerDetailMoveFailureKeepsChoice 校验适配层失败时保留确认框、
-// 目标设备与勾选状态，并显示既有中文错误。
+// 目标机器与勾选状态，并显示既有中文错误。
 func TestServerDetailMoveFailureKeepsChoice(t *testing.T) {
 	writer := &stubTopologyWriter{nextPlainError: errors.New("database unavailable")}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -855,11 +855,13 @@ func TestServerDetailMoveFailureKeepsChoice(t *testing.T) {
 }
 
 // TestServerDetailMoveSuccessNoticeShowsAnchorResult 校验改挂成功提示包含
-// 目标设备与主机密钥指纹三种复制结果。
+// 目标机器与主机密钥指纹三种复制结果。
 func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
 	writer := &stubTopologyWriter{}
+	store := newServerDetailTestStore()
+	store.details["srv-fine"].DeviceName = "NAS"
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
-		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		servers: store, writer: &stubServerWriter{},
 		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
 		topologyWriter: writer,
 	})
@@ -869,9 +871,9 @@ func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
 		notice  string
 		want    string
 	}{
-		{"copied", "已复制同机账号 other-account 的主机密钥锚。", "已改挂到目标设备 NAS。主机密钥指纹已复制。"},
-		{"none", "", "已改挂到目标设备 NAS。无可复制的主机密钥指纹。"},
-		{"conflict", "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。", "已改挂到目标设备 NAS。同机账号的主机密钥指纹不一致，未复制。"},
+		{"copied", "已复制同机账号 other-account 的主机密钥锚。", "已改挂到目标机器 NAS。主机密钥指纹已复制。"},
+		{"none", "", "已改挂到目标机器 NAS。无可复制的主机密钥指纹。"},
+		{"conflict", "同机同端口的其他账号主机密钥指纹不一致，未复制主机密钥锚。", "已改挂到目标机器 NAS。同机账号的主机密钥指纹不一致，未复制。"},
 	}
 	for _, testCase := range cases {
 		writer.nextMoveResult = TopologyServerMoveResult{
@@ -894,6 +896,42 @@ func TestServerDetailMoveSuccessNoticeShowsAnchorResult(t *testing.T) {
 	}
 }
 
+// TestServerDetailMoveSuccessNoticeUsesStoredDevice 校验改挂成功提示从当前
+// 服务器条目读取目标机器名，不信任跳转参数；未知指纹结论不显示提示。
+func TestServerDetailMoveSuccessNoticeUsesStoredDevice(t *testing.T) {
+	store := newServerDetailTestStore()
+	store.details["srv-fine"].DeviceName = "NAS"
+	writer := &stubTopologyWriter{nextMoveResult: TopologyServerMoveResult{
+		ToDevice: "伪造的机器名", AnchorCopyOutcome: TopologyAnchorCopyNone,
+	}}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: store, writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: writer,
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/move", url.Values{
+		"device": {"NAS"}, "confirm": {"1"},
+	})
+	if response.StatusCode != http.StatusSeeOther {
+		t.Fatalf("改挂状态码 = %d，应为 303", response.StatusCode)
+	}
+	location := strings.SplitN(response.Header.Get("Location"), "#", 2)[0]
+	if strings.Contains(location, "moved-device") || strings.Contains(location, "伪造的机器名") {
+		t.Fatalf("改挂跳转不应携带机器名参数：%s", location)
+	}
+	body := serversGet(t, handler, cookie, location+"&moved-device="+url.QueryEscape("另一个伪造名"))
+	if !strings.Contains(body, "已改挂到目标机器 NAS。无可复制的主机密钥指纹。") ||
+		strings.Contains(body, "伪造的机器名") {
+		t.Fatalf("成功提示应使用存储里的目标机器名：\n%s", body)
+	}
+
+	unknown := serversGet(t, handler, cookie, "/ui/servers/srv-fine?notice=server-moved&anchor-copy=unknown")
+	if strings.Contains(unknown, "已改挂到") {
+		t.Fatalf("未知指纹结论不应显示改挂成功提示：\n%s", unknown)
+	}
+}
+
 // TestServerDetailMoveConfirmationDialog 校验改挂入口先打开确认框，普通
 // 详情页不再直接渲染写表单。
 func TestServerDetailMoveConfirmationDialog(t *testing.T) {
@@ -905,9 +943,9 @@ func TestServerDetailMoveConfirmationDialog(t *testing.T) {
 
 	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
 	for _, want := range []string{
-		"这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。",
+		"这里只放低频且有风险的操作。改挂会改变这个条目关联的机器。",
 		`href="/ui/servers/srv-fine?move=confirm#server-advanced-actions"`,
-		">改挂到另一台设备</a>",
+		">改挂到另一台机器</a>",
 		`href="/ui/servers/srv-fine/delete"`, ">删除服务器条目</a>",
 	} {
 		if !strings.Contains(body, want) {

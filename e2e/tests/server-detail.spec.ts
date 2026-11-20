@@ -291,22 +291,22 @@ test("手机高级操作改挂需要二次确认并显示结果", async ({ page,
     await expect(advanced).not.toHaveAttribute("open", "");
     await advanced.locator("summary").click();
     await expect(advanced).toContainText(
-      "这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。",
+      "这里只放低频且有风险的操作。改挂会改变这个条目关联的机器。",
     );
-    await expect(advanced.getByRole("link", { name: "改挂到另一台设备" })).toBeVisible();
+    await expect(advanced.getByRole("link", { name: "改挂到另一台机器" })).toBeVisible();
     await expect(advanced.getByRole("link", { name: "删除服务器条目" })).toBeVisible();
     await expect(
       page.locator("#server-card-address").getByRole("button", { name: /改挂/ }),
     ).toHaveCount(0);
 
-    const entry = advanced.getByRole("link", { name: "改挂到另一台设备" });
+    const entry = advanced.getByRole("link", { name: "改挂到另一台机器" });
     await entry.click();
     const dialog = page.locator("[data-server-move-dialog]");
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText(
       "改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。",
     );
-    await dialog.getByLabel("目标设备").selectOption("NAS");
+    await dialog.getByLabel("目标机器").selectOption("NAS");
     const confirm = dialog.getByRole("button", { name: "确认改挂" });
     await expect(confirm).toBeDisabled();
 
@@ -317,13 +317,13 @@ test("手机高级操作改挂需要二次确认并显示结果", async ({ page,
 
     await entry.click();
     await expect(dialog).toBeVisible();
-    await dialog.getByLabel("目标设备").selectOption("NAS");
+    await dialog.getByLabel("目标机器").selectOption("NAS");
     await dialog.getByLabel("我已了解").check();
     await expect(confirm).toBeEnabled();
     await confirm.click();
 
     await expect(
-      page.getByText("已改挂到目标设备 NAS。无可复制的主机密钥指纹。"),
+      page.getByText("已改挂到目标机器 NAS。无可复制的主机密钥指纹。"),
     ).toBeVisible();
     await expect(page.locator(".location-value")).toHaveText("未登记地点");
     const addresses = page.locator("#server-card-address");
