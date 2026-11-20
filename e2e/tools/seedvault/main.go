@@ -317,6 +317,11 @@ func seedTopology(st *store.Store) error {
 			return err
 		}
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SERVER_BATCH_LOCATION")) == "1" {
+		if err := seedServerBatchLocationTopology(st); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS")) == "1" {
 		if _, err := st.AddNetwork(models.Network{
 			Name: "家A备用局域网", Type: models.NetworkPhysical, SiteName: "家A",
@@ -477,6 +482,55 @@ func seedServerFilterTopology(st *store.Store) error {
 	_, err = st.AddServerWithCredentials(&models.Server{
 		Name: "no-device", Host: "203.0.113.20", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
 	}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil)
+	return err
+}
+
+// seedServerBatchLocationTopology 为服务器列表批量设置地点浏览器用例准备
+// 数据：一台机器上的三个服务器条目、未登记地点的机器与未关联机器的服
+// 务器条目；只在显式设置开关时改变种子库。
+func seedServerBatchLocationTopology(st *store.Store) error {
+	park, err := st.AddSite("园区A", "批量设置地点浏览器测试")
+	if err != nil {
+		return err
+	}
+	if _, err := st.AddSiteWithParent("一号机房", "", park.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddDeviceAtSite("批量机器甲", "批量设置地点浏览器测试设备", "", park.Name); err != nil {
+		return err
+	}
+	if _, err := st.AddDeviceAtSite("批量机器乙", "批量设置地点浏览器测试设备", "", ""); err != nil {
+		return err
+	}
+	devices := []struct {
+		device string
+		name   string
+		host   string
+	}{
+		{device: "批量机器甲", name: "batch-a-web", host: "10.30.0.11"},
+		{device: "批量机器甲", name: "batch-a-db", host: "10.30.0.12"},
+		{device: "批量机器甲", name: "batch-a-extra", host: "10.30.0.13"},
+		{device: "批量机器乙", name: "batch-b-tool", host: "10.30.0.21"},
+	}
+	for _, item := range devices {
+		if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: item.name, Host: item.host, Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		}, &models.Credential{Type: models.CredPassword, Secret: []byte("browser-test-password")}, nil, item.device); err != nil {
+			return err
+		}
+	}
+	// 用不生成所属设备的直接插入形态造「未关联机器」条目；其余条目都会
+	// 自动登记设备，覆盖不了这条分支。
+	credentialID, err := st.SetCredential(&models.Credential{
+		Type: models.CredPassword, Secret: []byte("browser-test-password"),
+	})
+	if err != nil {
+		return err
+	}
+	_, err = st.AddServer(&models.Server{
+		Name: "batch-no-device", Host: "10.30.0.99", Port: 22, User: "owner", ShellType: models.ShellPOSIX,
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	})
 	return err
 }
 

@@ -26,8 +26,8 @@ func newServerBatchTestHandler(t *testing.T, role Role) (http.Handler, *http.Coo
 }
 
 // TestServerListBatchSelectionEntrances 校验可写角色的多选入口：进入与退
-// 出按钮、全选当前筛选结果、取消、设置地点与测试连接的禁用占位，以及收
-// 进「更多 ⋯」弹层的三项既有批量授权。
+// 出按钮、全选当前筛选结果、取消、测试连接的禁用占位，以及收进「更
+// 多 ⋯」弹层的三项既有批量授权。
 func TestServerListBatchSelectionEntrances(t *testing.T) {
 	handler, cookie := newServerBatchTestHandler(t, RoleStandalone)
 	page := serversGet(t, handler, cookie, "/ui/servers/")
@@ -50,25 +50,19 @@ func TestServerListBatchSelectionEntrances(t *testing.T) {
 		}
 	}
 
-	// 设置地点仍属于后续票：入口只能是禁用的普通按钮。测试连接已由
-	// #336 提供，必须是可用按钮；页面不提供可触发写入的表单字段，写路由
-	// 仍统一走防跨站请求伪造中间件。
-	for _, attribute := range []string{"data-server-set-location-action"} {
+	// 批量设置地点（#335）与批量测试连接（#336）都已接入：两个入口都
+	// 必须是可用按钮。设置地点的可提交内容只出现在独立确认页，测试连接
+	// 走内部接口；底部操作条仍不直接携带表单，写路由统一走防跨站请求伪
+	// 造中间件。
+	for _, attribute := range []string{"data-server-set-location-action", "data-server-test-connection-action"} {
 		button := regexp.MustCompile(`<button[^>]*` + attribute + `[^>]*>`).FindString(page)
 		if button == "" {
 			t.Fatalf("缺少 %s 按钮：\n%s", attribute, page)
 		}
-		if !strings.Contains(button, `type="button"`) || !strings.Contains(button, "disabled") {
-			t.Fatalf("%s 必须是禁用的普通按钮，实际 %q", attribute, button)
+		if !strings.Contains(button, `type="button"`) || strings.Contains(button, "disabled") ||
+			strings.Contains(button, "尚未开放") {
+			t.Fatalf("%s 必须是已启用的普通按钮，实际 %q", attribute, button)
 		}
-	}
-	testButton := regexp.MustCompile(`<button[^>]*data-server-test-connection-action[^>]*>`).FindString(page)
-	if testButton == "" {
-		t.Fatalf("缺少测试连接按钮：\n%s", page)
-	}
-	if !strings.Contains(testButton, `type="button"`) || strings.Contains(testButton, "disabled") ||
-		strings.Contains(testButton, "尚未开放") {
-		t.Fatalf("测试连接必须是已启用的普通按钮，实际 %q", testButton)
 	}
 	barStart := strings.Index(page, "data-server-selection-bar")
 	if barStart < 0 {

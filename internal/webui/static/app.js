@@ -444,6 +444,7 @@
       if (multiLabel !== null) {
         multiLabel.textContent = selecting ? "退出多选" : "多选";
       }
+      bar.dispatchEvent(new CustomEvent("sshmgr-server-selection-change"));
       persist();
     }
 
@@ -565,6 +566,82 @@
       });
     });
     selecting = restore();
+    refresh();
+  }
+
+  // 服务器列表批量设置地点：底部操作条按钮打开地点树单选弹层；选完地点
+  // 后带着选中服务器条目进入后果确认页，写入仍由确认页表单提交给服务
+  // 器，浏览器端不做任何直接写入。
+  function initServerBatchLocation(root) {
+    var button = document.querySelector("[data-server-set-location-action]");
+    var bar = document.querySelector("[data-server-selection-bar]");
+    var drawer = document.querySelector("[data-server-location-drawer]");
+    if (button === null || bar === null || drawer === null) {
+      return;
+    }
+    var next = drawer.querySelector("[data-server-location-next]");
+
+    function selectedIDs() {
+      return Array.prototype.slice.call(root.querySelectorAll('[data-server-card] input[type="checkbox"]:checked'))
+        .map(function (box) { return box.value; });
+    }
+
+    function chosenSite() {
+      var checked = drawer.querySelector('input[name="batch_site"]:checked');
+      return checked === null ? "" : checked.value;
+    }
+
+    function refresh() {
+      button.disabled = selectedIDs().length === 0;
+      if (next !== null) {
+        next.disabled = chosenSite() === "";
+      }
+    }
+
+    function close() {
+      drawer.hidden = true;
+    }
+
+    button.addEventListener("click", function () {
+      drawer.hidden = false;
+    });
+    drawer.querySelectorAll("[data-close-server-location]").forEach(function (element) {
+      element.addEventListener("click", close);
+    });
+    drawer.querySelectorAll('input[name="batch_site"]').forEach(function (radio) {
+      radio.addEventListener("change", refresh);
+    });
+    if (next !== null) {
+      next.addEventListener("click", function () {
+        var site = chosenSite();
+        var servers = selectedIDs();
+        if (site === "" || servers.length === 0) {
+          return;
+        }
+        var target = new URL("/ui/servers/batch/location", window.location.origin);
+        servers.forEach(function (id) {
+          target.searchParams.append("server", id);
+        });
+        target.searchParams.set("site", site);
+        target.searchParams.set("return_to", window.location.pathname + window.location.search);
+        window.location.href = target.pathname + target.search;
+      });
+    }
+    bar.addEventListener("sshmgr-server-selection-change", refresh);
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        close();
+      }
+    });
+
+    // 从后果确认页返回上一步时，带着 batch_location=1 重新打开弹层，并清
+    // 掉这个参数，刷新后不会再次自动打开。
+    var current = new URL(window.location.href);
+    if (current.searchParams.get("batch_location") === "1") {
+      current.searchParams.delete("batch_location");
+      window.history.replaceState(null, "", current.pathname + (current.search === "" ? "" : current.search));
+      drawer.hidden = false;
+    }
     refresh();
   }
 
@@ -883,6 +960,7 @@
   initRequiredNoteForms();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListFilters);
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
+  document.querySelectorAll("[data-server-list-page]").forEach(initServerBatchLocation);
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);
 })();

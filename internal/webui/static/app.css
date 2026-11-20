@@ -4167,3 +4167,59 @@ body.server-selecting main {
 .server-batch-connection-summary {
   margin: 0 0 12px;
 }
+
+/* 批量设置地点（#335）：地点弹层复用地点树单选样式；后果确认页用卡片
+   与分组清单呈现会一起变化的机器和无法设置的条目。 */
+.batch-location-summary .batch-location-main {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.batch-location-devices,
+.batch-location-unassociated {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.batch-location-device {
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.batch-location-device > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.batch-location-device small {
+  color: var(--color-muted);
+}
+
+.batch-location-device p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.batch-location-unassociated li {
+  padding-left: 18px;
+  position: relative;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.batch-location-unassociated li::before {
+  content: "!";
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: #b45309;
+  font-weight: 700;
+}

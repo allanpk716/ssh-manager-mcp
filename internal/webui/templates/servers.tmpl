@@ -127,7 +127,7 @@
 </div>
 </div>
 <div class="server-batch-actions">
-<button type="button" data-server-set-location-action disabled title="批量设置地点流程尚未开放">设置地点</button>
+<button type="button" data-server-set-location-action>设置地点</button>
 <button type="button" data-server-test-connection-action>测试连接</button>
 <button type="button" data-server-more-button disabled>更多 ⋯</button>
 </div>
@@ -177,5 +177,23 @@
 {{end}}
 </section>
 </div>
+{{/* 未登记地点的保留值与服务器列表筛选保持一致：__unregistered__。 */}}
+{{if .ServerListFilter.HasTopology}}
+<div class="drawer-shell" data-server-location-drawer hidden>
+<button class="drawer-backdrop" type="button" data-close-server-location aria-label="关闭设置地点"></button>
+<section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-batch-location-title">
+<div class="drawer-handle" aria-hidden="true"></div>
+<h2 id="server-batch-location-title">设置地点</h2>
+<p class="section-note">地点属于整台机器。同一台机器上的多个服务器条目会一起使用这里的地点。</p>
+<div class="location-tree" role="radiogroup" aria-label="选择目标地点">
+{{range .ServerListFilter.Sites}}{{if and .Value (ne .Value "__unregistered__")}}<label class="tree-option"><input type="radio" name="batch_site" value="{{.Label}}"><span>{{.Label}}</span></label>{{end}}{{end}}
+<label class="tree-option"><input type="radio" name="batch_site" value="__unregistered__"><span>未登记地点</span></label>
+</div>
+<div class="form-actions">
+<button class="primary-button" type="button" data-server-location-next disabled>查看后果</button>
+</div>
+</section>
+</div>
+{{end}}
 {{end}}
 {{end}}

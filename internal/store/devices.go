@@ -171,12 +171,24 @@ func (s *Store) EditDeviceWithSource(name string, changes DeviceChanges, source 
 	if s.readOnly {
 		return nil, ErrReadOnly
 	}
-	name = strings.TrimSpace(name)
 	tx, err := s.db.Begin()
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	device, err := s.editDeviceTx(tx, name, changes, source)
+	if err != nil {
+		return nil, err
+	}
+	return device, tx.Commit()
+}
+
+// editDeviceTx 在调用方事务里修改一台设备；数据行与审计行随外层事务提
+// 交，供单台编辑与批量设置地点共用同一份地点解析与审计语义。
+func (s *Store) editDeviceTx(
+	tx *sql.Tx, name string, changes DeviceChanges, source WriteSource,
+) (*models.Device, error) {
+	name = strings.TrimSpace(name)
 	device, err := deviceByNameTx(tx, name)
 	if err != nil {
 		return nil, err
@@ -241,7 +253,7 @@ func (s *Store) EditDeviceWithSource(name string, changes DeviceChanges, source 
 	if err := writeTopologyAuditSourceTx(tx, s.nowTime(), "device.edit", topologyEditSummary(name, editChanges), source); err != nil {
 		return nil, err
 	}
-	return device, tx.Commit()
+	return device, nil
 }
 
 // GetDevice 按名字返回设备，供详情命令使用。

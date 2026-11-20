@@ -1,0 +1,53 @@
+{{define "content"}}
+<section class="server-batch-location-page">
+<div class="title-row">
+<h1>确认批量设置地点</h1>
+</div>
+{{$view := .ServerBatchLocation}}
+{{if $view.Error}}
+<div class="notice notice-error" role="alert">
+<p>{{$view.Error}}</p>
+</div>
+<div class="form-actions">
+<a class="secondary-link" href="{{$view.BackHref}}">上一步</a>
+<a class="button-link" href="{{$view.ReturnTo}}">取消</a>
+</div>
+{{else}}
+<section class="shared-card batch-location-summary">
+<p class="batch-location-main">将把 {{$view.AffectedCount}} 台服务器所在的机器地点设为 {{$view.Target}}。</p>
+<p class="section-note">地点属于整台机器；确认后按设备去重，在一次事务中修改全部所涉设备的地点。</p>
+</section>
+<section class="shared-card" aria-label="会一起变化的机器">
+<div class="card-heading"><h2>会一起变化的机器</h2></div>
+<ul class="batch-location-devices">
+{{range $view.Devices}}
+<li class="batch-location-device">
+<div><strong>{{.Name}}</strong><small>当前地点：{{.CurrentLocation}}</small></div>
+<p>同一台机器上的其他服务器条目也会一起变化：{{if .OtherServersText}}{{.OtherServersText}}{{else}}无{{end}}</p>
+</li>
+{{end}}
+</ul>
+</section>
+{{if $view.Unassociated}}
+<section class="shared-card" aria-label="无法设置的服务器条目">
+<div class="card-heading"><h2>无法设置（未关联机器）</h2></div>
+<p class="section-note">以下选中的服务器条目没有关联机器，不会参与这次写入，也不阻塞其余条目提交。</p>
+<ul class="batch-location-unassociated">
+{{range $view.Unassociated}}<li>{{.Name}}</li>{{end}}
+</ul>
+</section>
+{{end}}
+<form class="batch-location-form" method="post" action="/ui/servers/batch/location">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+{{range $view.Servers}}<input type="hidden" name="server" value="{{.}}">{{end}}
+<input type="hidden" name="site" value="{{$view.SiteValue}}">
+<input type="hidden" name="return_to" value="{{$view.ReturnTo}}">
+<div class="form-actions">
+<a class="secondary-link" href="{{$view.BackHref}}">上一步</a>
+<a class="button-link" href="{{$view.ReturnTo}}">取消</a>
+<button class="primary-button" type="submit">确认修改</button>
+</div>
+</form>
+{{end}}
+</section>
+{{end}}
