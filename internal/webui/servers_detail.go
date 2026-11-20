@@ -669,56 +669,6 @@ func (h *handler) renderServerDetailAddressError(
 	})
 }
 
-// handleServerDetailAddressWrite 处理地址的新增、编辑与移除。
-func (h *handler) handleServerDetailAddressWrite(w http.ResponseWriter, r *http.Request, id, action string) {
-	if r.Method != http.MethodPost {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "保存地址只接受 POST 请求。")
-		return
-	}
-	detail := h.serverDetailForWrite(w, r, id)
-	if detail == nil {
-		return
-	}
-	if !detail.HasDevice || detail.DeviceName == "" {
-		h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "这台服务器条目还没有关联机器，请先改挂到机器或到新增流程补网络位置。")
-		return
-	}
-	device := detail.DeviceName
-	network := strings.TrimSpace(r.PostFormValue("network"))
-	address := strings.TrimSpace(r.PostFormValue("address"))
-	source := TopologyWriteSource{RemoteAddress: remoteIP(r)}
-	var err error
-	switch action {
-	case "add":
-		if network == "" || address == "" {
-			h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择网络并填写地址。")
-			return
-		}
-		_, err = h.cfg.TopologyWriter.AddNetworkMembership(device, network, address, source)
-	case "edit":
-		if network == "" || address == "" {
-			h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择网络并填写地址。")
-			return
-		}
-		_, err = h.cfg.TopologyWriter.EditNetworkMembership(device, network, address, source)
-	default:
-		if network == "" {
-			h.renderServerDetailWriteError(w, r, detail, http.StatusBadRequest, "请选择要移除的网络。")
-			return
-		}
-		_, err = h.cfg.TopologyWriter.RemoveNetworkMembership(device, network, source)
-	}
-	if err != nil {
-		h.renderServerDetailWriteError(w, r, detail, serverDetailWriteStatus(err), serverDetailWriteMessage(err))
-		return
-	}
-	notice := "address-saved"
-	if action == "remove" {
-		notice = "address-removed"
-	}
-	serverDetailWriteRedirect(w, r, detail.ID, notice, "#server-card-address")
-}
-
 // handleServerDetailMove 处理改挂到另一台机器表单，等价于命令行
 // devices move-server。
 func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request, id string) {

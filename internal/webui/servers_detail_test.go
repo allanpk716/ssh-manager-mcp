@@ -529,9 +529,9 @@ func TestServerDetailAddressClientReadOnly(t *testing.T) {
 	}
 }
 
-// TestServerDetailAddressLocationAndMoveWrites 校验地点、地址与改挂写操作
-// 都走拓扑写来源并回到统一详情页对应卡片。
-func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
+// TestServerDetailLocationAndMoveWrites 校验地点与改挂写操作都走拓扑写来
+// 源并回到统一详情页对应卡片；旧逐行地址入口不再注册。
+func TestServerDetailLocationAndMoveWrites(t *testing.T) {
 	writer := &stubTopologyWriter{}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
 		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
@@ -548,21 +548,6 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 			"/ui/servers/srv-fine/location",
 			url.Values{"site": {"机房"}},
 			"site-edit",
-		},
-		{
-			"/ui/servers/srv-fine/address/add",
-			url.Values{"network": {"机房网"}, "address": {"10.0.0.9"}},
-			"address-add",
-		},
-		{
-			"/ui/servers/srv-fine/address/edit",
-			url.Values{"network": {"办公网"}, "address": {"192.0.2.11"}},
-			"address-edit",
-		},
-		{
-			"/ui/servers/srv-fine/address/remove",
-			url.Values{"network": {"虚拟网"}},
-			"address-remove",
 		},
 		{
 			"/ui/servers/srv-fine/move",
@@ -583,17 +568,21 @@ func TestServerDetailAddressLocationAndMoveWrites(t *testing.T) {
 	if len(writer.siteEdits) != 1 || writer.siteEdits[0] != [2]string{"工作站", "机房"} {
 		t.Fatalf("机器地点写入 = %v，应为 工作站 -> 机房", writer.siteEdits)
 	}
-	if len(writer.addCalls) != 1 || writer.addCalls[0] != [3]string{"工作站", "机房网", "10.0.0.9"} {
-		t.Fatalf("地址新增写入 = %v", writer.addCalls)
-	}
-	if len(writer.editCalls) != 1 || writer.editCalls[0] != [3]string{"工作站", "办公网", "192.0.2.11"} {
-		t.Fatalf("地址编辑写入 = %v", writer.editCalls)
-	}
-	if len(writer.removeCalls) != 1 || writer.removeCalls[0] != [2]string{"工作站", "虚拟网"} {
-		t.Fatalf("地址移除写入 = %v", writer.removeCalls)
+	if len(writer.addCalls) != 0 || len(writer.editCalls) != 0 || len(writer.removeCalls) != 0 {
+		t.Fatalf("不应再使用逐行地址写入：%v %v %v", writer.addCalls, writer.editCalls, writer.removeCalls)
 	}
 	if len(writer.serverMoves) != 1 || writer.serverMoves[0] != [2]string{"srv-fine", "NAS"} {
 		t.Fatalf("改挂写入 = %v", writer.serverMoves)
+	}
+	for _, target := range []string{
+		"/ui/servers/srv-fine/address/add",
+		"/ui/servers/srv-fine/address/edit",
+		"/ui/servers/srv-fine/address/remove",
+	} {
+		response := serversPost(t, handler, cookie, target, url.Values{"network": {"办公网"}})
+		if response.StatusCode != http.StatusNotFound {
+			t.Fatalf("旧地址入口 %s 状态码 = %d，应为 404", target, response.StatusCode)
+		}
 	}
 }
 

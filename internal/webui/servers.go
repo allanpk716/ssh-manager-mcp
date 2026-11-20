@@ -899,12 +899,6 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleServerDetailAddressList(w, r, id)
-	case "address/add", "address/edit", "address/remove":
-		if h.cfg.TopologyWriter == nil {
-			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
-			return
-		}
-		h.handleServerDetailAddressWrite(w, r, id, strings.TrimPrefix(action, "address/"))
 	case "move":
 		if h.cfg.TopologyWriter == nil {
 			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
