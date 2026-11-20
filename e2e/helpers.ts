@@ -381,8 +381,8 @@ export async function startStandaloneUIWithTopology(
     env: {
       ...seedVaultEnvironment(runDir),
       ...seedEnv,
-      ...seedEnvironment,
       ...environment,
+      ...seedEnvironment,
     },
   });
   if (seed.status !== 0) {
