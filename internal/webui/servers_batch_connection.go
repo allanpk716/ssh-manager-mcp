@@ -3,8 +3,17 @@ package webui
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
+
+// serverBatchConnectionTaskQuery 保存一个连接测试任务与其服务器条目的对应
+// 关系，供任务被回收后读取持久结果。
+type serverBatchConnectionTaskQuery struct {
+	TaskID   string
+	ServerID string
+}
 
 // handleServerBatchConnectionTest 是服务器列表多选后的批量连接测试接口。
 // POST 为每台选中的服务器条目启动一个既有后台任务并立即返回任务标识；
@@ -32,7 +41,7 @@ func (h *handler) handleServerBatchConnectionTestStart(w http.ResponseWriter, r 
 		h.writeServerBatchConnectionError(w, http.StatusBadRequest, "批量测试请求无法读取，请刷新页面后重试。")
 		return
 	}
-	ids := uniqueServerBatchConnectionValues(r.PostForm["server"])
+	ids := dedupeServerBatchSelection(r.PostForm["server"])
 	if len(ids) == 0 {
 		h.writeServerBatchConnectionError(w, http.StatusBadRequest, "请先选择要测试的服务器。")
 		return
@@ -53,9 +62,7 @@ func (h *handler) handleServerBatchConnectionTestStart(w http.ResponseWriter, r 
 			return
 		}
 	}
-
-	source := ServerWriteSource{RemoteAddress: remoteIP(r)}
-	start := ServerConnectionTestBatchStart{Tasks: make([]ServerConnectionTestBatchTask, 0, len(ids))}
+	details := make([]*ServerDetailView, 0, len(ids))
 	for _, id := range ids {
 		detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), id)
 		if err != nil {
@@ -67,13 +74,21 @@ func (h *handler) handleServerBatchConnectionTestStart(w http.ResponseWriter, r 
 			h.writeServerBatchConnectionError(w, http.StatusBadRequest, "选中的服务器不存在，请刷新列表后重试。")
 			return
 		}
+		details = append(details, detail)
+	}
+
+	source := ServerWriteSource{RemoteAddress: remoteIP(r)}
+	start := ServerConnectionTestBatchStart{Tasks: make([]ServerConnectionTestBatchTask, 0, len(ids))}
+	for _, detail := range details {
 		taskID, err := h.cfg.ServerConnectionTester.StartServerTest(
 			detail.ID, strings.TrimSpace(detail.Shell) == "", source, ServerConnectionAnchor{},
 		)
 		if err != nil || taskID == "" {
 			h.logError(r, "批量连接测试启动", err)
-			h.writeServerBatchConnectionError(w, http.StatusInternalServerError, "连接测试未启动，请稍后重试。")
-			return
+			start.Tasks = append(start.Tasks, ServerConnectionTestBatchTask{
+				ServerID: detail.ID, Error: "未能启动连接测试，请稍后重试。",
+			})
+			continue
 		}
 		start.Tasks = append(start.Tasks, ServerConnectionTestBatchTask{ServerID: detail.ID, TaskID: taskID})
 	}
@@ -81,32 +96,29 @@ func (h *handler) handleServerBatchConnectionTestStart(w http.ResponseWriter, r 
 }
 
 // handleServerBatchConnectionTestStatus 聚合每台任务的短状态；任务被保留
-// 策略回收时要求页面整页读取持久结果，而不是猜测结论。
+// 策略回收时，按随任务传入的服务器条目读取最近一次持久结果。
 func (h *handler) handleServerBatchConnectionTestStatus(w http.ResponseWriter, r *http.Request) {
 	if h.cfg.ServerConnectionTester == nil {
 		h.writeServerBatchConnectionError(w, http.StatusBadRequest, "当前部署没有提供连接测试来源。")
 		return
 	}
-	taskIDs := uniqueServerBatchConnectionValues(r.URL.Query()["task"])
-	if len(taskIDs) == 0 {
+	queries := serverBatchConnectionTaskQueries(r.URL.Query())
+	if len(queries) == 0 {
 		h.writeServerBatchConnectionError(w, http.StatusBadRequest, "缺少连接测试任务。")
 		return
 	}
 	status := ServerConnectionTestBatchStatus{
-		Total: len(taskIDs), Cards: make([]ServerConnectionTestBatchCard, 0, len(taskIDs)),
+		Total: len(queries), Cards: make([]ServerConnectionTestBatchCard, 0, len(queries)),
 	}
 	now := h.cfg.now()
-	for _, taskID := range taskIDs {
-		task, ok := h.cfg.ServerConnectionTester.ServerTestStatus(taskID)
+	for _, item := range queries {
+		var card ServerConnectionTestBatchCard
+		task, ok := h.cfg.ServerConnectionTester.ServerTestStatus(item.TaskID)
 		if !ok || task == nil {
-			status.Cards = append(status.Cards, ServerConnectionTestBatchCard{
-				TaskID: taskID, State: ServerConnectionTestMissing,
-			})
-			status.Missing++
-			status.Reload = true
-			continue
+			card = h.persistedServerBatchConnectionCard(item.TaskID, item.ServerID, now, r)
+		} else {
+			card = NewServerConnectionTestBatchCard(task, now)
 		}
-		card := NewServerConnectionTestBatchCard(task, now)
 		status.Cards = append(status.Cards, card)
 		switch card.State {
 		case ServerConnectionTestRunning:
@@ -115,32 +127,52 @@ func (h *handler) handleServerBatchConnectionTestStatus(w http.ResponseWriter, r
 			status.Succeeded++
 		case ServerConnectionTestFailed:
 			status.Failed++
-		default:
-			status.Missing++
-			status.Reload = true
 		}
 	}
 	status.Done = status.Running == 0
 	h.writeServerBatchConnectionJSON(w, http.StatusOK, status)
 }
 
-// uniqueServerBatchConnectionValues 去掉空白项并按首次出现顺序去重，批量
-// 启动与轮询共用同一规则。
-func uniqueServerBatchConnectionValues(values []string) []string {
-	seen := make(map[string]struct{}, len(values))
-	var out []string
-	for _, value := range values {
-		item := strings.TrimSpace(value)
-		if item == "" {
-			continue
-		}
-		if _, ok := seen[item]; ok {
-			continue
-		}
-		seen[item] = struct{}{}
-		out = append(out, item)
+func serverBatchConnectionTaskQueries(values url.Values) []serverBatchConnectionTaskQuery {
+	taskValues := values["task"]
+	serverValues := values["server"]
+	if len(taskValues) == 0 || len(taskValues) != len(serverValues) {
+		return nil
 	}
-	return out
+	queries := make([]serverBatchConnectionTaskQuery, 0, len(taskValues))
+	for index, taskValue := range taskValues {
+		taskID := strings.TrimSpace(taskValue)
+		serverID := strings.TrimSpace(serverValues[index])
+		if taskID == "" || serverID == "" {
+			return nil
+		}
+		queries = append(queries, serverBatchConnectionTaskQuery{TaskID: taskID, ServerID: serverID})
+	}
+	return queries
+}
+
+// persistedServerBatchConnectionCard 把已被回收的任务换回服务器条目最近一
+// 次持久结果；从未测试时沿用列表卡片的既有短状态。
+func (h *handler) persistedServerBatchConnectionCard(
+	taskID, serverID string, now time.Time, r *http.Request,
+) ServerConnectionTestBatchCard {
+	detail, err := h.cfg.Servers.ServerDetail(h.requestClientInstance(r), serverID)
+	if err != nil {
+		h.logError(r, "批量连接测试读取最近结果", err)
+		return ServerConnectionTestBatchCard{
+			ServerID: serverID, TaskID: taskID, State: ServerConnectionTestFailed,
+			Title: "读取最近连接测试结果失败",
+		}
+	}
+	if detail == nil || detail.ConnectionTest == nil {
+		return ServerConnectionTestBatchCard{
+			ServerID: serverID, TaskID: taskID, State: ServerConnectionTestFailed,
+			Title: "从未测试", Untested: true,
+		}
+	}
+	return NewServerConnectionTestBatchCard(&ServerConnectionTestStatus{
+		ID: taskID, ServerID: serverID, Result: detail.ConnectionTest,
+	}, now)
 }
 
 func (h *handler) writeServerBatchConnectionJSON(

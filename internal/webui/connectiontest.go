@@ -18,9 +18,6 @@ const (
 	ServerConnectionTestSucceeded ServerConnectionTestState = "succeeded"
 	// ServerConnectionTestFailed 表示测试未完成或失败，条目保持未验证。
 	ServerConnectionTestFailed ServerConnectionTestState = "failed"
-	// ServerConnectionTestMissing 只用于批量轮询：任务已被保留策略回收，
-	// 页面需要回到列表读取持久结果；它不是新的连接测试结论。
-	ServerConnectionTestMissing ServerConnectionTestState = "missing"
 )
 
 // ServerConnectionTestStatus 是一次自动连接测试的页面数据。错误与说明必须
@@ -205,22 +202,28 @@ type ServerConnectionTester interface {
 type ServerConnectionTestBatchTask struct {
 	ServerID string `json:"server_id"`
 	TaskID   string `json:"task_id"`
+	// Error 为空表示任务已启动；不为空时是这台服务器条目未能启动连接测
+	// 试的白话说明。
+	Error string `json:"error,omitempty"`
 }
 
-// ServerConnectionTestBatchStart 是批量启动接口的返回值；只携带任务标识，
-// 不等待任何 SSH 连接完成。
+// ServerConnectionTestBatchStart 是批量启动接口的返回值；只携带服务器条
+// 目到任务的映射与启动失败说明，不等待任何 SSH 连接完成。
 type ServerConnectionTestBatchStart struct {
 	Tasks []ServerConnectionTestBatchTask `json:"tasks"`
 }
 
 // ServerConnectionTestBatchCard 是批量轮询里一台服务器条目的卡片短状态。
-// 文案由 #326 的列表短状态规则生成，页面只负责替换显示。
+// 文案由服务器列表卡片既有的短状态规则生成，页面只负责替换显示。
 type ServerConnectionTestBatchCard struct {
 	ServerID string                    `json:"server_id"`
 	TaskID   string                    `json:"task_id"`
 	State    ServerConnectionTestState `json:"state"`
 	Title    string                    `json:"title"`
 	Detail   string                    `json:"detail,omitempty"`
+	// Untested 表示这不是一次失败测试，而是服务器条目从未测试；状态仍按
+	// 已完成归档，页面沿用列表卡片的「从未测试」短状态。
+	Untested bool `json:"untested,omitempty"`
 }
 
 // ServerConnectionTestBatchStatus 是批量轮询接口的返回值：逐卡状态加汇总
@@ -232,18 +235,17 @@ type ServerConnectionTestBatchStatus struct {
 	Running   int                             `json:"running"`
 	Succeeded int                             `json:"succeeded"`
 	Failed    int                             `json:"failed"`
-	Missing   int                             `json:"missing,omitempty"`
-	// Reload 表示有任务状态已被保留策略回收，页面应整页读取持久结果。
-	Reload bool `json:"reload,omitempty"`
 }
 
 // NewServerConnectionTestBatchCard 把一台任务状态换成服务器列表卡片的短
-// 状态数据；进行中、成功与失败共用 #326 的文案映射，不另建第二套状态。
+// 状态数据；进行中、成功与失败共用既有文案映射，不另建第二套状态。
 func NewServerConnectionTestBatchCard(
 	status *ServerConnectionTestStatus, now time.Time,
 ) ServerConnectionTestBatchCard {
 	if status == nil {
-		return ServerConnectionTestBatchCard{State: ServerConnectionTestMissing}
+		return ServerConnectionTestBatchCard{
+			State: ServerConnectionTestFailed, Title: "从未测试", Untested: true,
+		}
 	}
 	card := ServerConnectionTestBatchCard{
 		ServerID: status.ServerID, TaskID: status.ID, State: status.State,

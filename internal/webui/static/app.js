@@ -140,9 +140,9 @@
     });
   }
 
-  // 批量测试连接（#336）：提交选中集合后立即把每张卡片换成进行中状态，
-  // 之后逐秒读取每台任务的状态。卡片完成文案由服务器按 #326 的列表短状
-  // 态规则生成，页面只负责替换显示，不另建第二套状态或文案。
+  // 批量测试连接：提交选中集合后立即把每张卡片换成进行中状态，之后逐
+  // 秒读取每台任务的状态。卡片完成文案由服务器按服务器列表卡片既有的
+  // 短状态规则生成，页面只负责替换显示，不另建第二套状态或文案。
   function initServerListBatchConnection(root, selected) {
     var bar = document.querySelector("[data-server-selection-bar]");
     var button = bar === null ? null : bar.querySelector("[data-server-test-connection-action]");
@@ -152,6 +152,7 @@
     var path = "/ui/servers/batch/connection-test";
     var testing = false;
     var testingCount = 0;
+    var startFailureCount = 0;
     var originalLines = {};
     var summary = null;
 
@@ -166,9 +167,11 @@
       return cards;
     }
 
-    function makeLine(state, title, detail) {
+    function makeLine(state, title, detail, untested) {
       var line = document.createElement("p");
-      line.className = state === "running"
+      line.className = untested
+        ? "server-test-line is-untested"
+        : state === "running"
         ? "server-test-line is-running"
         : state === "succeeded"
           ? "server-test-line is-succeeded"
@@ -235,6 +238,16 @@
       }
     }
 
+    function finishedSummary(body) {
+      var failed = body.failed || 0;
+      var message = "连接测试完成：" + ((body.total || 0) + startFailureCount) +
+        " 台，已连上 " + (body.succeeded || 0) + " 台，连不上 " + failed + " 台。";
+      if (startFailureCount > 0) {
+        message += "另有 " + startFailureCount + " 台未能启动。";
+      }
+      showSummary(startFailureCount > 0 ? "notice-error" : "notice-info", message);
+    }
+
     function restoreLines(ids, message) {
       var cards = cardsById();
       ids.forEach(function (id) {
@@ -258,9 +271,8 @@
           return;
         }
         if (card.state === "running" || card.state === "succeeded" || card.state === "failed") {
-          replaceLine(target, makeLine(card.state, card.title, card.detail));
+        replaceLine(target, makeLine(card.state, card.title, card.detail, card.untested));
         }
-        // 已被保留策略回收的任务交给整页刷新读取持久结果，不在这里猜测。
       });
       if (!body.done) {
         window.setTimeout(function () {
@@ -271,20 +283,14 @@
       testing = false;
       testingCount = 0;
       refresh();
-      if (body.reload) {
-        window.location.reload();
-        return;
-      }
-      showSummary(
-        "notice-info",
-        "连接测试完成：" + body.total + " 台，已连上 " + body.succeeded + " 台，连不上 " + body.failed + " 台。",
-      );
+      finishedSummary(body);
     }
 
     function pollStatus(tasks) {
       var params = new URLSearchParams();
       tasks.forEach(function (task) {
         params.append("task", task.task_id);
+        params.append("server", task.server_id);
       });
       window
         .fetch(path + "?" + params.toString(), { headers: { Accept: "application/json" } })
@@ -322,6 +328,7 @@
       }
       testing = true;
       testingCount = ids.length;
+      startFailureCount = 0;
       originalLines = {};
       refresh();
       ids.forEach(function (id) {
@@ -350,7 +357,28 @@
           if (!result.ok) {
             throw new Error(result.body.error);
           }
-          pollStatus(result.body.tasks || []);
+          var tasks = result.body.tasks || [];
+          var pollTasks = [];
+          var cards = cardsById();
+          tasks.forEach(function (task) {
+            var target = cards[task.server_id];
+            if (task.error) {
+              startFailureCount += 1;
+              testingCount -= 1;
+              if (target !== undefined) {
+                replaceLine(target, makeLine("failed", "未能启动连接测试", task.error));
+              }
+              return;
+            }
+            pollTasks.push(task);
+          });
+          if (pollTasks.length === 0) {
+            renderStatus([], {
+              cards: [], done: true, total: 0, running: 0, succeeded: 0, failed: 0,
+            });
+            return;
+          }
+          pollStatus(pollTasks);
         })
         .catch(function (error) {
           var message = error && error.message ? error.message : "批量连接测试没有启动，请稍后重试。";
@@ -365,9 +393,9 @@
   // 服务器列表多选：进入选择模式后点卡片或复选框都能勾选，全选只取当
   // 前筛选结果。选择模式与选中集合保存在会话存储里，筛选整页刷新和批
   // 量授权往返后都能恢复；「更多 ⋯」里的资源链接把选中标识符以重复的
-  // server 查询参数带到 #301 的共用服务器勾选页，写入仍由既有确认流程
-  // 执行。
-  function initServerListBatch(root) {
+  // server 查询参数带到加入 profile、授权机密项与授权共享存储共用的服务
+  // 器勾选页，写入仍由既有确认流程执行。
+  function initServerListBatch(root, selected) {
     var multiButton = root.querySelector("[data-server-multi-select]");
     var multiLabel = multiButton === null ? null : multiButton.querySelector("[data-server-multi-select-label]");
     var cards = Array.prototype.slice.call(root.querySelectorAll("[data-server-card]"));
@@ -386,7 +414,6 @@
     var modeKey = "sshmgr-servers-selecting";
     var selectedKey = "sshmgr-servers-selected";
     var selecting = false;
-    var selected = new Set();
     var connectionTests = initServerListBatchConnection(root, selected);
 
     function persist() {
@@ -418,6 +445,21 @@
       } catch (error) {
         return false;
       }
+    }
+
+    function trimSelectionToRenderedCards() {
+      var renderedIDs = new Set();
+      cards.forEach(function (card) {
+        var box = card.querySelector('input[type="checkbox"]');
+        if (box !== null) {
+          renderedIDs.add(box.value);
+        }
+      });
+      selected.forEach(function (id) {
+        if (!renderedIDs.has(id)) {
+          selected.delete(id);
+        }
+      });
     }
 
     function refresh() {
@@ -566,13 +608,14 @@
       });
     });
     selecting = restore();
+    trimSelectionToRenderedCards();
     refresh();
   }
 
   // 服务器列表批量设置地点：底部操作条按钮打开地点树单选弹层；选完地点
   // 后带着选中服务器条目进入后果确认页，写入仍由确认页表单提交给服务
   // 器，浏览器端不做任何直接写入。
-  function initServerBatchLocation(root) {
+  function initServerBatchLocation(root, selected) {
     var button = document.querySelector("[data-server-set-location-action]");
     var bar = document.querySelector("[data-server-selection-bar]");
     var drawer = document.querySelector("[data-server-location-drawer]");
@@ -581,18 +624,13 @@
     }
     var next = drawer.querySelector("[data-server-location-next]");
 
-    function selectedIDs() {
-      return Array.prototype.slice.call(root.querySelectorAll('[data-server-card] input[type="checkbox"]:checked'))
-        .map(function (box) { return box.value; });
-    }
-
     function chosenSite() {
       var checked = drawer.querySelector('input[name="batch_site"]:checked');
       return checked === null ? "" : checked.value;
     }
 
     function refresh() {
-      button.disabled = selectedIDs().length === 0;
+      button.disabled = selected.size === 0;
       if (next !== null) {
         next.disabled = chosenSite() === "";
       }
@@ -614,12 +652,11 @@
     if (next !== null) {
       next.addEventListener("click", function () {
         var site = chosenSite();
-        var servers = selectedIDs();
-        if (site === "" || servers.length === 0) {
+        if (site === "" || selected.size === 0) {
           return;
         }
         var target = new URL("/ui/servers/batch/location", window.location.origin);
-        servers.forEach(function (id) {
+        selected.forEach(function (id) {
           target.searchParams.append("server", id);
         });
         target.searchParams.set("site", site);
@@ -959,8 +996,11 @@
   updateAllShareScopeWarnings();
   initRequiredNoteForms();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListFilters);
-  document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
-  document.querySelectorAll("[data-server-list-page]").forEach(initServerBatchLocation);
+  document.querySelectorAll("[data-server-list-page]").forEach(function (root) {
+    var selected = new Set();
+    initServerListBatch(root, selected);
+    initServerBatchLocation(root, selected);
+  });
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
   document.querySelectorAll("[data-server-selection]").forEach(initServerSelection);
 })();

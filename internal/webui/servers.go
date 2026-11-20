@@ -77,8 +77,8 @@ type ServerListFilterPill struct {
 // 符不会使用两侧双下划线包裹的形式。
 const serverListUnregisteredSite = "__unregistered__"
 
-// ServerBatchResourceView 是批量操作抽屉里一个可继续选择的资源；Path 指向
-// #301 的共用服务器勾选页。
+// ServerBatchResourceView 是批量操作抽屉里一个可继续选择的资源；Path 指
+// 向加入 profile、授权机密项与授权共享存储共用的服务器勾选页。
 type ServerBatchResourceView struct {
 	ID   string
 	Name string
@@ -1026,24 +1026,28 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 		return
 	}
-	if id == "batch" && action == "connection-test" {
-		if h.cfg.ServerWriter == nil {
-			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+	// batch 是服务器列表批量入口的保留路径段；存储生成的服务器条目标识
+	// 符是 11 位 base64url 随机串，不会正好等于这个固定英文单词。
+	if id == "batch" && hasAction {
+		switch action {
+		case "connection-test":
+			if h.cfg.ServerWriter == nil || !h.caps.CanWrite {
+				h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+				return
+			}
+			h.handleServerBatchConnectionTest(w, r)
+			return
+		case "location":
+			if h.cfg.TopologyWriter == nil || !h.caps.CanWrite {
+				h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
+				return
+			}
+			h.handleServerBatchLocation(w, r)
 			return
 		}
-		h.handleServerBatchConnectionTest(w, r)
-		return
 	}
 	if !hasAction {
 		h.handleServerDetail(w, r, id)
-		return
-	}
-	if id == "batch" && action == "location" {
-		if h.cfg.TopologyWriter == nil || !h.caps.CanWrite {
-			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
-			return
-		}
-		h.handleServerBatchLocation(w, r)
 		return
 	}
 	switch action {

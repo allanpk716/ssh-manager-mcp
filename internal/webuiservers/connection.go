@@ -25,11 +25,12 @@ const connectionTestIncompleteMessage = "连接测试没有完成：读取加密
 // 页面的「启动任务、后台执行、页面轮询」模式，实际连接与锚定全部委托服务
 // 器管理模块的统一拨号路径。
 type connectionTester struct {
-	ctx   context.Context
-	open  managerOpener
-	mu    sync.Mutex
-	tasks map[string]*webui.ServerConnectionTestStatus
-	order []string
+	ctx             context.Context
+	open            managerOpener
+	mu              sync.Mutex
+	tasks           map[string]*webui.ServerConnectionTestStatus
+	runningByServer map[string]string
+	order           []string
 }
 
 // ConnectionTesterFromManager 返回绑定固定服务器管理模块的连接测试入口。
@@ -61,18 +62,31 @@ func newConnectionTester(open managerOpener, ctx context.Context) *connectionTes
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return &connectionTester{ctx: ctx, open: open, tasks: map[string]*webui.ServerConnectionTestStatus{}}
+	return &connectionTester{
+		ctx: ctx, open: open, tasks: map[string]*webui.ServerConnectionTestStatus{},
+		runningByServer: map[string]string{},
+	}
 }
 
-// StartServerTest 立即登记并启动后台任务；它不等待连接完成。
+// StartServerTest 立即登记并启动后台任务；它不等待连接完成。同一服务器
+// 条目已有运行中任务时直接返回原任务标识，不重复执行、不重复写审计。
 func (r *connectionTester) StartServerTest(
 	serverID string, probeShell bool, source webui.ServerWriteSource, anchor webui.ServerConnectionAnchor,
 ) (string, error) {
 	if serverID == "" {
 		return "", fmt.Errorf("服务器标识不能为空")
 	}
+	r.mu.Lock()
+	if runningID, ok := r.runningByServer[serverID]; ok {
+		if task := r.tasks[runningID]; task != nil && task.State == webui.ServerConnectionTestRunning {
+			r.mu.Unlock()
+			return runningID, nil
+		}
+		delete(r.runningByServer, serverID)
+	}
 	id, err := randomConnectionTaskID()
 	if err != nil {
+		r.mu.Unlock()
 		return "", err
 	}
 	task := &webui.ServerConnectionTestStatus{
@@ -80,8 +94,8 @@ func (r *connectionTester) StartServerTest(
 		ProbeShell: probeShell, AnchorCopied: anchor.Copied,
 		AnchorCopyFromServerName: anchor.FromServerName, AnchorCopyConflict: anchor.Conflict,
 	}
-	r.mu.Lock()
 	r.tasks[id] = task
+	r.runningByServer[serverID] = id
 	r.order = append(r.order, id)
 	r.mu.Unlock()
 	go r.runConnectionTest(task, source)
@@ -125,6 +139,9 @@ func (r *connectionTester) finishConnectionTest(
 ) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if runningID, ok := r.runningByServer[task.ServerID]; ok && runningID == task.ID {
+		delete(r.runningByServer, task.ServerID)
+	}
 	if result != nil {
 		task.ConnectionNotes = append([]string(nil), result.ConnectionNotes...)
 		task.AnchorFingerprint = result.AnchorFingerprint

@@ -270,6 +270,68 @@ func TestConnectionTesterKeepsRunningTasksBeyondRetention(t *testing.T) {
 	}
 }
 
+// TestConnectionTesterReusesRunningTaskForSameServer 覆盖同一服务器条目的
+// 去重边界：任务运行中再次启动时拿回原任务，不写第二条审计；原任务完成
+// 后再启动才创建新任务。
+func TestConnectionTesterReusesRunningTaskForSameServer(t *testing.T) {
+	manager, st := newAdapterManager(t)
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "reuse", User: "deploy", Host: "127.0.0.1", Port: 1, ShellType: models.ShellPOSIX,
+	}, &models.Credential{Type: models.CredPassword, Secret: []byte("login-secret")}, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	tester := ConnectionTesterFromOpener(func() (*servermanage.Manager, func(), error) {
+		<-release
+		return manager, func() {}, nil
+	})
+
+	firstID, err := tester.StartServerTest(
+		added.ServerID, false, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondID, err := tester.StartServerTest(
+		added.ServerID, false, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstID != secondID {
+		t.Fatalf("同一服务器条目运行中应拿回同一个任务：%q %q", firstID, secondID)
+	}
+
+	close(release)
+	finished := waitConnectionTestStatus(t, tester, firstID)
+	if finished.State != webui.ServerConnectionTestFailed {
+		t.Fatalf("原任务应先完成并保存失败结论：%+v", finished)
+	}
+	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"server.connect-test"}})
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("运行中重复启动不应写第二条连接测试审计：%v %+v", err, rows)
+	}
+
+	thirdID, err := tester.StartServerTest(
+		added.ServerID, false, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thirdID == firstID {
+		t.Fatalf("原任务完成后应创建新任务，仍拿到 %q", thirdID)
+	}
+	third := waitConnectionTestStatus(t, tester, thirdID)
+	if third.State != webui.ServerConnectionTestFailed {
+		t.Fatalf("新任务应独立完成：%+v", third)
+	}
+	rows, err = st.QueryAudit(store.AuditFilter{Actions: []string{"server.connect-test"}})
+	if err != nil || len(rows) != 2 {
+		t.Fatalf("完成后的再次测试应写新审计：%v %+v", err, rows)
+	}
+}
+
 // TestConnectionTesterOpenFailureIsNotCanceled 覆盖任务公共边界：打不开加
 // 密库这类非取消错误归为其他连接失败，显示固定白话说明，不回显底层错误。
 func TestConnectionTesterOpenFailureIsNotCanceled(t *testing.T) {

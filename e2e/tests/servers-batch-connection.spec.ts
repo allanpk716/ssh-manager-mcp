@@ -88,3 +88,48 @@ test("批量测试连接逐卡显示进行中与结果并在刷新后保留", as
     await sshd.close();
   }
 });
+
+test("筛选变化后批量选择只作用于仍显示的服务器", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology(undefined, undefined, {
+    SSHMGR_E2E_SERVER_BATCH_LOCATION: "1",
+  });
+  try {
+    await page.goto(ui.startupURL);
+    await page.getByRole("heading", { name: "状态总览" }).waitFor();
+    await gotoUIPath(page, "/ui/servers/?query=batch-");
+    await page.getByRole("button", { name: "多选" }).click();
+    for (const name of ["batch-a-web", "batch-a-db", "batch-b-tool"]) {
+      await page.getByLabel(`选择 ${name}`).check();
+    }
+    await expect(page.locator("[data-server-selected-count]")).toHaveText("已选 3 台");
+
+    await page.getByLabel("搜索服务器").fill("batch-a");
+    await page.getByRole("heading", { name: "服务器" }).waitFor();
+    await expect(page.locator("[data-server-card]")).toHaveCount(3);
+    await expect(page.locator("[data-server-selected-count]")).toHaveText("已选 2 台");
+
+    let testedServerCount = 0;
+    await page.route("*/**/ui/servers/batch/connection-test", async (route) => {
+      testedServerCount = new URLSearchParams(route.request().postData() ?? "").getAll("server").length;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ tasks: [] }),
+      });
+    });
+    await page.getByRole("button", { name: "测试连接" }).click();
+    await expect(page.locator("[data-server-batch-connection-summary]")).toBeVisible();
+    expect(testedServerCount).toBe(2);
+
+    await page.getByRole("button", { name: "设置地点" }).click();
+    await page.getByRole("radio", { name: "园区A / 一号机房" }).check();
+    await page.getByRole("button", { name: "查看后果" }).click();
+    await page.getByRole("heading", { name: "确认批量设置地点" }).waitFor();
+    const confirmURL = new URL(page.url());
+    const locationServers = confirmURL.searchParams.getAll("server");
+    expect(locationServers).toHaveLength(2);
+    await expect(page.locator("main")).not.toContainText("batch-b-tool");
+  } finally {
+    await ui.close();
+  }
+});

@@ -150,12 +150,12 @@ test("手机服务器列表多选、全选与更多菜单批量加入 profile", 
     await page.getByRole("button", { name: "全选当前筛选结果" }).click();
     await expect(count).toHaveText("已选 4 台");
 
-    // 筛选变化后选择仍在；再次全选按新的筛选结果重建集合。
+    // 筛选变化后选择裁剪为仍显示的卡片；再次全选按新的筛选结果重建集合。
     await page.locator("#server-search").fill("db");
     await expect(dbCard).toBeVisible();
     await expect(oldCard).toHaveCount(0);
     await expect(webCard).toHaveCount(0);
-    await expect(count).toHaveText("已选 4 台");
+    await expect(count).toHaveText("已选 1 台");
     await page.getByRole("button", { name: "全选当前筛选结果" }).click();
     await expect(count).toHaveText("已选 1 台");
 

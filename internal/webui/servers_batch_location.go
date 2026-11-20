@@ -112,13 +112,18 @@ func (h *handler) serverBatchLocationView(
 	}
 	deviceByServer := serverDeviceIndex(topology)
 	selected := make(map[string]bool, len(view.Servers))
+	for _, id := range view.Servers {
+		if _, ok := rowsByID[id]; !ok {
+			return view, "选中的服务器条目不存在，请刷新列表后重试。", http.StatusBadRequest
+		}
+		selected[id] = true
+	}
 	seenDevices := map[string]bool{}
 	for _, id := range view.Servers {
 		row, ok := rowsByID[id]
 		if !ok {
 			return view, "选中的服务器条目不存在，请刷新列表后重试。", http.StatusBadRequest
 		}
-		selected[id] = true
 		device, hasDevice := deviceByServer[id]
 		if !hasDevice {
 			view.Unassociated = append(view.Unassociated, ServerBatchLocationUnassociatedView{ID: id, Name: row.Name})
@@ -196,8 +201,8 @@ func (h *handler) renderServerBatchLocation(
 	})
 }
 
-// dedupeServerBatchSelection 去掉空值与重复的服务器条目标识符，保持传入
-// 顺序，让确认页与提交使用同一份选中清单。
+// dedupeServerBatchSelection 去掉空白值与重复的服务器条目标识符，保持传
+// 入顺序；设置地点与测试连接两个批量入口共用同一份选中清单规则。
 func dedupeServerBatchSelection(values []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(values))

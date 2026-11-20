@@ -50,8 +50,8 @@ func TestServerListBatchSelectionEntrances(t *testing.T) {
 		}
 	}
 
-	// 批量设置地点（#335）与批量测试连接（#336）都已接入：两个入口都
-	// 必须是可用按钮。设置地点的可提交内容只出现在独立确认页，测试连接
+	// 批量设置地点与批量测试连接都已接入：两个入口都必须是可用按钮。
+	// 设置地点的可提交内容只出现在独立确认页，测试连接
 	// 走内部接口；底部操作条仍不直接携带表单，写路由统一走防跨站请求伪
 	// 造中间件。
 	for _, attribute := range []string{"data-server-set-location-action", "data-server-test-connection-action"} {

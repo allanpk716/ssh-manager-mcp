@@ -2,6 +2,7 @@ package webui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,7 @@ type batchConnectionTesterStub struct {
 	mu       sync.Mutex
 	starts   []stubServerConnectionStart
 	statuses map[string]*ServerConnectionTestStatus
+	failOn   map[string]error
 }
 
 func newBatchConnectionTesterStub() *batchConnectionTesterStub {
@@ -29,6 +31,9 @@ func (s *batchConnectionTesterStub) StartServerTest(
 ) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.failOn[serverID]; err != nil {
+		return "", err
+	}
 	taskID := fmt.Sprintf("task-%d", len(s.starts)+1)
 	s.starts = append(s.starts, stubServerConnectionStart{
 		serverID: serverID, probeShell: probeShell, source: source, anchor: anchor,
@@ -67,6 +72,7 @@ type batchConnectionStartResponse struct {
 	Tasks []struct {
 		ServerID string `json:"server_id"`
 		TaskID   string `json:"task_id"`
+		Error    string `json:"error"`
 	} `json:"tasks"`
 }
 
@@ -77,19 +83,25 @@ type batchConnectionStatusResponse struct {
 		State    string `json:"state"`
 		Title    string `json:"title"`
 		Detail   string `json:"detail"`
+		Untested bool   `json:"untested"`
 	} `json:"cards"`
 	Done      bool `json:"done"`
 	Total     int  `json:"total"`
 	Running   int  `json:"running"`
 	Succeeded int  `json:"succeeded"`
 	Failed    int  `json:"failed"`
-	Missing   int  `json:"missing"`
-	Reload    bool `json:"reload"`
 }
 
 func newServerBatchConnectionTestEnv(
 	t *testing.T, role Role, tester ServerConnectionTester,
 ) (*batchConnectionTesterStub, http.Handler, *http.Cookie) {
+	stub, handler, cookie, _ := newServerBatchConnectionTestEnvWithStore(t, role, tester)
+	return stub, handler, cookie
+}
+
+func newServerBatchConnectionTestEnvWithStore(
+	t *testing.T, role Role, tester ServerConnectionTester,
+) (*batchConnectionTesterStub, http.Handler, *http.Cookie, *stubServerStore) {
 	t.Helper()
 	store := newStubServerStore()
 	store.rows = append(store.rows, ServerListEntry{
@@ -98,12 +110,8 @@ func newServerBatchConnectionTestEnv(
 	store.details["srv-auto"] = &ServerDetailView{
 		ID: "srv-auto", Name: "auto", User: "root", Host: "192.0.2.12", Port: 22,
 	}
-	var writer ServerWriter
-	if role != RoleClient {
-		writer = &stubServerWriter{}
-	}
 	handler, startup, err := New(Config{
-		Role: role, Servers: store, ServerWriter: writer,
+		Role: role, Servers: store, ServerWriter: &stubServerWriter{},
 		ServerConnectionTester: tester, Topology: serverListTopologySource{},
 		Access: &stubAccessStore{}, VersionHint: func() string { return "" },
 		Now: func() time.Time {
@@ -116,7 +124,7 @@ func newServerBatchConnectionTestEnv(
 	}
 	cookie := exchangeStartupTokenForCookie(t, handler, startup)
 	stub, _ := tester.(*batchConnectionTesterStub)
-	return stub, handler, cookie
+	return stub, handler, cookie, store
 }
 
 func decodeBatchConnectionResponse(t *testing.T, response *http.Response, value any) {
@@ -162,7 +170,8 @@ func TestServerBatchConnectionTestStartsOneTaskPerServer(t *testing.T) {
 		t.Fatalf("批量任务应记录同一个来源地址：%+v %+v", first, second)
 	}
 
-	statusBody := serversGet(t, handler, cookie, "/ui/servers/batch/connection-test?task=task-1&task=task-2")
+	statusBody := serversGet(t, handler, cookie,
+		"/ui/servers/batch/connection-test?task=task-1&server=srv-fine&task=task-2&server=srv-auto")
 	var runningStatus batchConnectionStatusResponse
 	if err := json.Unmarshal([]byte(statusBody), &runningStatus); err != nil {
 		t.Fatalf("解析进行中状态失败：%v\n%s", err, statusBody)
@@ -189,7 +198,8 @@ func TestServerBatchConnectionTestStartsOneTaskPerServer(t *testing.T) {
 			FailureLabel: "端口不通", Persisted: true,
 		},
 	})
-	doneBody := serversGet(t, handler, cookie, "/ui/servers/batch/connection-test?task=task-1&task=task-2")
+	doneBody := serversGet(t, handler, cookie,
+		"/ui/servers/batch/connection-test?task=task-1&server=srv-fine&task=task-2&server=srv-auto")
 	var doneStatus batchConnectionStatusResponse
 	if err := json.Unmarshal([]byte(doneBody), &doneStatus); err != nil {
 		t.Fatalf("解析完成状态失败：%v\n%s", err, doneBody)
@@ -200,13 +210,10 @@ func TestServerBatchConnectionTestStartsOneTaskPerServer(t *testing.T) {
 	if doneStatus.Cards[0].Title != "今天 10:12 已连上" ||
 		!strings.Contains(doneStatus.Cards[0].Detail, "192.0.2.10") ||
 		!strings.Contains(doneStatus.Cards[0].Detail, "耗时 120 毫秒") {
-		t.Fatalf("成功卡片应复用 #326 的短状态与汇总文案：%+v", doneStatus.Cards[0])
+		t.Fatalf("成功卡片应复用服务器列表既有的短状态与汇总文案：%+v", doneStatus.Cards[0])
 	}
 	if doneStatus.Cards[1].Title != "今天 10:12 连不上：端口不通" {
 		t.Fatalf("失败卡片应显示连不上与白话原因：%+v", doneStatus.Cards[1])
-	}
-	if doneStatus.Missing != 0 || doneStatus.Reload {
-		t.Fatalf("任务都存在时不应要求刷新：%+v", doneStatus)
 	}
 }
 
@@ -273,6 +280,37 @@ func TestServerBatchConnectionTestStartErrorPaths(t *testing.T) {
 	}
 }
 
+// TestServerBatchConnectionTestContinuesAfterOneStartFailure 覆盖逐台启动
+// 的部分失败边界：中间一台启动失败时返回明确说明，其余服务器条目仍返回
+// 任务并继续执行。
+func TestServerBatchConnectionTestContinuesAfterOneStartFailure(t *testing.T) {
+	stub := newBatchConnectionTesterStub()
+	stub.failOn = map[string]error{"srv-auto": errors.New("task source unavailable")}
+	_, handler, cookie := newServerBatchConnectionTestEnv(t, RoleStandalone, stub)
+
+	response := serversPost(t, handler, cookie, "/ui/servers/batch/connection-test", url.Values{
+		"server": {"srv-fine", "srv-auto", "srv-bare"},
+	})
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("单台启动失败不应让整批失败，状态码 = %d", response.StatusCode)
+	}
+	var started batchConnectionStartResponse
+	decodeBatchConnectionResponse(t, response, &started)
+	if len(started.Tasks) != 3 {
+		t.Fatalf("响应仍应逐台返回启动结果：%+v", started.Tasks)
+	}
+	if started.Tasks[0].TaskID != "task-1" || started.Tasks[0].Error != "" ||
+		started.Tasks[2].TaskID != "task-2" || started.Tasks[2].Error != "" {
+		t.Fatalf("启动成功的服务器应返回任务标识：%+v", started.Tasks)
+	}
+	if started.Tasks[1].TaskID != "" || started.Tasks[1].Error != "未能启动连接测试，请稍后重试。" {
+		t.Fatalf("启动失败的服务器应返回明确说明：%+v", started.Tasks[1])
+	}
+	if stub.startCount() != 2 {
+		t.Fatalf("失败后的服务器不应阻塞其余启动，实际启动 %d 次", stub.startCount())
+	}
+}
+
 // TestServerBatchConnectionTestClientRoleHasNoRoute 校验客户端只读角色没
 // 有批量连接测试写入口，请求不会到达任务启动。
 func TestServerBatchConnectionTestClientRoleHasNoRoute(t *testing.T) {
@@ -311,49 +349,46 @@ func TestServerBatchConnectionTestRequiresCSRF(t *testing.T) {
 	}
 }
 
-// TestServerBatchConnectionTestStatusMissingTaskRequiresReload 覆盖保留策
-// 略回收任务后的轮询：已回收任务标记缺失并要求整页读取持久结果，不猜
-// 测结论；缺少任务参数直接给出明确错误。
-func TestServerBatchConnectionTestStatusMissingTaskRequiresReload(t *testing.T) {
-	stub, handler, cookie := newServerBatchConnectionTestEnv(t, RoleStandalone, newBatchConnectionTesterStub())
-	response := serversPost(t, handler, cookie, "/ui/servers/batch/connection-test", url.Values{
-		"server": {"srv-fine"},
+// TestServerBatchConnectionTestStatusUsesPersistedResultAfterRetention 覆盖
+// 任务被回收后的轮询：按服务器条目读取最近一次持久结果；从未测试的条目
+// 显示既有短状态，其他运行中任务继续显示进行中。
+func TestServerBatchConnectionTestStatusUsesPersistedResultAfterRetention(t *testing.T) {
+	tester := newBatchConnectionTesterStub()
+	stub, handler, cookie, store := newServerBatchConnectionTestEnvWithStore(t, RoleStandalone, tester)
+	completedAt := time.Date(2026, 11, 20, 10, 12, 0, 0, time.Local)
+	store.details["srv-fine"].ConnectionTest = &ServerConnectionTestResultView{
+		State: ServerConnectionTestSucceeded, CompletedAt: completedAt, Succeeded: true,
+		SuccessAddress: "192.0.2.10", SuccessNetworkName: "办公网", Duration: 120 * time.Millisecond,
+	}
+	stub.finish("task-running", ServerConnectionTestStatus{
+		ID: "task-running", State: ServerConnectionTestRunning, ServerID: "srv-auto",
 	})
-	var started batchConnectionStartResponse
-	decodeBatchConnectionResponse(t, response, &started)
-	if len(started.Tasks) != 1 {
-		t.Fatalf("应启动一个任务：%+v", started.Tasks)
-	}
-	taskID := started.Tasks[0].TaskID
 
-	missingBody := serversGet(t, handler, cookie,
-		"/ui/servers/batch/connection-test?task="+url.QueryEscape(taskID)+"&task=task-missing")
-	var missingStatus batchConnectionStatusResponse
-	if err := json.Unmarshal([]byte(missingBody), &missingStatus); err != nil {
-		t.Fatalf("解析状态失败：%v\n%s", err, missingBody)
+	body := serversGet(t, handler, cookie,
+		"/ui/servers/batch/connection-test?task=task-recycled&server=srv-fine"+
+			"&task=task-running&server=srv-auto"+
+			"&task=task-removed&server=srv-bare")
+	var status batchConnectionStatusResponse
+	if err := json.Unmarshal([]byte(body), &status); err != nil {
+		t.Fatalf("解析状态失败：%v\n%s", err, body)
 	}
-	if missingStatus.Done || missingStatus.Running != 1 || missingStatus.Missing != 1 || !missingStatus.Reload {
-		t.Fatalf("一台仍在运行、一台已回收时应继续轮询并要求最终刷新：%+v", missingStatus)
+	if len(status.Cards) != 3 || status.Total != 3 {
+		t.Fatalf("应按任务逐台返回状态：%+v", status)
 	}
-
-	stub.finish(taskID, ServerConnectionTestStatus{
-		State: ServerConnectionTestFailed, ServerID: "srv-fine",
-		Result: &ServerConnectionTestResultView{
-			State: ServerConnectionTestFailed, FailureLabel: "端口不通",
-		},
-	})
-	doneBody := serversGet(t, handler, cookie,
-		"/ui/servers/batch/connection-test?task="+url.QueryEscape(taskID)+"&task=task-missing")
-	var doneStatus batchConnectionStatusResponse
-	if err := json.Unmarshal([]byte(doneBody), &doneStatus); err != nil {
-		t.Fatalf("解析完成状态失败：%v\n%s", err, doneBody)
+	if status.Cards[0].ServerID != "srv-fine" || status.Cards[0].TaskID != "task-recycled" ||
+		status.Cards[0].State != string(ServerConnectionTestSucceeded) ||
+		status.Cards[0].Title != "今天 10:12 已连上" ||
+		!strings.Contains(status.Cards[0].Detail, "192.0.2.10") {
+		t.Fatalf("已回收任务应返回持久保存的最近结果：%+v", status.Cards[0])
 	}
-	if !doneStatus.Done || doneStatus.Failed != 1 || doneStatus.Missing != 1 || !doneStatus.Reload {
-		t.Fatalf("全部结束后应带缺失计数并要求整页刷新：%+v", doneStatus)
+	if status.Cards[1].State != string(ServerConnectionTestRunning) || status.Cards[1].Title != "正在连接" {
+		t.Fatalf("其他运行中任务应照常显示进行中：%+v", status.Cards[1])
 	}
-
-	emptyBody, emptyCode := serversGetStatus(t, handler, cookie, "/ui/servers/batch/connection-test")
-	if emptyCode != http.StatusBadRequest || !strings.Contains(emptyBody, "缺少连接测试任务") {
-		t.Fatalf("缺少任务参数应返回明确错误，状态码=%d：%s", emptyCode, emptyBody)
+	if status.Cards[2].State != string(ServerConnectionTestFailed) || !status.Cards[2].Untested ||
+		status.Cards[2].Title != "从未测试" {
+		t.Fatalf("没有持久结果的任务应显示从未测试：%+v", status.Cards[2])
+	}
+	if status.Done || status.Running != 1 || status.Succeeded != 1 || status.Failed != 1 {
+		t.Fatalf("汇总应把回收任务按完成处理并保留运行中计数：%+v", status)
 	}
 }
