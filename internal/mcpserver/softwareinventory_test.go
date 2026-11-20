@@ -37,7 +37,8 @@ func (f *fakeSoftwareInventoryQuerier) QuerySoftwareInventory(
 }
 
 // softwareInventoryFaceFixture 造一个权威端 vault：可见设备、授权外设备
-// 与不受管设备各一台，可见设备上有服务程序与系统包声明。
+// 与不受管设备各一台，可见设备上有服务程序与系统包实测条目；授权外与
+// 不受管设备只有声明。
 func softwareInventoryFaceFixture(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	st := newStoreAt(t, filepath.Join(t.TempDir(), "inventory-face.db"))
@@ -71,20 +72,26 @@ func softwareInventoryFaceFixture(t *testing.T) (*store.Store, string) {
 	if err := st.GrantServers(profileID, []string{visibleServer.ID}); err != nil {
 		t.Fatal(err)
 	}
+	if err := st.ReplaceSoftwareObservedItems("可见设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{
+				Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.25.3",
+				ListeningPorts: []softwareinventory.ListeningPort{{
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+					Exposure: softwareinventory.ExposureAllAddresses,
+				}},
+			},
+			{
+				Category: softwareinventory.CategorySystemPackage,
+				Name:     "libc6", Version: "2.39-0ubuntu8",
+			},
+		},
+		ServerID: visibleServer.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
 	manager := softwareinventory.New(st)
 	for _, declaration := range []softwareinventory.Declaration{
-		{
-			Device: "可见设备", Category: softwareinventory.CategoryServiceProgram,
-			Name: "nginx", Version: "1.25.3",
-			ListeningPorts: []softwareinventory.ListeningPort{{
-				Address: "0.0.0.0", Port: 80, Protocol: "tcp",
-				Exposure: softwareinventory.ExposureAllAddresses,
-			}},
-		},
-		{
-			Device: "可见设备", Category: softwareinventory.CategorySystemPackage,
-			Name: "libc6", Version: "2.39-0ubuntu8",
-		},
 		{
 			Device: "授权外设备", Category: softwareinventory.CategoryServiceProgram,
 			Name: "PostgreSQL", Version: "16.2",
@@ -195,8 +202,9 @@ func TestQuerySoftwareInventoryAuthorityFace(t *testing.T) {
 	if strings.Contains(text, "libc6") {
 		t.Fatalf("系统包默认不应返回：%s", text)
 	}
-	if !result.Devices[0].Collection.NeverCollected || !result.Devices[0].Collection.Stale {
-		t.Fatalf("采集状态应表示从未采集：%+v", result.Devices[0].Collection)
+	if result.Devices[0].Collection.NeverCollected || result.Devices[0].Collection.Stale ||
+		result.Devices[0].Collection.CommandSetVersion != "posix-v2" {
+		t.Fatalf("采集状态应来自实测成功记录：%+v", result.Devices[0].Collection)
 	}
 	if len(result.Devices[0].Items) != 1 ||
 		result.Devices[0].Items[0].ListeningPorts[0].Exposure != softwareinventory.ExposureAllAddresses {
@@ -272,7 +280,8 @@ func TestQuerySoftwareInventoryCacheFaceUsesInjectedQuerier(t *testing.T) {
 	session := softwareInventoryFaceSessionWithQuerier(t, querier)
 	text, isError := callSoftwareInventoryTool(t, session, map[string]any{
 		"device": "权威端设备", "name": "nginx", "minimum_exposure": "all_addresses",
-		"category": "service_program", "include_system_packages": true,
+		"category": "service_program", "exact_version": "1.25.3", "site": "总部",
+		"network": "总部物理局域网", "include_system_packages": true,
 	})
 	if isError {
 		t.Fatalf("在线查询报错：%s", text)
@@ -282,7 +291,8 @@ func TestQuerySoftwareInventoryCacheFaceUsesInjectedQuerier(t *testing.T) {
 	}
 	if querier.got != (QuerySoftwareInventoryInput{
 		Device: "权威端设备", Name: "nginx", MinimumExposure: "all_addresses",
-		Category: "service_program", IncludeSystemPackages: true,
+		Category: "service_program", ExactVersion: "1.25.3", Site: "总部",
+		Network: "总部物理局域网", IncludeSystemPackages: true,
 	}) {
 		t.Fatalf("过滤条件未原样传递：%+v", querier.got)
 	}

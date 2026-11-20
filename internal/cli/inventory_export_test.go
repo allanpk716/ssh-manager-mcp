@@ -6,15 +6,41 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/softwareinventory"
+	"ssh-manager-mcp/internal/store"
 )
+
+// seedInventoryObservedForExport 直接写入实测条目，供导出命令测试使用。
+func seedInventoryObservedForExport(
+	t *testing.T,
+	items map[string][]models.SoftwareObservedItem,
+) {
+	t.Helper()
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), mustDecodeHex(t, os.Getenv("SSHMGR_MASTERKEY_HEX")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	for device, rows := range items {
+		if err := st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: rows, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestInventoryExportCycloneDXIncludesSystemPackages(t *testing.T) {
 	newSecretsEnv(t)
 	mustInventoryCli(t, "", "devices", "add", "gpu工作站")
-	mustInventoryCli(t, "", "inventory", "add", "gpu工作站",
-		"--category", "system_package", "--name", "libc6", "--version", "2.39-0ubuntu8")
-	mustInventoryCli(t, "", "inventory", "add", "gpu工作站",
-		"--category", "service_program", "--name", "nginx", "--version", "1.25.3")
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"gpu工作站": {
+			{Category: softwareinventory.CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+			{Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+		},
+	})
 
 	output := mustInventoryCli(t, "", "inventory", "export", "--format", "cyclonedx")
 	var document map[string]any
@@ -58,8 +84,11 @@ func TestInventoryExportRequiresCycloneDXFormat(t *testing.T) {
 func TestInventoryExportWritesOutputFile(t *testing.T) {
 	newSecretsEnv(t)
 	mustInventoryCli(t, "", "devices", "add", "gpu工作站")
-	mustInventoryCli(t, "", "inventory", "add", "gpu工作站",
-		"--category", "service_program", "--name", "nginx", "--version", "1.25.3")
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"gpu工作站": {
+			{Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+		},
+	})
 	outputPath := filepath.Join(t.TempDir(), "software-inventory.json")
 	mustInventoryCli(t, "", "inventory", "export", "--format", "cyclonedx", "--output", outputPath)
 	blob, err := os.ReadFile(outputPath)

@@ -18,9 +18,9 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// newInventoryClientFixture 造一个在内存里的权威端（含一台可见设备、一条
-// 服务声明与一条系统包声明）和一个客户端缓存目录（cache.auth.json 指向
-// 该权威端）。返回的关闭函数用于模拟权威端停机。
+// newInventoryClientFixture 造一个在内存里的权威端（含一台可见设备、实测
+// 服务程序与系统包，以及两条保留声明）和一个客户端缓存目录
+// （cache.auth.json 指向该权威端）。返回的关闭函数用于模拟权威端停机。
 func newInventoryClientFixture(t *testing.T) (stop func()) {
 	t.Helper()
 	vaultDirectory := t.TempDir()
@@ -33,7 +33,10 @@ func newInventoryClientFixture(t *testing.T) (stop func()) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if _, err := st.AddDevice("gpu-设备", "", ""); err != nil {
+	if _, err := st.AddSite("总部", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDeviceAtSite("gpu-设备", "", "", "总部"); err != nil {
 		t.Fatal(err)
 	}
 	credentialID, err := st.SetCredential(&models.Credential{
@@ -56,6 +59,14 @@ func newInventoryClientFixture(t *testing.T) (stop func()) {
 	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "总部",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("gpu-设备", "总部物理局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := softwareinventory.New(st).AddDeclaration(softwareinventory.Declaration{
 		Device: "gpu-设备", Category: softwareinventory.CategoryServiceProgram,
 		Name: "nginx", Version: "1.25.3",
@@ -64,6 +75,22 @@ func newInventoryClientFixture(t *testing.T) (stop func()) {
 			Exposure: softwareinventory.ExposureAllAddresses,
 		}},
 	}, softwareinventory.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{
+				Category: softwareinventory.CategoryServiceProgram,
+				Name:     "nginx", Version: "1.25.3",
+				ListeningPorts: []softwareinventory.ListeningPort{{
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+					Exposure: softwareinventory.ExposureAllAddresses,
+				}},
+			},
+			{Category: softwareinventory.CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+		},
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := softwareinventory.New(st).AddDeclaration(softwareinventory.Declaration{
@@ -103,12 +130,13 @@ func TestInventoryClientViewsAndSearchesOnline(t *testing.T) {
 	defer stop()
 
 	view := mustInventoryCli(t, "", "inventory", "view", "gpu-设备")
-	for _, want := range []string{"gpu-设备", "nginx", "1.25.3", "声明", "0.0.0.0:80/tcp", "监听所有地址"} {
+	for _, want := range []string{"gpu-设备", "nginx", "1.25.3", "实测", "0.0.0.0:80/tcp", "监听所有地址"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("客户端查看缺少 %q：\n%s", want, view)
 		}
 	}
-	search := mustInventoryCli(t, "", "inventory", "search", "NGINX")
+	search := mustInventoryCli(t, "", "inventory", "search", "NGINX",
+		"--version", "1.25.3", "--site", "总部", "--network", "总部物理局域网")
 	if !strings.Contains(search, "gpu-设备") || !strings.Contains(search, "nginx") {
 		t.Fatalf("客户端搜索结果：\n%s", search)
 	}

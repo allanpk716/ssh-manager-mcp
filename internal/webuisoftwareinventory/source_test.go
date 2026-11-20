@@ -116,25 +116,30 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		device.Status.LastSuccessAt == nil || device.Status.LastSuccessAt.Unix() != secondAt.Unix() {
 		t.Fatalf("设备页面数据或采集状态不符：%+v", device)
 	}
-	if len(device.Groups) != 3 || device.Groups[0].CategoryLabel != "服务程序" ||
-		device.Groups[1].CategoryLabel != "容器镜像" || device.Groups[2].CategoryLabel != "系统包" {
+	if len(device.Groups) != 2 || device.Groups[0].CategoryLabel != "容器镜像" ||
+		device.Groups[1].CategoryLabel != "系统包" {
 		t.Fatalf("设备页面类别分组不符：%+v", device.Groups)
 	}
-	declared := device.Groups[0].Items[0]
-	if declared.Version != "1.2.3+build.7" || declared.Source != "声明" ||
-		declared.ConfirmedAt == nil || declared.ConfirmedAt.Unix() != confirmedAt.Unix() ||
-		len(declared.ListeningPorts) != 1 || declared.ListeningPorts[0].ExposureLabel != "局域网" {
-		t.Fatalf("声明条目页面数据不符：%+v", declared)
+	for _, group := range device.Groups {
+		for _, item := range group.Items {
+			if item.Name == "自建网关" || item.Source == "声明" {
+				t.Fatalf("声明不应进入设备页面：%+v", item)
+			}
+		}
 	}
-	container := device.Groups[1].Items[0]
+	declarations, err := st.SearchSoftwareDeclarations("", softwareinventory.AllDevicesVisible())
+	if err != nil || len(declarations) != 1 || declarations[0].Version != "1.2.3+build.7" {
+		t.Fatalf("声明应保留在存储里：%v %+v", err, declarations)
+	}
+	container := device.Groups[0].Items[0]
 	if container.Version != "16.4" || container.Source != "实测" || container.BelongsTo != "Docker" ||
 		container.ContainerTag != "16-alpine" || container.ContainerDigest != "sha256:abcdef" ||
 		!container.ContainerRunning || container.ListeningPorts[0].ExposureLabel != "监听所有地址" {
 		t.Fatalf("容器镜像条目页面数据不符：%+v", container)
 	}
-	if !device.Groups[2].SystemPackages || device.Groups[2].SystemPackageCount != 1 ||
-		len(device.Groups[2].Items) != 1 || device.Groups[2].Items[0].Version != "8.9.1-1" {
-		t.Fatalf("系统包分组应保留全量数据并给出数量：%+v", device.Groups[2])
+	if !device.Groups[1].SystemPackages || device.Groups[1].SystemPackageCount != 1 ||
+		len(device.Groups[1].Items) != 1 || device.Groups[1].Items[0].Version != "8.9.1-1" {
+		t.Fatalf("系统包分组应保留全量数据并给出数量：%+v", device.Groups[1])
 	}
 	var versionChange *webui.SoftwareInventoryChange
 	for i := range device.History {
@@ -297,15 +302,20 @@ func TestSourceAddsDeclarationAndClaimsObservedItem(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
-		Device: "工作站", Name: "业务网关", Visibility: softwareinventory.AllDevicesVisible(),
+		Device: "工作站", Name: "unknown", Visibility: softwareinventory.AllDevicesVisible(),
 		IncludeSystemPackages: true,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
-		result.Devices[0].Items[0].Source != softwareinventory.SourceCombined {
-		t.Fatalf("新增并认领后应合成一条软件条目：%+v", result.Devices)
+		result.Devices[0].Items[0].Source != softwareinventory.SourceObserved ||
+		result.Devices[0].Items[0].Name != "unknown-gateway" {
+		t.Fatalf("认领后可见查询应仍只有实测条目：%+v", result.Devices)
+	}
+	declarations, err := st.SearchSoftwareDeclarations("", softwareinventory.AllDevicesVisible())
+	if err != nil || len(declarations) != 1 || declarations[0].ClaimedObservedKey != "unidentified-8443" {
+		t.Fatalf("新增并认领后的声明应保留：%v %+v", err, declarations)
 	}
 	rows, err := st.QueryAudit(store.AuditFilter{
 		Actions: []string{"software-declaration-add", "software-declaration-claim"},
@@ -456,8 +466,12 @@ func TestSourceReviewsDeclarationDrafts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 2 {
-		t.Fatalf("两条确认草稿应进入生效清单：%+v", result.Devices)
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 0 {
+		t.Fatalf("确认后的声明不应进入使用者可见查询：%+v", result.Devices)
+	}
+	declarations, err := st.SearchSoftwareDeclarations("", softwareinventory.AllDevicesVisible())
+	if err != nil || len(declarations) != 2 {
+		t.Fatalf("两条确认草稿应成为保留的生效声明：%v %+v", err, declarations)
 	}
 	remaining, err := source.SoftwareInventoryDrafts()
 	if err != nil || len(remaining) != 0 {

@@ -183,8 +183,8 @@ func (m *Manager) UnclaimDeclaration(declarationID string, source Source) error 
 	return err
 }
 
-// ViewDevice 按可见设备范围查看一台设备的软件清单，并按类别分组。它复用
-// 统一查询，因此实测、声明与两者合成的结果和查询工具保持一致。
+// ViewDevice 按可见设备范围查看一台设备的实测软件清单，并按类别分组。
+// 它复用统一查询，因此结果与查询工具保持一致，不显示声明。
 func (m *Manager) ViewDevice(
 	deviceName string,
 	visibility Visibility,
@@ -221,8 +221,8 @@ func (m *Manager) ViewDevice(
 	return inventory, nil
 }
 
-// SearchSoftware 按软件名做大小写不敏感的跨设备搜索，结果同样来自实测与
-// 声明的统一合成。
+// SearchSoftware 按软件名做大小写不敏感的跨设备搜索，结果同样只来自实
+// 测条目。
 func (m *Manager) SearchSoftware(namePart string, visibility Visibility) ([]SearchResult, error) {
 	result, err := m.Query(QueryOptions{
 		Name: namePart, IncludeSystemPackages: true, Visibility: visibility,

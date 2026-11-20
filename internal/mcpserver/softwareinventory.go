@@ -16,12 +16,15 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// QuerySoftwareInventoryInput 是 query_software_inventory 的输入。五个参
+// QuerySoftwareInventoryInput 是 query_software_inventory 的输入。八个参
 // 数全部可选；可见设备范围不在这里传，由查询执行方决定：本地查询按本
 // 面 profile 计算，在线查询由权威端按设备码绑定的 profile 计算。
 type QuerySoftwareInventoryInput struct {
 	Device                string `json:"device,omitempty" jsonschema:"device name filter; omit for all visible devices"`
 	Name                  string `json:"name,omitempty" jsonschema:"case-insensitive substring match on the software name; omit for all names"`
+	ExactVersion          string `json:"exact_version,omitempty" jsonschema:"exact case-sensitive version string after trimming surrounding whitespace; omit for any version"`
+	Site                  string `json:"site,omitempty" jsonschema:"site path filter including descendant sites; omit for all sites"`
+	Network               string `json:"network,omitempty" jsonschema:"registered network name filter; the network may be physical or virtual; omit for all networks"`
 	MinimumExposure       string `json:"minimum_exposure,omitempty" jsonschema:"minimum exposure level of any listening port: local_machine | specific_address | all_addresses | local_area_network | virtual_local_area_network | public_network; omit for any"`
 	Category              string `json:"category,omitempty" jsonschema:"category filter: operating_system | service_program | container_image | driver_firmware | system_package | unidentified_process; omit for any"`
 	IncludeSystemPackages bool   `json:"include_system_packages,omitempty" jsonschema:"include system packages (default false — system package lists can be very long)"`
@@ -72,6 +75,9 @@ func (q localSoftwareInventoryQuerier) QuerySoftwareInventory(
 	return softwareinventory.New(st).Query(softwareinventory.QueryOptions{
 		Device:                in.Device,
 		Name:                  in.Name,
+		ExactVersion:          in.ExactVersion,
+		Site:                  in.Site,
+		Network:               in.Network,
 		MinimumExposure:       softwareinventory.Exposure(in.MinimumExposure),
 		Category:              softwareinventory.Category(in.Category),
 		IncludeSystemPackages: in.IncludeSystemPackages,
@@ -96,7 +102,7 @@ func registerSoftwareInventoryTool(
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[17], // "query_software_inventory"（票 #185）
-			Description: "Query the software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All five filters are optional: device (name), name (case-insensitive substring), minimum_exposure, category, include_system_packages (default false — package lists can be huge). Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
+			Description: "Query the observed software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All eight filters are optional: device (name), name (case-insensitive substring), exact_version (verbatim equality), site (including descendant sites), network (registered physical or virtual network name), minimum_exposure, category, include_system_packages (default false — package lists can be huge; name or exact_version includes system packages). Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
 		},
 		func(_ context.Context, _ *mcp.CallToolRequest, in QuerySoftwareInventoryInput) (*mcp.CallToolResult, QuerySoftwareInventoryOutput, error) {
 			result, err := inventory.QuerySoftwareInventory(in)

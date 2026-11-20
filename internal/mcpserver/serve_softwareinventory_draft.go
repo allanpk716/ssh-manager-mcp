@@ -22,7 +22,7 @@ import (
 const softwareDeclarationDraftsMaxBodyBytes = 256 << 10
 
 // softwareDeclarationDraftsRequest 是提交声明草稿的请求体。declarations
-// 的字段与 draft_software_declarations 工具输入一一对应。
+// 的字段与声明草稿的领域结构一一对应。
 type softwareDeclarationDraftsRequest struct {
 	Declarations []softwareinventory.DeclarationDraft `json:"declarations"`
 }

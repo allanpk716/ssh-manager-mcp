@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/store"
 )
 
 // CollectionStatus 描述一台设备的采集状态；清单是否过期按读取时刻计算。
@@ -31,6 +32,9 @@ type CollectionStatus struct {
 type QueryOptions struct {
 	Device                string
 	Name                  string
+	ExactVersion          string
+	Site                  string
+	Network               string
 	MinimumExposure       Exposure
 	Category              Category
 	IncludeSystemPackages bool
@@ -265,6 +269,9 @@ func missingCollectionStatus(managed bool) CollectionStatus {
 func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	options.Device = strings.TrimSpace(options.Device)
 	options.Name = strings.TrimSpace(options.Name)
+	options.ExactVersion = strings.TrimSpace(options.ExactVersion)
+	options.Site = strings.TrimSpace(options.Site)
+	options.Network = strings.TrimSpace(options.Network)
 	if options.Category != "" {
 		switch options.Category {
 		case CategoryOperatingSystem, CategoryServiceProgram, CategoryContainerImage,
@@ -276,14 +283,17 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	if options.MinimumExposure != "" && exposureRank(options.MinimumExposure) == 0 {
 		return QueryResult{}, fmt.Errorf("暴露级别代号不合法：%q", options.MinimumExposure)
 	}
+	if options.Name != "" || options.ExactVersion != "" {
+		options.IncludeSystemPackages = true
+	}
+	allowedDevices, hasDeviceFilter, err := m.allowedDevices(options)
+	if err != nil {
+		return QueryResult{}, err
+	}
 
 	var bundles []queryBundle
 	if options.Device != "" {
 		overview, err := m.st.SoftwareDeviceOverviewForDevice(options.Device, options.Visibility)
-		if err != nil {
-			return QueryResult{}, err
-		}
-		stored, err := m.st.SoftwareDeclarationsForDevice(options.Device, options.Visibility)
 		if err != nil {
 			return QueryResult{}, err
 		}
@@ -293,8 +303,11 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		}
 		bundles = []queryBundle{{
 			DeviceID: overview.ID, DeviceName: overview.Name, Managed: overview.Managed,
-			Declarations: stored.Declarations, Observed: observed.Items,
+			Observed: observed.Items,
 		}}
+		if hasDeviceFilter && !allowedDevices[overview.ID] {
+			bundles = nil
+		}
 	} else {
 		overviews, err := m.st.SoftwareDeviceOverviews(options.Visibility)
 		if err != nil {
@@ -307,17 +320,6 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 				DeviceID: overview.ID, DeviceName: overview.Name, Managed: overview.Managed,
 			})
 		}
-		rows, err := m.st.SearchSoftwareDeclarations("", options.Visibility)
-		if err != nil {
-			return QueryResult{}, err
-		}
-		for _, row := range rows {
-			position, ok := index[row.DeviceID]
-			if !ok {
-				return QueryResult{}, ErrDeviceNotVisible
-			}
-			bundles[position].Declarations = append(bundles[position].Declarations, row)
-		}
 		observed, err := m.st.SoftwareObservedItemsForScope(options.Visibility)
 		if err != nil {
 			return QueryResult{}, err
@@ -329,11 +331,35 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			}
 			bundles[position].Observed = inventory.Items
 		}
+		if hasDeviceFilter {
+			kept := bundles[:0]
+			for _, bundle := range bundles {
+				if allowedDevices[bundle.DeviceID] {
+					kept = append(kept, bundle)
+				}
+			}
+			bundles = kept
+		}
 	}
 
 	devices := make([]QueryDeviceResult, 0)
 	for _, bundle := range bundles {
-		items := combineObservedAndDeclared(bundle)
+		items := make([]QueryItem, 0, len(bundle.Observed))
+		for _, observed := range bundle.Observed {
+			items = append(items, queryItemFromObserved(bundle.DeviceID, observed))
+		}
+		sort.Slice(items, func(i, j int) bool {
+			if items[i].Category != items[j].Category {
+				return categoryRank(items[i].Category) < categoryRank(items[j].Category)
+			}
+			if strings.ToLower(items[i].Name) != strings.ToLower(items[j].Name) {
+				return strings.ToLower(items[i].Name) < strings.ToLower(items[j].Name)
+			}
+			if items[i].Version != items[j].Version {
+				return items[i].Version < items[j].Version
+			}
+			return items[i].ObservedStableKey < items[j].ObservedStableKey
+		})
 		filtered := make([]QueryItem, 0, len(items))
 		for _, item := range items {
 			if options.Category != "" && item.Category != options.Category {
@@ -341,6 +367,9 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			}
 			if options.Name != "" &&
 				!strings.Contains(strings.ToLower(item.Name), strings.ToLower(options.Name)) {
+				continue
+			}
+			if options.ExactVersion != "" && item.Version != options.ExactVersion {
 				continue
 			}
 			if item.Category == CategorySystemPackage && !options.IncludeSystemPackages {
@@ -352,7 +381,8 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			}
 			filtered = append(filtered, item)
 		}
-		hasItemFilter := options.Name != "" || options.Category != "" || options.MinimumExposure != ""
+		hasItemFilter := options.Name != "" || options.ExactVersion != "" || options.Category != "" ||
+			options.MinimumExposure != ""
 		if len(filtered) == 0 {
 			if hasItemFilter {
 				continue
@@ -366,6 +396,27 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	}
 	sort.Slice(devices, func(i, j int) bool { return devices[i].DeviceName < devices[j].DeviceName })
 	return QueryResult{Devices: devices}, nil
+}
+
+// allowedDevices 按地点与网络成员计算设备过滤结果。hasDeviceFilter 为
+// false 时不限制设备，调用方可跳过集合查找。
+func (m *Manager) allowedDevices(
+	options QueryOptions,
+) (allowed map[string]bool, hasFilter bool, err error) {
+	if options.Site == "" && options.Network == "" {
+		return nil, false, nil
+	}
+	devices, err := m.st.ListDevices(store.DeviceFilter{
+		Site: options.Site, Network: options.Network,
+	})
+	if err != nil {
+		return nil, false, err
+	}
+	allowed = make(map[string]bool, len(devices))
+	for _, device := range devices {
+		allowed[device.ID] = true
+	}
+	return allowed, true, nil
 }
 
 // collectionStatusFor 读取一台设备的采集状态；状态推导与命令行 status、

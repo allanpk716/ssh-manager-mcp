@@ -1,8 +1,6 @@
 package mcpserver
 
-// 票 #188：draft_software_declarations 与 collect_software_inventory 两个
-// 工具面。权威端与单机直接写本机 vault；客户端缓存面把草稿经注入的受审
-// 计转发写能力提交，立即采集没有可传命令的参数。
+// 票 #188：软件清单立即采集工具面。声明草稿提交不再注册为 MCP 工具。
 
 import (
 	"context"
@@ -60,12 +58,13 @@ func (f *fakeSoftwareInventoryCollector) CollectSoftwareInventory(
 	return f.result, f.err
 }
 
-// TestSoftwareInventoryAgentToolSurface 钉住工具清单：新增草稿与立即采集两
-// 个工具；不提供任何确认草稿或修改生效声明的 MCP 工具。
+// TestSoftwareInventoryAgentToolSurface 钉住工具清单：查询与立即采集两个
+// 工具；声明草稿不再注册，也不提供确认草稿或修改生效声明的 MCP 工具。
 func TestSoftwareInventoryAgentToolSurface(t *testing.T) {
-	if BrokerTools[18] != "draft_software_declarations" ||
-		BrokerTools[19] != "collect_software_inventory" {
-		t.Fatalf("BrokerTools 应包含两个新工具：%v", BrokerTools)
+	for _, name := range BrokerTools {
+		if name == "draft_software_declarations" {
+			t.Fatal("BrokerTools 不应再宣传 draft_software_declarations")
+		}
 	}
 	st, profileID := softwareInventoryFaceFixture(t)
 	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
@@ -79,9 +78,8 @@ func TestSoftwareInventoryAgentToolSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	allowed := map[string]bool{
-		"query_software_inventory":    true,
-		"draft_software_declarations": true,
-		"collect_software_inventory":  true,
+		"query_software_inventory":   true,
+		"collect_software_inventory": true,
 	}
 	for _, tool := range listed.Tools {
 		if !strings.Contains(tool.Name, "software") {
@@ -113,137 +111,6 @@ func TestCollectSoftwareInventoryInputShape(t *testing.T) {
 	draftType := reflect.TypeFor[DraftSoftwareDeclarationsInput]()
 	if draftType.NumField() != 1 || draftType.Field(0).Name != "Declarations" {
 		t.Fatal("draft_software_declarations 输入应只有 declarations 一个字段")
-	}
-}
-
-// TestDraftSoftwareDeclarationsAuthorityFace 权威端与单机直接写草稿：一次
-// 多条返回编号；确认前查询不受影响；越界设备被拒。
-func TestDraftSoftwareDeclarationsAuthorityFace(t *testing.T) {
-	st, profileID := softwareInventoryFaceFixture(t)
-	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
-	session := softwareInventorySession(t, srv)
-
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "draft_software_declarations",
-		Arguments: map[string]any{"declarations": []map[string]any{
-			{
-				"device": "可见设备", "category": "service_program",
-				"name": "业务网关", "version": "2.1",
-				"listening_ports": []map[string]any{{
-					"address": "0.0.0.0", "port": 8443, "protocol": "tcp",
-					"exposure": "virtual_local_area_network",
-				}},
-			},
-			{
-				"device": "可见设备", "category": "operating_system",
-				"name": "Ubuntu", "version": "24.04",
-			},
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("提交草稿报错：%+v", result.Content)
-	}
-	text := toolResultText(result)
-	var output struct {
-		DraftIDs []string `json:"draft_ids"`
-	}
-	if err := json.Unmarshal([]byte(text), &output); err != nil {
-		t.Fatalf("解析草稿输出失败：%v\n%s", err, text)
-	}
-	if len(output.DraftIDs) != 2 || output.DraftIDs[0] == "" || output.DraftIDs[1] == "" {
-		t.Fatalf("应返回两个草稿编号：%+v", output)
-	}
-
-	queryText, isError := callSoftwareInventoryTool(t, session, map[string]any{"name": "业务网关"})
-	if isError || strings.Contains(queryText, "业务网关") {
-		t.Fatalf("草稿确认前不应出现在查询工具结果里：%q %v", queryText, isError)
-	}
-
-	drafts, err := st.SoftwareDeclarationDrafts(store.AllSoftwareDevices())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(drafts) != 2 {
-		t.Fatalf("权威端应直接落两条草稿：%+v", drafts)
-	}
-	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{"software-declaration-draft"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 2 || rows[0].Source != store.AuditSourceAgent {
-		t.Fatalf("本地提交草稿应以 agent 来源写审计：%+v", rows)
-	}
-
-	rejected, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "draft_software_declarations",
-		Arguments: map[string]any{"declarations": []map[string]any{{
-			"device": "授权外设备", "category": "service_program",
-			"name": "redis", "version": "7.2",
-		}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !rejected.IsError || !strings.Contains(toolResultText(rejected), "可见范围") {
-		t.Fatalf("越界设备应被拒：%+v", rejected.Content)
-	}
-}
-
-// TestDraftSoftwareDeclarationsCacheFaceForwards 客户端面把草稿原样交给注
-// 入的受审计转发写能力。
-func TestDraftSoftwareDeclarationsCacheFaceForwards(t *testing.T) {
-	agent := &fakeSoftwareInventoryAgent{
-		draftResult: DraftSoftwareDeclarationsOutput{DraftIDs: []string{"draft-1", "draft-2"}},
-	}
-	session := softwareInventoryFaceSessionWithQuerier(t, agent)
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "draft_software_declarations",
-		Arguments: map[string]any{"declarations": []map[string]any{{
-			"device": "权威端设备", "category": "service_program",
-			"name": "nginx", "version": "1.25.3",
-			"claimed_observed_key": "observed-key-1",
-		}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.IsError {
-		t.Fatalf("转发草稿报错：%+v", result.Content)
-	}
-	if agent.draftCalls != 1 || len(agent.draftGot.Declarations) != 1 ||
-		agent.draftGot.Declarations[0].Name != "nginx" ||
-		agent.draftGot.Declarations[0].ClaimedObservedKey != "observed-key-1" {
-		t.Fatalf("草稿未原样转发：%+v", agent.draftGot)
-	}
-	if !strings.Contains(toolResultText(result), "draft-2") {
-		t.Fatalf("转发结果未透出：%s", toolResultText(result))
-	}
-}
-
-// TestDraftSoftwareDeclarationsCacheFaceFailsClosed 客户端面没有注入转发写
-// 能力时固定报错，不写任何本地数据。
-func TestDraftSoftwareDeclarationsCacheFaceFailsClosed(t *testing.T) {
-	session := softwareInventoryFaceSessionWithQuerier(t, &fakeSoftwareInventoryQuerier{})
-	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "draft_software_declarations",
-		Arguments: map[string]any{"declarations": []map[string]any{{
-			"device": "任意设备", "category": "service_program",
-			"name": "nginx", "version": "1.25.3",
-		}}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := toolResultText(result)
-	if !result.IsError || !strings.Contains(text, "权威端") || !strings.Contains(text, "草稿") {
-		t.Fatalf("未注入转发写能力时应固定报错：%q %v", text, result.IsError)
 	}
 }
 

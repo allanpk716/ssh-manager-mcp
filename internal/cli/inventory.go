@@ -257,17 +257,21 @@ func inventoryViewCmd() *cobra.Command {
 func inventorySearchCmd() *cobra.Command {
 	var jsonOutput bool
 	var instance string
+	var exactVersion, site, network string
 	c := &cobra.Command{
-		Use:   "search NAME [--json]",
+		Use:   "search NAME [--version 精确版本] [--site 地点路径] [--network 网络] [--json]",
 		Args:  cobra.ExactArgs(1),
 		Short: "Search software by name across devices",
+		Long: `按软件名子串跨设备搜索实测软件清单。--version 是去除首尾空白后的
+逐字相等；--site 支持上级地点并包含全部下级地点；--network 传物理局域网
+或虚拟局域网的网络名字。带软件名或精确版本时自动包含系统包。`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			source, err := openInventoryQuerySource(instance)
 			if err != nil {
 				return err
 			}
 			defer source.Close()
-			results, err := source.SearchSoftware(args[0])
+			results, err := source.SearchSoftware(args[0], exactVersion, site, network)
 			if err != nil {
 				return err
 			}
@@ -293,6 +297,9 @@ func inventorySearchCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&instance, "instance", "", "客户端的命名缓存实例（默认槽省略；与 SSHMGR_CACHE_DIR 互斥）")
+	c.Flags().StringVar(&exactVersion, "version", "", "精确版本；去除首尾空白后逐字相等")
+	c.Flags().StringVar(&site, "site", "", "地点路径；包含该地点及全部下级地点")
+	c.Flags().StringVar(&network, "network", "", "网络名字；可选物理局域网或虚拟局域网")
 	c.Flags().BoolVar(&jsonOutput, "json", false, "以 JSON Lines 输出；每条结果一行")
 	return c
 }
