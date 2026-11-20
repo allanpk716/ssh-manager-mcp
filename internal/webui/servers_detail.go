@@ -95,19 +95,22 @@ type serverDetailDeviceOption struct {
 // serverDetailTopologyView 是地址与地点块的展示数据；客户端只读来源也会
 // 填充，CanWrite 控制表单是否出现。
 type serverDetailTopologyView struct {
-	HasDevice         bool
-	DeviceName        string
-	LocationPath      string
-	Addresses         []serverDetailAddressRow
-	AvailableNetworks []serverDetailDeviceOption
-	Mismatches        []TopologyLocationMismatch
-	SiblingAccounts   []serverDetailSiblingAccount
-	MoveChoices       []serverDetailDeviceOption
-	LocationOptions   locationOptionsView
-	CanWrite          bool
-	CanEditAddresses  bool
-	LocationOpen      bool
-	NewLocationHref   string
+	HasDevice    bool
+	DeviceName   string
+	LocationPath string
+	// PreferredNetworkAddress 来自设备连接候选；只取物理或虚拟局域网候选，
+	// 不把兜底主机当成网络成员地址。
+	PreferredNetworkAddress string
+	Addresses               []serverDetailAddressRow
+	AvailableNetworks       []serverDetailDeviceOption
+	Mismatches              []TopologyLocationMismatch
+	SiblingAccounts         []serverDetailSiblingAccount
+	MoveChoices             []serverDetailDeviceOption
+	LocationOptions         locationOptionsView
+	CanWrite                bool
+	CanEditAddresses        bool
+	LocationOpen            bool
+	NewLocationHref         string
 }
 
 // serverDetailSoftwareView 是软件清单入口卡片的数据；摘要与清单明细都来
@@ -144,9 +147,12 @@ type serverDetailPageView struct {
 	ProfileRows   []serverDetailProfileRow
 	ShareRows     []ServerDetailSharedStorageChoice
 	Topology      *serverDetailTopologyView
-	Software      *serverDetailSoftwareView
-	Move          *serverDetailMoveDraft
-	AdvancedOpen  bool
+	// PreferredNetworkAddress 是其他地址为空时页头显示的网络成员地址，来
+	// 自连接候选里的第一个物理或虚拟局域网地址。
+	PreferredNetworkAddress string
+	Software                *serverDetailSoftwareView
+	Move                    *serverDetailMoveDraft
+	AdvancedOpen            bool
 }
 
 // serverDetailMoveDraft 保存改挂确认框里 owner 已选择的目标设备与确认状态。
@@ -386,6 +392,7 @@ func (h *handler) serverDetailPageWith(
 			return nil, err
 		}
 		view.Topology = h.serverDetailTopologyView(detail, data, r)
+		view.PreferredNetworkAddress = view.Topology.PreferredNetworkAddress
 		if drawer == serverDetailEditLocation && view.Topology.CanWrite && view.Topology.HasDevice {
 			view.Topology.LocationOpen = true
 		}
@@ -428,6 +435,13 @@ func (h *handler) serverDetailTopologyView(
 	}
 	if device == nil {
 		return view
+	}
+	for _, candidate := range device.Candidates {
+		source := models.DialAddressSource(candidate.Source)
+		if source == models.DialAddressSourcePhysical || source == models.DialAddressSourceVirtual {
+			view.PreferredNetworkAddress = candidate.Address
+			break
+		}
 	}
 	view.LocationPath = device.LocationPath
 	suggestionNetworks := make([]networkrange.Network, 0, len(data.Networks))

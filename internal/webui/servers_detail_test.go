@@ -505,6 +505,51 @@ func TestServerDetailAddressEditorDrawer(t *testing.T) {
 	}
 }
 
+// TestServerDetailHeaderUsesPreferredNetworkAddress 校验其他地址清空后，
+// 页头显示连接候选里的首选网络地址；没有网络地址时不显示空主机。
+func TestServerDetailHeaderUsesPreferredNetworkAddress(t *testing.T) {
+	cases := []struct {
+		name       string
+		candidates []TopologyCandidate
+		want       string
+	}{
+		{
+			name: "有物理局域网候选",
+			candidates: []TopologyCandidate{
+				{Address: "203.0.113.9", Source: string(models.DialAddressSourceFallback)},
+				{Address: "192.0.2.10", Source: string(models.DialAddressSourcePhysical)},
+			},
+			want: `root@192.0.2.10:22`,
+		},
+		{
+			name:       "没有网络候选",
+			candidates: []TopologyCandidate{{Address: "203.0.113.9", Source: string(models.DialAddressSourceFallback)}},
+			want:       `root · 端口 22`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := newServerDetailTestStore()
+			store.details["srv-fine"].Host = ""
+			data := serverDetailTopologyFixture()
+			data.Devices[0].Candidates = testCase.candidates
+			handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+				servers: store, writer: &stubServerWriter{},
+				topology:       &stubTopologySource{data: data},
+				topologyWriter: &stubTopologyWriter{},
+			})
+			body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+			want := `<p class="detail-subtitle mono">` + testCase.want + `</p>`
+			if !strings.Contains(body, want) {
+				t.Fatalf("页头应显示 %q：\n%s", testCase.want, body)
+			}
+			if strings.Contains(body, "root@:22") {
+				t.Fatalf("其他地址清空后页头不得显示空主机：\n%s", body)
+			}
+		})
+	}
+}
+
 // TestServerDetailAddressRangeSuggestions 校验网段提示按地点覆盖计算：只
 // 读行说明不会自动归入，编辑弹层提供只改草稿的确认入口。
 func TestServerDetailAddressRangeSuggestions(t *testing.T) {

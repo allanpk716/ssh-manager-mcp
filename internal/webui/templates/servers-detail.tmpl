@@ -3,7 +3,7 @@
 <a class="back-link" href="/ui/servers/" aria-label="返回服务器列表"><span aria-hidden="true">‹</span>服务器</a>
 <div class="subpage-header">
 <h1>{{.ServerDetail.Name}}</h1>
-<p class="detail-subtitle mono">{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}</p>
+<p class="detail-subtitle mono">{{if .ServerDetail.Host}}{{.ServerDetail.User}}@{{.ServerDetail.Host}}:{{.ServerDetail.Port}}{{else if .ServerDetailPage.PreferredNetworkAddress}}{{.ServerDetail.User}}@{{.ServerDetailPage.PreferredNetworkAddress}}:{{.ServerDetail.Port}}{{else}}{{.ServerDetail.User}} · 端口 {{.ServerDetail.Port}}{{end}}</p>
 {{if .Caps.CanWrite}}<div id="server-last-test" class="server-last-test{{if .ServerDetail.ConnectionTest}}{{if .ServerDetail.ConnectionTest.Succeeded}} is-succeeded{{else}} is-failed{{end}}{{end}}">
 <span class="status-dot" aria-hidden="true"></span>{{if .ServerDetail.ConnectionTest}}上次测试：{{formatTime .ServerDetail.ConnectionTest.CompletedAt}} {{.ServerDetail.ConnectionTest.ShortStatusText}}{{else}}从未测试{{end}}
 </div>{{end}}
