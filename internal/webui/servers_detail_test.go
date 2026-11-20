@@ -354,8 +354,7 @@ func TestServerDetailUnifiedPageShowsCardsAndFields(t *testing.T) {
 		`class="location-value"`, "机房", "地点登记在机器上",
 		`id="server-card-address"`, "办公网", "物理局域网", "192.0.2.10",
 		"虚拟网", "虚拟局域网", "100.64.0.10", "其他（公网或未登记网络）",
-		"地点不一致", "公司 / 一厂区 / 3 号楼",
-		`action="/ui/servers/srv-fine/address/add"`, "＋ 添加地址", "机房网",
+		"地点不一致", "公司 / 一厂区 / 3 号楼", `data-detail-edit-button="address"`,
 		`id="server-card-description"`, `href="/ui/servers/srv-fine?edit=description"`,
 		"用途", "构建机", "部署了什么", "Docker", "硬件", "NUC",
 		"注意事项", "只允许 owner 登录", "备注", "内部服务",
@@ -369,10 +368,164 @@ func TestServerDetailUnifiedPageShowsCardsAndFields(t *testing.T) {
 	if strings.Contains(body, `role="dialog"`) || strings.Contains(body, `name="description"`) {
 		t.Fatalf("未请求编辑时不应同时渲染预览与编辑表单：\n%s", body)
 	}
+	for _, forbidden := range []string{
+		`action="/ui/servers/srv-fine/address/add"`,
+		`action="/ui/servers/srv-fine/address/edit"`,
+		`action="/ui/servers/srv-fine/address/remove"`,
+		"编辑地址由后续版本提供",
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("地址卡片不应再保留逐行写入入口 %q：\n%s", forbidden, body)
+		}
+	}
 
 	bare := serversGet(t, handler, cookie, "/ui/servers/srv-bare")
 	if !strings.Contains(bare, "同一台机器上的其他账号") || !strings.Contains(bare, "未关联机器") {
 		t.Fatalf("未关联机器时仍应有账号卡片与说明：\n%s", bare)
+	}
+}
+
+// TestServerDetailAddressEditorDrawer 校验地址分区使用一份「网络 + 地址」
+// 清单编辑，下拉包含全部网络与其他地址选项。
+func TestServerDetailAddressEditorDrawer(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=address")
+	for _, want := range []string{
+		`data-server-detail-drawer="address"`,
+		`<h2 id="server-detail-drawer-title">编辑地址</h2>`,
+		`action="/ui/servers/srv-fine/address"`,
+		`name="address_network"`, `name="address"`,
+		`value="other"`, "其他（公网或未登记网络）",
+		`value="办公网"`, `value="机房网"`, `value="虚拟网"`,
+		`name="revision" value="4"`, `data-remove-address`, `data-add-detail-address`,
+		"保存地址",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("地址编辑弹层缺少 %q：\n%s", want, body)
+		}
+	}
+	if strings.Count(body, `data-detail-address-row`) != 3 {
+		t.Fatalf("地址编辑弹层应有三个初始行（两个网络成员与一个其他地址）：\n%s", body)
+	}
+}
+
+// TestServerDetailAddressListWrite 校验整份地址表单走服务器写入口，并把
+// 其他地址行转换成清空语义。
+func TestServerDetailAddressListWrite(t *testing.T) {
+	writer := &stubServerWriter{}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: writer,
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/address", url.Values{
+		"revision":        {"4"},
+		"address_network": {"办公网", "虚拟网"},
+		"address":         {"192.0.2.10", "100.64.0.10"},
+	})
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/servers/srv-fine?saved=address#server-card-address" {
+		t.Fatalf("地址保存状态码=%d 跳转=%s", response.StatusCode, response.Header.Get("Location"))
+	}
+	if len(writer.addressEdits) != 1 {
+		t.Fatalf("应调用一次地址列表写入：%+v", writer.addressEdits)
+	}
+	edit := writer.addressEdits[0]
+	if edit.id != "srv-fine" || edit.form.ExpectedRevision != 4 || len(edit.form.Rows) != 2 ||
+		edit.form.Rows[0].Network != "办公网" || edit.form.Rows[0].Address != "192.0.2.10" ||
+		edit.form.Rows[1].Network != "虚拟网" || edit.form.Rows[1].Address != "100.64.0.10" {
+		t.Fatalf("地址列表写入参数不正确：%+v", edit)
+	}
+	if edit.source.RemoteAddress != "192.0.2.1" {
+		t.Fatalf("地址列表写入来源不正确：%+v", edit.source)
+	}
+}
+
+// TestServerDetailAddressWriteKeepsDraft 校验表单错误与修订号冲突都保持
+// 地址弹层打开，并回显 owner 提交的整份草稿。
+func TestServerDetailAddressWriteKeepsDraft(t *testing.T) {
+	cases := []struct {
+		name     string
+		writer   *stubServerWriter
+		status   int
+		notice   string
+		revision string
+	}{
+		{
+			name:     "表单错误",
+			writer:   &stubServerWriter{addressErr: &ServerFormError{Message: "地址不能包含空白字符。"}},
+			status:   http.StatusBadRequest,
+			notice:   "地址不能包含空白字符。",
+			revision: "4",
+		},
+		{
+			name: "修订号冲突",
+			writer: &stubServerWriter{conflict: &ServerEditConflictView{
+				Current: &ServerDetailView{
+					ID: "srv-fine", Name: "fine", Revision: 5,
+					DeviceName: "工作站", HasDevice: true,
+				},
+			}},
+			status:   http.StatusConflict,
+			notice:   "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。",
+			revision: "4",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+				servers: newServerDetailTestStore(), writer: testCase.writer,
+				topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+				topologyWriter: &stubTopologyWriter{},
+			})
+			response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/address", url.Values{
+				"revision":        {testCase.revision},
+				"address_network": {"机房网", "other"},
+				"address":         {"10.0.0.9", "203.0.113.10"},
+			})
+			if len(testCase.writer.addressEdits) != 1 ||
+				testCase.writer.addressEdits[0].form.Rows[0].Address != "10.0.0.9" {
+				t.Fatalf("写入前应解析整份草稿：%+v", testCase.writer.addressEdits)
+			}
+			body := readResponseBody(t, response)
+			if response.StatusCode != testCase.status || !strings.Contains(body, testCase.notice) {
+				t.Fatalf("状态码=%d，应含 %q：\n%s", response.StatusCode, testCase.notice, body)
+			}
+			for _, want := range []string{
+				`data-server-detail-drawer="address"`, `value="10.0.0.9"`,
+				`value="203.0.113.10"`, `value="机房网"`, `value="other"`,
+			} {
+				if !strings.Contains(body, want) {
+					t.Fatalf("失败后应保留整份地址草稿，缺少 %q：\n%s", want, body)
+				}
+			}
+		})
+	}
+}
+
+// TestServerDetailAddressClientReadOnly 校验客户端直接请求地址编辑参数时
+// 也不渲染写表单。
+func TestServerDetailAddressClientReadOnly(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		role: RoleClient, servers: newServerDetailTestStore(),
+		topology: &stubTopologySource{data: serverDetailTopologyFixture()},
+	})
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=address")
+	for _, forbidden := range []string{
+		`data-detail-edit-button="address"`, `name="address_network"`, `role="dialog"`,
+	} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("客户端地址卡片不应包含 %q：\n%s", forbidden, body)
+		}
+	}
+	if !strings.Contains(body, "仅显示本地快照，修改请到权威端。") {
+		t.Fatalf("客户端地址卡片应提示到权威端修改：\n%s", body)
 	}
 }
 

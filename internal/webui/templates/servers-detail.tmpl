@@ -88,7 +88,7 @@
 
 <section aria-label="地址" id="server-card-address">
 <article class="shared-card address-card">
-<div class="card-heading"><h2>地址</h2>{{if .CanWrite}}<span class="muted">编辑地址由后续版本提供</span>{{end}}</div>
+<div class="card-heading"><h2>地址</h2>{{if .CanEditAddresses}}<a class="small-button" href="/ui/servers/{{$.ServerDetail.ID}}?edit=address" data-detail-edit-button="address">编辑</a>{{end}}</div>
 <p class="card-help">sshmgr 连接时会按自己所在的网络自动选择地址。</p>
 <div class="address-card-list">
 {{range .Addresses}}
@@ -96,42 +96,10 @@
 <span class="address-network">{{.NetworkName}}</span>
 <span class="type-tag">{{.TypeLabel}}</span>
 <span class="address-value mono">{{.Address}}</span>
-{{if $.Caps.CanWrite}}
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/address/edit" class="inline-form address-edit-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<input type="hidden" name="network" value="{{.NetworkName}}">
-<input type="text" name="address" value="{{.Address}}" aria-label="编辑 {{.NetworkName}} 的地址">
-<button type="submit">保存</button>
-</form>
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/address/remove" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<input type="hidden" name="network" value="{{.NetworkName}}">
-<button type="submit" class="danger">移除</button>
-</form>
-{{end}}
 </div>
 {{end}}
-<div class="address-card-row fallback-address">
-<span class="address-network">其他（公网或未登记网络）</span>
-<span class="type-tag">条目地址</span>
-<span class="address-value mono">{{.FallbackAddress}}</span>
+{{if not .Addresses}}<p class="empty-inline">暂无可用地址。</p>{{end}}
 </div>
-</div>
-{{if and .CanWrite .HasDevice .AvailableNetworks}}
-<details class="address-add">
-<summary>＋ 添加地址</summary>
-<form method="post" action="/ui/servers/{{$.ServerDetail.ID}}/address/add" class="inline-form">
-<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-<label for="address-network">网络</label>
-<select id="address-network" name="network">
-{{range .AvailableNetworks}}<option value="{{.Name}}">{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}
-</select>
-<label for="address-value">地址</label>
-<input id="address-value" name="address" required>
-<button type="submit">添加</button>
-</form>
-</details>
-{{else if and .CanWrite .HasDevice}}<p class="empty-inline">这台机器已加入全部已登记网络。</p>{{end}}
 </article>
 </section>
 {{else}}

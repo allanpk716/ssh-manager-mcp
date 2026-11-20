@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -13,6 +14,7 @@ import (
 const (
 	serverDetailEditConnection  = "connection"
 	serverDetailEditLocation    = "location"
+	serverDetailEditAddress     = "address"
 	serverDetailEditDescription = "description"
 	serverDetailEditAccounts    = "accounts"
 )
@@ -20,7 +22,8 @@ const (
 // serverDetailEditScopeFromQuery 返回要打开的编辑弹层；空串表示不打开。
 func serverDetailEditScopeFromQuery(r *http.Request) string {
 	switch r.URL.Query().Get("edit") {
-	case serverDetailEditConnection, serverDetailEditLocation, serverDetailEditDescription, serverDetailEditAccounts:
+	case serverDetailEditConnection, serverDetailEditLocation, serverDetailEditAddress,
+		serverDetailEditDescription, serverDetailEditAccounts:
 		return r.URL.Query().Get("edit")
 	default:
 		return ""
@@ -55,9 +58,11 @@ func serverDetailEditPath(id, scope string) string {
 
 // serverDetailAddressRow 是地址卡片里的一行：网络名、类型与地址。
 type serverDetailAddressRow struct {
-	NetworkName string
-	TypeLabel   string
-	Address     string
+	NetworkName  string
+	NetworkValue string
+	TypeLabel    string
+	Address      string
+	IsOther      bool
 }
 
 // serverDetailSiblingAccount 是同一台机器上的另一个登录账号；Note 复用
@@ -90,6 +95,7 @@ type serverDetailTopologyView struct {
 	MoveChoices       []serverDetailDeviceOption
 	LocationOptions   locationOptionsView
 	CanWrite          bool
+	CanEditAddresses  bool
 	LocationOpen      bool
 	FallbackAddress   string
 	NewLocationHref   string
@@ -123,6 +129,7 @@ type serverDetailPageView struct {
 	EditDrawer    string
 	Edit          *serverEditView
 	AccountDrafts map[string]string
+	AddressDrafts []serverDetailAddressRow
 	SecretRows    []serverDetailSecretRow
 	ProfileRows   []serverDetailProfileRow
 	ShareRows     []ServerDetailSharedStorageChoice
@@ -135,6 +142,8 @@ func (v serverDetailPageView) DrawerTitle() string {
 	switch v.EditDrawer {
 	case serverDetailEditLocation:
 		return "编辑地点"
+	case serverDetailEditAddress:
+		return "编辑地址"
 	case serverDetailEditDescription:
 		return "编辑说明"
 	case serverDetailEditAccounts:
@@ -149,6 +158,8 @@ func (v serverDetailPageView) DrawerCaption() string {
 	switch v.EditDrawer {
 	case serverDetailEditLocation:
 		return "地点登记在机器上，同一台机器的全部服务器条目共用。"
+	case serverDetailEditAddress:
+		return "地址登记在机器上，同一台机器的全部服务器条目共用。"
 	case serverDetailEditDescription:
 		return "这些内容只写给人看，用于补充这台服务器的背景。"
 	case serverDetailEditAccounts:
@@ -216,6 +227,7 @@ type serverDetailRenderOptions struct {
 	drawer        string
 	edit          *serverEditView
 	accountDrafts map[string]string
+	addressDrafts []serverDetailAddressRow
 }
 
 // renderServerDetailPageView 渲染详情页；drawer 非空时打开对应编辑弹层，
@@ -237,6 +249,12 @@ func (h *handler) renderServerDetailPageView(
 	if err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "读取服务器详情失败", "读取服务器详情失败，请稍后重试。")
 		return
+	}
+	if options.addressDrafts != nil {
+		view.AddressDrafts = options.addressDrafts
+	}
+	if !h.caps.CanWrite {
+		view.EditDrawer = ""
 	}
 	if options.edit != nil && options.edit.Notice != "" && options.notice == "" {
 		options.notice = options.edit.Notice
@@ -274,10 +292,8 @@ func serverDetailNoticeText(kind string) string {
 	switch kind {
 	case "location-saved":
 		return "已保存机器地点。"
-	case "address-saved":
+	case "saved-address":
 		return "已保存地址。"
-	case "address-removed":
-		return "已移除地址。"
 	case "server-moved":
 		return "已改挂到另一台机器。"
 	case "saved-connection":
@@ -301,6 +317,8 @@ func serverDetailSavedNoticeKind(kind string) string {
 		return serverDetailEditDescription
 	case "saved-accounts":
 		return serverDetailEditAccounts
+	case "saved-address":
+		return serverDetailEditAddress
 	default:
 		return ""
 	}
@@ -335,6 +353,12 @@ func (h *handler) serverDetailPageWith(
 		if drawer == serverDetailEditLocation && view.Topology.CanWrite && view.Topology.HasDevice {
 			view.Topology.LocationOpen = true
 		}
+		if drawer == serverDetailEditAddress && view.Topology.CanEditAddresses {
+			view.AddressDrafts = append([]serverDetailAddressRow(nil), view.Topology.Addresses...)
+			if len(view.AddressDrafts) == 0 {
+				view.AddressDrafts = []serverDetailAddressRow{{NetworkValue: "other"}}
+			}
+		}
 	}
 	view.Software = h.serverDetailSoftwareView(r, detail)
 	view.SecretRows = serverDetailSecretRows(detail)
@@ -349,8 +373,9 @@ func (h *handler) serverDetailTopologyView(
 ) *serverDetailTopologyView {
 	view := &serverDetailTopologyView{
 		HasDevice: detail.HasDevice, DeviceName: detail.DeviceName,
-		CanWrite:        h.cfg.TopologyWriter != nil,
-		FallbackAddress: detail.Host,
+		CanWrite:         h.cfg.TopologyWriter != nil,
+		CanEditAddresses: h.caps.CanWrite,
+		FallbackAddress:  detail.Host,
 	}
 	if !view.CanWrite {
 		view.LocationOpen = false
@@ -376,25 +401,20 @@ func (h *handler) serverDetailTopologyView(
 		}
 		network := networkByID[membership.NetworkID]
 		view.Addresses = append(view.Addresses, serverDetailAddressRow{
-			NetworkName: network.Name, TypeLabel: networkTypeLabel(network.Type),
-			Address: membership.Address,
+			NetworkName: network.Name, NetworkValue: network.Name,
+			TypeLabel: networkTypeLabel(network.Type), Address: membership.Address,
 		})
 	}
-	usedNetworks := map[string]bool{}
-	for _, membership := range data.Memberships {
-		if membership.DeviceID == device.ID {
-			usedNetworks[membership.NetworkID] = true
-		}
+	if detail.Host != "" {
+		view.Addresses = append(view.Addresses, serverDetailAddressRow{
+			NetworkName: "其他（公网或未登记网络）", NetworkValue: "other",
+			TypeLabel: "其他地址", Address: detail.Host, IsOther: true,
+		})
 	}
 	for _, network := range data.Networks {
-		if !usedNetworks[network.ID] {
-			view.AvailableNetworks = append(view.AvailableNetworks, serverDetailDeviceOption{
-				Name: network.Name, LocationPath: network.LocationPath,
-			})
-		}
-		if network.Type == networkTypeVirtual {
-			continue
-		}
+		view.AvailableNetworks = append(view.AvailableNetworks, serverDetailDeviceOption{
+			Name: network.Name, LocationPath: network.LocationPath,
+		})
 	}
 	view.Mismatches = device.LocationMismatches
 	for _, server := range device.Servers {
@@ -571,6 +591,82 @@ func (h *handler) handleServerDetailLocation(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	serverDetailWriteRedirect(w, r, detail.ID, "location-saved", serverDetailCardAnchor(serverDetailEditLocation))
+}
+
+// handleServerDetailAddressList 处理整份地址列表保存。校验失败、写入失败
+// 与修订号冲突都保持弹层打开并回显整份草稿。
+func (h *handler) handleServerDetailAddressList(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "保存地址列表只接受 POST 请求。")
+		return
+	}
+	detail := h.serverDetailForWrite(w, r, id)
+	if detail == nil {
+		return
+	}
+	form, drafts := parseServerAddressListForm(r, detail.Revision)
+	if !detail.HasDevice || detail.DeviceName == "" {
+		h.renderServerDetailAddressError(w, r, detail, http.StatusBadRequest,
+			"这台服务器条目还没有关联机器，请先改挂到机器或到新增流程补网络位置。", drafts)
+		return
+	}
+	_, conflict, err := h.cfg.ServerWriter.EditServerAddresses(
+		detail.ID, form, ServerWriteSource{RemoteAddress: remoteIP(r)},
+	)
+	if err != nil {
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			h.renderServerDetailAddressError(w, r, detail, http.StatusBadRequest, formErr.Message, drafts)
+			return
+		}
+		h.renderServerDetailAddressError(w, r, detail, http.StatusInternalServerError,
+			"保存地址失败，请稍后重试。", drafts)
+		return
+	}
+	if conflict != nil {
+		h.renderServerDetailAddressError(w, r, conflict.Current, http.StatusConflict,
+			"服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。", drafts)
+		return
+	}
+	http.Redirect(
+		w, r, serverDetailPath(detail.ID)+"?saved=address"+serverDetailCardAnchor(serverDetailEditAddress),
+		http.StatusSeeOther,
+	)
+}
+
+func parseServerAddressListForm(r *http.Request, fallbackRevision int64) (ServerAddressListForm, []serverDetailAddressRow) {
+	revision := int64(0)
+	if parsed, err := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("revision")), 10, 64); err == nil {
+		revision = parsed
+	} else if strings.TrimSpace(r.PostFormValue("revision")) == "" {
+		revision = fallbackRevision
+	}
+	networks := r.PostForm["address_network"]
+	addresses := r.PostForm["address"]
+	rows := make([]ServerAddressRow, 0, len(networks))
+	drafts := make([]serverDetailAddressRow, 0, len(networks))
+	for index, network := range networks {
+		address := ""
+		if index < len(addresses) {
+			address = strings.TrimSpace(addresses[index])
+		}
+		network = strings.TrimSpace(network)
+		if network == "" && address == "" {
+			continue
+		}
+		rows = append(rows, ServerAddressRow{Network: network, Address: address})
+		drafts = append(drafts, serverDetailAddressRow{NetworkValue: network, Address: address})
+	}
+	return ServerAddressListForm{Rows: rows, ExpectedRevision: revision}, drafts
+}
+
+func (h *handler) renderServerDetailAddressError(
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, status int,
+	notice string, drafts []serverDetailAddressRow,
+) {
+	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
+		status: status, notice: notice, drawer: serverDetailEditAddress, addressDrafts: drafts,
+	})
 }
 
 // handleServerDetailAddressWrite 处理地址的新增、编辑与移除。
