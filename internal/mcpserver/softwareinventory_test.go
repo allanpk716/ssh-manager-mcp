@@ -227,6 +227,52 @@ func TestQuerySoftwareInventoryAuthorityFace(t *testing.T) {
 	}
 }
 
+// TestQuerySoftwareInventoryToolExplainsObservedExposure 钉住工具说明：实
+// 测清单只有三档监听暴露级别，声明专属档位仅为兼容旧参数继续接受。
+func TestQuerySoftwareInventoryToolExplainsObservedExposure(t *testing.T) {
+	session := softwareInventoryFaceSessionWithQuerier(t, &fakeSoftwareInventoryQuerier{})
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool *mcp.Tool
+	for i := range tools.Tools {
+		if tools.Tools[i].Name == "query_software_inventory" {
+			tool = tools.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("工具清单缺少 query_software_inventory")
+	}
+	for _, wanted := range []string{
+		"observed listening ports use only local_machine, specific_address, and all_addresses",
+		"local_area_network, virtual_local_area_network, and public_network remain accepted for compatibility but do not match observed items",
+	} {
+		if !strings.Contains(tool.Description, wanted) {
+			t.Fatalf("工具说明缺少 %q：%s", wanted, tool.Description)
+		}
+	}
+
+	schemaBlob, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaBlob, &schema); err != nil {
+		t.Fatal(err)
+	}
+	description := schema.Properties["minimum_exposure"].Description
+	if !strings.Contains(description, "observed items use only local_machine | specific_address | all_addresses") ||
+		!strings.Contains(description, "local_area_network | virtual_local_area_network | public_network are accepted for compatibility but do not match observed items") {
+		t.Fatalf("minimum_exposure 参数说明不准确：%s", description)
+	}
+}
+
 // TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters 钉住 CSV 导
 // 出面：format=csv 复用同一组查询条件，返回能用标准解析器读回的总表文
 // 本，并且机密项遮蔽仍然生效。
