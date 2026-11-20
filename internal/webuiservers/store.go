@@ -458,7 +458,7 @@ func EditServerAddressesView(
 		Identifier: id, ExpectedRevision: form.ExpectedRevision, CheckRevision: true,
 	}
 	for _, row := range form.Rows {
-		if row.Network == "other" {
+		if row.Network == webui.ServerAddressNetworkOther {
 			if request.OtherAddress != "" {
 				return nil, nil, &webui.ServerFormError{Message: "其他（公网或未登记网络）地址最多只能有一行。"}
 			}

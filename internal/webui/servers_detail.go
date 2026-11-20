@@ -401,7 +401,7 @@ func (h *handler) serverDetailPageWith(
 		if drawer == serverDetailEditAddress && view.Topology.CanEditAddresses {
 			view.AddressDrafts = append([]serverDetailAddressRow(nil), view.Topology.Addresses...)
 			if len(view.AddressDrafts) == 0 {
-				view.AddressDrafts = []serverDetailAddressRow{{NetworkValue: "other"}}
+				view.AddressDrafts = []serverDetailAddressRow{{NetworkValue: ServerAddressNetworkOther}}
 			}
 		}
 	}

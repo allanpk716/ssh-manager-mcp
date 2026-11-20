@@ -28,6 +28,10 @@ type ServerListEntry struct {
 	ConnectionTest *ServerConnectionTestResultView
 }
 
+// ServerAddressNetworkOther 表示地址编辑行选择「其他（公网或未登记网络）」。
+// 模板与浏览器脚本也使用字面值 other，两处改动时必须与这个常量同步。
+const ServerAddressNetworkOther = "other"
+
 // ServerCard 是服务器列表的一张卡片。它在列表行的基础上补充拓扑、授权与
 // 同机账号数；字段名由模板逐项展示。
 type ServerCard struct {
