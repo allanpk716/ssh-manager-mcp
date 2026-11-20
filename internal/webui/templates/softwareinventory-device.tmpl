@@ -23,6 +23,7 @@
 <button type="submit">立即采集</button>
 </form>
 {{end}}
+<a class="button-link" href="/ui/software-inventory/export?device={{.SoftwareInventoryDevice.Name | urlquery}}">导出这台设备</a>
 </article>
 
 {{range .SoftwareInventoryDevice.Groups}}

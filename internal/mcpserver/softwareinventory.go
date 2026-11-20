@@ -20,6 +20,7 @@ import (
 // 数全部可选；可见设备范围不在这里传，由查询执行方决定：本地查询按本
 // 面 profile 计算，在线查询由权威端按设备码绑定的 profile 计算。
 type QuerySoftwareInventoryInput struct {
+	Format                string `json:"format,omitempty" jsonschema:"output format: json (structured device list; default) or csv (flat inventory table text; the CSV is UTF-8 with a byte order mark and CRLF line endings)"`
 	Device                string `json:"device,omitempty" jsonschema:"device name filter; omit for all visible devices"`
 	Name                  string `json:"name,omitempty" jsonschema:"case-insensitive substring match on the software name; omit for all names"`
 	ExactVersion          string `json:"exact_version,omitempty" jsonschema:"exact case-sensitive version string after trimming surrounding whitespace; omit for any version"`
@@ -41,7 +42,8 @@ type SoftwareInventoryQuerier interface {
 // 输出的统一遮蔽字段（见 masking.go 的测试约束）。
 type QuerySoftwareInventoryOutput struct {
 	MaskedOutput
-	Devices []softwareinventory.QueryDeviceResult `json:"devices" jsonschema:"matching devices, each with its software items, listening ports and exposure levels, source, collection time, and collection status"`
+	Devices []softwareinventory.QueryDeviceResult `json:"devices" jsonschema:"matching devices, each with its software items, listening ports and exposure levels, source, collection time, and collection status; empty when format=csv"`
+	CSV     string                                `json:"csv,omitempty" jsonschema:"flat inventory table text; one row per software item; only present for format=csv"`
 }
 
 // errSoftwareInventoryNotWired 是客户端面未注入在线查询能力时的固定错误
@@ -102,9 +104,19 @@ func registerSoftwareInventoryTool(
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[17], // "query_software_inventory"（票 #185）
-			Description: "Query the observed software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All eight filters are optional: device (name), name (case-insensitive substring), exact_version (verbatim equality), site (including descendant sites), network (registered physical or virtual network name), minimum_exposure, category, include_system_packages (default false — package lists can be huge; name or exact_version includes system packages). Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
+			Description: "Query the observed software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All eight filters are optional: device (name), name (case-insensitive substring), exact_version (verbatim equality), site (including descendant sites), network (registered physical or virtual network name), minimum_exposure, category, include_system_packages (default false — package lists can be huge; name or exact_version includes system packages). format optionally returns the same filtered result as flat CSV table text (one row per software item, UTF-8 with byte order mark, CRLF line endings) instead of the structured device list. Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
 		},
 		func(_ context.Context, _ *mcp.CallToolRequest, in QuerySoftwareInventoryInput) (*mcp.CallToolResult, QuerySoftwareInventoryOutput, error) {
+			if format := in.Format; format != "" && format != "json" && format != "csv" {
+				return &mcp.CallToolResult{
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{
+							Text: "format 参数只支持 json 或 csv",
+						}},
+					}, QuerySoftwareInventoryOutput{
+						Devices: []softwareinventory.QueryDeviceResult{},
+					}, nil
+			}
 			result, err := inventory.QuerySoftwareInventory(in)
 			if err != nil {
 				// 空数组而不是 nil：工具输出的 JSON 结构里 devices 恒为数组。
@@ -112,6 +124,20 @@ func registerSoftwareInventoryTool(
 					IsError: true,
 					Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
 				}, QuerySoftwareInventoryOutput{Devices: []softwareinventory.QueryDeviceResult{}}, nil
+			}
+			if in.Format == "csv" {
+				blob, err := softwareinventory.MarshalCSV(result)
+				if err != nil {
+					return &mcp.CallToolResult{
+							IsError: true,
+							Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+						}, QuerySoftwareInventoryOutput{
+							Devices: []softwareinventory.QueryDeviceResult{},
+						}, nil
+				}
+				return nil, QuerySoftwareInventoryOutput{
+					Devices: []softwareinventory.QueryDeviceResult{}, CSV: string(blob),
+				}, nil
 			}
 			return nil, QuerySoftwareInventoryOutput{Devices: result.Devices}, nil
 		},

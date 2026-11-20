@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,6 +81,115 @@ func TestInventoryExportRequiresCycloneDXFormat(t *testing.T) {
 		if err == nil {
 			t.Fatalf("%v：导出格式必须显式写为 cyclonedx", args)
 		}
+	}
+}
+
+// readInventoryExportCSV 把命令输出的 CSV 用标准解析器读回；先断言字节顺
+// 序标记与回车换行，避免只看整串文本。
+func readInventoryExportCSV(t *testing.T, output string) [][]string {
+	t.Helper()
+	blob := []byte(output)
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("导出缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	if bytes.Contains(blob[3:], []byte("\n")) && !bytes.Contains(blob[3:], []byte("\r\n")) {
+		t.Fatalf("导出换行必须是回车加换行：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, output)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("导出缺少表头：%q", output)
+	}
+	return rows
+}
+
+func TestInventoryExportCSVUsesCommandLineFilters(t *testing.T) {
+	newSecretsEnv(t)
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), mustDecodeHex(t, os.Getenv("SSHMGR_MASTERKEY_HEX")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("公司", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDeviceAtSite("工作站", "", "", "公司"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDeviceAtSite("分部工作站", "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "总部物理局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"工作站": {
+			{
+				Category: softwareinventory.CategoryServiceProgram,
+				Name: `nginx,网页服务
+含引号"特"`, Version: "1.25.3",
+				ListeningPorts: []softwareinventory.ListeningPort{{
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+					Exposure: softwareinventory.ExposureAllAddresses,
+				}},
+			},
+			{Category: softwareinventory.CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+		},
+		"分部工作站": {
+			{Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.24.0"},
+		},
+	})
+	st.Close()
+
+	output := mustInventoryCli(t, "", "inventory", "export", "--format", "csv",
+		"--name", "nginx", "--version", "1.25.3",
+		"--site", "公司", "--network", "总部物理局域网")
+	rows := readInventoryExportCSV(t, output)
+	if strings.Join(rows[0], "|") != "设备|软件名|版本|类别|监听端口|暴露级别|采集时间" {
+		t.Fatalf("CSV 表头 = %#v", rows[0])
+	}
+	if len(rows) != 2 || rows[1][0] != "工作站" ||
+		rows[1][1] != "nginx,网页服务\n含引号\"特\"" || rows[1][2] != "1.25.3" ||
+		rows[1][4] != "0.0.0.0:80/tcp" || rows[1][5] != "监听所有地址" {
+		t.Fatalf("按条件导出的 CSV 行 = %#v", rows)
+	}
+
+	output = mustInventoryCli(t, "", "inventory", "export", "--format", "csv",
+		"--device", "分部工作站")
+	rows = readInventoryExportCSV(t, output)
+	if len(rows) != 2 || rows[1][0] != "分部工作站" || rows[1][2] != "1.24.0" {
+		t.Fatalf("单台设备导出的 CSV 行 = %#v", rows)
+	}
+}
+
+func TestInventoryExportCSVWritesOutputFile(t *testing.T) {
+	newSecretsEnv(t)
+	mustInventoryCli(t, "", "devices", "add", "gpu工作站")
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"gpu工作站": {
+			{Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+		},
+	})
+	outputPath := filepath.Join(t.TempDir(), "software-inventory.csv")
+	mustInventoryCli(t, "", "inventory", "export", "--format", "csv", "--output", outputPath)
+	file, err := os.Open(outputPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	blob, err := io.ReadAll(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readInventoryExportCSV(t, string(blob))
+	if len(rows) != 2 || rows[1][1] != "nginx" {
+		t.Fatalf("输出文件里的 CSV 行 = %#v", rows)
 	}
 }
 

@@ -1,7 +1,9 @@
 package webui
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -58,6 +60,10 @@ type stubSoftwareInventorySource struct {
 	deviceErr          error
 	devices            []SoftwareInventoryDeviceSummary
 	deviceFilter       SoftwareInventoryFilter
+	exportCSV          []byte
+	exportErr          error
+	exportFilter       SoftwareInventoryFilter
+	exportCalled       bool
 	searchRows         []SoftwareInventorySearchRow
 	searchDevices      []SoftwareInventorySearchDevice
 	searchQuery        string
@@ -133,6 +139,14 @@ func (s *stubSoftwareInventorySource) SearchSoftwareInventory(
 	s.searchQuery = filter.Name
 	s.searchFilter = filter
 	return s.searchDevices, nil
+}
+
+func (s *stubSoftwareInventorySource) ExportSoftwareInventoryCSV(
+	filter SoftwareInventoryFilter,
+) ([]byte, error) {
+	s.exportCalled = true
+	s.exportFilter = filter
+	return s.exportCSV, s.exportErr
 }
 
 func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
@@ -315,6 +329,8 @@ func TestSoftwareInventoryRootShowsDeviceCardsFiltersAndSearch(t *testing.T) {
 		"Linux 内核 6.8.0-49-generic", "重点软件", "<dd>4</dd>", "全部软件", "<dd>6</dd>",
 		"未识别进程", "<dd>1</dd>", "采集时间", "2026-11-20 09:30:00", "正常", "立即采集",
 		"跨设备搜索结果", "openssl-service", "全部软件包（1 条，默认折叠）", "展开全部软件包",
+		`href="/ui/software-inventory/export?query=openssl&amp;exact_version=3.0.2-0ubuntu1.18&amp;site=%E5%85%AC%E5%8F%B8&amp;network=%E6%80%BB%E9%83%A8%E7%89%A9%E7%90%86%E5%B1%80%E5%9F%9F%E7%BD%91"`,
+		"导出当前筛选",
 	} {
 		if !strings.Contains(body, wanted) {
 			t.Fatalf("软件清单首页缺少 %q：\n%s", wanted, body)
@@ -339,6 +355,88 @@ func TestSoftwareInventorySearchRedirectsToRoot(t *testing.T) {
 	if location := response.Header.Get("Location"); location !=
 		"/ui/software-inventory/?exact_version=3.0.2&query=openssl&site=%E5%85%AC%E5%8F%B8" {
 		t.Fatalf("搜索跳转应保留条件：%s", location)
+	}
+}
+
+func readSoftwareInventoryExportCSV(t *testing.T, response *http.Response) [][]string {
+	t.Helper()
+	body := readResponseBody(t, response)
+	blob := []byte(body)
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("导出缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	reader := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF"))))
+	rows, err := reader.ReadAll()
+	if err != nil {
+		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, blob)
+	}
+	return rows
+}
+
+func TestSoftwareInventoryExportUsesCurrentFilters(t *testing.T) {
+	source := &stubSoftwareInventorySource{exportCSV: []byte(
+		"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
+			"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n")}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	response := doGetWithCookie(t, handler, cookie,
+		"/ui/software-inventory/export?query=nginx&exact_version=1.25.3&site=%E5%85%AC%E5%8F%B8&network=%E6%80%BB%E9%83%A8%E7%89%A9%E7%90%86%E5%B1%80%E5%9F%9F%E7%BD%91")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("导出状态码 = %d，应为 200：\n%s", response.StatusCode, readResponseBody(t, response))
+	}
+	if contentType := response.Header.Get("Content-Type"); contentType != "text/csv; charset=utf-8" {
+		t.Fatalf("导出 Content-Type = %q", contentType)
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition !=
+		`attachment; filename="software-inventory.csv"` {
+		t.Fatalf("导出 Content-Disposition = %q", disposition)
+	}
+	wantedFilter := SoftwareInventoryFilter{
+		Name: "nginx", ExactVersion: "1.25.3", Site: "公司", Network: "总部物理局域网",
+	}
+	if !source.exportCalled || source.exportFilter != wantedFilter {
+		t.Fatalf("导出条件 = %+v（called=%v），想要 %+v",
+			source.exportFilter, source.exportCalled, wantedFilter)
+	}
+	rows := readSoftwareInventoryExportCSV(t, response)
+	if len(rows) != 2 || rows[1][0] != "工作站" || rows[1][1] != "nginx" {
+		t.Fatalf("当前筛选导出行 = %#v", rows)
+	}
+}
+
+func TestSoftwareInventoryExportSingleDevice(t *testing.T) {
+	source := &stubSoftwareInventorySource{
+		device: &SoftwareInventoryDevice{Name: "工作站"},
+		exportCSV: []byte(
+			"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
+				"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n"),
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	devicePage := doGetWithCookie(t, handler, cookie,
+		"/ui/software-inventory/devices?device=%E5%B7%A5%E4%BD%9C%E7%AB%99")
+	deviceBody := readResponseBody(t, devicePage)
+	if !strings.Contains(deviceBody,
+		`href="/ui/software-inventory/export?device=%E5%B7%A5%E4%BD%9C%E7%AB%99"`) ||
+		!strings.Contains(deviceBody, "导出这台设备") {
+		t.Fatalf("设备详情缺少单台设备导出入口：\n%s", deviceBody)
+	}
+
+	response := doGetWithCookie(t, handler, cookie,
+		"/ui/software-inventory/export?device=%E5%B7%A5%E4%BD%9C%E7%AB%99")
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("单台设备导出状态码 = %d，应为 200：\n%s",
+			response.StatusCode, readResponseBody(t, response))
+	}
+	if disposition := response.Header.Get("Content-Disposition"); disposition !=
+		`attachment; filename="software-inventory-device.csv"` {
+		t.Fatalf("单台设备导出 Content-Disposition = %q", disposition)
+	}
+	wantedFilter := SoftwareInventoryFilter{Device: "工作站"}
+	if source.exportFilter != wantedFilter {
+		t.Fatalf("单台设备导出条件 = %+v，想要 %+v", source.exportFilter, wantedFilter)
+	}
+	rows := readSoftwareInventoryExportCSV(t, response)
+	if len(rows) != 2 || rows[1][0] != "工作站" {
+		t.Fatalf("单台设备导出行 = %#v", rows)
 	}
 }
 

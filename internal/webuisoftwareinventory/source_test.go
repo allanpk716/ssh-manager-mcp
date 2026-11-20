@@ -1,8 +1,10 @@
 package webuisoftwareinventory
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"path/filepath"
 	"reflect"
@@ -233,6 +235,99 @@ func TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters(t *testing.T) {
 		linux[0].Rows[0].Item.SearchCategoryLabel != "操作系统与内核" {
 		t.Fatalf("搜索默认视图应把操作系统与内核合成一个突出类别：%+v", linux)
 	}
+}
+
+// TestSourceExportsCSVFromUnifiedQuery 验证导出接口复用统一查询条件，并
+// 输出能被标准解析器读回的平铺 CSV 总表。
+func TestSourceExportsCSVFromUnifiedQuery(t *testing.T) {
+	st, _ := newTestStore(t)
+	if _, err := st.AddSite("公司", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("分部机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range []struct{ name, site string }{
+		{name: "工作站", site: "公司"}, {name: "分部工作站", site: "分部机房"},
+	} {
+		if _, err := st.AddDeviceAtSite(device.name, "", "", device.site); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.AddNetworkMembership("工作站", "总部物理局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	seed := func(device string, items ...models.SoftwareObservedItem) {
+		t.Helper()
+		if err := st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: items, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("工作站",
+		models.SoftwareObservedItem{
+			Category: softwareinventory.CategoryServiceProgram,
+			Name:     "nginx", Version: "1.25.3",
+			ListeningPorts: []softwareinventory.ListeningPort{{
+				Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+				Exposure: softwareinventory.ExposureAllAddresses,
+			}},
+		},
+		models.SoftwareObservedItem{
+			Category: softwareinventory.CategorySystemPackage,
+			Name:     "libc6", Version: "2.39-0ubuntu8",
+		},
+	)
+	seed("分部工作站", models.SoftwareObservedItem{
+		Category: softwareinventory.CategoryServiceProgram,
+		Name:     "nginx", Version: "1.24.0",
+	})
+	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+
+	blob, err := source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
+		Name: "nginx", ExactVersion: "1.25.3", Site: "公司", Network: "总部物理局域网",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readExportCSV(t, blob)
+	if len(rows) != 2 || rows[1][0] != "工作站" || rows[1][1] != "nginx" ||
+		rows[1][5] != "监听所有地址" {
+		t.Fatalf("当前筛选导出行 = %#v", rows)
+	}
+
+	blob, err = source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
+		Device: "分部工作站",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = readExportCSV(t, blob)
+	if len(rows) != 2 || rows[1][0] != "分部工作站" || rows[1][2] != "1.24.0" {
+		t.Fatalf("单台设备导出行 = %#v", rows)
+	}
+}
+
+func readExportCSV(t *testing.T, blob []byte) [][]string {
+	t.Helper()
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("导出缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, blob)
+	}
+	if len(rows) == 0 || strings.Join(rows[0], "|") !=
+		"设备|软件名|版本|类别|监听端口|暴露级别|采集时间" {
+		t.Fatalf("导出表头 = %#v", rows)
+	}
+	return rows
 }
 
 // TestSourceBuildsDeviceViewFromUnifiedQuery 验证适配层把统一查询、采集

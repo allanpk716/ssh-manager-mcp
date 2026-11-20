@@ -5,7 +5,9 @@ package mcpserver
 // 快照数据。
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"path/filepath"
@@ -225,6 +227,83 @@ func TestQuerySoftwareInventoryAuthorityFace(t *testing.T) {
 	}
 }
 
+// TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters 钉住 CSV 导
+// 出面：format=csv 复用同一组查询条件，返回能用标准解析器读回的总表文
+// 本，并且机密项遮蔽仍然生效。
+func TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters(t *testing.T) {
+	st, profileID := softwareInventoryFaceFixture(t)
+	secretValue := "nginx-secret-version"
+	if err := st.AddSecret(
+		"SOFTWARE_VERSION_TOKEN", "软件版本里的机密项", []byte(secretValue), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceSoftwareObservedItems("可见设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{
+				Category: softwareinventory.CategoryServiceProgram,
+				Name:     "nginx", Version: secretValue,
+				ListeningPorts: []softwareinventory.ListeningPort{{
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+					Exposure: softwareinventory.ExposureAllAddresses,
+				}},
+			},
+			{
+				Category: softwareinventory.CategorySystemPackage,
+				Name:     "libc6", Version: "2.39-0ubuntu8",
+			},
+		},
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	session := softwareInventorySession(t, srv)
+
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{
+		"format": "csv", "name": "nginx", "exact_version": secretValue,
+		"include_system_packages": true,
+	})
+	if isError {
+		t.Fatalf("CSV 查询报错：%s", text)
+	}
+	var output QuerySoftwareInventoryOutput
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
+	}
+	if output.CSV == "" {
+		t.Fatalf("format=csv 应返回总表文本：%s", text)
+	}
+	if strings.Contains(output.CSV, secretValue) {
+		t.Fatalf("CSV 里的机密值必须被遮蔽：%q", output.CSV)
+	}
+	if len(output.Masked) != 1 || output.Masked[0] != "SOFTWARE_VERSION_TOKEN" {
+		t.Fatalf("遮蔽名单 = %#v", output.Masked)
+	}
+	blob := []byte(output.CSV)
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("CSV 缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("CSV 必须能被标准解析器读回：%v\n%q", err, output.CSV)
+	}
+	if len(rows) != 2 || rows[1][0] != "可见设备" || rows[1][1] != "nginx" ||
+		rows[1][2] != "{{sshmgr-secret:SOFTWARE_VERSION_TOKEN}}" ||
+		rows[1][5] != "监听所有地址" {
+		t.Fatalf("筛选后的 CSV 行 = %#v", rows)
+	}
+
+	text, isError = callSoftwareInventoryTool(t, session, map[string]any{"format": "spdx"})
+	if !isError || !strings.Contains(text, "format") {
+		t.Fatalf("非法 format 应报错：%q %v", text, isError)
+	}
+}
+
 // TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices 钉住
 // 统一查询的缺口修复：没有任何声明的实测条目也必须能被 MCP 工具查到。
 func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testing.T) {
@@ -298,6 +377,47 @@ func TestQuerySoftwareInventoryCacheFaceUsesInjectedQuerier(t *testing.T) {
 	}
 	if !strings.Contains(text, "权威端设备") || !strings.Contains(text, "nginx") {
 		t.Fatalf("在线查询结果未透出：%s", text)
+	}
+}
+
+// TestQuerySoftwareInventoryCacheFaceReturnsCSVFromOnlineResult 客户端面的
+// CSV 与权威端共用同一个序列化函数：转发回来的结构化结果在本机转成总表
+// 文本，查询条件仍原样交给在线能力。
+func TestQuerySoftwareInventoryCacheFaceReturnsCSVFromOnlineResult(t *testing.T) {
+	querier := &fakeSoftwareInventoryQuerier{
+		result: softwareinventory.QueryResult{Devices: []softwareinventory.QueryDeviceResult{{
+			DeviceID: "device-1", DeviceName: "权威端设备",
+			Items: []softwareinventory.QueryItem{{
+				DeviceID: "device-1", Category: softwareinventory.CategoryServiceProgram,
+				CategoryLabel: "服务程序", Name: "nginx", Version: "1.25.3",
+			}},
+		}}},
+	}
+	session := softwareInventoryFaceSessionWithQuerier(t, querier)
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{
+		"format": "csv", "name": "nginx", "exact_version": "1.25.3",
+	})
+	if isError {
+		t.Fatalf("客户端 CSV 查询报错：%s", text)
+	}
+	if querier.got.Format != "csv" || querier.got.Name != "nginx" ||
+		querier.got.ExactVersion != "1.25.3" {
+		t.Fatalf("客户端面应原样传递查询条件：%+v", querier.got)
+	}
+	var output QuerySoftwareInventoryOutput
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
+	}
+	blob := []byte(output.CSV)
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("客户端 CSV 缺少字节顺序标记：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("客户端 CSV 必须能被标准解析器读回：%v\n%q", err, output.CSV)
+	}
+	if len(rows) != 2 || rows[1][0] != "权威端设备" || rows[1][1] != "nginx" {
+		t.Fatalf("客户端 CSV 行 = %#v", rows)
 	}
 }
 

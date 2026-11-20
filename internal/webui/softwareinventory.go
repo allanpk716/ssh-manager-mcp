@@ -123,9 +123,11 @@ type SoftwareInventoryDeviceSummary struct {
 	StatusLabels             []string
 }
 
-// SoftwareInventoryFilter 是设备清单与全局搜索共享的读取条件。空值表示
-// 不限制；地点使用完整路径，网络使用名称。
+// SoftwareInventoryFilter 是设备清单、全局搜索与导出共享的读取条件。空
+// 值表示不限制；地点使用完整路径，网络使用名称。Device 只用于单台设备
+// 导出；设备清单与全局搜索不解析它。
 type SoftwareInventoryFilter struct {
+	Device       string
 	Name         string
 	ExactVersion string
 	Site         string
@@ -220,6 +222,7 @@ type SoftwareInventorySource interface {
 	SoftwareInventoryDevices(filter SoftwareInventoryFilter) ([]SoftwareInventoryDeviceSummary, error)
 	SoftwareInventoryDevice(deviceName string) (*SoftwareInventoryDevice, error)
 	SearchSoftwareInventory(filter SoftwareInventoryFilter) ([]SoftwareInventorySearchDevice, error)
+	ExportSoftwareInventoryCSV(filter SoftwareInventoryFilter) ([]byte, error)
 	SoftwareInventoryTodos() (SoftwareInventoryTodos, error)
 	SoftwareInventoryDeclaration(id string) (*SoftwareInventoryDeclaration, error)
 	SoftwareInventoryDeclarations() ([]SoftwareInventoryDeclaration, error)
@@ -286,6 +289,8 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 		h.handleSoftwareInventoryDeviceSudo(w, r)
 	case "/ui/software-inventory/search":
 		h.handleSoftwareInventorySearch(w, r)
+	case "/ui/software-inventory/export":
+		h.handleSoftwareInventoryExport(w, r)
 	case "/ui/software-inventory/collect":
 		h.handleSoftwareInventoryCollect(w, r)
 	case "/ui/software-inventory/schedule":
@@ -295,6 +300,36 @@ func (h *handler) handleSoftwareInventory(w http.ResponseWriter, r *http.Request
 	default:
 		h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 	}
+}
+
+// handleSoftwareInventoryExport 导出平铺 CSV 总表。网址带 device 时只导出
+// 这台设备；否则带上首页当前的软件名、精确版本、地点与网络条件。下载
+// 链接不改变当前页面，筛选状态由首页网址继续保留。
+func (h *handler) handleSoftwareInventoryExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "软件清单导出只接受 GET 请求。")
+		return
+	}
+	filter := softwareInventoryFilterFromQuery(r)
+	filename := "software-inventory.csv"
+	if deviceName := strings.TrimSpace(r.URL.Query().Get("device")); deviceName != "" {
+		filter = SoftwareInventoryFilter{Device: deviceName}
+		filename = "software-inventory-device.csv"
+	}
+	blob, err := h.cfg.SoftwareInventory.ExportSoftwareInventoryCSV(filter)
+	if err != nil {
+		var missing *SoftwareInventoryDeviceNotFoundError
+		if errors.As(err, &missing) {
+			h.renderError(w, r, http.StatusNotFound, "设备不存在", missing.Error())
+			return
+		}
+		h.renderError(w, r, http.StatusInternalServerError, "导出软件清单失败", "导出软件清单失败，请稍后重试。")
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(blob)
 }
 
 // handleSoftwareInventorySchedule 保存全局每天采集时间。调度服务与客户端

@@ -15,6 +15,7 @@
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">立即全部采集</button>
 </form>
+<a class="button-link" href="/ui/software-inventory/export?query={{.SoftwareInventory.Filter.Name | urlquery}}&amp;exact_version={{.SoftwareInventory.Filter.ExactVersion | urlquery}}&amp;site={{.SoftwareInventory.Filter.Site | urlquery}}&amp;network={{.SoftwareInventory.Filter.Network | urlquery}}">导出当前筛选</a>
 </div>
 {{if .SoftwareInventory.ScheduleNotice}}<p class="flash-ok">{{.SoftwareInventory.ScheduleNotice}}</p>{{end}}
 {{if .SoftwareInventory.ScheduleError}}<p class="flash-error">{{.SoftwareInventory.ScheduleError}}</p>{{end}}

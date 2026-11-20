@@ -239,6 +239,25 @@ func (s openerSource) SearchSoftwareInventory(
 	return out, nil
 }
 
+func (s openerSource) ExportSoftwareInventoryCSV(
+	filter webui.SoftwareInventoryFilter,
+) ([]byte, error) {
+	st, done, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
+		Device: filter.Device, Name: filter.Name, ExactVersion: filter.ExactVersion,
+		Site: filter.Site, Network: filter.Network,
+		IncludeSystemPackages: true, Visibility: softwareinventory.AllDevicesVisible(),
+	})
+	if err != nil {
+		return nil, deviceError(filter.Device, err)
+	}
+	return softwareinventory.MarshalCSV(result)
+}
+
 func softwareInventoryStatusLabels(status softwareinventory.CollectionStatusView) []string {
 	if !status.Managed {
 		return []string{"不采集（不受管设备）"}

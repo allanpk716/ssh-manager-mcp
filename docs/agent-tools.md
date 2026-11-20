@@ -336,13 +336,18 @@ PowerShell 的 `New-SmbMapping` 完成，挂载密码只经 SSH 会话的标准�
 
 只读查询实测软件清单（设备上实际采到的软件、版本、监听端口与暴露级别）。
 
-- 八个参数全部可选：`device`（设备名）、`name`（软件名子串，不区分大小
-  写）、`exact_version`（精确版本；去除首尾空白后逐字相等，区分大小
-  写，也不判断「低于某版本」）、`site`（地点，包含全部下级地点）、
+- 八个筛选参数全部可选：`device`（设备名）、`name`（软件名子串，不区分
+  大小写）、`exact_version`（精确版本；去除首尾空白后逐字相等，区分大
+  小写，也不判断「低于某版本」）、`site`（地点，包含全部下级地点）、
   `network`（网络名字，可以是物理局域网或虚拟局域网）、
   `minimum_exposure`（最低暴露级别）、`category`（类别）、
-  `include_system_packages`（带软件名或精确版本时自动包含系统包；其余浏览
-  默认省略）。
+  `include_system_packages`（带软件名或精确版本时自动包含系统包；其余浏
+  览默认省略）。
+- `format` 可选：`json`（默认，按设备分组的结构化结果）或 `csv`（同一
+  组筛选条件下的平铺 CSV 总表文本；每个软件条目一行，列固定为「设备、
+  软件名、版本、类别、监听端口、暴露级别、采集时间」，带 UTF-8 字节顺
+  序标记，换行为回车加换行）。工具不写调用方文件；CSV 文本同样经过机
+  密项遮蔽。
 - 返回按设备分组：每台设备带采集状态（采集执行者、上次成功时间、上次
   失败时间与原因、是否不完整、是否清单过期——超过 7 天没有成功结果或从
   未采集都算过期）与匹配的实测软件条目；条目带精确版本、监听端口与暴露
@@ -983,7 +988,7 @@ HEAD，后续重构以符号名为准）：
 | query_topology：按出发点输出所属网络、同在物理局域网、只能经虚拟局域网到达、无共同网络不可达与未登记服务器五段；传入 to 时输出逐对全部共同网络、网络属性，并标记 sshmgr 真正拨号时会优先尝试的网络（与按服务器条目拨号的共用入口同一条候选地址规划）；`detail=true` 展开参数显示地址与设备角色，地址遵守 ExposeHost 主机披露开关；可达行附本实例最新探测结果；只读登记、成功地址缓存与本地观察，不探测、不建 SSH、不写审计、不改成功地址缓存与快照修订号；旧权威端快照固定报错；`from` 为服务器编号且 `to` 为唯一共享地址时，按挂载点约定翻译成这台服务器上的实际路径并说明是否可挂载，主机只用于识别共享存储 | 规格 #234、票 #241、票 #242、票 #243；`internal/mcpserver/query_topology.go`（QueryTopologyForProfile）；`internal/shareaddress/address.go`（Parse 与 Resolve）；`internal/sshbroker/entrydial.go`（PlanServerDialCandidates）；`internal/mcpserver/server.go`（query_topology 注册） |
 | list_shares：默认只读登记与挂载点约定、不做任何现场检测；可选现场检测参数对可见 Linux 与 macOS 可挂载服务器并发只读检测，报告已挂载、未挂载、配置缺失、不可达（附原因说明）四种状态；可挂载范围是挂载密码机密项可写入列表与会话可见服务器取交集，交集为空不返回；旧权威端快照按 ADR 0014 报错 | `internal/mcpserver/list_shares.go`（ListSharesForProfile / annotateSharedStorageMountChecks）；`internal/sharemount/check.go`（固定检测命令）；`internal/store/shared_storage.go`（SharedStorageMountPoint）；`internal/mcpserver/run.go`（hydrateCacheStore 设置快照推荐版本） |
 | mount_share：共享存储持久挂载（Linux 写 fstab 与仅 root 可读凭据文件，macOS 写 autofs 间接映射）；服务器级目录锁带 owner 文件与过期回收；撤销标记版本号不低于快照版本号时拒绝；Linux 先在 /var/run 临时挂载点试挂成功才改写正式配置；macOS 映射改写后先卸载旧 smbfs 挂载再刷新；已挂载且一致时幂等 no-change；密码只经提权会话标准输入写入，结果与审计不含地址；不提供卸载 | 规格 #198、#212；`internal/sharemount/`（service.go / linux.go / darwin.go / marker.go / lock.go / check.go）；`internal/mcpserver/mount_share.go` |
-| query_software_inventory：按 profile 可见范围查询实测软件清单（软件名子串、精确版本、地点、网络、设备、类别、最低暴露级别与系统包条件；含监听端口、暴露级别、来源、采集时间与设备采集状态）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185、#343；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go`；`internal/softwareinventory/query.go` |
+| query_software_inventory：按 profile 可见范围查询实测软件清单（软件名子串、精确版本、地点、网络、设备、类别、最低暴露级别与系统包条件；含监听端口、暴露级别、来源、采集时间与设备采集状态；`format=csv` 返回同一组条件下的平铺 CSV 总表文本）；客户端在线查询权威端，不可达时固定报错、不回退本地数据 | 票 #185、#343、#347；`internal/mcpserver/softwareinventory.go`；`internal/mcpserver/serve_softwareinventory.go`；`internal/clientops/softwareinventory_forward.go`；`internal/softwareinventory/query.go`；`internal/softwareinventory/csv.go` |
 | collect_software_inventory：请求立即采集；本地面同步执行或登记客户端请求，客户端经权威端转发 | 票 #188；`internal/mcpserver/softwareinventory_collect.go`；`internal/mcpserver/serve_softwareinventory_collect_forward.go`；`internal/clientops/softwareinventory_collect_forward.go` |
 | 确认码与「服务器编号 + 命令完整文本」的哈希绑定、5 分钟有效、单次作废、进程内存不持久化；约 6 位字母数字（字母表去 0/O、1/I/L） | `internal/mcpserver/confirmcode.go`（confirmationTTL / confirmBindingKey / issue / consume / confirmationCodeAlphabet） |
 | 命令策略审计动作：前台 exec-blocked / exec-confirm-required / exec-confirmed，后台 exec-bg-blocked / exec-bg-confirm-required / exec-bg-confirmed（Status 列存命中规则编号；带码执行行的 Command 列存「命令原文 + 确认理由」JSON 摘要） | `internal/mcpserver/core.go`；`internal/mcpserver/bgtools.go`；`internal/mcpserver/confirmcode.go`（gateExecConfirmation） |
