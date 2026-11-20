@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -254,56 +255,112 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 	}
 	server, err := st.GetServerByName("工作站-ssh")
 	if err != nil || server == nil {
-		t.Fatalf("取服务器条目失败：%v %+v", err, server)
+		t.Fatalf("取采集用服务器条目失败：%v %+v", err, server)
 	}
-	firstAt := confirmedAt.Add(time.Hour)
-	st.NowFn = func() time.Time { return firstAt }
+	collectedAt := confirmedAt.Add(time.Hour)
+	st.NowFn = func() time.Time { return collectedAt }
 	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{
-			{
-				Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
-				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef",
-				ContainerRunning: true, ListeningPorts: []models.SoftwareListeningPort{{
-					Address: "0.0.0.0", Port: 5432, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
-				}},
-			},
-			{Category: models.SoftwareCategorySystemPackage, Name: "curl", Version: "8.8.0-1"},
-		},
-		ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
-	}, store.CLISource()); err != nil {
-		t.Fatal(err)
-	}
-	secondAt := firstAt.Add(24 * time.Hour)
-	st.NowFn = func() time.Time { return secondAt }
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
-		Items: []models.SoftwareObservedItem{
-			{
-				Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
-				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef",
-				ContainerRunning: true, ListeningPorts: []models.SoftwareListeningPort{{
-					Address: "0.0.0.0", Port: 5432, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
-				}},
-			},
+			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+			{Category: models.SoftwareCategoryServiceProgram, Name: "nginx", Version: "1.24.0"},
+			{Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
+				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerRunning: true},
+			{Category: models.SoftwareCategoryDriverFirmware, Name: "Linux 内核", Version: "6.8.0-49-generic"},
+			{Category: models.SoftwareCategoryDriverFirmware, Name: "NVIDIA 显卡驱动", Version: "550.120"},
 			{Category: models.SoftwareCategorySystemPackage, Name: "curl", Version: "8.9.1-1"},
+			{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2"},
+			{Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway",
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+				ListeningPorts: []models.SoftwareListeningPort{{
+					Address: "127.0.0.1", Port: 8443, Protocol: "tcp",
+					Exposure: models.SoftwareExposureLocal,
+				}}},
 		},
 		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	st.NowFn = func() time.Time { return secondAt.Add(time.Second) }
+	profileID, err := st.AddProfile("运维")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{server.ID}); err != nil {
+		t.Fatal(err)
+	}
+	clientID, _, err := st.AddCacheToken("laptop-client", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectSudo(server.Name, true, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector(
+		"工作站", "laptop-client", server.Name, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	st.NowFn = func() time.Time { return collectedAt.Add(time.Hour) }
 	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if device.Name != "工作站" || !device.Status.Managed || device.Status.CollectorLabel != "权威端" ||
-		device.Status.LastSuccessAt == nil || device.Status.LastSuccessAt.Unix() != secondAt.Unix() {
-		t.Fatalf("设备页面数据或采集状态不符：%+v", device)
+	if device.Name != "工作站" || !device.Status.Managed {
+		t.Fatalf("设备页面基础数据不符：%+v", device)
 	}
-	if len(device.Groups) != 2 || device.Groups[0].CategoryLabel != "容器镜像" ||
-		device.Groups[1].CategoryLabel != "系统包" {
-		t.Fatalf("设备页面类别分组不符：%+v", device.Groups)
+	if device.Status.Collector != clientID || device.Status.CollectorName != "laptop-client" ||
+		device.Status.CollectorLabel != "客户端实例 laptop-client" ||
+		device.Status.PreferredServerEntry != server.Name {
+		t.Fatalf("设备页面采集执行者状态不符：%+v", device.Status)
+	}
+	if device.Summary.SystemName != "Ubuntu" || device.Summary.SystemVersion != "24.04.1 LTS" ||
+		device.Summary.KernelName != "Linux 内核" || device.Summary.KernelVersion != "6.8.0-49-generic" ||
+		device.Summary.ImportantSoftwareCount != 6 || device.Summary.AllSoftwareCount != 8 ||
+		device.Summary.UnidentifiedProcessCount != 1 {
+		t.Fatalf("设备页面摘要应与首页卡片同口径：%+v", device.Summary)
+	}
+	cards, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cards) != 1 || !reflect.DeepEqual(cards[0], device.Summary) {
+		t.Fatalf("首页卡片与设备详情的摘要与状态口径应完全一致：%+v %+v", cards, device.Summary)
+	}
+	labels := make([]string, 0, len(device.Groups))
+	for _, group := range device.Groups {
+		labels = append(labels, group.CategoryLabel)
+	}
+	wantedLabels := []string{
+		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+	}
+	if strings.Join(labels, "|") != strings.Join(wantedLabels, "|") {
+		t.Fatalf("设备页面分组顺序不符：%v", labels)
+	}
+	if len(device.Groups[0].Items) != 2 || device.Groups[0].Items[0].Name != "Ubuntu" ||
+		device.Groups[0].Items[1].Name != "Linux 内核" {
+		t.Fatalf("操作系统与内核应合并为一个分组：%+v", device.Groups[0].Items)
+	}
+	if len(device.Groups[3].Items) != 1 || device.Groups[3].Items[0].Name != "NVIDIA 显卡驱动" {
+		t.Fatalf("内核不应重复出现在驱动与固件分组：%+v", device.Groups[3].Items)
+	}
+	if !device.Groups[4].SystemPackages || device.Groups[4].SystemPackageCount != 2 {
+		t.Fatalf("系统包分组应折叠并给出数量：%+v", device.Groups[4])
+	}
+	process := device.Groups[5].Items[0]
+	if process.ProcessName != "gateway" || process.ExecutablePath != "/opt/gateway/gateway" ||
+		process.ProcessID != 8123 || process.ListeningPorts[0].ExposureLabel != "仅本机" {
+		t.Fatalf("未识别进程条目应保留进程可得信息：%+v", process)
+	}
+	if len(device.Advanced.ClientInstances) != 1 ||
+		device.Advanced.ClientInstances[0].Name != "laptop-client" ||
+		device.Advanced.ClientInstances[0].ProfileName != "运维" {
+		t.Fatalf("高级区客户端实例数据不符：%+v", device.Advanced.ClientInstances)
+	}
+	if len(device.Advanced.ServerEntries) != 1 ||
+		device.Advanced.ServerEntries[0].Name != server.Name ||
+		!device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("高级区采集用服务器条目数据不符：%+v", device.Advanced.ServerEntries)
 	}
 	for _, group := range device.Groups {
 		for _, item := range group.Items {
@@ -315,25 +372,6 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 	declarations, err := st.SearchSoftwareDeclarations("", softwareinventory.AllDevicesVisible())
 	if err != nil || len(declarations) != 1 || declarations[0].Version != "1.2.3+build.7" {
 		t.Fatalf("声明应保留在存储里：%v %+v", err, declarations)
-	}
-	container := device.Groups[0].Items[0]
-	if container.Version != "16.4" || container.Source != "实测" || container.BelongsTo != "Docker" ||
-		container.ContainerTag != "16-alpine" || container.ContainerDigest != "sha256:abcdef" ||
-		!container.ContainerRunning || container.ListeningPorts[0].ExposureLabel != "监听所有地址" {
-		t.Fatalf("容器镜像条目页面数据不符：%+v", container)
-	}
-	if !device.Groups[1].SystemPackages || device.Groups[1].SystemPackageCount != 1 ||
-		len(device.Groups[1].Items) != 1 || device.Groups[1].Items[0].Version != "8.9.1-1" {
-		t.Fatalf("系统包分组应保留全量数据并给出数量：%+v", device.Groups[1])
-	}
-	var versionChange *webui.SoftwareInventoryChange
-	for i := range device.History {
-		if device.History[i].KindLabel == "版本变化" && device.History[i].Name == "curl" {
-			versionChange = &device.History[i]
-		}
-	}
-	if versionChange == nil || versionChange.OldValue != "8.8.0-1" || versionChange.NewValue != "8.9.1-1" {
-		t.Fatalf("变化历史页面数据不符：%+v", device.History)
 	}
 
 	if _, err := source.SoftwareInventoryDevice("不存在"); err == nil {
@@ -674,9 +712,9 @@ func TestSourceReviewsDeclarationDrafts(t *testing.T) {
 	}
 }
 
-// TestSourceCollectorSettingsAndSudo 验证采集设置读取、登记校验错误透
-// 出、成功登记与 sudo 开关写入 Web UI 来源审计。
-func TestSourceCollectorSettingsAndSudo(t *testing.T) {
+// TestSourceDeviceAdvancedSettingsAndSudo 验证设备页高级采集设置：登记
+// 校验错误透出、成功登记改变设备视图、sudo 开关写入 Web UI 来源审计。
+func TestSourceDeviceAdvancedSettingsAndSudo(t *testing.T) {
 	st, _ := newTestStore(t)
 	addTestDevice(t, st, "工作站")
 	server, err := st.GetServerByName("工作站-ssh")
@@ -695,15 +733,19 @@ func TestSourceCollectorSettingsAndSudo(t *testing.T) {
 	}
 	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
 
-	settings, err := source.SoftwareInventorySettings()
+	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings.Devices) != 1 || settings.Devices[0].Name != "工作站" ||
-		len(settings.Servers) != 1 || settings.Servers[0].Name != server.Name ||
-		len(settings.ClientInstances) != 1 || settings.ClientInstances[0].Name != "laptop-client" ||
-		settings.ClientInstances[0].ProfileName != "运维" {
-		t.Fatalf("采集设置页面数据不符：%+v", settings)
+	if len(device.Advanced.ClientInstances) != 1 ||
+		device.Advanced.ClientInstances[0].Name != "laptop-client" ||
+		device.Advanced.ClientInstances[0].ProfileName != "运维" {
+		t.Fatalf("设备页高级区客户端实例数据不符：%+v", device.Advanced.ClientInstances)
+	}
+	if len(device.Advanced.ServerEntries) != 1 ||
+		device.Advanced.ServerEntries[0].Name != server.Name ||
+		device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("设备页高级区采集用服务器条目数据不符：%+v", device.Advanced.ServerEntries)
 	}
 	err = source.SetSoftwareInventoryCollector(webui.SoftwareInventoryCollectorForm{
 		Device: "工作站", Collector: "不存在的客户端", ServerEntry: server.Name,
@@ -717,17 +759,25 @@ func TestSourceCollectorSettingsAndSudo(t *testing.T) {
 	}, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"}); err != nil {
 		t.Fatal(err)
 	}
+	device, err = source.SoftwareInventoryDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.Status.CollectorLabel != "客户端实例 laptop-client" ||
+		device.Status.PreferredServerEntry != server.Name {
+		t.Fatalf("登记后的设备页采集执行者状态不符：%+v", device.Status)
+	}
 	if err := source.SetSoftwareInventorySudo(
 		server.Name, true, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	settings, err = source.SoftwareInventorySettings()
+	device, err = source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Servers[0].SudoEnabled != true {
-		t.Fatalf("sudo 开关打开后的设置页面数据不符：%+v", settings.Servers[0])
+	if !device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("sudo 开关打开后的设备页数据不符：%+v", device.Advanced.ServerEntries[0])
 	}
 	rows, err := st.QueryAudit(store.AuditFilter{
 		Actions: []string{"software-collect-collector", "software-collect-sudo"},

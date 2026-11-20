@@ -228,6 +228,48 @@ func TestQueryPreservesWebDisplayFields(t *testing.T) {
 	}
 }
 
+// TestQueryPreservesUnidentifiedProcessFields 钉住未识别进程在查询结果里
+// 保留进程可得信息：设备详情页要展示进程名、可执行文件路径与进程号。
+func TestQueryPreservesUnidentifiedProcessFields(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "工作站", true)
+	collectedAt := time.Unix(1770000600, 0)
+	st.NowFn = func() time.Time { return collectedAt }
+	server, err := st.GetServerByName("工作站-ssh")
+	if err != nil || server == nil {
+		t.Fatalf("取采集用服务器条目失败：%v %+v", err, server)
+	}
+	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{{
+			Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway",
+			ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+			ListeningPorts: []models.SoftwareListeningPort{{
+				Address: "0.0.0.0", Port: 8443, Protocol: "tcp",
+				Exposure: models.SoftwareExposureAllAddresses,
+			}},
+		}},
+		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.Query(QueryOptions{
+		Device: "工作站", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := findQueryDevice(result, "工作站")
+	if device == nil || len(device.Items) != 1 {
+		t.Fatalf("按设备查询结果 = %+v", result.Devices)
+	}
+	process := device.Items[0]
+	if process.Name != "unknown-gateway" || process.ProcessName != "gateway" ||
+		process.ExecutablePath != "/opt/gateway/gateway" || process.ProcessID != 8123 {
+		t.Fatalf("未识别进程条目应保留进程可得信息：%+v", process)
+	}
+}
+
 // TestQueryFiltersAndCollectionStatus 覆盖查询工具的全部过滤条件与采集
 // 状态字段。
 func TestQueryFiltersAndCollectionStatus(t *testing.T) {
