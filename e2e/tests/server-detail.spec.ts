@@ -84,6 +84,7 @@ test("服务器详情分区编辑弹层支持打开取消保存与焦点返回",
     const drawers = [
       { scope: "connection", title: "编辑连接" },
       { scope: "location", title: "编辑地点" },
+      { scope: "address", title: "编辑地址" },
       { scope: "description", title: "编辑说明" },
       { scope: "accounts", title: "编辑其他账号说明" },
     ];
@@ -131,6 +132,54 @@ test("服务器详情分区编辑弹层支持打开取消保存与焦点返回",
     await expect(page.getByText("已保存账号说明。")).toBeVisible();
     await expect(page.locator("#server-card-accounts")).toContainText("夜里跑备份任务");
     await expect(page.locator('[data-detail-edit-button="accounts"]')).toBeFocused();
+  } finally {
+    await ui.close();
+  }
+});
+
+test("服务器详情地址统一列表支持改归网络与删除行", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology();
+  try {
+    await openDetail(page, ui);
+    const card = page.locator("#server-card-address");
+    for (const row of [
+      { network: "家A局域网", type: "物理局域网", address: "192.168.1.20" },
+      { network: "虚拟网", type: "虚拟局域网", address: "100.64.0.20" },
+      { network: "虚拟网B", type: "虚拟局域网", address: "100.65.0.20" },
+      { network: "其他（公网或未登记网络）", type: "其他地址", address: "192.0.2.10" },
+    ]) {
+      const addressRow = card.locator(".address-card-row", { hasText: row.address }).filter({
+        hasText: row.network,
+      });
+      await expect(addressRow).toBeVisible();
+      await expect(addressRow).toContainText(row.type);
+    }
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    const drawer = page.locator('[data-server-detail-drawer="address"]');
+    await expect(drawer).toBeVisible();
+    const otherRow = drawer.locator('[data-address-row]:has(input[value="192.0.2.10"])');
+    await expect(otherRow.locator('[data-address-network]')).toHaveValue("other");
+    await expect(
+      drawer.locator('[data-address-row]:has(input[value="192.168.1.20"]) option[value="other"]'),
+    ).toBeDisabled();
+    await otherRow.locator('[data-address-network]').selectOption("机房局域网");
+    await drawer.getByRole("button", { name: "保存地址" }).click();
+
+    await expect(page.getByText("已保存地址。")).toBeVisible();
+    const reassigned = card.locator(".address-card-row", { hasText: "192.0.2.10" });
+    await expect(reassigned).toContainText("机房局域网");
+    await expect(reassigned).toContainText("物理局域网");
+    await expect(card).not.toContainText("其他（公网或未登记网络）");
+    await expect(page.locator('[data-detail-edit-button="address"]')).toBeFocused();
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    const deleteRow = drawer.locator('[data-address-row]:has(input[value="192.0.2.10"])');
+    await deleteRow.getByRole("button", { name: "删除第4行地址" }).click();
+    await drawer.getByRole("button", { name: "保存地址" }).click();
+    await expect(page.getByText("已保存地址。")).toBeVisible();
+    await expect(card).not.toContainText("192.0.2.10");
+    await expect(card).toContainText("192.168.1.20");
   } finally {
     await ui.close();
   }
@@ -276,11 +325,14 @@ test("服务器详情连接测试端口不通并展示候选地址", async ({ pa
   const ui = await startStandaloneUIWithTopology(undefined, port);
   try {
     await openConnectionTarget(page, ui);
-    await page
-      .locator(".address-card-row", { hasText: "连接测试备用局域网" })
-      .getByRole("button", { name: "移除" })
+    await page.locator('[data-detail-edit-button="address"]').click();
+    const addressDrawer = page.locator('[data-server-detail-drawer="address"]');
+    await addressDrawer
+      .locator('[data-address-row]:has(input[value="127.0.0.2"])')
+      .getByRole("button", { name: /删除第\d行地址/ })
       .click();
-    await expect(page.getByText("已移除地址。")).toBeVisible();
+    await addressDrawer.getByRole("button", { name: "保存地址" }).click();
+    await expect(page.getByText("已保存地址。")).toBeVisible();
     await startInlineConnectionTest(page);
     const failure = page.locator(".connection-test-result.is-failed");
     await expect(failure).toContainText("✗");
