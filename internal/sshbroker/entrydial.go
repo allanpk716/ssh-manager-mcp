@@ -15,17 +15,17 @@ import (
 	"ssh-manager-mcp/internal/store"
 )
 
-// DialAddressSource 标明一个候选地址来自哪一级挑选优先级：物理局域
-// 网、虚拟局域网或兜底主机。
-type DialAddressSource string
+// DialAddressSource 标明一个候选地址来自哪一级挑选优先级。代号定义在
+// models 包，供加密库与页面结果复用。
+type DialAddressSource = models.DialAddressSource
 
 const (
 	// DialAddressPhysical 表示目标设备与拨号设备共同所在的物理局域网。
-	DialAddressPhysical DialAddressSource = "physical"
+	DialAddressPhysical = models.DialAddressSourcePhysical
 	// DialAddressVirtual 表示目标设备与拨号设备共同所在的虚拟局域网。
-	DialAddressVirtual DialAddressSource = "virtual"
+	DialAddressVirtual = models.DialAddressSourceVirtual
 	// DialAddressFallback 表示服务器条目登记的兜底主机。
-	DialAddressFallback DialAddressSource = "fallback"
+	DialAddressFallback = models.DialAddressSourceFallback
 )
 
 // ErrFirstTrustNoCommonVirtualLan 表示服务器条目还没有主机密钥锚，首次
@@ -72,6 +72,17 @@ type DialAddressPlan struct {
 type DialAttemptError struct {
 	Candidate DialAddress
 	Err       error
+}
+
+// ServerDialResult 是一次按服务器条目拨号的结构化结果。地址与网络名是
+// owner 已登记或实际使用的事实；失败原因只保留白话分类，不携带底层错误。
+type ServerDialResult struct {
+	Attempts           []models.ServerConnectionTestAttempt
+	SuccessAddress     string
+	SuccessNetworkName string
+	SuccessSource      models.DialAddressSource
+	Duration           time.Duration
+	ConnectionNotes    []string
 }
 
 // ServerDialError 汇总一次按服务器条目拨号的逐地址失败结果；Unwrap 回到第
@@ -480,17 +491,21 @@ func PlanServerDialCandidates(input ServerDialPlanInput) (ServerDialPlanResult, 
 	return ServerDialPlanResult{Plan: plan, SuccessCache: successCache}, nil
 }
 
-// ConnectServerEntry 是 sshmgr 发起 SSH 连接的统一生产入口（所有按服务
-// 器条目发起的连接都走这里）：按目标服务器条目规划候选地址、逐个试连，
-// 返回已建立的客户端与连接说明。主机密钥与
-// 条目锚不一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称，
-// 不泄露 IP 或域名。连接成功的地址会写入请求显式携带的成功地址缓存。
-func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
+// ConnectServerEntryWithResult 是 sshmgr 发起 SSH 连接的统一生产入口（所
+// 有按服务器条目发起的连接都走这里）：按目标服务器条目规划候选地址、逐
+// 个试连，返回已建立的客户端、结构化结果与连接说明。主机密钥与条目锚不
+// 一致的地址会被跳过；说明只用网络名加序号或「兜底地址」指称。连接成功
+// 的地址会写入请求显式携带的成功地址缓存。
+func ConnectServerEntryWithResult(
+	ctx context.Context, req ServerDialRequest,
+) (*Client, ServerDialResult, error) {
+	totalStarted := time.Now()
+	result := ServerDialResult{}
 	addressTimeout := req.AddressTimeout
 	if addressTimeout == 0 {
 		resolved, err := ResolveAddressTimeout()
 		if err != nil {
-			return nil, nil, err
+			return nil, result, err
 		}
 		addressTimeout = resolved
 	}
@@ -498,7 +513,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 	if req.Topology != nil {
 		resolved, err := req.Topology.ServerDialTopology(req.Server)
 		if err != nil {
-			return nil, nil, err
+			return nil, result, err
 		}
 		topology = resolved
 	}
@@ -507,7 +522,7 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		SuccessCache: req.SuccessCache, Now: time.Now(),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, result, err
 	}
 	plan := planned.Plan
 	successCache := planned.SuccessCache
@@ -524,11 +539,11 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 	}
 	hostKeyCallback, err := HostKeyTOFUWithSource(req.HostKeys, req.Server, req.HostKeyWriteSource)
 	if err != nil {
-		return nil, nil, err
+		return nil, result, err
 	}
 	pin, err := req.HostKeys.GetEntryPin(req.Server)
 	if err != nil {
-		return nil, nil, err
+		return nil, result, err
 	}
 	pinnedHostKeyAlgorithms := hostKeyAlgorithmsForPin(pin)
 	// 只有“指纹锚且算法未知”才需要算法族探测；环境变量显式指定时保持原
@@ -541,7 +556,6 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 		keepAlive = backgroundKeepAlive
 	}
 	failures := make([]DialAttemptError, 0, len(plan.Candidates))
-	var notes []string
 	attemptCandidate := func(candidate DialAddress, hostKeyAlgorithms []string) (*Client, error) {
 		dialCtx := ctx
 		stopAddressTimeout := func() {}
@@ -606,9 +620,18 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			if cli != nil {
 				cli.Close()
 			}
-			return nil, nil, parentErr
+			return nil, result, parentErr
+		}
+		attempt := models.ServerConnectionTestAttempt{
+			NetworkName: candidate.NetworkName, Address: candidate.Address,
+			Source: models.DialAddressSource(candidate.Source), Duration: time.Since(candidateStarted),
 		}
 		if err == nil {
+			attempt.OK = true
+			result.Attempts = append(result.Attempts, attempt)
+			result.SuccessAddress = candidate.Address
+			result.SuccessNetworkName = candidate.NetworkName
+			result.SuccessSource = models.DialAddressSource(candidate.Source)
 			if successCache != nil {
 				record := DialSuccessRecord{
 					Address: candidate.Address, SucceededAt: time.Now(), Duration: time.Since(candidateStarted),
@@ -617,18 +640,24 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 					warnDialSuccessCacheFailure("写入", err)
 				}
 			}
-			return cli, notes, nil
+			result.Duration = time.Since(totalStarted)
+			return cli, result, nil
 		}
+		attempt.FailureReason = connectionTestFailureReason(err, ClassifyProbeDialError(err))
+		result.Attempts = append(result.Attempts, attempt)
 		if errors.Is(err, ErrHostKeyMismatch) {
 			if successCache != nil {
 				if cacheErr := successCache.DeleteServerDialSuccess(req.Server, candidate.Address); cacheErr != nil {
 					warnDialSuccessCacheFailure("清除", cacheErr)
 				}
 			}
-			notes = append(notes, candidateLabel(candidate)+"呈现了不同的主机密钥，已跳过")
+			result.ConnectionNotes = append(
+				result.ConnectionNotes, candidateLabel(candidate)+"呈现了不同的主机密钥，已跳过",
+			)
 		}
 		failures = append(failures, DialAttemptError{Candidate: candidate, Err: err})
 	}
+	result.Duration = time.Since(totalStarted)
 	dialErr := &ServerDialError{Failures: failures, Port: req.Server.Port}
 	if plan.FallbackOnlyReason != "" {
 		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
@@ -636,7 +665,38 @@ func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []
 			dialErr.Hint = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
 		}
 	}
-	return nil, notes, dialErr
+	return nil, result, dialErr
+}
+
+// ConnectServerEntry 保留既有三返回值形态，供不需要结构化结果的调用方使
+// 用；内部与结构化入口共用同一条拨号路径。
+func ConnectServerEntry(ctx context.Context, req ServerDialRequest) (*Client, []string, error) {
+	cli, result, err := ConnectServerEntryWithResult(ctx, req)
+	return cli, result.ConnectionNotes, err
+}
+
+func connectionTestFailureReason(err error, category models.ProbeErrorCategory) models.ConnectionTestFailureReason {
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, ErrHostKeyMismatch):
+		return models.ConnectionTestFailureHostKeyMismatch
+	case category == models.ProbeErrorTimeout:
+		return models.ConnectionTestFailureTimeout
+	case category == models.ProbeErrorConnectionRefused,
+		category == models.ProbeErrorNoRoute, category == models.ProbeErrorDNSFailure:
+		return models.ConnectionTestFailurePortUnreachable
+	case isAuthenticationFailure(err):
+		return models.ConnectionTestFailureAuthentication
+	default:
+		return models.ConnectionTestFailureOther
+	}
+}
+
+func isAuthenticationFailure(err error) bool {
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unable to authenticate") ||
+		strings.Contains(message, "no supported methods remain")
 }
 
 func warnDialSuccessCacheFailure(action string, err error) {

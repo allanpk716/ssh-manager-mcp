@@ -197,6 +197,9 @@ func DetailView(manager *servermanage.Manager, identifier string) (*webui.Server
 			PinnedAt:      time.Unix(detail.HostKeyAnchor.CreatedAt, 0),
 		}
 	}
+	if detail.ConnectionTest != nil {
+		view.ConnectionTest = webui.NewServerConnectionTestResultView(*detail.ConnectionTest)
+	}
 	for _, record := range detail.DeliveryRecords {
 		view.DeliveryRecords = append(view.DeliveryRecords, deliveryRecordRow(record))
 	}

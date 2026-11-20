@@ -153,6 +153,24 @@ func TestManagerConnectionTestAnchorsVirtualAddressAndWritesShell(t *testing.T) 
 	if commands := script.commands(); strings.Join(commands, ";") != "echo %OS%;echo $PSVersionTable" {
 		t.Fatalf("自动探测必须执行现有两条固定命令，实际 %q", commands)
 	}
+	if !result.Succeeded || result.CompletedAt.IsZero() || result.SuccessAddress != virtualHost ||
+		result.SuccessNetworkName != "虚拟网" || result.Duration <= 0 || len(result.Attempts) != 1 ||
+		!result.Attempts[0].OK || result.Attempts[0].Address != virtualHost ||
+		result.Attempts[0].NetworkName != "虚拟网" || result.Attempts[0].Duration <= 0 {
+		t.Fatalf("连接测试应返回结构化成功结果：%+v", result)
+	}
+	persisted, err := st.ServerConnectionTestResult(added.ServerID)
+	if err != nil || persisted == nil || !persisted.Succeeded ||
+		persisted.SuccessAddress != virtualHost || persisted.SuccessNetworkName != "虚拟网" ||
+		persisted.CompletedAt.IsZero() || persisted.Duration <= 0 || len(persisted.Attempts) != 1 {
+		t.Fatalf("连接测试成功后应持久保存结构化结果：%v %+v", err, persisted)
+	}
+	detail, err := New(st).Detail(added.ServerID)
+	if err != nil || detail.ConnectionTest == nil || !detail.ConnectionTest.Succeeded ||
+		detail.ConnectionTest.SuccessAddress != virtualHost ||
+		detail.ConnectionTest.SuccessSource != models.DialAddressSourceVirtual {
+		t.Fatalf("服务器详情应读回最近一次连接测试结果：%v %+v", err, detail.ConnectionTest)
+	}
 	if physicalAuthRequests.Load() != 0 {
 		t.Fatalf("首次锚定有虚拟局域网地址时不得尝试物理地址，认证请求数=%d", physicalAuthRequests.Load())
 	}
@@ -253,6 +271,17 @@ func TestManagerConnectionTestHostKeyMismatchSkipsWithoutCredentials(t *testing.
 	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{Identifier: added.ServerID})
 	if err == nil || len(result.ConnectionNotes) != 2 {
 		t.Fatalf("两个不一致地址都应被跳过：%v %+v", err, result)
+	}
+	if result.Succeeded || result.FailureReason != models.ConnectionTestFailureHostKeyMismatch ||
+		len(result.Attempts) != 2 || result.Attempts[0].FailureReason != models.ConnectionTestFailureHostKeyMismatch ||
+		result.Attempts[1].FailureReason != models.ConnectionTestFailureHostKeyMismatch {
+		t.Fatalf("主机密钥不一致应归类为白话失败并逐地址保存：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Succeeded ||
+		persisted.FailureReason != models.ConnectionTestFailureHostKeyMismatch ||
+		len(persisted.Attempts) != 2 || persisted.CompletedAt.IsZero() {
+		t.Fatalf("主机密钥不一致的最近结果应持久保存：%v %+v", persistErr, persisted)
 	}
 	if result.AnchorResult != "" {
 		t.Fatalf("连接失败时不得显示锚定校验成功：%+v", result)
@@ -360,6 +389,15 @@ func TestManagerConnectionTestAuthenticationFailureKeepsSavedRows(t *testing.T) 
 	if err == nil || result.AnchorFingerprint == "" || result.AnchorResult != "" {
 		t.Fatalf("认证失败应返回错误；锚事实可保留但不显示校验成功：%v %+v", err, result)
 	}
+	if result.Succeeded || result.FailureReason != models.ConnectionTestFailureAuthentication ||
+		len(result.Attempts) != 1 || result.Attempts[0].FailureReason != models.ConnectionTestFailureAuthentication {
+		t.Fatalf("认证失败应归类为白话失败并记录候选地址结果：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Succeeded ||
+		persisted.FailureReason != models.ConnectionTestFailureAuthentication || len(persisted.Attempts) != 1 {
+		t.Fatalf("认证失败的最近结果应持久保存：%v %+v", persistErr, persisted)
+	}
 	saved, err := st.GetServer(added.ServerID)
 	if err != nil || saved.ShellType != models.ShellPOSIX || saved.AuthMethod != models.AuthPassword ||
 		saved.SudoCredentialID == "" || saved.DeviceID != targetDevice.ID {
@@ -412,8 +450,64 @@ func TestManagerConnectionTestAddressTimeout(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "连接超时") {
 		t.Fatalf("多地址测试应汇总连接超时：%v %+v", err, result)
 	}
+	if result.Succeeded || result.FailureReason != models.ConnectionTestFailureTimeout ||
+		len(result.Attempts) != 2 || result.Attempts[0].FailureReason != models.ConnectionTestFailureTimeout {
+		t.Fatalf("连接超时应归类为白话失败并逐地址保存：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Succeeded ||
+		persisted.FailureReason != models.ConnectionTestFailureTimeout || len(persisted.Attempts) != 2 {
+		t.Fatalf("连接超时的最近结果应持久保存：%v %+v", persistErr, persisted)
+	}
 	if strings.Contains(err.Error(), "login-secret") {
 		t.Fatalf("超时错误不得包含登录密码：%v", err)
+	}
+}
+
+// TestManagerConnectionTestPortUnreachable 覆盖端口不通：真实 SSH 服务不存
+// 在时，整体与逐地址结果都使用 owner 可读的失败分类。
+func TestManagerConnectionTestPortUnreachable(t *testing.T) {
+	manager, st, targetDevice := newConnectionTestStore(t, false)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := addConnectionMembership(t, st, targetDevice.Name, "127.0.0.1", true); err != nil {
+		t.Fatal(err)
+	}
+	added := addConnectionServer(t, st, targetDevice.Name, "127.0.0.1", port)
+
+	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{Identifier: added.ServerID})
+	if err == nil || result.Succeeded || result.FailureReason != models.ConnectionTestFailurePortUnreachable ||
+		len(result.Attempts) != 1 || result.Attempts[0].FailureReason != models.ConnectionTestFailurePortUnreachable {
+		t.Fatalf("端口不通应归类为白话失败并逐地址保存：%v %+v", err, result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Succeeded ||
+		persisted.FailureReason != models.ConnectionTestFailurePortUnreachable || len(persisted.Attempts) != 1 {
+		t.Fatalf("端口不通的最近结果应持久保存：%v %+v", persistErr, persisted)
+	}
+}
+
+// TestManagerConnectionTestCanceledDoesNotPersistResult 钉住进行中任务的
+// 边界：调用方取消时还没有完成结果，不得写入最近一次完成结果。
+func TestManagerConnectionTestCanceledDoesNotPersistResult(t *testing.T) {
+	manager, st, targetDevice := newConnectionTestStore(t, false)
+	added := addConnectionServer(t, st, targetDevice.Name, "127.0.0.1", 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := manager.TestConnection(ctx, ConnectionTestRequest{Identifier: added.ServerID})
+	if err == nil {
+		t.Fatal("已取消的连接测试应返回错误")
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted != nil {
+		t.Fatalf("取消不应写入最近一次完成结果：%v %+v", persistErr, persisted)
 	}
 }
 

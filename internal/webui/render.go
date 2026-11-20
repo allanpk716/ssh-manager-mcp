@@ -48,6 +48,8 @@ type pageData struct {
 	ServerDetailNotice                string
 	ServerDetailNoticeKind            string
 	ServerDetailPage                  *serverDetailPageView
+	ServerConnectionTest              *ServerConnectionTestResultView
+	ServerConnectionTestUpdateHeader  bool
 	ServerEdit                        *serverEditView
 	ServerDeletePreview               *ServerDeletePreviewView
 	ServerDeleteNotice                string

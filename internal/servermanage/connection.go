@@ -2,10 +2,13 @@ package servermanage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/shellprobe"
+	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -19,6 +22,7 @@ type ConnectionTestRequest struct {
 // ConnectionTestResult 是连接测试给页面与任务层的结果。主机密钥指纹不是登
 // 录秘密，可以展示；登录凭据与提权口令绝不进入这里的任何字段。
 type ConnectionTestResult struct {
+	models.ServerConnectionTestResult
 	ConnectionNotes   []string
 	ShellDetected     models.ShellType
 	ShellEvidence     string
@@ -48,21 +52,31 @@ func (m *Manager) TestConnection(
 
 	var detected models.ShellType
 	var evidence string
-	var notes []string
+	var dial sshbroker.ServerDialResult
 	writeSource := storeWriteSource(req.Source)
 	if req.ProbeShell {
-		detected, evidence, notes, err = shellprobe.ProbeServerWithSource(ctx, m.st, srv, writeSource)
+		dial, detected, evidence, err = shellprobe.ProbeServerWithDialResult(ctx, m.st, srv, writeSource)
 	} else {
-		notes, err = shellprobe.ConnectServerWithSource(ctx, m.st, srv, writeSource)
+		dial, err = shellprobe.ConnectServerWithDialResult(ctx, m.st, srv, writeSource)
 	}
 	result := &ConnectionTestResult{
-		ConnectionNotes: notes,
-		ShellDetected:   detected,
-		ShellEvidence:   evidence,
+		ServerConnectionTestResult: connectionTestStorageResult(dial, time.Now()),
+		ConnectionNotes:            dial.ConnectionNotes,
+		ShellDetected:              detected,
+		ShellEvidence:              evidence,
 	}
 	if err != nil {
+		result.Succeeded = false
+		result.FailureReason = overallConnectionFailureReason(dial, err)
+		var persistErr error
+		if !errors.Is(err, context.Canceled) {
+			persistErr = m.st.SaveServerConnectionTestResult(srv.ID, result.ServerConnectionTestResult)
+		}
 		m.applyAnchorFacts(result, srv.ID)
 		_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
+		if persistErr != nil {
+			return result, fmt.Errorf("%w；保存最近一次连接测试结果失败：%v", err, persistErr)
+		}
 		return result, err
 	}
 
@@ -73,7 +87,13 @@ func (m *Manager) TestConnection(
 			Shell: &detectedText,
 		}, req.Source); err != nil {
 			m.applyAnchorFacts(result, srv.ID)
+			result.Succeeded = false
+			result.FailureReason = models.ConnectionTestFailureOther
+			persistErr := m.st.SaveServerConnectionTestResult(srv.ID, result.ServerConnectionTestResult)
 			_ = m.writeConnectionTestAudit(req.Source, srv.Name, "error", result.AnchorFingerprint, string(detected), err)
+			if persistErr != nil {
+				return result, fmt.Errorf("%w；保存最近一次连接测试结果失败：%v", err, persistErr)
+			}
 			return result, err
 		}
 	}
@@ -95,7 +115,42 @@ func (m *Manager) TestConnection(
 	if err := m.writeConnectionTestAudit(req.Source, srv.Name, "ok", result.AnchorFingerprint, string(detected), nil); err != nil {
 		return result, err
 	}
+	if err := m.st.SaveServerConnectionTestResult(srv.ID, result.ServerConnectionTestResult); err != nil {
+		return result, fmt.Errorf("保存最近一次连接测试结果失败：%w", err)
+	}
 	return result, nil
+}
+
+func connectionTestStorageResult(
+	dial sshbroker.ServerDialResult, completedAt time.Time,
+) models.ServerConnectionTestResult {
+	return models.ServerConnectionTestResult{
+		CompletedAt: completedAt, Succeeded: true, Attempts: dial.Attempts,
+		SuccessAddress: dial.SuccessAddress, SuccessNetworkName: dial.SuccessNetworkName,
+		SuccessSource: dial.SuccessSource,
+		Duration:      dial.Duration,
+	}
+}
+
+func overallConnectionFailureReason(
+	dial sshbroker.ServerDialResult, err error,
+) models.ConnectionTestFailureReason {
+	priority := []models.ConnectionTestFailureReason{
+		models.ConnectionTestFailureHostKeyMismatch,
+		models.ConnectionTestFailureAuthentication,
+		models.ConnectionTestFailureTimeout,
+		models.ConnectionTestFailurePortUnreachable,
+	}
+	found := map[models.ConnectionTestFailureReason]bool{}
+	for _, attempt := range dial.Attempts {
+		found[attempt.FailureReason] = true
+	}
+	for _, reason := range priority {
+		if found[reason] {
+			return reason
+		}
+	}
+	return models.ConnectionTestFailureOther
 }
 
 // applyAnchorFacts 只补充失败结果仍可确认的锚事实；锚定结论只在连接测试成

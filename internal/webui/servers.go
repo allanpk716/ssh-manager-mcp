@@ -127,6 +127,9 @@ type ServerDetailView struct {
 	// HostKeyAnchor 是这个服务器条目自己的主机密钥锚；条目尚无锚时为
 	// 空，模板显示尚未锚定。
 	HostKeyAnchor *ServerDetailHostKeyAnchor
+	// ConnectionTest 是这个服务器条目最近一次完成的连接测试结果；从未
+	// 测试时为空。该视图同时供页头短状态与连接卡片结果区复用。
+	ConnectionTest *ServerConnectionTestResultView
 }
 
 // ServerDetailHostKeyAnchor 是服务器详情页主机密钥锚信息区的展示数据：

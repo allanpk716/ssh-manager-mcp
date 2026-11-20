@@ -138,6 +138,9 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 		h.renderError(w, r, http.StatusNotFound, "服务器不存在", "请求的服务器不存在。")
 		return
 	}
+	if taskID := strings.TrimSpace(r.URL.Query().Get("task")); taskID != "" {
+		detail.ConnectionTest = h.serverConnectionTaskView(detail, taskID)
+	}
 	notice, noticeKind := serverDetailNoticeText(r.URL.Query().Get("notice")), ""
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
@@ -589,9 +592,26 @@ func (h *handler) handleServerDetailMove(w http.ResponseWriter, r *http.Request,
 	serverDetailWriteRedirect(w, r, detail.ID, "server-moved")
 }
 
-// handleServerDetailTest 启动一次连接测试并进入既有结果页；结果页会显示
-// 实际使用的网络指称与真实握手地址。
+// handleServerDetailTest 启动一次连接测试。局部请求把连接卡片的结果区换
+// 成进行中状态并继续轮询；普通请求回到详情页，不再进入独立结果页。
 func (h *handler) handleServerDetailTest(w http.ResponseWriter, r *http.Request, id string) {
+	taskID := strings.TrimSpace(r.URL.Query().Get("task"))
+	if r.Method == http.MethodGet {
+		if taskID == "" || !isFragmentRequest(r) {
+			h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "读取连接测试状态只接受局部刷新请求。")
+			return
+		}
+		detail := h.serverDetailForWrite(w, r, id)
+		if detail == nil {
+			return
+		}
+		view := h.serverConnectionTaskView(detail, taskID)
+		if view == nil {
+			view = detail.ConnectionTest
+		}
+		h.renderConnectionTestFragment(w, r, view, true)
+		return
+	}
 	if r.Method != http.MethodPost {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "测试连接只接受 POST 请求。")
 		return
@@ -609,11 +629,55 @@ func (h *handler) handleServerDetailTest(w http.ResponseWriter, r *http.Request,
 		detail.ID, probeShell, ServerWriteSource{RemoteAddress: remoteIP(r)}, ServerConnectionAnchor{},
 	)
 	if err != nil || taskID == "" {
+		if isFragmentRequest(r) {
+			h.renderConnectionTestFragment(w, r, &ServerConnectionTestResultView{
+				State: ServerConnectionTestFailed, FailureLabel: "连接测试未启动，请稍后重试。",
+			}, false)
+			return
+		}
 		h.renderServerDetailWriteError(w, r, detail, http.StatusInternalServerError, "连接测试未启动，请稍后重试。")
 		return
 	}
-	target := url.Values{"server": {detail.ID}, "task": {taskID}, "source": {"detail"}}
-	http.Redirect(w, r, serverAddResultPath+"?"+target.Encode(), http.StatusSeeOther)
+	if isFragmentRequest(r) {
+		h.renderConnectionTestFragment(w, r, h.runningConnectionTestView(detail.ID, taskID), false)
+		return
+	}
+	target := url.Values{"tab": {"connection"}, "task": {taskID}}
+	http.Redirect(w, r, "/ui/servers/"+url.PathEscape(detail.ID)+"?"+target.Encode(), http.StatusSeeOther)
+}
+
+func (h *handler) serverConnectionTaskView(detail *ServerDetailView, taskID string) *ServerConnectionTestResultView {
+	if h.cfg.ServerConnectionTester == nil {
+		return detail.ConnectionTest
+	}
+	status, ok := h.cfg.ServerConnectionTester.ServerTestStatus(taskID)
+	if !ok || status == nil || status.ServerID != detail.ID {
+		return detail.ConnectionTest
+	}
+	if status.State == ServerConnectionTestRunning {
+		return h.runningConnectionTestView(detail.ID, taskID)
+	}
+	if status.Result != nil {
+		return status.Result
+	}
+	return detail.ConnectionTest
+}
+
+func (h *handler) runningConnectionTestView(serverID, taskID string) *ServerConnectionTestResultView {
+	poll := url.Values{"task": {taskID}}
+	return &ServerConnectionTestResultView{
+		State:    ServerConnectionTestRunning,
+		PollPath: "/ui/servers/" + url.PathEscape(serverID) + "/test?" + poll.Encode(),
+	}
+}
+
+func (h *handler) renderConnectionTestFragment(
+	w http.ResponseWriter, r *http.Request, view *ServerConnectionTestResultView, updateHeader bool,
+) {
+	h.renderPage(w, r, http.StatusOK, "server-connection-test-result.tmpl", pageData{
+		ServerConnectionTest:             view,
+		ServerConnectionTestUpdateHeader: updateHeader && view != nil && view.State != ServerConnectionTestRunning,
+	})
 }
 
 // serverDetailForWrite 读取写操作目标的服务器详情，找不到或读失败时已写

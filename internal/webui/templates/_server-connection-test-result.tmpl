@@ -1,0 +1,22 @@
+{{define "serverConnectionTestResult"}}
+{{if .}}
+<section id="server-connection-test-result" class="connection-test-result {{if eq .State "running"}}is-running{{else if .Succeeded}}is-succeeded{{else}}is-failed{{end}}"{{if eq .State "running"}} hx-get="{{.PollPath}}" hx-trigger="every 1s" hx-target="#server-connection-test-live" hx-swap="innerHTML"{{end}}>
+{{if eq .State "running"}}
+<span class="connection-test-spinner" aria-hidden="true"></span>
+<span>正在连接…</span>
+{{else if .Succeeded}}
+<span class="connection-test-icon" aria-hidden="true">✓</span>
+<span class="connection-test-main">已连上 · 用的地址 {{.SuccessAddress}}{{if .SuccessNetworkLabel}}（{{.SuccessNetworkLabel}}）{{end}}· 耗时 {{.Duration.Milliseconds}} 毫秒</span>
+{{else}}
+<span class="connection-test-icon" aria-hidden="true">✗</span>
+<span class="connection-test-main"><strong>连不上</strong> · {{.FailureLabel}}</span>
+<button type="button" class="connection-test-candidate-toggle" data-connection-test-candidates aria-expanded="false" aria-controls="server-connection-test-candidates">展开看每个候选地址的结果</button>
+<ul id="server-connection-test-candidates" class="connection-test-candidate-list" hidden>
+{{range .Attempts}}<li class="connection-test-candidate"><span>{{.NetworkLabel}}</span><span class="mono">{{.Address}}</span><span>{{if .OK}}已连上{{else}}{{.FailureLabel}}{{end}} · 耗时 {{.Duration.Milliseconds}} 毫秒</span></li>{{end}}
+</ul>
+{{end}}
+</section>
+{{else}}
+<section id="server-connection-test-result" class="connection-test-result is-empty"><span>从未测试</span></section>
+{{end}}
+{{end}}

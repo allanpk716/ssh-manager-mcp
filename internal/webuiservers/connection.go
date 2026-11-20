@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -92,6 +93,11 @@ func (r *connectionTester) ServerTestStatus(taskID string) (*webui.ServerConnect
 	}
 	status := *task
 	status.ConnectionNotes = append([]string(nil), task.ConnectionNotes...)
+	if task.Result != nil {
+		result := *task.Result
+		result.Attempts = append([]webui.ServerConnectionTestAttemptView(nil), task.Result.Attempts...)
+		status.Result = &result
+	}
 	return &status, true
 }
 
@@ -121,10 +127,23 @@ func (r *connectionTester) finishConnectionTest(
 		task.HandshakeAddress = result.HandshakeAddress
 		task.ShellDetected = string(result.ShellDetected)
 		task.ShellEvidence = result.ShellEvidence
+		task.Result = webui.NewServerConnectionTestResultView(result.ServerConnectionTestResult)
 	}
 	if err != nil {
 		task.State = webui.ServerConnectionTestFailed
-		task.Message = err.Error()
+		if errors.Is(err, context.Canceled) {
+			task.Message = "连接被取消"
+			task.Result = &webui.ServerConnectionTestResultView{
+				State: webui.ServerConnectionTestFailed, FailureLabel: "连接被取消",
+			}
+		} else if task.Result != nil {
+			task.Message = task.Result.FailureLabel
+		} else {
+			task.Message = "连接被取消"
+			task.Result = &webui.ServerConnectionTestResultView{
+				State: webui.ServerConnectionTestFailed, FailureLabel: "连接被取消",
+			}
+		}
 		if task.ProbeShell {
 			task.ShellNotice = "连接失败，shell 未验证；条目保持默认 POSIX 标注。"
 		}
