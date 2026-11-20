@@ -1,29 +1,97 @@
 {{define "content"}}
 <section class="software-inventory">
 <h1>软件清单</h1>
-<div class="inline-form">
-<a class="button-link" href="/ui/software-inventory/search">跨设备搜索</a>
-<a class="button-link" href="/ui/software-inventory/todos">待办</a>
-<a class="button-link" href="/ui/software-inventory/drafts">草稿审阅</a>
-<a class="button-link" href="/ui/software-inventory/declarations">生效声明</a>
-<a class="button-link" href="/ui/software-inventory/settings">采集设置</a>
-<a class="button-link" href="/ui/software-inventory/declarations/new">新增声明</a>
+<p>先看设备，再用全局搜索跨设备找软件。</p>
+<div class="inline-form" aria-label="全局采集与导出位置"></div>
+
+<form id="software-inventory-search-form" class="software-inventory-filter" method="get" action="/ui/software-inventory/">
+<h2>全局软件搜索</h2>
+<div class="form-field">
+<label for="software-inventory-query">软件名（子串）</label>
+<input id="software-inventory-query" type="search" name="query" value="{{.SoftwareInventory.Filter.Name}}" placeholder="例如：openssl、xz-utils、nginx" autocomplete="off">
 </div>
-{{if .SoftwareInventoryError}}<p class="form-error">{{.SoftwareInventoryError}}</p>{{end}}
-{{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+<div class="form-field">
+<label for="software-inventory-exact-version">精确版本（可选）</label>
+<input id="software-inventory-exact-version" name="exact_version" value="{{.SoftwareInventory.Filter.ExactVersion}}" placeholder="留空表示不筛选版本" autocomplete="off">
+</div>
+<p>搜索范围始终包含全部软件包和底层库。</p>
+<div class="form-field">
+<label for="software-inventory-site">地点</label>
+<select id="software-inventory-site" name="site" hx-get="/ui/software-inventory/" hx-trigger="change" hx-target="#software-inventory-results" hx-select="#software-inventory-results" hx-swap="outerHTML" hx-push-url="true" hx-include="closest form">
+<option value="">全部地点</option>
+{{range .SoftwareInventory.SiteOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+</div>
+<div class="form-field">
+<label for="software-inventory-network">网络</label>
+<select id="software-inventory-network" name="network" hx-get="/ui/software-inventory/" hx-trigger="change" hx-target="#software-inventory-results" hx-select="#software-inventory-results" hx-swap="outerHTML" hx-push-url="true" hx-include="closest form">
+<option value="">全部网络</option>
+{{range .SoftwareInventory.NetworkOptions}}<option value="{{.Value}}"{{if .Selected}} selected{{end}}>{{.Label}}</option>{{end}}
+</select>
+</div>
+<button type="submit">搜索</button>
+</form>
+
+<div id="software-inventory-results">
+{{if .SoftwareInventory.HasSearch}}
+<h2>跨设备搜索结果</h2>
 <ul class="record-cards">
-{{range .SoftwareInventoryDevices}}
+{{range .SoftwareInventory.SearchDevices}}
 <li class="record-card">
-<h2><a href="/ui/software-inventory/devices?device={{.Name | urlquery}}">{{.Name}}</a></h2>
+<h3><a href="/ui/software-inventory/devices?device={{.DeviceName | urlquery}}">{{.DeviceName}}</a> · {{len .Rows}} 条</h3>
+{{range .Rows}}{{if ne .Item.CategoryLabel "系统包"}}
+<article class="software-search-item">
+<strong>{{.Item.Name}}</strong>
 <dl class="field-list">
-<dt>采集状态</dt><dd>{{template "softwareInventoryStatus" .Status}}</dd>
+<dt>精确版本</dt><dd>{{.Item.Version}}</dd>
+<dt>类别</dt><dd>{{.Item.SearchCategoryLabel}}</dd>
+<dt>监听端口与暴露级别</dt><dd>{{if .Item.ListeningPorts}}{{range .Item.ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
+<dt>采集时间</dt><dd>{{formatOptionalTime .Item.CollectedAt}}</dd>
 </dl>
+</article>
+{{end}}{{end}}
+<h4>全部软件包（{{.SystemPackageCount}} 条，默认折叠）</h4>
+<details>
+<summary>展开全部软件包</summary>
+{{range .Rows}}{{if eq .Item.CategoryLabel "系统包"}}
+<article class="software-search-item">
+<strong>{{.Item.Name}}</strong>
+<dl class="field-list">
+<dt>精确版本</dt><dd>{{.Item.Version}}</dd>
+<dt>类别</dt><dd>{{.Item.CategoryLabel}}</dd>
+<dt>采集时间</dt><dd>{{formatOptionalTime .Item.CollectedAt}}</dd>
+</dl>
+</article>
+{{end}}{{end}}
+</details>
+</li>
+{{else}}<li class="empty-text">没有匹配的软件。</li>{{end}}
+</ul>
+{{end}}
+
+<h2>设备清单</h2>
+<ul class="record-cards">
+{{range .SoftwareInventory.Devices}}
+<li class="record-card">
+<h3><a href="/ui/software-inventory/devices?device={{.Name | urlquery}}">{{.Name}}</a></h3>
+<p class="status-badges">{{range .StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
+<dl class="field-list">
+<dt>系统与内核</dt><dd>{{if .SystemName}}{{.SystemName}} {{.SystemVersion}}{{else}}-{{end}}；{{if .KernelName}}{{.KernelName}} {{.KernelVersion}}{{else}}-{{end}}</dd>
+<dt>重点软件</dt><dd>{{.ImportantSoftwareCount}}</dd>
+<dt>全部软件</dt><dd>{{.AllSoftwareCount}}</dd>
+<dt>未识别进程</dt><dd>{{.UnidentifiedProcessCount}}</dd>
+<dt>采集时间</dt><dd>{{formatOptionalTime .Status.LastSuccessAt}}</dd>
+{{if .Status.LastFailureReason}}<dt>上次失败原因</dt><dd>{{.Status.LastFailureReason}}</dd>{{end}}
+</dl>
+{{if .Status.Managed}}
+<form method="post" action="/ui/software-inventory/collect?device={{.Name | urlquery}}">
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<button type="submit">立即采集</button>
+</form>
+{{end}}
 </li>
 {{else}}<li class="empty-text">暂无设备。</li>{{end}}
 </ul>
+</div>
 </section>
-{{end}}
-
-{{define "softwareInventoryStatus"}}
-{{if .Managed}}{{.CollectorLabel}}{{else}}不受管设备，没有采集执行者{{end}}；上次成功 {{formatOptionalTime .LastSuccessAt}}；上次失败 {{formatOptionalTime .LastFailureAt}}{{if .LastFailureReason}}（{{.LastFailureReason}}）{{end}}；{{if .Stale}}清单已过期{{else}}清单未过期{{end}}
 {{end}}

@@ -281,6 +281,25 @@ export async function startStandaloneUIWithTopology(probePort?: number): Promise
   return startUIProcess(runDir);
 }
 
+// startStandaloneUIWithSoftwareInventory 用设备优先软件清单测试数据启动
+// 单机 Web UI；地点、网络、版本与采集状态只在这份种子里出现。
+export async function startStandaloneUIWithSoftwareInventory(): Promise<standaloneUI> {
+  const runDir = mkdtempSync(path.join(os.tmpdir(), "sshmgr-e2e-software-inventory-"));
+  const seed = spawnSync("go", ["run", "./e2e/tools/seedvault", runDir], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: {
+      ...seedVaultEnvironment(runDir),
+      SSHMGR_E2E_SOFTWARE_INVENTORY: "1",
+    },
+  });
+  if (seed.status !== 0) {
+    await rm(runDir, { recursive: true, force: true });
+    throw new Error(`准备软件清单临时加密库失败：${seed.stdout}\n${seed.stderr}`);
+  }
+  return startUIProcess(runDir);
+}
+
 // startClientUIWithTopology 用带拓扑数据的本地快照启动客户端 Web UI，供网
 // 络拓扑浏览器测试验证只读视图与按快照裁剪的呈现。
 export async function startClientUIWithTopology(): Promise<clientUI> {
@@ -541,11 +560,16 @@ async function startAuthorityUI(password: string, pairingMode = "", clientsSeed 
 type standaloneUIFixture = { standaloneUI: standaloneUI };
 // sharesStandaloneUIFixture 给共享存储用例额外种入挂载密码与登记数据。
 type sharesStandaloneUIFixture = { sharesStandaloneUI: standaloneUI };
+type softwareInventoryUIFixture = { softwareInventoryUI: standaloneUI };
 type clientUIFixture = { clientUI: clientUI };
 type authorityUIFixture = { authorityUI: authorityUI };
 
 export const test = base.extend<
-  standaloneUIFixture & sharesStandaloneUIFixture & clientUIFixture & authorityUIFixture
+  standaloneUIFixture &
+    sharesStandaloneUIFixture &
+    softwareInventoryUIFixture &
+    clientUIFixture &
+    authorityUIFixture
 >({
   standaloneUI: async ({}, use) => {
     const ui = await startStandaloneUI();
@@ -562,6 +586,11 @@ export const test = base.extend<
       delete process.env.SSHMGR_E2E_SHARES;
     }
   },
+  softwareInventoryUI: async ({}, use) => {
+    const ui = await startStandaloneUIWithSoftwareInventory();
+    await use(ui);
+    await ui.close();
+  },
   clientUI: async ({}, use) => {
     const ui = await startClientUI();
     await use(ui);
@@ -574,7 +603,14 @@ export const test = base.extend<
   },
 });
 
-export { expect, startAuthorityUI, startClientUI, startStandaloneUI, startEmptyMachineUI };
+export {
+  expect,
+  startAuthorityUI,
+  startClientUI,
+  startStandaloneUI,
+  startStandaloneUIWithSoftwareInventory,
+  startEmptyMachineUI,
+};
 
 // gotoUIPath 以当前页面地址为基准打开同一个 Web UI 里的路径；测试配置不设
 // baseURL，直接 page.goto("/ui/...") 无法解析相对地址。

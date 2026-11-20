@@ -102,8 +102,9 @@ type pageData struct {
 	ShareResidue                      *ShareResidueView
 	ShareDesktopGuide                 *ShareDesktopGuideView
 	SoftwareInventoryDevices          []SoftwareInventoryDeviceSummary
+	SoftwareInventory                 *SoftwareInventoryPageView
 	SoftwareInventoryDevice           *SoftwareInventoryDevice
-	SoftwareInventorySearchRows       []SoftwareInventorySearchRow
+	SoftwareInventorySearchRows       []SoftwareInventorySearchDevice
 	SoftwareInventoryQuery            string
 	SoftwareInventoryTodos            SoftwareInventoryTodos
 	SoftwareInventoryDeclarationForm  *SoftwareInventoryDeclarationForm

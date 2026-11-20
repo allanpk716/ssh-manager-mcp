@@ -42,10 +42,10 @@ type ClientMachineChoice struct {
 }
 
 type ClientSoftwareSummary struct {
-	LastCollectedAt      time.Time
-	ItemCount            int
-	PendingExposureCount int
-	TopItems             []string
+	LastCollectedAt          time.Time
+	ItemCount                int
+	UnidentifiedProcessCount int
+	TopItems                 []string
 }
 
 type ClientResource struct {
@@ -482,16 +482,6 @@ func (m *Manager) clientSoftware(machineName string) (*ClientSoftwareSummary, er
 	if err != nil {
 		return nil, err
 	}
-	inventory, err := m.st.SoftwareDeclarationsForDevice(machineName, store.AllSoftwareDevices())
-	if err != nil {
-		return nil, err
-	}
-	declarationsByKey := make(map[string]store.SoftwareDeclarationView, len(inventory.Declarations))
-	for _, declaration := range inventory.Declarations {
-		if declaration.ClaimedObservedKey != "" {
-			declarationsByKey[declaration.ClaimedObservedKey] = declaration
-		}
-	}
 	summary := &ClientSoftwareSummary{LastCollectedAt: status.LastSuccessAt, ItemCount: len(items)}
 	for _, item := range items {
 		if len(summary.TopItems) < 3 {
@@ -501,23 +491,11 @@ func (m *Manager) clientSoftware(machineName string) (*ClientSoftwareSummary, er
 			}
 			summary.TopItems = append(summary.TopItems, label)
 		}
-		declaration := declarationsByKey[item.StableKey]
-		for _, port := range item.ListeningPorts {
-			if port.Exposure == models.SoftwareExposureAllAddresses && !softwareDeclarationCoversPort(declaration, port) {
-				summary.PendingExposureCount++
-			}
+		if item.Category == models.SoftwareCategoryUnidentified {
+			summary.UnidentifiedProcessCount++
 		}
 	}
 	return summary, nil
-}
-
-func softwareDeclarationCoversPort(declaration store.SoftwareDeclarationView, port models.SoftwareListeningPort) bool {
-	for _, declared := range declaration.ListeningPorts {
-		if declared.Port == port.Port && declared.Protocol == port.Protocol {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *Manager) clientSecrets(serverIDs []string) ([]ClientResource, error) {

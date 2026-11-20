@@ -1,82 +1,94 @@
-import { expect, gotoUIPath, openAuthorityUI, openStandaloneUI, test } from "../helpers";
+import { expect, gotoUIPath, test } from "../helpers";
 
-test("从待办认领未识别进程后它从待办消失", async ({ page, standaloneUI }) => {
-  await openStandaloneUI(page, standaloneUI);
-
+async function openSoftwareInventory(
+  page: import("@playwright/test").Page,
+  ui: { startupURL: string },
+): Promise<void> {
+  await page.goto(ui.startupURL);
+  await page.getByRole("heading", { name: "状态总览" }).waitFor();
   await gotoUIPath(page, "/ui/software-inventory/");
-  await page.getByRole("link", { name: "待办" }).click();
-  await expect(page.getByRole("heading", { name: "未识别进程" })).toBeVisible();
-  const processRow = page.locator(".record-card", { hasText: "/opt/gateway/gateway" });
-  await expect(processRow).toContainText("0.0.0.0:8443/tcp");
-  await processRow.getByRole("link", { name: "认领" }).click();
+  await page.getByRole("heading", { name: "软件清单", exact: true }).waitFor();
+}
 
-  await expect(page.getByRole("heading", { name: "新增软件声明" })).toBeVisible();
-  await expect(page.getByLabel("设备")).toHaveValue("工作站");
-  await expect(page.getByLabel(/监听端口/)).toHaveValue(
-    "0.0.0.0,8443,tcp,all_addresses",
-  );
-  await page.getByLabel("软件名").fill("业务网关");
-  await page.getByLabel("精确版本").fill("2.1.0");
-  await page.getByLabel(/监听端口/).fill("0.0.0.0,8443,tcp,virtual_local_area_network");
-  await page.getByRole("button", { name: "保存声明" }).click();
+test("地点和网络筛选即选即生效并保留地址与表单状态", async ({ page, softwareInventoryUI }) => {
+  await openSoftwareInventory(page, softwareInventoryUI);
+  const deviceList = page.locator("h2:has-text('设备清单') + ul.record-cards");
+  await expect(deviceList).toContainText("工作站");
+  await expect(deviceList).toContainText("虚拟网设备");
+  await expect(deviceList).toContainText("分部过期设备");
 
-  await expect(page.getByRole("heading", { name: "软件清单待办" })).toBeVisible();
-  await expect(page.getByText("已登记软件声明。")).toBeVisible();
-  await expect(page.locator(".record-card", { hasText: "/opt/gateway/gateway" })).toHaveCount(0);
+  await page.getByLabel("地点").selectOption({ label: "公司" });
+  await expect(deviceList).toContainText("工作站");
+  await expect(deviceList).toContainText("虚拟网设备");
+  await expect(deviceList).not.toContainText("分部过期设备");
+
+  await page.getByLabel("网络").selectOption({ label: "总部物理局域网（物理局域网）" });
+  await expect(deviceList).toContainText("工作站");
+  await expect(deviceList).not.toContainText("虚拟网设备");
+  await expect(page).toHaveURL(/site=/);
+  await expect(page).toHaveURL(/network=/);
+
+  await page.getByLabel("软件名（子串）").fill("openssl");
+  await page.getByLabel("精确版本（可选）").fill("3.0.2-0ubuntu1.18");
+  await page.locator("#software-inventory-search-form").getByRole("button", { name: "搜索" }).click();
+  const searchResults = page.locator("h2:has-text('跨设备搜索结果') + ul.record-cards");
+  await expect(searchResults).toContainText("工作站");
+  await expect(searchResults).not.toContainText("分部过期设备");
+
+  await page.reload();
+  await expect(page.getByLabel("地点")).toHaveValue("公司");
+  await expect(page.getByLabel("网络")).toHaveValue("总部物理局域网");
+  await expect(page.getByLabel("软件名（子串）")).toHaveValue("openssl");
+  await expect(page.getByLabel("精确版本（可选）")).toHaveValue("3.0.2-0ubuntu1.18");
+  await expect(searchResults).toContainText("工作站");
 });
 
-test("声明草稿确认后进入生效清单", async ({ page, standaloneUI }) => {
-  await openStandaloneUI(page, standaloneUI);
+test("全局搜索支持精确版本并默认折叠全部软件包", async ({ page, softwareInventoryUI }) => {
+  await openSoftwareInventory(page, softwareInventoryUI);
+  const searchResults = page.locator("h2:has-text('跨设备搜索结果') + ul.record-cards");
+  await page.getByLabel("软件名（子串）").fill("openssl");
+  await page.getByLabel("精确版本（可选）").fill("3.0.2-0ubuntu1.18");
+  await page.locator("#software-inventory-search-form").getByRole("button", { name: "搜索" }).click();
 
-  await gotoUIPath(page, "/ui/software-inventory/");
-  await page.getByRole("link", { name: "草稿审阅" }).click();
-  await expect(page.getByRole("heading", { name: "声明草稿审阅" })).toBeVisible();
-  await expect(page.getByText("业务网关")).toBeVisible();
-  await page.getByRole("button", { name: "按草稿确认" }).click();
+  await expect(searchResults.locator("li.record-card")).toHaveCount(2);
+  await expect(searchResults).toContainText("工作站");
+  await expect(searchResults).toContainText("分部过期设备");
+  await expect(searchResults).not.toContainText("虚拟网设备");
+  await expect(searchResults).toContainText("3.0.2-0ubuntu1.18");
 
-  await expect(page.getByText("草稿已确认并进入生效清单。")).toBeVisible();
-  await gotoUIPath(page, "/ui/software-inventory/");
-  await page.getByRole("link", { name: "工作站" }).click();
-  await expect(page.getByRole("heading", { name: "工作站 · 软件清单" })).toBeVisible();
-  await expect(page.locator(".record-card", { hasText: "业务网关" }).first()).toBeVisible();
+  await page.getByLabel("地点").selectOption({ label: "公司" });
+  await expect(searchResults).toContainText("工作站");
+  await expect(searchResults).not.toContainText("分部过期设备");
+
+  await page.getByLabel("地点").selectOption({ label: "全部地点" });
+  await page.getByLabel("精确版本（可选）").fill("");
+  await page.locator("#software-inventory-search-form").getByRole("button", { name: "搜索" }).click();
+  await expect(searchResults.locator("li.record-card")).toHaveCount(3);
+  await expect(searchResults).toContainText("虚拟网设备");
+
+  const virtualCard = searchResults.locator("li.record-card").filter({ hasText: "虚拟网设备" });
+  await expect(virtualCard).toContainText("OpenSSL");
+  await expect(virtualCard.getByText("openssl-library")).toBeHidden();
+  await virtualCard.getByText("展开全部软件包").click();
+  await expect(virtualCard.getByText("openssl-library")).toBeVisible();
 });
 
-test("声明草稿驳回后消失", async ({ page, standaloneUI }) => {
-  await openStandaloneUI(page, standaloneUI);
+test("软件清单区域撤下旧流程入口", async ({ page, softwareInventoryUI }) => {
+  await openSoftwareInventory(page, softwareInventoryUI);
+  const area = page.locator("section.software-inventory");
+  for (const forbidden of ["声明", "认领", "草稿", "待办", "对不上", "待确认暴露", "采集设置"]) {
+    await expect(area).not.toContainText(forbidden);
+  }
+  await expect(area.getByRole("link", { name: /声明|草稿|待办/ })).toHaveCount(0);
 
-  await gotoUIPath(page, "/ui/software-inventory/");
-  await page.getByRole("link", { name: "草稿审阅" }).click();
-  await expect(page.getByText("业务网关")).toBeVisible();
-  await page.getByRole("button", { name: "驳回草稿" }).click();
-
-  await expect(page.getByText("草稿已驳回。")).toBeVisible();
-  await expect(page.getByText("业务网关")).toHaveCount(0);
-});
-
-test("打开 sudo 采集开关要求重新验证并保留表单状态", async ({ page, authorityUI }) => {
-  test.skip(test.info().project.name !== "desktop-chromium", "只在桌面浏览器等待重新验证时效");
-  test.setTimeout(30_000);
-  await openAuthorityUI(page, authorityUI, "browser-test-password");
-
-  await gotoUIPath(page, "/ui/software-inventory/");
-  await page.getByRole("link", { name: "采集设置" }).click();
-  await page.getByLabel("服务器条目", { exact: true }).selectOption("web-1");
-  await page.getByLabel("允许用 sudo 采集").check();
-
-  // 端到端测试把重新验证窗口缩短到 1 秒；等它过期后再提交。窗口不能只有
-  // 100 毫秒：验证回跳后还要检查保留的表单状态，慢速持续集成机器会在第二
-  // 次提交前再次过期，导致页面又回到重新验证页。
-  await page.waitForTimeout(1_200);
-  await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
-  await expect(page.getByRole("heading", { name: "重新验证" })).toBeVisible();
-  await page.getByLabel("管理员口令").fill("browser-test-password");
-  await page.getByRole("button", { name: "验证并继续" }).click();
-
-  await expect(page.getByRole("heading", { name: "软件清单采集设置" })).toBeVisible();
-  await expect(page.getByText("已保留表单状态，请再次提交。")).toBeVisible();
-  await expect(page.getByLabel("服务器条目", { exact: true })).toHaveValue("web-1");
-  await expect(page.getByLabel("允许用 sudo 采集")).toBeChecked();
-  await page.getByRole("button", { name: "保存 sudo 采集开关" }).click();
-  const serverRow = page.locator(".record-card", { hasText: "web-1" });
-  await expect(serverRow).toContainText("已打开");
+  for (const path of [
+    "/ui/software-inventory/todos",
+    "/ui/software-inventory/declarations",
+    "/ui/software-inventory/declarations/new",
+    "/ui/software-inventory/drafts",
+    "/ui/software-inventory/settings",
+  ]) {
+    await gotoUIPath(page, path);
+    await expect(page.getByRole("heading", { name: "页面不存在" })).toBeVisible();
+  }
 });

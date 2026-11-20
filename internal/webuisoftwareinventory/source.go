@@ -24,21 +24,65 @@ func FromOpener(open func() (*store.Store, func(), error)) webui.SoftwareInvento
 	return openerSource{open: open}
 }
 
-func (s openerSource) SoftwareInventoryDevices() ([]webui.SoftwareInventoryDeviceSummary, error) {
+func (s openerSource) SoftwareInventoryDevices(
+	filter webui.SoftwareInventoryFilter,
+) ([]webui.SoftwareInventoryDeviceSummary, error) {
 	st, done, err := s.open()
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	statuses, err := softwareinventory.New(st).CollectionStatuses(softwareinventory.AllDevicesVisible(), "")
+	manager := softwareinventory.New(st)
+	statuses, err := manager.CollectionStatuses(softwareinventory.AllDevicesVisible(), "")
 	if err != nil {
 		return nil, err
 	}
-	out := make([]webui.SoftwareInventoryDeviceSummary, 0, len(statuses))
+	statusByName := make(map[string]softwareinventory.CollectionStatusView, len(statuses))
 	for _, status := range statuses {
-		out = append(out, webui.SoftwareInventoryDeviceSummary{
-			Name: status.DeviceName, Status: statusView(status),
-		})
+		statusByName[status.DeviceName] = status
+	}
+	result, err := manager.Query(softwareinventory.QueryOptions{
+		Site: filter.Site, Network: filter.Network, IncludeSystemPackages: true,
+		Visibility: softwareinventory.AllDevicesVisible(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]webui.SoftwareInventoryDeviceSummary, 0, len(result.Devices))
+	for _, device := range result.Devices {
+		status, ok := statusByName[device.DeviceName]
+		if !ok {
+			status = softwareinventory.CollectionStatusView{
+				DeviceName: device.DeviceName, Managed: true,
+				CollectionStatus: softwareinventory.CollectionStatus{
+					NeverCollected: true, Stale: true,
+				},
+			}
+		}
+		summary := webui.SoftwareInventoryDeviceSummary{
+			Name: device.DeviceName, Status: statusView(status),
+			StatusLabels:     softwareInventoryStatusLabels(status),
+			AllSoftwareCount: len(device.Items),
+		}
+		for _, item := range device.Items {
+			switch {
+			case item.Category == softwareinventory.CategorySystemPackage:
+			case item.Category == softwareinventory.CategoryOperatingSystem &&
+				summary.SystemName == "":
+				summary.SystemName, summary.SystemVersion = item.Name, item.Version
+				summary.ImportantSoftwareCount++
+			case item.Category == softwareinventory.CategoryDriverFirmware &&
+				strings.HasSuffix(item.Name, "内核") && summary.KernelName == "":
+				summary.KernelName, summary.KernelVersion = item.Name, item.Version
+				summary.ImportantSoftwareCount++
+			case item.Category == softwareinventory.CategoryUnidentified:
+				summary.UnidentifiedProcessCount++
+				summary.ImportantSoftwareCount++
+			default:
+				summary.ImportantSoftwareCount++
+			}
+		}
+		out = append(out, summary)
 	}
 	return out, nil
 }
@@ -81,26 +125,58 @@ func (s openerSource) SoftwareInventoryDevice(
 }
 
 func (s openerSource) SearchSoftwareInventory(
-	namePart string,
-) ([]webui.SoftwareInventorySearchRow, error) {
+	filter webui.SoftwareInventoryFilter,
+) ([]webui.SoftwareInventorySearchDevice, error) {
 	st, done, err := s.open()
 	if err != nil {
 		return nil, err
 	}
 	defer done()
-	rows, err := softwareinventory.New(st).SearchSoftware(
-		namePart, softwareinventory.AllDevicesVisible(),
-	)
+	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
+		Name: filter.Name, ExactVersion: filter.ExactVersion,
+		Site: filter.Site, Network: filter.Network,
+		IncludeSystemPackages: true, Visibility: softwareinventory.AllDevicesVisible(),
+	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]webui.SoftwareInventorySearchRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, webui.SoftwareInventorySearchRow{
-			DeviceName: row.DeviceName, Item: itemView(searchItemAsQueryItem(row.Item)),
-		})
+	out := make([]webui.SoftwareInventorySearchDevice, 0, len(result.Devices))
+	for _, device := range result.Devices {
+		searchDevice := webui.SoftwareInventorySearchDevice{
+			DeviceName: device.DeviceName,
+			Rows:       make([]webui.SoftwareInventorySearchRow, 0, len(device.Items)),
+		}
+		for _, item := range device.Items {
+			if item.Category == softwareinventory.CategorySystemPackage {
+				searchDevice.SystemPackageCount++
+			}
+			searchDevice.Rows = append(searchDevice.Rows, webui.SoftwareInventorySearchRow{
+				DeviceName: device.DeviceName, Item: itemView(item),
+			})
+		}
+		if len(searchDevice.Rows) > 0 {
+			out = append(out, searchDevice)
+		}
 	}
 	return out, nil
+}
+
+func softwareInventoryStatusLabels(status softwareinventory.CollectionStatusView) []string {
+	if !status.Managed {
+		return []string{"不采集（不受管设备）"}
+	}
+	labels := make([]string, 0, 2)
+	if status.LastFailureAt != nil && (status.LastSuccessAt == nil ||
+		status.LastFailureAt.After(*status.LastSuccessAt)) {
+		labels = append(labels, "采集失败")
+	}
+	if status.Stale {
+		labels = append(labels, "清单过期")
+	}
+	if len(labels) == 0 {
+		labels = append(labels, "正常")
+	}
+	return labels
 }
 
 func (s openerSource) SoftwareInventoryTodos() (webui.SoftwareInventoryTodos, error) {
@@ -591,8 +667,14 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 			ExposureLabel: port.Exposure.Label(),
 		})
 	}
+	searchCategoryLabel := item.CategoryLabel
+	if item.Category == softwareinventory.CategoryOperatingSystem ||
+		(item.Category == softwareinventory.CategoryDriverFirmware && strings.HasSuffix(item.Name, "内核")) {
+		searchCategoryLabel = "操作系统与内核"
+	}
 	return webui.SoftwareInventoryItem{
-		CategoryLabel: item.CategoryLabel, Name: item.Name, Version: item.Version,
+		CategoryLabel: item.CategoryLabel, SearchCategoryLabel: searchCategoryLabel,
+		Name: item.Name, Version: item.Version,
 		PackageURL: item.PackageURL, CPE: item.CPE, Source: item.Source,
 		CollectedAt: item.CollectedAt, ConfirmedAt: item.ConfirmedAt,
 		ListeningPorts: ports, BelongsTo: item.BelongsTo, Note: item.Note,

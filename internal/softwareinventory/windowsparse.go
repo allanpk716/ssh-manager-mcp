@@ -43,6 +43,7 @@ func parseWindowsInventoryOutput(output string) (*ParsedCollection, error) {
 	}
 	if osInfo.recognized {
 		collection.Items = append(collection.Items, buildWindowsOSItem(osInfo))
+		collection.Items = append(collection.Items, buildWindowsKernelItem(osInfo))
 	}
 	installed, installedIndexes := buildWindowsInstalledItems(sectionOrEmpty(sections, "installed"))
 	collection.Items = append(collection.Items, installed...)
@@ -123,6 +124,21 @@ func buildWindowsOSItem(info windowsOSInfo) models.SoftwareObservedItem {
 		Name:         name,
 		Version:      version,
 		Architecture: info.architecture,
+	}
+}
+
+func buildWindowsKernelItem(info windowsOSInfo) models.SoftwareObservedItem {
+	version := info.currentBuild
+	if version != "" && info.updateRevision != "" {
+		version += "." + info.updateRevision
+	}
+	if version == "" {
+		version = "unknown"
+	}
+	return models.SoftwareObservedItem{
+		Category: models.SoftwareCategoryDriverFirmware,
+		Name:     "Windows 内核",
+		Version:  version,
 	}
 }
 

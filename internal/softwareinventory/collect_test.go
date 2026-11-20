@@ -202,11 +202,11 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 	}{
 		{
 			device: "工作站", serverEntry: "powershell-entry", shell: models.ShellPowerShell,
-			fixture: "win10-powershell-full.txt", itemCount: 813,
+			fixture: "win10-powershell-full.txt", itemCount: 814,
 		},
 		{
 			device: "命令行工作站", serverEntry: "cmd-entry", shell: models.ShellWindowsCmd,
-			fixture: "win10-cmd-full.txt", itemCount: 203,
+			fixture: "win10-cmd-full.txt", itemCount: 204,
 		},
 	}
 	for _, test := range tests {

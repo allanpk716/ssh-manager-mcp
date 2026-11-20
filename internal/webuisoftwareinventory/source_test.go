@@ -49,6 +49,191 @@ func addTestDevice(t *testing.T, st *store.Store, name string) {
 	}
 }
 
+// TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters 钉住首页的
+// 公共数据契约：设备摘要来自统一实测查询，搜索复用精确版本、地点与网络
+// 条件，声明数据不进入页面。
+func TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters(t *testing.T) {
+	st, _ := newTestStore(t)
+	for _, site := range []struct{ name, parent string }{
+		{name: "公司"},
+		{name: "总部机房", parent: "公司"},
+		{name: "分部机房"},
+	} {
+		if _, err := st.AddSiteWithParent(site.name, "", site.parent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, network := range []models.Network{
+		{Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司"},
+		{Name: "跨地点虚拟局域网", Type: models.NetworkVirtual},
+		{Name: "分部物理局域网", Type: models.NetworkPhysical, SiteName: "分部机房"},
+	} {
+		if _, err := st.AddNetwork(network); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentialID, err := st.SetCredential(&models.Credential{
+		Type: models.CredPassword, Secret: []byte("test-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := map[string]string{}
+	for _, device := range []struct{ name, site, network string }{
+		{name: "工作站", site: "总部机房", network: "总部物理局域网"},
+		{name: "虚拟网设备", site: "公司", network: "跨地点虚拟局域网"},
+		{name: "分部失败设备", site: "分部机房", network: "分部物理局域网"},
+	} {
+		if _, err := st.AddDeviceAtSite(device.name, "", "", device.site); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership(device.name, device.network, "192.0.2.10"); err != nil {
+			t.Fatal(err)
+		}
+		server, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: device.name + "-ssh", Host: "192.0.2.10", Port: 22, User: "owner",
+			AuthMethod: models.AuthPassword, CredentialID: credentialID,
+		}, nil, nil, device.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		servers[device.name] = server.ServerID
+	}
+	if _, err := st.AddDeviceAtSite("不受管存储", "", "", "分部机房"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	seed := func(device string, collectedAt time.Time, items []models.SoftwareObservedItem) {
+		t.Helper()
+		st.NowFn = func() time.Time { return collectedAt }
+		if err := st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: items, ServerID: servers[device],
+			CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("工作站", now.Add(-10*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+		{Category: models.SoftwareCategoryDriverFirmware, Name: "Linux 内核", Version: "6.8.0-49-generic"},
+		{Category: models.SoftwareCategoryServiceProgram, Name: "nginx", Version: "1.24.0"},
+		{Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway", ExecutablePath: "/opt/gateway/gateway"},
+		{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+		{Category: models.SoftwareCategorySystemPackage, Name: "base-files", Version: "13.5ubuntu3"},
+	})
+	seed("虚拟网设备", now.Add(-10*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategoryServiceProgram, Name: "OpenSSL", Version: "3.0.2"},
+	})
+	seed("分部失败设备", now.Add(-9*24*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+	})
+	st.NowFn = func() time.Time { return now.Add(-time.Hour) }
+	if err := st.RecordSoftwareCollectionFailure(
+		"分部失败设备", "连接超时，端口不通", servers["分部失败设备"], false, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	st.NowFn = nil
+	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+
+	devices, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 4 {
+		t.Fatalf("设备卡片应包含全部设备：%+v", devices)
+	}
+	var workstation, failed, unmanaged *webui.SoftwareInventoryDeviceSummary
+	for i := range devices {
+		switch devices[i].Name {
+		case "工作站":
+			workstation = &devices[i]
+		case "分部失败设备":
+			failed = &devices[i]
+		case "不受管存储":
+			unmanaged = &devices[i]
+		}
+	}
+	if workstation == nil || failed == nil || unmanaged == nil {
+		t.Fatalf("设备卡片缺失：%+v", devices)
+	}
+	if workstation.SystemName != "Ubuntu" || workstation.SystemVersion != "24.04.1 LTS" ||
+		workstation.KernelName != "Linux 内核" || workstation.KernelVersion != "6.8.0-49-generic" ||
+		workstation.ImportantSoftwareCount != 4 || workstation.AllSoftwareCount != 6 ||
+		workstation.UnidentifiedProcessCount != 1 ||
+		len(workstation.StatusLabels) != 1 || workstation.StatusLabels[0] != "正常" {
+		t.Fatalf("工作站设备摘要不符：%+v", workstation)
+	}
+	if len(failed.StatusLabels) != 2 || failed.StatusLabels[0] != "采集失败" ||
+		failed.StatusLabels[1] != "清单过期" || failed.Status.LastFailureReason != "连接超时，端口不通" {
+		t.Fatalf("采集失败且过期的设备摘要不符：%+v", failed)
+	}
+	if len(unmanaged.StatusLabels) != 1 || unmanaged.StatusLabels[0] != "不采集（不受管设备）" {
+		t.Fatalf("不受管设备状态不符：%+v", unmanaged)
+	}
+
+	inCompany, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Site: "公司"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inCompany) != 2 || inCompany[0].Name != "工作站" || inCompany[1].Name != "虚拟网设备" {
+		t.Fatalf("上级地点应包含下级地点设备：%+v", inCompany)
+	}
+	inPhysical, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Network: "总部物理局域网"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inPhysical) != 1 || inPhysical[0].Name != "工作站" {
+		t.Fatalf("物理局域网应按成员筛选设备：%+v", inPhysical)
+	}
+	inVirtual, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Network: "跨地点虚拟局域网"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inVirtual) != 1 || inVirtual[0].Name != "虚拟网设备" {
+		t.Fatalf("虚拟局域网应按成员筛选设备：%+v", inVirtual)
+	}
+
+	exact, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{
+		Name: "openssl", ExactVersion: "3.0.2-0ubuntu1.18",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exact) != 2 || exact[0].DeviceName != "分部失败设备" || exact[1].DeviceName != "工作站" {
+		t.Fatalf("精确版本搜索应只返回拥有对应条目的设备：%+v", exact)
+	}
+	if len(exact[1].Rows) != 1 || exact[1].Rows[0].Item.Name != "openssl" ||
+		exact[1].Rows[0].Item.CategoryLabel != "系统包" {
+		t.Fatalf("精确版本搜索应返回逐字相等的系统包：%+v", exact[1])
+	}
+	exactInCompany, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{
+		Name: "openssl", ExactVersion: "3.0.2-0ubuntu1.18", Site: "公司",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exactInCompany) != 1 || exactInCompany[0].DeviceName != "工作站" {
+		t.Fatalf("地点条件应同时缩小搜索结果：%+v", exactInCompany)
+	}
+	withoutVersion, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{Name: "openssl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutVersion) != 3 || withoutVersion[0].DeviceName != "分部失败设备" ||
+		withoutVersion[1].DeviceName != "工作站" || withoutVersion[2].DeviceName != "虚拟网设备" {
+		t.Fatalf("版本留空表示不筛版本：%+v", withoutVersion)
+	}
+	linux, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{Name: "Linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linux) != 1 || len(linux[0].Rows) != 1 ||
+		linux[0].Rows[0].Item.SearchCategoryLabel != "操作系统与内核" {
+		t.Fatalf("搜索默认视图应把操作系统与内核合成一个突出类别：%+v", linux)
+	}
+}
+
 // TestSourceBuildsDeviceViewFromUnifiedQuery 验证适配层把统一查询、采集
 // 状态与变化历史合成 Web UI 页面数据，并把系统包整理成默认折叠分组。
 func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
