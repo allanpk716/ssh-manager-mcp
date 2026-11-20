@@ -535,8 +535,7 @@
   // 服务器详情分区编辑弹层：打开时聚焦第一个控件并限制焦点；Escape 与遮
   // 罩关闭；无弹层但带卡片锚点时把焦点还给对应卡片的编辑按钮。
   function initServerDetailDrawer() {
-    var shell = document.querySelector("[data-server-detail-drawer]");
-    if (shell === null) {
+    function focusEditButtonForHash() {
       var anchorMatch = /^#server-card-([a-z]+)$/.exec(window.location.hash);
       if (anchorMatch === null) {
         return;
@@ -549,6 +548,12 @@
           editButton.focus();
         });
       }
+    }
+
+    window.addEventListener("hashchange", focusEditButtonForHash);
+    var shell = document.querySelector("[data-server-detail-drawer]");
+    if (shell === null) {
+      focusEditButtonForHash();
       return;
     }
     var dialog = shell.querySelector("[data-server-detail-dialog]");
