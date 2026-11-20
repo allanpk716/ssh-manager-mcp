@@ -415,6 +415,77 @@ func TestServerDetailAddressEditorDrawer(t *testing.T) {
 	}
 }
 
+// TestServerDetailAddressRangeSuggestions 校验网段提示按地点覆盖计算：只
+// 读行说明不会自动归入，编辑弹层提供只改草稿的确认入口。
+func TestServerDetailAddressRangeSuggestions(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailNetworkRangeTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailNetworkRangeFixture("site-home")},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	body := serversGet(t, handler, cookie, "/ui/servers/srv-fine")
+	readOnlyHint := "这个地址落在 家A-办公网 的登记网段 192.168.100.0/24 内。可在『编辑』里确认归属，不会自动归入。"
+	if !strings.Contains(body, readOnlyHint) {
+		t.Fatalf("只读地址行应说明网段覆盖且不会自动归入，缺少 %q：\n%s", readOnlyHint, body)
+	}
+
+	drawer := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=address")
+	for _, want := range []string{
+		"属于 家A-办公网？网段 192.168.100.0/24 覆盖这个地址。",
+		`data-confirm-network="家A-办公网"`, ">确认</button>",
+	} {
+		if !strings.Contains(drawer, want) {
+			t.Fatalf("地址编辑弹层缺少 %q：\n%s", want, drawer)
+		}
+	}
+}
+
+// TestServerDetailAddressRangeSuggestionsRequireCoveredLocation 校验设备地
+// 点不在物理局域网覆盖地点及其下级内时不出现网段提示。
+func TestServerDetailAddressRangeSuggestionsRequireCoveredLocation(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailNetworkRangeTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailNetworkRangeFixture("site-office")},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	drawer := serversGet(t, handler, cookie, "/ui/servers/srv-fine?edit=address")
+	for _, forbidden := range []string{"这个地址落在", "属于 家A-办公网", "data-confirm-network="} {
+		if strings.Contains(drawer, forbidden) {
+			t.Fatalf("设备地点不在覆盖范围内时不应提示 %q：\n%s", forbidden, drawer)
+		}
+	}
+}
+
+func newServerDetailNetworkRangeTestStore() *stubServerStore {
+	store := newServerDetailTestStore()
+	store.details["srv-fine"].Host = "192.168.100.41"
+	return store
+}
+
+func serverDetailNetworkRangeFixture(deviceSiteID string) *TopologyData {
+	return &TopologyData{
+		Sites: []TopologySite{
+			{ID: "site-home", Name: "家A", LocationPath: "家A"},
+			{ID: "site-room", ParentID: "site-home", Name: "房间", LocationPath: "家A / 房间"},
+			{ID: "site-office", Name: "办公室", LocationPath: "办公室"},
+		},
+		Networks: []TopologyNetwork{{
+			ID: "net-home", Name: "家A-办公网", Type: "physical",
+			SiteID: "site-home", SiteName: "家A", LocationPath: "家A",
+			NetworkRange: "192.168.100.0/24",
+		}},
+		Devices: []TopologyDevice{{
+			ID: "device-1", Name: "工作站", Kind: "server", SiteID: deviceSiteID,
+			LocationPath: map[string]string{
+				"site-home": "家A", "site-room": "家A / 房间", "site-office": "办公室",
+			}[deviceSiteID],
+			Servers: []TopologyDeviceServer{{ID: "srv-fine", Name: "fine"}},
+		}},
+	}
+}
+
 // TestServerDetailAddressListWrite 校验整份地址表单走服务器写入口，并把
 // 其他地址行转换成清空语义。
 func TestServerDetailAddressListWrite(t *testing.T) {

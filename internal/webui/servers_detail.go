@@ -7,6 +7,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/networkrange"
 )
 
 // 服务器详情页一列卡片里的可编辑分区；值同时用于查询参数与表单隐藏
@@ -58,10 +61,18 @@ func serverDetailEditPath(id, scope string) string {
 
 // serverDetailAddressRow 是地址卡片里的一行：网络名、类型与地址。
 type serverDetailAddressRow struct {
+	NetworkName      string
+	NetworkValue     string
+	TypeLabel        string
+	Address          string
+	RangeSuggestions []serverDetailAddressSuggestion
+}
+
+// serverDetailAddressSuggestion 是按登记网段算出的一个候选网络；只用于
+// 提示与编辑草稿确认，不代表网络成员已写入。
+type serverDetailAddressSuggestion struct {
 	NetworkName  string
-	NetworkValue string
-	TypeLabel    string
-	Address      string
+	NetworkRange string
 }
 
 // serverDetailSiblingAccount 是同一台机器上的另一个登录账号；Note 复用
@@ -419,6 +430,30 @@ func (h *handler) serverDetailTopologyView(
 		return view
 	}
 	view.LocationPath = device.LocationPath
+	suggestionNetworks := make([]networkrange.Network, 0, len(data.Networks))
+	for _, network := range data.Networks {
+		suggestionNetworks = append(suggestionNetworks, networkrange.Network{
+			Name: network.Name, Range: network.NetworkRange, SiteID: network.SiteID,
+			Physical: network.Type != networkTypeVirtual,
+		})
+	}
+	suggestionSites := make([]*models.Site, 0, len(data.Sites))
+	for _, site := range data.Sites {
+		suggestionSites = append(suggestionSites, &models.Site{ID: site.ID, ParentID: site.ParentID})
+	}
+	rangeSuggestions := func(address, currentNetwork string) []serverDetailAddressSuggestion {
+		matches := networkrange.Suggestions(networkrange.Input{
+			Address: address, CurrentNetwork: currentNetwork, DeviceSiteID: device.SiteID,
+			Networks: suggestionNetworks, Sites: suggestionSites,
+		})
+		suggestions := make([]serverDetailAddressSuggestion, 0, len(matches))
+		for _, match := range matches {
+			suggestions = append(suggestions, serverDetailAddressSuggestion{
+				NetworkName: match.NetworkName, NetworkRange: match.NetworkRange,
+			})
+		}
+		return suggestions
+	}
 	for _, membership := range data.Memberships {
 		if membership.DeviceID != device.ID {
 			continue
@@ -427,12 +462,14 @@ func (h *handler) serverDetailTopologyView(
 		view.Addresses = append(view.Addresses, serverDetailAddressRow{
 			NetworkName: network.Name, NetworkValue: network.Name,
 			TypeLabel: networkTypeLabel(network.Type), Address: membership.Address,
+			RangeSuggestions: rangeSuggestions(membership.Address, network.Name),
 		})
 	}
 	if detail.Host != "" {
 		view.Addresses = append(view.Addresses, serverDetailAddressRow{
 			NetworkName: "其他（公网或未登记网络）", NetworkValue: "other",
 			TypeLabel: "其他地址", Address: detail.Host,
+			RangeSuggestions: rangeSuggestions(detail.Host, "other"),
 		})
 	}
 	for _, network := range data.Networks {
