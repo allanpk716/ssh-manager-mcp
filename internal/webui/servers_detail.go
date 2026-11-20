@@ -76,7 +76,8 @@ type serverDetailAddressSuggestion struct {
 }
 
 // serverDetailSiblingAccount 是同一台机器上的另一个登录账号；Note 复用
-// 该条目的服务器元数据说明字段，ConnectionTest 来自 #326 的持久结果。
+// 该条目的服务器元数据说明字段，ConnectionTest 是最近一次连接测试的持久
+// 化结果。
 type serverDetailSiblingAccount struct {
 	ID             string
 	Name           string
