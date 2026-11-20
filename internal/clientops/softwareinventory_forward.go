@@ -64,6 +64,9 @@ func IsSoftwareInventoryUnreachable(err error) bool {
 type softwareInventoryRequest struct {
 	Device                string `json:"device"`
 	Name                  string `json:"name"`
+	ExactVersion          string `json:"exact_version"`
+	Site                  string `json:"site"`
+	Network               string `json:"network"`
 	MinimumExposure       string `json:"minimum_exposure"`
 	Category              string `json:"category"`
 	IncludeSystemPackages bool   `json:"include_system_packages"`
@@ -141,6 +144,9 @@ func (f *SoftwareInventoryForwarder) QuerySoftwareInventory(
 	body, err := json.Marshal(softwareInventoryRequest{
 		Device:                in.Device,
 		Name:                  in.Name,
+		ExactVersion:          in.ExactVersion,
+		Site:                  in.Site,
+		Network:               in.Network,
 		MinimumExposure:       in.MinimumExposure,
 		Category:              in.Category,
 		IncludeSystemPackages: in.IncludeSystemPackages,

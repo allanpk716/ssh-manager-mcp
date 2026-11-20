@@ -8,8 +8,8 @@ import (
 )
 
 // TestDeclarationDraftsHiddenFromQueriesAndTodos 钉住草稿的隔离性：提交后
-// 不影响统一查询与三类待办；确认后才进入结果，认领的未识别进程也从待办
-// 里消失。
+// 不影响统一查询与三类待办；确认后数据保留但查询仍只输出实测，认领的
+// 未识别进程从待办里消失。
 func TestDeclarationDraftsHiddenFromQueriesAndTodos(t *testing.T) {
 	manager, st := newTestManager(t)
 	mustDevice(t, st, "工作站", true)
@@ -81,9 +81,16 @@ func TestDeclarationDraftsHiddenFromQueriesAndTodos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(query.Devices) != 1 || len(query.Devices[0].Items) != 1 ||
-		query.Devices[0].Items[0].Source != SourceCombined {
-		t.Fatalf("确认后认领草稿应合成为一条软件条目：%+v", query.Devices)
+	if len(query.Devices) != 0 {
+		t.Fatalf("确认后的声明仍不应进入使用者可见查询：%+v", query.Devices)
+	}
+	declarations, err := st.SearchSoftwareDeclarations("", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declarations) != 1 || declarations[0].Name != "业务网关" ||
+		declarations[0].ClaimedObservedKey != "unidentified-1" {
+		t.Fatalf("确认后的声明与认领关系应保留：%+v", declarations)
 	}
 	todos, err = manager.Todos(AllDevicesVisible())
 	if err != nil {

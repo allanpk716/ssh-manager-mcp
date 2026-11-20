@@ -45,3 +45,71 @@ func TestInventoryViewAndSearchIncludeObservedOnlyItems(t *testing.T) {
 		t.Fatalf("跨设备搜索应包含只有实测的条目：\n%s", search)
 	}
 }
+
+// TestInventorySearchAcceptsExactVersionSiteAndNetwork 命令行搜索与领域查
+// 询使用同一组条件；结果只来自实测条目。
+func TestInventorySearchAcceptsExactVersionSiteAndNetwork(t *testing.T) {
+	dbPath, masterKey := newSecretsEnv(t)
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("总部", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSiteWithParent("机房", "", "总部"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "总部",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "跨地点虚拟局域网", Type: models.NetworkVirtual,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	site := "机房"
+	if _, err := st.EditDevice("工作站", store.DeviceChanges{Site: &site}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("工作站", "总部物理局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: softwareinventory.CategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+			{Category: softwareinventory.CategorySystemPackage, Name: "openssl-tools", Version: "3.0.13-0ubuntu3.4"},
+		},
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := softwareinventory.New(st).AddDeclaration(softwareinventory.Declaration{
+		Device: "工作站", Category: softwareinventory.CategorySystemPackage,
+		Name: "openssl", Version: "3.0.2-0ubuntu1.18",
+	}, softwareinventory.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	output := mustInventoryCli(t, "",
+		"inventory", "search", "OPENSSL", "--version", " 3.0.2-0ubuntu1.18 ",
+		"--site", "总部", "--network", "总部物理局域网")
+	if strings.Count(output, "openssl") != 1 || !strings.Contains(output, "3.0.2-0ubuntu1.18") ||
+		strings.Contains(output, "3.0.13-0ubuntu3.4") {
+		t.Fatalf("命令行精确版本与地点网络筛选失败：\n%s", output)
+	}
+	virtual := mustInventoryCli(t, "",
+		"inventory", "search", "openssl", "--version", "3.0.2-0ubuntu1.18",
+		"--site", "总部", "--network", "跨地点虚拟局域网")
+	if !strings.Contains(virtual, "没有匹配的软件条目。") {
+		t.Fatalf("设备不是虚拟局域网成员时不应有结果：\n%s", virtual)
+	}
+}

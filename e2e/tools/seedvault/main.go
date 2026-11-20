@@ -177,7 +177,16 @@ func seed(dir string) error {
 			return err
 		}
 	}
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SOFTWARE_INVENTORY")) == "1" {
+		if err := seedSoftwareInventoryViews(st, credentialID, webID); err != nil {
+			return err
+		}
+		if strings.TrimSpace(os.Getenv("SSHMGR_E2E_SOFTWARE_INVENTORY_CLIENT_COLLECTOR")) == "1" {
+			if err := assignAllSoftwareInventoryCollectorsToClient(st, profileID); err != nil {
+				return err
+			}
+		}
+	} else if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{
 			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
 			{Category: models.SoftwareCategorySystemPackage, Name: "base-files", Version: "13.5ubuntu3"},
@@ -249,6 +258,162 @@ func seed(dir string) error {
 		return err
 	}
 	return seedConnectionTestTarget(st)
+}
+
+// seedSoftwareInventoryViews 给设备优先界面测试种入多地点、物理与虚拟网
+// 络、多版本软件和四种采集状态。默认种子仍保持精简，避免影响其它浏览器
+// 用例的设备数量断言。
+func seedSoftwareInventoryViews(st *store.Store, credentialID, workstationServerID string) error {
+	// build-1 故意不在 laptop-client 绑定的 profile 授权里，供设备详情
+	// 高级区测试采集执行者登记的校验错误提示。
+	if _, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "build-1", Host: "192.0.2.14", Port: 22, User: "owner",
+		AuthMethod: models.AuthPassword, CredentialID: credentialID,
+	}, nil, nil, "工作站"); err != nil {
+		return err
+	}
+	for _, site := range []struct{ name, parent string }{
+		{name: "公司"},
+		{name: "总部机房", parent: "公司"},
+		{name: "分部机房"},
+	} {
+		if _, err := st.AddSiteWithParent(site.name, "", site.parent); err != nil {
+			return err
+		}
+	}
+	for _, network := range []models.Network{
+		{Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司"},
+		{Name: "跨地点虚拟局域网", Type: models.NetworkVirtual},
+		{Name: "分部物理局域网", Type: models.NetworkPhysical, SiteName: "分部机房"},
+	} {
+		if _, err := st.AddNetwork(network); err != nil {
+			return err
+		}
+	}
+	if _, err := st.EditDevice("工作站", store.DeviceChanges{Site: &[]string{"总部机房"}[0]}); err != nil {
+		return err
+	}
+	if _, err := st.AddNetworkMembership("工作站", "总部物理局域网", "192.0.2.10"); err != nil {
+		return err
+	}
+	serverIDs := map[string]string{"工作站": workstationServerID}
+	for _, device := range []struct{ name, site, network, host string }{
+		{name: "虚拟网设备", site: "公司", network: "跨地点虚拟局域网", host: "192.0.2.21"},
+		{name: "分部过期设备", site: "分部机房", network: "分部物理局域网", host: "192.0.2.22"},
+		{name: "分部失败设备", site: "分部机房", network: "分部物理局域网", host: "192.0.2.23"},
+	} {
+		if _, err := st.AddDeviceAtSite(device.name, "软件清单浏览器测试设备", "", device.site); err != nil {
+			return err
+		}
+		if _, err := st.AddNetworkMembership(device.name, device.network, device.host); err != nil {
+			return err
+		}
+		added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: device.name + "-ssh", Host: device.host, Port: 22, User: "owner",
+			AuthMethod: models.AuthPassword, CredentialID: credentialID,
+		}, nil, nil, device.name)
+		if err != nil {
+			return err
+		}
+		serverIDs[device.name] = added.ServerID
+	}
+	if _, err := st.AddDeviceAtSite("不受管存储", "没有服务器条目的设备", "", "分部机房"); err != nil {
+		return err
+	}
+
+	now := time.Now()
+	seed := func(device string, collectedAt time.Time, items []models.SoftwareObservedItem) error {
+		st.NowFn = func() time.Time { return collectedAt }
+		return st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: items, ServerID: serverIDs[device],
+			CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
+		}, store.CLISource())
+	}
+	baseItems := []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+		{Category: models.SoftwareCategoryDriverFirmware, Name: "Linux 内核", Version: "6.8.0-49-generic"},
+	}
+	if err := seed("工作站", now.Add(-10*time.Hour), append(append([]models.SoftwareObservedItem{}, baseItems...),
+		models.SoftwareObservedItem{
+			Category: models.SoftwareCategoryServiceProgram, Name: "nginx", Version: "1.24.0-2ubuntu7",
+			ListeningPorts: []models.SoftwareListeningPort{{
+				Address: "0.0.0.0", Port: 80, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
+			}},
+		},
+		models.SoftwareObservedItem{Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4"},
+		models.SoftwareObservedItem{Category: models.SoftwareCategoryDriverFirmware, Name: "NVIDIA 显卡驱动", Version: "550.120"},
+		models.SoftwareObservedItem{
+			Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway", ProcessName: "gateway",
+			ExecutablePath: "/opt/gateway/gateway", ListeningPorts: []models.SoftwareListeningPort{{
+				Address: "0.0.0.0", Port: 8443, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
+			}},
+		},
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "openssl-library", Version: "3.0.2-0ubuntu1.18"},
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8.3"},
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "xz-utils", Version: "5.4.1-0ubuntu2"},
+	)); err != nil {
+		return err
+	}
+	if err := seed("虚拟网设备", now.Add(-10*time.Hour), append(append([]models.SoftwareObservedItem{}, baseItems...),
+		models.SoftwareObservedItem{Category: models.SoftwareCategoryServiceProgram, Name: "OpenSSL", Version: "3.0.2"},
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "openssl-library", Version: "3.0.2"},
+	)); err != nil {
+		return err
+	}
+	if err := seed("分部过期设备", now.Add(-9*24*time.Hour), append(append([]models.SoftwareObservedItem{}, baseItems...),
+		models.SoftwareObservedItem{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+	)); err != nil {
+		return err
+	}
+	if err := seed("分部失败设备", now.Add(-9*24*time.Hour), baseItems); err != nil {
+		return err
+	}
+	st.NowFn = func() time.Time { return now.Add(-time.Hour) }
+	err := st.RecordSoftwareCollectionFailure(
+		"分部失败设备", "连接超时，端口不通", serverIDs["分部失败设备"], false, store.CLISource(),
+	)
+	st.NowFn = nil
+	return err
+}
+
+// assignAllSoftwareInventoryCollectorsToClient 把浏览器测试库里全部受管设备
+// 的采集执行者登记给 laptop-client。全局立即采集因此只登记客户端分派，
+// 不会拨号到种子数据里的不可达地址。
+func assignAllSoftwareInventoryCollectorsToClient(st *store.Store, profileID string) error {
+	statuses, err := st.SoftwareCollectionStatuses("")
+	if err != nil {
+		return err
+	}
+	serverIDs := make([]string, 0)
+	for _, status := range statuses {
+		if !status.Managed {
+			continue
+		}
+		servers, err := st.FullServersForDevice(status.DeviceName)
+		if err != nil {
+			return err
+		}
+		for _, server := range servers {
+			serverIDs = append(serverIDs, server.ID)
+		}
+	}
+	if len(serverIDs) > 0 {
+		if err := st.GrantServers(profileID, serverIDs); err != nil {
+			return err
+		}
+	}
+	for _, status := range statuses {
+		if !status.Managed {
+			continue
+		}
+		if err := st.SetSoftwareCollectionCollector(
+			status.DeviceName, "laptop-client", "", store.CLISource(),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // writeBrowserTestCertificate 给权威端浏览器测试生成一张 P-256 椭圆曲线

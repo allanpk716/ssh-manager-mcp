@@ -44,10 +44,42 @@ func TestSoftwareInventoryForwarderAgainstServeHandler(t *testing.T) {
 	if err := st.GrantServers(profileID, []string{added.ServerID}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := st.AddSite("总部", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSiteWithParent("机房", "", "总部"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "总部",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "跨地点虚拟局域网", Type: models.NetworkVirtual,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gpuSite := "机房"
+	if _, err := st.EditDevice("gpu-设备", store.DeviceChanges{Site: &gpuSite}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership("gpu-设备", "总部物理局域网", "192.0.2.20"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := softwareinventory.New(st).AddDeclaration(softwareinventory.Declaration{
 		Device: "gpu-设备", Category: softwareinventory.CategoryServiceProgram,
 		Name: "nginx", Version: "1.25.3",
 	}, softwareinventory.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceSoftwareObservedItems("gpu-设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: softwareinventory.CategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+			{Category: softwareinventory.CategorySystemPackage, Name: "openssl-tools", Version: "3.0.13-0ubuntu3.4"},
+		},
+		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
 	runner, err := mcpserver.NewServeRunner(st)
@@ -71,15 +103,28 @@ func TestSoftwareInventoryForwarderAgainstServeHandler(t *testing.T) {
 	defer forwarder.Close()
 
 	result, err := forwarder.QuerySoftwareInventory(mcpserver.QuerySoftwareInventoryInput{
-		Name: "NGINX",
+		Name: "openssl", ExactVersion: " 3.0.2-0ubuntu1.18 ",
+		Site: "总部", Network: "总部物理局域网",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(result.Devices) != 1 || result.Devices[0].DeviceName != "gpu-设备" ||
-		len(result.Devices[0].Items) != 1 || result.Devices[0].Items[0].Name != "nginx" ||
-		!result.Devices[0].Collection.NeverCollected {
+		len(result.Devices[0].Items) != 1 || result.Devices[0].Items[0].Version != "3.0.2-0ubuntu1.18" ||
+		result.Devices[0].Items[0].Source != softwareinventory.SourceObserved ||
+		result.Devices[0].Collection.NeverCollected {
 		t.Fatalf("端到端查询结果 = %+v", result)
+	}
+
+	virtual, err := forwarder.QuerySoftwareInventory(mcpserver.QuerySoftwareInventoryInput{
+		Name: "openssl", ExactVersion: "3.0.2-0ubuntu1.18",
+		Site: "总部", Network: "跨地点虚拟局域网",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(virtual.Devices) != 0 {
+		t.Fatalf("设备不是虚拟局域网成员时不应返回：%+v", virtual.Devices)
 	}
 
 	// 另一个未授权设备码：403 分支文本。

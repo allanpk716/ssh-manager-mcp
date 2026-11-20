@@ -61,10 +61,10 @@ type ClientMachine struct {
 
 // ClientSoftwareSummary 是客户端所在机器的软件清单摘要。
 type ClientSoftwareSummary struct {
-	LastCollectedAt      time.Time
-	ItemCount            int
-	PendingExposureCount int
-	TopItems             []string
+	LastCollectedAt          time.Time
+	ItemCount                int
+	UnidentifiedProcessCount int
+	TopItems                 []string
 }
 
 // ClientResource 是客户端经 profile 服务器能拿到的一项资源。

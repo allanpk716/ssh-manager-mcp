@@ -75,9 +75,8 @@ func TestInventoryDraftCLILifecycle(t *testing.T) {
 		t.Fatalf("确认输出 = %q", output)
 	}
 	view := mustInventoryCli(t, "", "inventory", "view", "工作站")
-	if !strings.Contains(view, "nginx") || !strings.Contains(view, "1.27.0") ||
-		!strings.Contains(view, "owner 修订过版本") {
-		t.Fatalf("修改后确认的声明应生效：\n%s", view)
+	if strings.Contains(view, "nginx") {
+		t.Fatalf("确认后的声明不应进入实测清单结果：\n%s", view)
 	}
 
 	// 驳回：草稿消失，不进入清单。
@@ -98,6 +97,14 @@ func TestInventoryDraftCLILifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	declarations, err := st.SearchSoftwareDeclarations("", store.AllSoftwareDevices())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declarations) != 1 || declarations[0].Name != "nginx" ||
+		declarations[0].Version != "1.27.0" || declarations[0].Note != "owner 修订过版本" {
+		t.Fatalf("确认后的声明应保留在存储里：%+v", declarations)
+	}
 	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{
 		"software-declaration-confirm", "software-declaration-confirm-edit",
 		"software-declaration-reject",

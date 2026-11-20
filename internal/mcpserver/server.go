@@ -89,15 +89,12 @@ var BrokerTools = []string{
 	// [17] — 软件清单查询（票 #185）：权威端与单机本地查询；客户端缓存面在线
 	// 转发到权威端，不可达时报错，绝不回退本地快照数据。
 	"query_software_inventory",
-	// [18] — 声明草稿提交（票 #188）：只写草稿，owner 确认后才生效；客户端
-	// 缓存面经受审计转发写「提交声明草稿」提交。
-	"draft_software_declarations",
-	// [19] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
+	// [18] — 软件清单立即采集（票 #188）：固定命令集，无可传命令的参数。
 	"collect_software_inventory",
-	// [20] — 共享存储持久挂载（规格 #198）：固定命令完成 Linux 与 macOS
+	// [19] — 共享存储持久挂载（规格 #198）：固定命令完成 Linux 与 macOS
 	// 的首次挂载、按新快照更新与重新挂载，不经过命令策略，也不能卸载。
 	"mount_share",
-	// [21] — 出发点分组视图（票 #241）：只读网络拓扑登记与本地探测结果，
+	// [20] — 出发点分组视图（票 #241）：只读网络拓扑登记与本地探测结果，
 	// 不主动探测。
 	"query_topology",
 }
@@ -320,7 +317,7 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
-			Name:        BrokerTools[21], // "query_topology"
+			Name:        BrokerTools[20], // "query_topology"
 			Description: "Read-only network topology query. With only `from`, return that origin device's neighbor groups; with `to`, return pairwise connectivity details from the origin to those targets. `from` is \"self\" (the device where this sshmgr instance runs) or a server id from list_servers; each `to` item is a server id for a managed device, or a device name for an unmanaged device or client instance; detail=true expands addresses, registered network bandwidth, metering, and device roles. Alternatively, set `from` to an authorized server id and `to` to exactly one SMB shared address (\\\\server\\share\\path or smb://server/share/path) to translate it to that server's agreed local path and report whether that server may mount the shared storage; mixed normal targets and multiple shared addresses are rejected. Reads only topology registrations, shared-storage registrations, the dial success address cache, and this instance's locally stored probe observations; it never probes and never opens an SSH connection. For a current on-site connectivity result, call probe_connectivity.",
 		},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in QueryTopologyInput) (*mcp.CallToolResult, any, error) {
@@ -362,7 +359,7 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
-			Name:        BrokerTools[20], // "mount_share"
+			Name:        BrokerTools[19], // "mount_share"
 			Description: "Mount an SMB shared storage on a Linux or macOS server by fixed commands. Input is only a share name from list_shares and a server id from list_servers; no command or path can be supplied. The broker selects a registered common-network address from the target server, writes the persistent Linux or macOS configuration and the root-only mount secret, makes it effective, and verifies the mount point can list content. The operation is intended to be idempotent and safe to call again after share changes, but this tool cannot unmount or roll back a mount. A matching owner revocation marker rejects the call until a newer shared-storage authorization is synced. Windows servers do not need it: their fixed drive letter is injected into each command session. Mount passwords are never included in command text, results, or audit records.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, in MountShareInput) (*mcp.CallToolResult, MountShareOutput, error) {
@@ -601,10 +598,8 @@ func NewServerFromSourceWithDeliveryRecorder(storeFn func() *store.Store, profil
 	// inventory 为 nil 时走本地适配层；客户端缓存面注入在线转发器，未注
 	// 入时由保底能力固定报错（见 newCacheBroker）。
 	registerSoftwareInventoryTool(srv, busy, storeFn, hkFn, profileID, inventory)
-	// draft_software_declarations 与 collect_software_inventory（票 #188）
-	// 同样两个面都注册：本地面直接写 vault / 立即采集；客户端面复用同一
-	// 个注入能力，未实现对应方法时保底报错。
-	registerSoftwareDeclarationDraftTool(srv, busy, storeFn, hkFn, profileID, inventory)
+	// collect_software_inventory（票 #188）同样两个面都注册：本地面直接
+	// 立即采集；客户端面复用同一个注入能力，未实现对应方法时保底报错。
 	registerSoftwareInventoryCollectionTool(srv, busy, storeFn, hkFn, profileID, inventory)
 
 	return srv, tunnels, tasks, nil

@@ -50,6 +50,11 @@ func TestParseWindowsFullFixtures(t *testing.T) {
 			if operatingSystem.Version != "22H2" || operatingSystem.Architecture != "AMD64" {
 				t.Fatalf("注册表系统版本条目 = %+v", operatingSystem)
 			}
+			for _, item := range collection.Items {
+				if item.Category == models.SoftwareCategoryDriverFirmware && item.Name == "Windows 内核" {
+					t.Fatalf("固定命令集没有 Windows 内核条目，解析器不应额外推导：%+v", item)
+				}
+			}
 
 			docker := findObservedItem(
 				t, collection.Items, models.SoftwareCategorySystemPackage, "Docker Desktop",

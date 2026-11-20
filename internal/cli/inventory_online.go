@@ -95,17 +95,36 @@ func (s *inventoryQuerySource) ViewDevice(
 }
 
 // SearchSoftware 跨设备搜索。owner 范围读本地；客户端在线查询。
-func (s *inventoryQuerySource) SearchSoftware(namePart string) ([]softwareinventory.SearchResult, error) {
+func (s *inventoryQuerySource) SearchSoftware(
+	namePart, exactVersion, site, network string,
+) ([]softwareinventory.SearchResult, error) {
 	if s.local != nil {
-		return softwareinventory.New(s.local).SearchSoftware(
-			namePart, softwareinventory.AllDevicesVisible())
+		result, err := softwareinventory.New(s.local).Query(softwareinventory.QueryOptions{
+			Name:                  namePart,
+			ExactVersion:          exactVersion,
+			Site:                  site,
+			Network:               network,
+			IncludeSystemPackages: true,
+			Visibility:            softwareinventory.AllDevicesVisible(),
+		})
+		if err != nil {
+			return nil, err
+		}
+		return queryResultAsSearchResults(result), nil
 	}
 	result, err := s.forwarder.QuerySoftwareInventory(mcpserver.QuerySoftwareInventoryInput{
-		Name: namePart, IncludeSystemPackages: true,
+		Name: namePart, ExactVersion: exactVersion, Site: site, Network: network,
+		IncludeSystemPackages: true,
 	})
 	if err != nil {
 		return nil, s.mapError(err)
 	}
+	return queryResultAsSearchResults(result), nil
+}
+
+func queryResultAsSearchResults(
+	result softwareinventory.QueryResult,
+) []softwareinventory.SearchResult {
 	out := make([]softwareinventory.SearchResult, 0)
 	for i := range result.Devices {
 		for _, item := range result.Devices[i].Items {
@@ -116,7 +135,7 @@ func (s *inventoryQuerySource) SearchSoftware(namePart string) ([]softwareinvent
 			})
 		}
 	}
-	return out, nil
+	return out
 }
 
 // inventoryItemFromQuery 把在线查询条目转换成本地查看使用的条目形态。

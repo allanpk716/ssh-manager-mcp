@@ -55,6 +55,63 @@ func TestSoftwareCollectionStatusesForCollector(t *testing.T) {
 	}
 }
 
+// TestSoftwareCollectionDailyTimeSettingPersistsChangedAt 验证每日采集时间
+// 与它的修改时刻一起读取；旧数据的修改时刻为零时按零值处理。
+func TestSoftwareCollectionDailyTimeSettingPersistsChangedAt(t *testing.T) {
+	st := newCollectTestStore(t)
+	setting, err := st.SoftwareCollectionDailyTimeSetting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setting.Value != models.DefaultSoftwareCollectionDailyTime || !setting.ChangedAt.IsZero() {
+		t.Fatalf("未保存时应返回默认时间和零修改时刻：%+v", setting)
+	}
+
+	changedAt := time.Date(2026, 1, 2, 2, 0, 0, 0, time.Local)
+	st.NowFn = func() time.Time { return changedAt }
+	if err := st.SetSoftwareCollectionDailyTime("01:30", CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	setting, err = st.SoftwareCollectionDailyTimeSetting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setting.Value != "01:30" || !setting.ChangedAt.Equal(changedAt) {
+		t.Fatalf("应持久返回每日时间与修改时刻：%+v", setting)
+	}
+
+	if _, err := st.db.Exec(
+		`UPDATE settings SET updated_at=0 WHERE key=?`, softwareCollectionDailyTimeSettingKey,
+	); err != nil {
+		t.Fatal(err)
+	}
+	setting, err = st.SoftwareCollectionDailyTimeSetting()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !setting.ChangedAt.IsZero() {
+		t.Fatalf("旧数据没有修改时刻时应返回零值：%+v", setting)
+	}
+}
+
+// TestStoreNowTimeUsesPublicClockReader 验证调用方不读取测试时钟字段，而
+// 是通过存储对象的公开方法取得当前时间。
+func TestStoreNowTimeUsesPublicClockReader(t *testing.T) {
+	st := newCollectTestStore(t)
+	fixed := time.Date(2026, 1, 2, 2, 0, 0, 0, time.Local)
+	st.NowFn = func() time.Time { return fixed }
+	if got := st.NowTime(); !got.Equal(fixed) {
+		t.Fatalf("注入时钟时应返回固定时间，得到 %v", got)
+	}
+
+	st.NowFn = nil
+	before := time.Now()
+	got := st.NowTime()
+	if got.Before(before) {
+		t.Fatalf("未注入时钟应使用真实时间：%v 早于 %v", got, before)
+	}
+}
+
 // TestSoftwareImmediateCollectionRequest 验证立即采集请求的登记与清除：登
 // 记后状态带待执行标记并写审计；成功或失败的采集落库都把请求当作已处
 // 理。

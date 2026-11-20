@@ -54,8 +54,9 @@ func (m *Manager) collectionStatusView(stored models.SoftwareCollectionStatus) C
 func collectionStatusCore(stored models.SoftwareCollectionStatus, now time.Time) CollectionStatus {
 	status := CollectionStatus{
 		Collector: stored.Collector.CacheTokenID, CollectorName: stored.CollectorName,
-		CollectorRevoked: stored.CollectorRevoked,
-		ServerEntry:      stored.LastServerName, LastFailureReason: stored.LastFailureReason,
+		CollectorRevoked:  stored.CollectorRevoked,
+		PreferredServerID: stored.PreferredServerID,
+		ServerEntry:       stored.LastServerName, LastFailureReason: stored.LastFailureReason,
 		Incomplete: stored.LastIncomplete, CommandSetVersion: stored.CommandSetVersion,
 		PendingImmediate: stored.PendingImmediate,
 	}

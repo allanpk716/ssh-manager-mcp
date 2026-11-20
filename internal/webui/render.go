@@ -104,16 +104,12 @@ type pageData struct {
 	ShareResidue                      *ShareResidueView
 	ShareDesktopGuide                 *ShareDesktopGuideView
 	SoftwareInventoryDevices          []SoftwareInventoryDeviceSummary
+	SoftwareInventory                 *SoftwareInventoryPageView
 	SoftwareInventoryDevice           *SoftwareInventoryDevice
-	SoftwareInventorySearchRows       []SoftwareInventorySearchRow
 	SoftwareInventoryQuery            string
 	SoftwareInventoryTodos            SoftwareInventoryTodos
-	SoftwareInventoryDeclarationForm  *SoftwareInventoryDeclarationForm
-	SoftwareInventoryDeclaration      *SoftwareInventoryDeclaration
-	SoftwareInventoryDeclarations     []SoftwareInventoryDeclaration
-	SoftwareInventoryDrafts           []SoftwareInventoryDraft
-	SoftwareInventorySettings         *SoftwareInventorySettings
 	SoftwareInventoryCollectorForm    *SoftwareInventoryCollectorForm
+	SoftwareInventoryAdvancedOpen     bool
 	SoftwareInventorySudoServer       string
 	SoftwareInventorySudoEnabled      bool
 	SoftwareInventoryResumeNotice     string
@@ -323,9 +319,8 @@ var pageFuncs = template.FuncMap{
 		}
 		return value.Format("2006-01-02 15:04:05 Z07:00")
 	},
-	"declarationFormPath": declarationFormPath,
-	"addOne":              func(v int) int { return v + 1 },
-	"credentialLabel":     CredentialTypeLabel,
+	"addOne":          func(v int) int { return v + 1 },
+	"credentialLabel": CredentialTypeLabel,
 	// shareUnmountResultLabel 把单台卸载任务结论分类换成页面文案。
 	"shareUnmountResultLabel": shareUnmountResultLabel,
 	// shareRevokeResultLabel 把撤销授权任务结论分类换成页面文案。

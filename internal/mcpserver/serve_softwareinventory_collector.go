@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 
@@ -76,7 +75,8 @@ func (r *ServeRunner) handleSoftwareInventoryAssignments(w http.ResponseWriter, 
 	for _, id := range granted {
 		grantedSet[id] = true
 	}
-	assignments, err := r.st.SoftwareCollectionAssignments(models.ClientCollector(ct.ID), time.Now())
+	now := r.st.NowTime()
+	assignments, err := r.st.SoftwareCollectionAssignments(models.ClientCollector(ct.ID), now)
 	if err != nil {
 		http.Error(w, "assignment lookup failed", http.StatusInternalServerError)
 		return

@@ -51,14 +51,14 @@ func (h *handler) buildMoreView(r *http.Request) (*moreView, error) {
 		todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos()
 		switch {
 		case err != nil:
-			view.SoftwareInventorySummary = "待办读取失败"
+			view.SoftwareInventorySummary = "读取失败"
 		default:
 			count := len(todos.PendingExposure) + len(todos.UnidentifiedProcesses) +
 				len(todos.Mismatches) + len(todos.StaleDevices)
 			if count == 0 {
-				view.SoftwareInventorySummary = "没有待办"
+				view.SoftwareInventorySummary = "没有需要处理的内容"
 			} else {
-				view.SoftwareInventorySummary = fmt.Sprintf("%d 项待办", count)
+				view.SoftwareInventorySummary = fmt.Sprintf("%d 项需要处理", count)
 			}
 		}
 	}

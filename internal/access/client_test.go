@@ -81,6 +81,10 @@ func TestClientDetailIncludesVisibleResourcesAndSoftwareSummary(t *testing.T) {
 					Exposure: models.SoftwareExposureAllAddresses,
 				}},
 			},
+			{
+				Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway",
+				ExecutablePath: "/opt/gateway/gateway",
+			},
 		},
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -96,8 +100,8 @@ func TestClientDetailIncludesVisibleResourcesAndSoftwareSummary(t *testing.T) {
 	if detail.Machine == nil || detail.Machine.Name != "工作站" || detail.Machine.SitePath != "公司 / 一号楼" {
 		t.Fatalf("所在机器不正确：%+v", detail.Machine)
 	}
-	if detail.Software == nil || detail.Software.ItemCount != 2 || detail.Software.PendingExposureCount != 1 ||
-		len(detail.Software.TopItems) != 2 {
+	if detail.Software == nil || detail.Software.ItemCount != 3 || detail.Software.UnidentifiedProcessCount != 1 ||
+		len(detail.Software.TopItems) != 3 {
 		t.Fatalf("软件清单摘要不正确：%+v", detail.Software)
 	}
 	if len(detail.Secrets) != 1 || detail.Secrets[0].Name != "WEB_TOKEN" ||

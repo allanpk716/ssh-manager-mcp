@@ -28,10 +28,9 @@ func mustObservedItems(
 	return collectedAt
 }
 
-// TestClaimCombinesObservedAndDeclaredItems 覆盖声明认领实测后的合成结果：
-// 一条软件只出现一条，来源为两者合成，版本与端口来自实测，暴露级别与
-// 声明提供的标识、备注来自声明。
-func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
+// TestClaimKeepsDeclarationButQueryStaysObserved 覆盖声明认领实测后的数据
+// 保留：认领关系留在声明行里，使用者可见查询仍只输出实测版本与端口。
+func TestClaimKeepsDeclarationButQueryStaysObserved(t *testing.T) {
 	manager, st := newTestManager(t)
 	mustDevice(t, st, "工作站", true)
 	observed := models.SoftwareObservedItem{
@@ -72,19 +71,24 @@ func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
 		t.Fatalf("认领后应只显示一条软件，实际：%+v", result.Devices)
 	}
 	item := result.Devices[0].Items[0]
-	if item.Source != SourceCombined || item.Name != "Nginx 网站服务" ||
-		item.Version != "1.25.3" || item.CPE != "cpe:2.3:a:f5:nginx:1.25.0:*:*:*:*:*:*:*" ||
+	if item.Source != SourceObserved || item.Name != "nginx" ||
+		item.Version != "1.25.3" || item.CPE != "" ||
 		item.PackageURL != "pkg:deb/ubuntu/nginx@1.25.3" ||
-		item.Note != "对外网站入口" || item.ObservedStableKey != storedObserved[0].StableKey ||
+		item.Note != "" || item.ObservedStableKey != storedObserved[0].StableKey ||
 		item.CollectedAt == nil || !item.CollectedAt.Equal(collectedAt) {
-		t.Fatalf("认领后的合成条目 = %+v", item)
+		t.Fatalf("认领后的可见查询条目 = %+v", item)
 	}
 	if len(item.ListeningPorts) != 1 || item.ListeningPorts[0].Port != 443 ||
-		item.ListeningPorts[0].Exposure != ExposurePublicNetwork {
-		t.Fatalf("合成条目的监听端口 = %+v", item.ListeningPorts)
+		item.ListeningPorts[0].Exposure != ExposureAllAddresses {
+		t.Fatalf("可见查询的监听端口 = %+v", item.ListeningPorts)
 	}
-	if !item.VersionMismatch {
-		t.Fatalf("声明与实测版本不同应标出版本不一致：%+v", item)
+	declarations, err := st.SearchSoftwareDeclarations("", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declarations) != 1 || declarations[0].ID != declarationID ||
+		declarations[0].ClaimedObservedKey != storedObserved[0].StableKey {
+		t.Fatalf("认领关系应保留在声明存储里：%+v", declarations)
 	}
 
 	// 整体替换实测结果时保留稳定键，认领关系必须继续有效。
@@ -98,8 +102,8 @@ func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
 	}
 	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
 		result.Devices[0].Items[0].Version != "1.27.0" ||
-		result.Devices[0].Items[0].Source != SourceCombined {
-		t.Fatalf("整体替换后认领关系失效：%+v", result.Devices)
+		result.Devices[0].Items[0].Source != SourceObserved {
+		t.Fatalf("整体替换后的实测查询结果 = %+v", result.Devices)
 	}
 
 	if err := manager.UnclaimDeclaration(declarationID, CLISource()); err != nil {
@@ -109,8 +113,15 @@ func TestClaimCombinesObservedAndDeclaredItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 2 {
-		t.Fatalf("取消认领后应重新显示声明与实测两条：%+v", result.Devices)
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 {
+		t.Fatalf("取消认领后可见查询仍应只有一条实测：%+v", result.Devices)
+	}
+	declarations, err = st.SearchSoftwareDeclarations("", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declarations) != 1 || declarations[0].ClaimedObservedKey != "" {
+		t.Fatalf("取消认领后的声明 = %+v", declarations)
 	}
 }
 
@@ -165,8 +176,8 @@ func TestClaimSurvivesCollectorPackageUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
-		result.Devices[0].Items[0].Source != SourceCombined ||
+		result.Devices[0].Items[0].Source != SourceObserved ||
 		result.Devices[0].Items[0].Version != "10.0p1" {
-		t.Fatalf("升级后认领关系应保持：%+v", result.Devices)
+		t.Fatalf("升级后的实测查询结果 = %+v", result.Devices)
 	}
 }

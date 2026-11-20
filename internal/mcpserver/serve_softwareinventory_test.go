@@ -121,6 +121,44 @@ func newSoftwareInventoryRunner(t *testing.T) *softwareInventoryFixture {
 	}
 }
 
+// seedSoftwareInventoryObserved 给权威端查询测试写入与声明同名的实测条
+// 目；声明仍留在存储里，供数据保留断言使用。
+func seedSoftwareInventoryObserved(t *testing.T, st *store.Store) {
+	t.Helper()
+	items := map[string][]models.SoftwareObservedItem{
+		"gpu-设备": {
+			{
+				Category: softwareinventory.CategoryServiceProgram,
+				Name:     "nginx", Version: "1.25.3",
+				ListeningPorts: []softwareinventory.ListeningPort{{
+					Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+					Exposure: softwareinventory.ExposureAllAddresses,
+				}},
+			},
+			{Category: softwareinventory.CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+		},
+		"mirror-设备": {
+			{
+				Category: softwareinventory.CategoryServiceProgram,
+				Name:     "PostgreSQL", Version: "16.2",
+			},
+		},
+		"不受管设备": {
+			{
+				Category: softwareinventory.CategoryOperatingSystem,
+				Name:     "NAS 系统", Version: "7.2.1",
+			},
+		},
+	}
+	for deviceName, rows := range items {
+		if err := st.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
+			Items: rows, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // postSoftwareInventory 发起一次 POST /software-inventory，返回状态码与
 // 响应体。token 为空表示不带设备码。
 func postSoftwareInventory(t *testing.T, srv *httptest.Server, token, body string) (int, string) {
@@ -169,6 +207,7 @@ func TestSoftwareInventoryEndpoint_RejectsInvalidDeviceCode(t *testing.T) {
 // 查到自己 profile 可见的受管设备；授权外受管设备与不受管设备都不返回。
 func TestSoftwareInventoryEndpoint_OnlyProfileVisibleDevices(t *testing.T) {
 	fx := newSoftwareInventoryRunner(t)
+	seedSoftwareInventoryObserved(t, fx.st)
 	status, body := postSoftwareInventory(t, fx.srv, fx.laptopToken, `{}`)
 	if status != http.StatusOK {
 		t.Fatalf("状态码 = %d，应为 200；响应体：%s", status, body)
@@ -183,8 +222,9 @@ func TestSoftwareInventoryEndpoint_OnlyProfileVisibleDevices(t *testing.T) {
 	if strings.Contains(body, "PostgreSQL") || strings.Contains(body, "NAS 系统") {
 		t.Fatalf("授权外设备或不受管设备的清单泄漏了：%s", body)
 	}
-	if !result.Devices[0].Collection.NeverCollected || !result.Devices[0].Collection.Stale {
-		t.Fatalf("采集状态应表示从未采集：%+v", result.Devices[0].Collection)
+	if result.Devices[0].Collection.NeverCollected || result.Devices[0].Collection.Stale ||
+		result.Devices[0].Collection.CommandSetVersion != "posix-v2" {
+		t.Fatalf("采集状态应来自实测成功记录：%+v", result.Devices[0].Collection)
 	}
 
 	// 另一个 profile 用同一接口查自己的范围。
@@ -201,7 +241,7 @@ func TestSoftwareInventoryEndpoint_OnlyProfileVisibleDevices(t *testing.T) {
 }
 
 // TestSoftwareInventoryEndpoint_IncludesObservedOnlyDevices 权威端只读接
-// 口与本地统一查询共用同一份实测加声明合成结果。
+// 口与本地统一查询共用同一份实测结果。
 func TestSoftwareInventoryEndpoint_IncludesObservedOnlyDevices(t *testing.T) {
 	fx := newSoftwareInventoryRunner(t)
 	observed := models.SoftwareObservedItem{
@@ -232,6 +272,7 @@ func TestSoftwareInventoryEndpoint_IncludesObservedOnlyDevices(t *testing.T) {
 // 设备与非法参数各有明确的状态码。
 func TestSoftwareInventoryEndpoint_FiltersAndErrors(t *testing.T) {
 	fx := newSoftwareInventoryRunner(t)
+	seedSoftwareInventoryObserved(t, fx.st)
 
 	// 系统包默认不含，显式包含后返回。
 	_, body := postSoftwareInventory(t, fx.srv, fx.laptopToken, `{"device":"gpu-设备"}`)

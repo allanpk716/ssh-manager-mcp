@@ -14,11 +14,12 @@ func moreMenuAuthority(t *testing.T) http.Handler {
 		Role:    RoleServer,
 		Servers: &stubServerSource{},
 		Access:  &stubAccessStore{},
-		SoftwareInventory: &stubSoftwareInventorySource{todos: SoftwareInventoryTodos{
-			UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{
-				{DeviceName: "工作站", Name: "业务网关"},
-			},
-			StaleDevices: []SoftwareInventoryStaleDevice{{DeviceName: "软路由"}},
+		SoftwareInventory: &stubSoftwareInventorySource{devices: []SoftwareInventoryDeviceSummary{
+			{Name: "工作站", Status: SoftwareInventoryStatus{Managed: true}, StatusLabels: []string{"正常"}},
+			{Name: "软路由", StatusLabels: []string{"不采集（不受管设备）"}},
+		}, todos: SoftwareInventoryTodos{
+			UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{{DeviceName: "工作站"}},
+			StaleDevices:          []SoftwareInventoryStaleDevice{{DeviceName: "软路由"}},
 		}},
 		Ops: &stubOpsStore{backupStatus: OpsBackupStatus{
 			HasLatest: true, LatestTime: time.Unix(1800000000, 0),
@@ -63,7 +64,7 @@ func TestMoreMenuShowsGroupsSummariesAndAccountActions(t *testing.T) {
 		t.Fatalf("权威端应打开“更多”菜单，状态码=%d 页面：\n%s", response.StatusCode, body)
 	}
 	for _, want := range []string{
-		"资产", "软件清单", "2 项待办", `/ui/software-inventory/`,
+		"资产", "软件清单", "2 项需要处理", `/ui/software-inventory/`,
 		"地点与网络", "3 个地点 · 2 个网络", `/ui/more/locations-networks/`,
 		"网络拓扑图", `/ui/topology/`,
 		"运维", "备份", "最近备份：2027-01-15", `/ui/ops/backup`,

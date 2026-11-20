@@ -52,7 +52,8 @@ func TestAuthorityClientDetailShowsProfileStatusMachineAndResources(t *testing.T
 		Machine: &ClientMachine{ID: "machine-1", Name: "工作站", SitePath: "公司 / 一号楼"},
 		Software: &ClientSoftwareSummary{
 			LastCollectedAt: time.Date(2026, 11, 18, 9, 30, 0, 0, time.UTC),
-			ItemCount:       3, PendingExposureCount: 1, TopItems: []string{"Ubuntu 24.04.1", "nginx 1.24.0"},
+			ItemCount:       3, UnidentifiedProcessCount: 1,
+			TopItems: []string{"Ubuntu 24.04.1", "nginx 1.24.0"},
 		},
 		Secrets: []ClientResource{{ID: "secret-1", Name: "MATRIX_TOKEN", Note: "浏览器测试机密项", ViaServers: []string{"db-1"}}},
 		Shares:  []ClientResource{{ID: "share-1", Name: "datasets", Note: "临时数据", ViaServers: []string{"db-1"}}},
@@ -69,7 +70,7 @@ func TestAuthorityClientDetailShowsProfileStatusMachineAndResources(t *testing.T
 		"<h1>笔记本</h1>", "经配对接入", "profile", "运维", "web-1", "old-1",
 		"最后同步", "客户端版本", "推荐版本", "v0.22.0", "与推荐版本一致",
 		"设备码前缀", "abc123…", "所在机器", "机器 工作站", "公司 / 一号楼",
-		"最近采集 2026-11-18 09:30:00 · 3 个软件 · 1 个待确认暴露",
+		"最近采集 2026-11-18 09:30:00 · 3 个软件 · 1 个未识别进程",
 		"Ubuntu 24.04.1", "查看全部", "立即采集",
 		"它能用到的机密项与共享存储", "MATRIX_TOKEN", "浏览器测试机密项", "经过：db-1",
 		"datasets", "临时数据", "共享存储 · 经过：db-1", "危险区", "移除客户端",
