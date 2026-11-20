@@ -18,6 +18,7 @@
 {{if .Caps.CanWrite}}
 <a class="secondary-button" href="/ui/servers/import">导入 SSH 配置</a>
 <a class="secondary-button" href="/ui/servers/complete?{{completeQueue .ServerList}}&amp;position=0">逐台补全需要注意的服务器</a>
+<button class="secondary-button" type="button" aria-pressed="false" data-server-multi-select><span data-server-multi-select-label>多选</span></button>
 {{end}}
 </div>
 <form class="server-filter-form" method="get" action="/ui/servers/" aria-label="搜索与筛选服务器" data-server-filter-form>
@@ -117,12 +118,33 @@
 {{end}}
 </section>
 {{if and .Caps.CanWrite .ServerBatch}}
-<section class="server-selection-bar" data-server-selection-bar hidden aria-label="批量操作">
+<section class="server-selection-bar" data-server-selection-bar hidden aria-label="多选操作">
+<div class="server-batch-summary">
 <strong data-server-selected-count>已选 0 台</strong>
-<button type="button" data-batch-button="profiles">加入 profile</button>
-<button type="button" data-batch-button="secrets">授权机密项</button>
-<button type="button" data-batch-button="shares">授权共享存储</button>
+<div class="server-batch-tools">
+<button type="button" data-server-select-all>全选当前筛选结果</button>
+<button type="button" data-server-cancel-selection>取消</button>
+</div>
+</div>
+<div class="server-batch-actions">
+<button type="button" data-server-set-location-action disabled title="批量设置地点流程尚未开放">设置地点</button>
+<button type="button" data-server-test-connection-action disabled title="批量测试尚未开放，将由后续版本提供">测试连接</button>
+<button type="button" data-server-more-button disabled>更多 ⋯</button>
+</div>
 </section>
+<div class="drawer-shell" data-server-more-drawer hidden>
+<button class="drawer-backdrop" type="button" data-close-more aria-label="关闭更多批量操作"></button>
+<section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-more-title">
+<div class="drawer-handle" aria-hidden="true"></div>
+<h2 id="server-more-title">更多批量操作</h2>
+<p class="section-note">以下操作仍按已选服务器条目执行。</p>
+<div class="server-more-list">
+<button class="resource-card" type="button" data-batch-button="profiles"><span class="resource-copy"><strong>加入 profile</strong><small>把这批服务器加入指定的客户端 profile</small></span></button>
+<button class="resource-card" type="button" data-batch-button="secrets"><span class="resource-copy"><strong>授权机密项</strong><small>选择要写入这些服务器的机密项</small></span></button>
+<button class="resource-card" type="button" data-batch-button="shares"><span class="resource-copy"><strong>授权共享存储</strong><small>让这些服务器可以挂载指定共享存储</small></span></button>
+</div>
+</section>
+</div>
 <div class="drawer-shell" data-server-batch-drawer hidden>
 <button class="drawer-backdrop" type="button" data-close-batch aria-label="关闭批量操作"></button>
 <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="server-batch-title">

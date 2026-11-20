@@ -2312,10 +2312,7 @@ button.danger {
   bottom: 0;
   left: 0;
   z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-small);
+  display: block;
   padding: calc(var(--space-small) + env(safe-area-inset-bottom)) var(--space-medium);
   background: var(--color-panel);
   border-top: 1px solid var(--color-panel-border);
@@ -2333,6 +2330,92 @@ button.danger {
   border-radius: 8px;
   background: var(--color-background);
   cursor: pointer;
+}
+
+/* 多选模式：复选框只在选择时可见；点卡片即切换，卡片里的链接不再进入
+   详情，行内操作让位给底部操作条。 */
+.server-list-page .server-select-control {
+  display: none;
+}
+
+.server-list-page.server-selecting .server-select-control {
+  display: inline-flex;
+}
+
+.server-list-page.server-selecting .server-card {
+  cursor: pointer;
+}
+
+.server-list-page.server-selecting .server-row-actions {
+  display: none;
+}
+
+.server-batch-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-small);
+}
+
+.server-batch-summary strong {
+  flex: 0 0 auto;
+}
+
+.server-batch-tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.server-batch-tools button {
+  border: 0;
+  background: transparent;
+  color: var(--color-accent);
+  font-weight: 650;
+}
+
+.server-batch-tools button[data-server-cancel-selection] {
+  color: var(--color-muted);
+  font-weight: 400;
+}
+
+.server-batch-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-small);
+  margin-top: var(--space-small);
+}
+
+.server-batch-actions button {
+  border-color: #bfdbfe;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+body.server-selecting main {
+  padding-bottom: calc(190px + env(safe-area-inset-bottom));
+}
+
+/* 手机上底部操作条取代一级导航的位置，避免两层底栏叠在一起。 */
+@media (max-width: 767px) {
+  body.server-selecting .primary-nav {
+    display: none;
+  }
+}
+
+.server-more-list {
+  display: grid;
+  gap: var(--space-small);
+  margin-top: var(--space-medium);
+}
+
+.server-more-list .resource-card {
+  width: 100%;
+  border: 0;
+  cursor: pointer;
+  text-align: left;
 }
 
 /* 服务器分步新增：步骤条、地址行、同机识别与地点树。 */
@@ -2527,8 +2610,9 @@ button.danger {
     grid-auto-flow: row;
   }
 
-  .server-selection-bar {
-    flex-wrap: wrap;
+  .server-batch-actions button {
+    padding: 0 4px;
+    font-size: 13px;
   }
 }
 

@@ -140,73 +140,207 @@
     });
   }
 
-  // 服务器列表多选：勾选卡片后打开底部批量操作栏。资源链接把选中标识符
-  // 带到 #301 的共用服务器勾选页，仍由既有确认流程执行写入。
+  // 服务器列表多选：进入选择模式后点卡片或复选框都能勾选，全选只取当
+  // 前筛选结果。选择模式与选中集合保存在会话存储里，筛选整页刷新和批
+  // 量授权往返后都能恢复；「更多 ⋯」里的资源链接把选中标识符以重复的
+  // server 查询参数带到 #301 的共用服务器勾选页，写入仍由既有确认流程
+  // 执行。
   function initServerListBatch(root) {
+    var multiButton = root.querySelector("[data-server-multi-select]");
+    var multiLabel = multiButton === null ? null : multiButton.querySelector("[data-server-multi-select-label]");
     var cards = Array.prototype.slice.call(root.querySelectorAll("[data-server-card]"));
     var bar = document.querySelector("[data-server-selection-bar]");
+    var moreDrawer = document.querySelector("[data-server-more-drawer]");
     var drawer = document.querySelector("[data-server-batch-drawer]");
     var count = document.querySelector("[data-server-selected-count]");
-    if (cards.length === 0 || bar === null || drawer === null) {
+    if (multiButton === null || bar === null || drawer === null) {
       return;
     }
     var panels = Array.prototype.slice.call(drawer.querySelectorAll("[data-batch-panel]"));
     var resources = Array.prototype.slice.call(drawer.querySelectorAll("[data-batch-resource]"));
+    var selectAllButton = bar.querySelector("[data-server-select-all]");
+    var cancelButton = bar.querySelector("[data-server-cancel-selection]");
+    var moreButton = bar.querySelector("[data-server-more-button]");
+    var modeKey = "sshmgr-servers-selecting";
+    var selectedKey = "sshmgr-servers-selected";
+    var selecting = false;
+    var selected = new Set();
 
-    function selectedIDs() {
-      return cards.filter(function (card) {
-        var box = card.querySelector('input[type="checkbox"]');
-        return box !== null && box.checked;
-      }).map(function (card) {
-        return card.querySelector('input[type="checkbox"]').value;
-      });
+    function persist() {
+      try {
+        if (!selecting) {
+          window.sessionStorage.removeItem(modeKey);
+          window.sessionStorage.removeItem(selectedKey);
+          return;
+        }
+        window.sessionStorage.setItem(modeKey, "1");
+        window.sessionStorage.setItem(selectedKey, JSON.stringify(Array.from(selected)));
+      } catch (error) {
+        // 会话存储不可用时只影响跨页保留，本页内选择不受影响。
+      }
+    }
+
+    function restore() {
+      try {
+        var saved = window.sessionStorage.getItem(selectedKey);
+        var ids = saved === null ? [] : JSON.parse(saved);
+        if (Array.isArray(ids)) {
+          ids.forEach(function (id) {
+            if (typeof id === "string" && id !== "") {
+              selected.add(id);
+            }
+          });
+        }
+        return window.sessionStorage.getItem(modeKey) === "1";
+      } catch (error) {
+        return false;
+      }
     }
 
     function refresh() {
-      var selected = selectedIDs();
+      cards.forEach(function (card) {
+        var box = card.querySelector('input[type="checkbox"]');
+        if (box !== null) {
+          box.checked = selected.has(box.value);
+        }
+      });
       if (count !== null) {
-        count.textContent = "已选 " + selected.length + " 台";
+        count.textContent = "已选 " + selected.size + " 台";
       }
-      bar.hidden = selected.length === 0;
-      drawer.querySelectorAll("[data-batch-button-disabled]").forEach(function (element) {
-        element.disabled = selected.length === 0;
+      if (selectAllButton !== null) {
+        selectAllButton.disabled = cards.length === 0;
+      }
+      if (moreButton !== null) {
+        moreButton.disabled = selected.size === 0;
+      }
+      bar.hidden = !selecting;
+      root.classList.toggle("server-selecting", selecting);
+      document.body.classList.toggle("server-selecting", selecting);
+      multiButton.setAttribute("aria-pressed", selecting ? "true" : "false");
+      if (multiLabel !== null) {
+        multiLabel.textContent = selecting ? "退出多选" : "多选";
+      }
+      persist();
+    }
+
+    function setSelecting(active) {
+      selecting = active;
+      if (!active) {
+        selected.clear();
+      }
+      refresh();
+    }
+
+    function toggleCard(card) {
+      var box = card.querySelector('input[type="checkbox"]');
+      if (box === null) {
+        return;
+      }
+      if (selected.has(box.value)) {
+        selected.delete(box.value);
+      } else {
+        selected.add(box.value);
+      }
+      refresh();
+    }
+
+    multiButton.addEventListener("click", function () {
+      setSelecting(!selecting);
+    });
+    if (cancelButton !== null) {
+      cancelButton.addEventListener("click", function () {
+        setSelecting(false);
+      });
+    }
+    if (selectAllButton !== null) {
+      selectAllButton.addEventListener("click", function () {
+        selected.clear();
+        cards.forEach(function (card) {
+          var box = card.querySelector('input[type="checkbox"]');
+          if (box !== null) {
+            selected.add(box.value);
+          }
+        });
+        refresh();
       });
     }
 
-    cards.forEach(function (card) {
-      var box = card.querySelector('input[type="checkbox"]');
-      if (box !== null) {
-        box.addEventListener("change", refresh);
+    // 选择模式下点卡片（包括卡片里的链接）只切换勾选，不进入详情；复选
+    // 框自己的点击交给原生行为，避免一次点击切换两次。
+    root.addEventListener("click", function (event) {
+      if (!selecting) {
+        return;
       }
+      var card = event.target.closest("[data-server-card]");
+      if (card === null || event.target.closest(".server-select-control") !== null) {
+        return;
+      }
+      event.preventDefault();
+      toggleCard(card);
+    });
+    root.addEventListener("change", function (event) {
+      if (!selecting) {
+        return;
+      }
+      var card = event.target.closest("[data-server-card]");
+      if (card === null || !event.target.matches('input[type="checkbox"]')) {
+        return;
+      }
+      if (event.target.checked) {
+        selected.add(event.target.value);
+      } else {
+        selected.delete(event.target.value);
+      }
+      refresh();
     });
 
-    bar.querySelectorAll("[data-batch-button]").forEach(function (button) {
-      button.addEventListener("click", function () {
-        panels.forEach(function (panel) {
-          panel.hidden = panel.getAttribute("data-batch-panel") !== button.getAttribute("data-batch-button");
-        });
-        drawer.hidden = false;
+    if (moreButton !== null && moreDrawer !== null) {
+      moreButton.addEventListener("click", function () {
+        moreDrawer.hidden = false;
       });
-    });
+      moreDrawer.querySelectorAll("[data-close-more]").forEach(function (element) {
+        element.addEventListener("click", function () {
+          moreDrawer.hidden = true;
+        });
+      });
+      moreDrawer.querySelectorAll("[data-batch-button]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          moreDrawer.hidden = true;
+          panels.forEach(function (panel) {
+            panel.hidden = panel.getAttribute("data-batch-panel") !== button.getAttribute("data-batch-button");
+          });
+          drawer.hidden = false;
+        });
+      });
+    }
 
     drawer.querySelectorAll("[data-close-batch]").forEach(function (button) {
       button.addEventListener("click", function () {
         drawer.hidden = true;
       });
     });
+    document.addEventListener("keydown", function (event) {
+      if (event.key === "Escape") {
+        if (moreDrawer !== null) {
+          moreDrawer.hidden = true;
+        }
+        drawer.hidden = true;
+      }
+    });
 
     resources.forEach(function (link) {
       link.addEventListener("click", function (event) {
         event.preventDefault();
         var target = new URL(link.getAttribute("href"), window.location.origin);
-        selectedIDs().forEach(function (id) {
+        selected.forEach(function (id) {
           target.searchParams.append("server", id);
         });
         target.searchParams.set("mode", "add");
-        target.searchParams.set("return_to", "/ui/servers/");
+        target.searchParams.set("return_to", window.location.pathname + window.location.search);
         window.location.href = target.pathname + target.search;
       });
     });
+    selecting = restore();
     refresh();
   }
 

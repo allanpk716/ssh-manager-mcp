@@ -118,30 +118,82 @@ test("手机输入已登记地址时识别同一台机器", async ({ page, isMob
   }
 });
 
-test("手机服务器列表多选后批量加入 profile", async ({ page, isMobile }, testInfo) => {
+test("手机服务器列表多选、全选与更多菜单批量加入 profile", async ({ page, isMobile }, testInfo) => {
   testInfo.skip(!isMobile, "这个用例按 390 视口验证手机流程");
   const ui = await startStandaloneUIWithTopology();
   try {
     await openStandaloneUI(page, ui);
-    await page.getByRole("checkbox", { name: "选择 db-1" }).check();
-    await page.getByRole("checkbox", { name: "选择 old-1" }).check();
-    await expect(page.getByText("已选 2 台")).toBeVisible();
-    await page.getByRole("button", { name: "加入 profile" }).click();
+    const multiButton = page.getByRole("button", { name: "多选" });
+    const bar = page.locator("[data-server-selection-bar]");
+    const count = page.locator("[data-server-selected-count]");
+    await multiButton.click();
+    await expect(multiButton).toHaveAttribute("aria-pressed", "true");
+    await expect(multiButton).toContainText("退出多选");
+    await expect(bar).toBeVisible();
+    await expect(count).toHaveText("已选 0 台");
+    await expect(page.getByRole("button", { name: "设置地点" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "测试连接" })).toBeDisabled();
+
+    // 选择模式下点卡片或名称链接都只切换勾选，不进入详情。
+    const dbCard = page.locator("[data-server-card]", { hasText: "db-1" });
+    const oldCard = page.locator("[data-server-card]", { hasText: "old-1" });
+    const webCard = page.locator("[data-server-card]", { hasText: "web-1" });
+    await dbCard.locator(".server-card-context").click();
+    await expect(dbCard.locator("input[type='checkbox']")).toBeChecked();
+    await expect(count).toHaveText("已选 1 台");
+    await oldCard.getByRole("checkbox", { name: "选择 old-1" }).check();
+    await webCard.locator("h2 a").click();
+    await expect(webCard.locator("input[type='checkbox']")).toBeChecked();
+    await expect(count).toHaveText("已选 3 台");
+    await expect(page).toHaveURL(/\/ui\/servers\/?$/);
+
+    await page.getByRole("button", { name: "全选当前筛选结果" }).click();
+    await expect(count).toHaveText("已选 4 台");
+
+    // 筛选变化后选择仍在；再次全选按新的筛选结果重建集合。
+    await page.locator("#server-search").fill("db");
+    await expect(dbCard).toBeVisible();
+    await expect(oldCard).toHaveCount(0);
+    await expect(webCard).toHaveCount(0);
+    await expect(count).toHaveText("已选 4 台");
+    await page.getByRole("button", { name: "全选当前筛选结果" }).click();
+    await expect(count).toHaveText("已选 1 台");
+
+    await page.getByRole("button", { name: "更多 ⋯" }).click();
+    await expect(page.getByRole("heading", { name: "更多批量操作" })).toBeVisible();
+    await expect(page.getByRole("button", { name: /加入 profile/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /授权机密项/ })).toBeVisible();
+    await expect(page.getByRole("button", { name: /授权共享存储/ })).toBeVisible();
+    await page.getByRole("button", { name: /加入 profile/ }).click();
     await page.getByRole("link", { name: /运维/ }).click();
 
     await expect(page.getByRole("heading", { name: "调整 运维" })).toBeVisible();
     await expect(page).toHaveURL(/mode=add/);
     await expect(page).toHaveURL(/return_to=/);
     await expect(page.locator(".selection-row", { hasText: "db-1" }).locator("input")).toBeChecked();
-    await expect(page.locator(".selection-row", { hasText: "old-1" }).locator("input")).toBeChecked();
-    await expect(page.locator(".selection-row", { hasText: "web-1" }).locator("input")).toBeChecked();
+    await expect(page).toHaveURL(/return_to=%2Fui%2Fservers%2F%3Fquery%3Ddb/);
     await expect(page.getByText("新增 1 台、移除 0 台")).toBeVisible();
     await page.screenshot({ path: `${screenshotDir}/mobile-batch-profile-selection.png`, fullPage: true });
     await page.getByRole("button", { name: "下一步" }).click();
     await page.getByRole("button", { name: "确认保存授权" }).click();
-    await expect(page).toHaveURL(/\/ui\/servers\/?/);
+    // 批量授权完成后回到列表：筛选与选择都保留。
+    await expect(page).toHaveURL(/\/ui\/servers\/\?query=db/);
     await expect(page.getByRole("heading", { name: "服务器" })).toBeVisible({ timeout: 10_000 });
+    await expect(count).toHaveText("已选 1 台");
+    await expect(dbCard.locator("input[type='checkbox']")).toBeChecked();
     await page.screenshot({ path: `${screenshotDir}/mobile-batch-profile-result.png`, fullPage: true });
+
+    await page.getByRole("link", { name: "清除搜索：db" }).click();
+    await expect(oldCard).toBeVisible();
+    await expect(count).toHaveText("已选 1 台");
+    await expect(oldCard.locator("input[type='checkbox']")).not.toBeChecked();
+
+    await page.getByRole("button", { name: "取消" }).click();
+    await expect(bar).toBeHidden();
+    await expect(multiButton).toHaveAttribute("aria-pressed", "false");
+    await expect(multiButton).toContainText("多选");
+    await expect(dbCard.locator("input[type='checkbox']")).not.toBeChecked();
+    await page.screenshot({ path: `${screenshotDir}/mobile-batch-profile-cancel.png`, fullPage: true });
   } finally {
     await ui.close();
   }
