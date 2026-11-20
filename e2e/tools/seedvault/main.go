@@ -474,6 +474,30 @@ func seedTopology(st *store.Store) error {
 	if _, err := st.AddNetwork(models.Network{Name: "虚拟网B", Type: models.NetworkVirtual}); err != nil {
 		return err
 	}
+	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_ADDRESS_RANGE_HINT")) == "1" {
+		if _, err := st.AddNetwork(models.Network{
+			Name: "家A-办公网", Type: models.NetworkPhysical, SiteName: "家A",
+			NetworkRange: "192.168.100.0/24",
+		}); err != nil {
+			return err
+		}
+		if _, err := st.AddNetwork(models.Network{
+			Name: "机房同网段", Type: models.NetworkPhysical, SiteName: "机房",
+			NetworkRange: "192.168.100.0/24",
+		}); err != nil {
+			return err
+		}
+		hintDevice, err := st.AddDeviceAtSite("网段提示机器", "网段提示浏览器测试设备", "", "家A")
+		if err != nil {
+			return err
+		}
+		if _, err := st.AddServer(&models.Server{
+			Name: "subnet-hint", Host: "192.168.100.41", Port: 22, User: "owner",
+			DeviceID: hintDevice.ID,
+		}); err != nil {
+			return err
+		}
+	}
 	if strings.TrimSpace(os.Getenv("SSHMGR_E2E_TOPOLOGY_EMPTY_GROUPS")) == "1" {
 		if _, err := st.AddNetwork(models.Network{
 			Name: "家A备用局域网", Type: models.NetworkPhysical, SiteName: "家A",

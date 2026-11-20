@@ -93,7 +93,7 @@
 </select></label>
 <label class="form-field"><span>第{{addOne $index}}行地址</span>
 <input name="address" value="{{$row.Address}}" autocomplete="off" aria-label="第{{addOne $index}}行地址" data-address-input></label>
-{{range $suggestion := $row.RangeSuggestions}}<div class="address-suggestion" data-network-suggestion="{{.NetworkName}}" data-suggested-address="{{$row.Address}}">
+{{range .RangeSuggestions}}<div class="address-suggestion" data-network-suggestion="{{.NetworkName}}" data-suggested-address="{{$row.Address}}">
 <p>属于 {{.NetworkName}}？网段 {{.NetworkRange}} 覆盖这个地址。</p>
 <button type="button" class="confirm-network-button" data-confirm-network="{{.NetworkName}}">确认</button>
 </div>{{end}}

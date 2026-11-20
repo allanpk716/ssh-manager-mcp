@@ -14,11 +14,12 @@ import {
 async function openDetail(
   page: import("@playwright/test").Page,
   ui: { startupURL: string },
+  serverID = "web-1",
 ): Promise<void> {
   await page.goto(ui.startupURL);
   await page.getByRole("heading", { name: "状态总览" }).waitFor();
-  await gotoUIPath(page, "/ui/servers/web-1");
-  await page.getByRole("heading", { name: "web-1", exact: true }).waitFor();
+  await gotoUIPath(page, `/ui/servers/${serverID}`);
+  await page.getByRole("heading", { name: serverID, exact: true }).waitFor();
 }
 
 test("服务器详情一列卡片并回归旧分段地址", async ({ page }) => {
@@ -189,6 +190,73 @@ test("服务器详情地址统一列表支持改归网络与删除行", async ({
     await expect(page.getByText("已保存地址。")).toBeVisible();
     await expect(card).not.toContainText("192.0.2.10");
     await expect(card).toContainText("192.168.1.20");
+  } finally {
+    await ui.close();
+  }
+});
+
+test("服务器详情网段提示确认草稿并在保存后归属网络", async ({ page }) => {
+  const ui = await startStandaloneUIWithTopology(undefined, undefined, undefined, {
+    SSHMGR_E2E_ADDRESS_RANGE_HINT: "1",
+  });
+  try {
+    await openDetail(page, ui, "subnet-hint");
+    const card = page.locator("#server-card-address");
+    const readOnlyRow = card.locator(".address-card-row", { hasText: "192.168.100.41" });
+    await expect(readOnlyRow).toContainText("其他（公网或未登记网络）");
+    await expect(readOnlyRow).toContainText(
+      "这个地址落在 家A-办公网 的登记网段 192.168.100.0/24 内。可在『编辑』里确认归属，不会自动归入。",
+    );
+    await expect(readOnlyRow).not.toContainText("机房同网段");
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    const drawer = page.locator('[data-server-detail-drawer="address"]');
+    const editRow = drawer.locator('[data-address-row]:has(input[value="192.168.100.41"])');
+    await expect(editRow.locator(".address-suggestion")).toContainText(
+      "属于 家A-办公网？网段 192.168.100.0/24 覆盖这个地址。",
+    );
+    await expect(editRow.locator(".address-suggestion", { hasText: "机房同网段" })).toHaveCount(0);
+    await editRow.getByRole("button", { name: "确认" }).click();
+    await expect(editRow.locator("[data-address-network]")).toHaveValue("家A-办公网");
+    await expect(editRow).toContainText("已归入 家A-办公网，保存后生效");
+
+    await drawer.getByRole("link", { name: "取消" }).click();
+    await page.getByRole("heading", { name: "subnet-hint", exact: true }).waitFor();
+    await expect(card.locator(".address-card-row", { hasText: "192.168.100.41" })).toContainText(
+      "其他（公网或未登记网络）",
+    );
+    await expect(card).toContainText("不会自动归入");
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    await drawer.getByRole("button", { name: "加一行地址" }).click();
+    const addedRow = drawer.locator("[data-address-row]").last();
+    await expect(addedRow.locator(".address-suggestion")).toHaveCount(0);
+    await drawer.getByRole("link", { name: "取消" }).click();
+    await page.getByRole("heading", { name: "subnet-hint", exact: true }).waitFor();
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    const addressInput = drawer
+      .locator('[data-address-row]:has(input[value="192.168.100.41"])')
+      .locator("[data-address-input]");
+    await addressInput.fill("example.internal");
+    await expect(
+      drawer.locator('[data-address-row]:has(input[value="example.internal"]) .address-suggestion'),
+    ).toBeHidden();
+    await drawer.getByRole("link", { name: "取消" }).click();
+    await page.getByRole("heading", { name: "subnet-hint", exact: true }).waitFor();
+
+    await page.locator('[data-detail-edit-button="address"]').click();
+    await drawer
+      .locator('[data-address-row]:has(input[value="192.168.100.41"])')
+      .getByRole("button", { name: "确认" })
+      .click();
+    await drawer.getByRole("button", { name: "保存地址" }).click();
+    await expect(page.getByText("已保存地址。")).toBeVisible();
+    const savedRow = card.locator(".address-card-row", { hasText: "192.168.100.41" });
+    await expect(savedRow).toContainText("家A-办公网");
+    await expect(savedRow).toContainText("物理局域网");
+    await expect(card).not.toContainText("其他（公网或未登记网络）");
+    await expect(card).not.toContainText("不会自动归入");
   } finally {
     await ui.close();
   }

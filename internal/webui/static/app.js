@@ -335,6 +335,41 @@
       return;
     }
     var clone = template.cloneNode(true);
+    clone.querySelectorAll("[data-network-suggestion]").forEach(function (item) {
+      item.remove();
+    });
+
+    function confirmedState(row) {
+      var state = row.querySelector("[data-address-confirmed]");
+      if (state === null) {
+        state = document.createElement("p");
+        state.className = "address-confirmed";
+        state.setAttribute("data-address-confirmed", "");
+        state.hidden = true;
+        row.appendChild(state);
+      }
+      return state;
+    }
+
+    function updateSuggestions(select) {
+      var row = select.closest("[data-address-row]");
+      if (row === null) {
+        return;
+      }
+      var input = row.querySelector("[data-address-input]");
+      row.querySelectorAll("[data-network-suggestion]").forEach(function (item) {
+        var suggestedAddress = item.getAttribute("data-suggested-address") || "";
+        var typedAddress = input === null ? suggestedAddress : input.value;
+        item.hidden = typedAddress.trim() !== suggestedAddress.trim() ||
+          item.getAttribute("data-network-suggestion") === select.value;
+      });
+      var state = row.querySelector("[data-address-confirmed]");
+      if (state !== null) {
+        var confirmedAddress = state.getAttribute("data-confirmed-address") || "";
+        state.hidden = state.getAttribute("data-confirmed-network") !== select.value ||
+          (input !== null && input.value.trim() !== confirmedAddress.trim());
+      }
+    }
 
     function refresh() {
       var selects = list.querySelectorAll("[data-address-network]");
@@ -368,6 +403,7 @@
         if (otherOption !== null) {
           otherOption.disabled = otherSelected > 0 && select.value !== "other";
         }
+        updateSuggestions(select);
       });
     }
 
@@ -389,6 +425,7 @@
         var input = row.querySelector("[data-address-input]");
         if (input !== null) {
           input.value = "";
+          input.removeAttribute("value");
         }
         if (select !== null) {
           var chosen = null;
@@ -414,6 +451,30 @@
       if (event.target.hasAttribute && event.target.hasAttribute("data-address-network")) {
         refresh();
       }
+    });
+    root.addEventListener("input", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-address-input")) {
+        refresh();
+      }
+    });
+    root.addEventListener("click", function (event) {
+      var button = event.target.closest("[data-confirm-network]");
+      if (button === null) {
+        return;
+      }
+      var row = button.closest("[data-address-row]");
+      var select = row === null ? null : row.querySelector("[data-address-network]");
+      if (select === null) {
+        return;
+      }
+      var network = button.getAttribute("data-confirm-network");
+      select.value = network;
+      var state = confirmedState(row);
+      var input = row.querySelector("[data-address-input]");
+      state.setAttribute("data-confirmed-network", network);
+      state.setAttribute("data-confirmed-address", input === null ? "" : input.value);
+      state.textContent = "已归入 " + network + "，保存后生效";
+      refresh();
     });
     refresh();
   }
