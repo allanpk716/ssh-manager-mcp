@@ -205,6 +205,7 @@ type stubServerWriter struct {
 	otherAdds      []OtherDeviceAddForm
 	edits          []ServerEditForm
 	editIDs        []string
+	addressEdits   []stubServerAddressEdit
 	deletes        []string
 	importRuns     []stubImportRun
 	completes      []stubComplete
@@ -213,6 +214,7 @@ type stubServerWriter struct {
 	run            *ServerImportRunView
 	completeErr    error
 	editErr        error
+	addressErr     error
 	deleteDigest   string
 	deleteErr      error
 	anchorCopied   bool
@@ -220,6 +222,12 @@ type stubServerWriter struct {
 	anchorConflict bool
 	pinWrites      []stubHostKeyWrite
 	clearWrites    []string
+}
+
+type stubServerAddressEdit struct {
+	id     string
+	form   ServerAddressListForm
+	source ServerWriteSource
 }
 
 type stubHostKeyWrite struct {
@@ -277,6 +285,19 @@ func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source Ser
 		return nil, w.conflict, nil
 	}
 	return &ServerEditResultView{Detail: &ServerDetailView{ID: id, Name: form.NameValue()}}, nil, nil
+}
+
+func (w *stubServerWriter) EditServerAddresses(
+	id string, form ServerAddressListForm, source ServerWriteSource,
+) (*ServerAddressListResultView, *ServerEditConflictView, error) {
+	w.addressEdits = append(w.addressEdits, stubServerAddressEdit{id: id, form: form, source: source})
+	if w.addressErr != nil {
+		return nil, nil, w.addressErr
+	}
+	if w.conflict != nil {
+		return nil, w.conflict, nil
+	}
+	return &ServerAddressListResultView{Detail: &ServerDetailView{ID: id}}, nil, nil
 }
 
 func (w *stubServerWriter) DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error) {

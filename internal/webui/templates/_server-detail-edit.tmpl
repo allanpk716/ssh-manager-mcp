@@ -78,6 +78,34 @@
 {{end}}
 {{end}}
 
+{{if eq $scope "address"}}
+{{with $.ServerDetailPage.Topology}}
+<form method="post" action="/ui/servers/{{$detail.ID}}/address" class="server-form drawer-form" data-server-detail-address-editor>
+<input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+<input type="hidden" name="revision" value="{{$detail.Revision}}">
+<div class="address-list" data-address-list>
+{{range $index, $row := $.ServerDetailPage.AddressDrafts}}
+<div class="address-row" data-detail-address-row data-address-row>
+<label class="form-field"><span>第{{addOne $index}}行网络</span>
+<select name="address_network" aria-label="第{{addOne $index}}行网络" data-address-network>
+<option value="other"{{if eq $row.NetworkValue "other"}} selected{{end}}>其他（公网或未登记网络）</option>
+{{range $.ServerDetailPage.Topology.AvailableNetworks}}<option value="{{.Name}}"{{if eq $row.NetworkValue .Name}} selected{{end}}>{{.Name}}{{if .LocationPath}}（{{.LocationPath}}）{{end}}</option>{{end}}
+</select></label>
+<label class="form-field"><span>第{{addOne $index}}行地址</span>
+<input name="address" value="{{$row.Address}}" autocomplete="off" aria-label="第{{addOne $index}}行地址" data-address-input></label>
+<button type="button" class="icon-button" data-remove-address aria-label="删除第{{addOne $index}}行地址">删除这行</button>
+</div>
+{{end}}
+</div>
+<button type="button" class="secondary-button address-add" data-add-detail-address>加一行地址</button>
+<div class="form-actions drawer-actions">
+<button type="submit">保存地址</button>
+<a class="button-link" href="{{$closeHref}}" data-cancel-detail-edit>取消</a>
+</div>
+</form>
+{{end}}
+{{end}}
+
 {{if eq $scope "description"}}
 <form method="post" action="/ui/servers/{{$detail.ID}}/edit" class="server-form drawer-form">
 <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">

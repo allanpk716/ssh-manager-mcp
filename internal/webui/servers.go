@@ -358,6 +358,26 @@ type ServerEditForm struct {
 	ExpectedRevision int64
 }
 
+// ServerAddressRow 是服务器详情地址编辑弹层里的一行；Network 为 other 时表
+// 示这行是服务器条目的其他地址。
+type ServerAddressRow struct {
+	Network string
+	Address string
+}
+
+// ServerAddressListForm 是整份地址列表提交。空列表与空其他地址会真实表
+// 示「没有地址」，由处理器先做整份校验。
+type ServerAddressListForm struct {
+	Rows             []ServerAddressRow
+	ExpectedRevision int64
+}
+
+// ServerAddressListResultView 是地址列表保存后的页面结果。
+type ServerAddressListResultView struct {
+	Detail  *ServerDetailView
+	Warning string
+}
+
 // NameValue 等取值方法给测试与模板读取可选字段，空值返回空串。
 func (f ServerEditForm) NameValue() string        { return stringValue(f.Name) }
 func (f ServerEditForm) DescriptionValue() string { return stringValue(f.Description) }
@@ -506,6 +526,8 @@ type ServerWriter interface {
 	FinishServerAdd(form ServerAddFinishForm, source ServerWriteSource) error
 	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
+	// EditServerAddresses 用一份最终清单同时保存网络成员与其他地址。
+	EditServerAddresses(id string, form ServerAddressListForm, source ServerWriteSource) (*ServerAddressListResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
 	DeleteServer(identifier, digest string, source ServerWriteSource) error
 	// SharedCredentialServers 返回与这台服务器共用同一份登录凭据的服务器
@@ -871,12 +893,12 @@ func (h *handler) handleServerEntry(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleServerDetailLocation(w, r, id)
-	case "address/add", "address/edit", "address/remove":
-		if h.cfg.TopologyWriter == nil {
+	case "address":
+		if h.cfg.ServerWriter == nil {
 			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")
 			return
 		}
-		h.handleServerDetailAddressWrite(w, r, id, strings.TrimPrefix(action, "address/"))
+		h.handleServerDetailAddressList(w, r, id)
 	case "move":
 		if h.cfg.TopologyWriter == nil {
 			h.renderError(w, r, http.StatusNotFound, "页面不存在", "请求的页面不存在。")

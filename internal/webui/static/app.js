@@ -326,6 +326,98 @@
     }
   }
 
+  // 服务器详情地址弹层：加行、删行与「其他地址最多一行」都在浏览器内即
+  // 时更新；最终校验与写入仍由服务器处理整份表单。
+  function initServerDetailAddressEditor(root) {
+    var list = root.querySelector("[data-address-list]");
+    var template = list === null ? null : list.querySelector("[data-address-row]");
+    if (template === null) {
+      return;
+    }
+    var clone = template.cloneNode(true);
+
+    function refresh() {
+      var selects = list.querySelectorAll("[data-address-network]");
+      var otherSelected = 0;
+      selects.forEach(function (select) {
+        if (select.value === "other") {
+          otherSelected += 1;
+        }
+      });
+      selects.forEach(function (select, index) {
+        var rowNumber = index + 1;
+        var row = select.closest("[data-address-row]");
+        select.setAttribute("aria-label", "第" + rowNumber + "行网络");
+        var label = select.parentNode.querySelector("span");
+        if (label !== null) {
+          label.textContent = "第" + rowNumber + "行网络";
+        }
+        var input = row === null ? null : row.querySelector("[data-address-input]");
+        if (input !== null) {
+          input.setAttribute("aria-label", "第" + rowNumber + "行地址");
+          var inputLabel = input.parentNode.querySelector("span");
+          if (inputLabel !== null) {
+            inputLabel.textContent = "第" + rowNumber + "行地址";
+          }
+        }
+        var remove = row === null ? null : row.querySelector("[data-remove-address]");
+        if (remove !== null) {
+          remove.setAttribute("aria-label", "删除第" + rowNumber + "行地址");
+        }
+        var otherOption = select.querySelector('option[value="other"]');
+        if (otherOption !== null) {
+          otherOption.disabled = otherSelected > 0 && select.value !== "other";
+        }
+      });
+    }
+
+    root.querySelectorAll("[data-remove-address]").forEach(function (button) {
+      button.addEventListener("click", function () {
+        var row = button.closest("[data-address-row]");
+        if (row !== null && row.parentNode !== null) {
+          row.remove();
+          refresh();
+        }
+      });
+    });
+    var addButton = root.querySelector("[data-add-detail-address]");
+    if (addButton !== null) {
+      addButton.addEventListener("click", function (event) {
+        event.preventDefault();
+        var row = clone.cloneNode(true);
+        var select = row.querySelector("[data-address-network]");
+        var input = row.querySelector("[data-address-input]");
+        if (input !== null) {
+          input.value = "";
+        }
+        if (select !== null) {
+          var chosen = null;
+          select.querySelectorAll("option").forEach(function (option) {
+            if (chosen === null && !option.disabled && option.value !== "other") {
+              chosen = option.value;
+            }
+          });
+          select.value = chosen === null ? "other" : chosen;
+        }
+        list.appendChild(row);
+        var remove = row.querySelector("[data-remove-address]");
+        if (remove !== null) {
+          remove.addEventListener("click", function () {
+            row.remove();
+            refresh();
+          });
+        }
+        refresh();
+      });
+    }
+    root.addEventListener("change", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-address-network")) {
+        refresh();
+      }
+    });
+    refresh();
+  }
+
   // 共用服务器勾选组件：搜索与三类筛选、三态全选与底部实时差异统计。
   // 隐藏行仍留在文档里，勾选值随表单提交，因此筛选不会丢选择。
   function initServerSelection(root) {
@@ -500,8 +592,7 @@
   // 服务器详情分区编辑弹层：打开时聚焦第一个控件并限制焦点；Escape 与遮
   // 罩关闭；无弹层但带卡片锚点时把焦点还给对应卡片的编辑按钮。
   function initServerDetailDrawer() {
-    var shell = document.querySelector("[data-server-detail-drawer]");
-    if (shell === null) {
+    function focusEditButtonForHash() {
       var anchorMatch = /^#server-card-([a-z]+)$/.exec(window.location.hash);
       if (anchorMatch === null) {
         var advancedOpen =
@@ -525,6 +616,12 @@
           editButton.focus();
         });
       }
+    }
+
+    window.addEventListener("hashchange", focusEditButtonForHash);
+    var shell = document.querySelector("[data-server-detail-drawer]");
+    if (shell === null) {
+      focusEditButtonForHash();
       return;
     }
     var dialog = shell.querySelector("[data-server-detail-dialog]");
@@ -582,6 +679,9 @@
   }
 
   initServerDetailDrawer();
+  document
+    .querySelectorAll("[data-server-detail-address-editor]")
+    .forEach(initServerDetailAddressEditor);
   initServerMoveConfirm();
   document.querySelectorAll("[data-server-list-page]").forEach(initServerListBatch);
   document.querySelectorAll("[data-server-wizard]").forEach(initServerWizard);
