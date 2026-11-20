@@ -1133,10 +1133,16 @@ func (h *handler) handleServerDescriptionEditPost(w http.ResponseWriter, r *http
 	h.redirectServerDetailSaved(w, r, result.Detail.ID, serverDetailEditDescription)
 }
 
-// handleServerAccountNotesEditPost 处理同机账号说明弹层：逐个比较每个账号
-// 的显示说明，只写发生变化的条目；登录信息不在这一层提交。
+// handleServerAccountNotesEditPost 处理同机账号说明弹层：先校验全部发生
+// 变化账号的修订号，全部匹配后才逐条写入说明；登录信息不在这一层提交。
 func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
 	drafts := map[string]string{}
+	type accountNoteEdit struct {
+		id       string
+		note     string
+		revision int64
+	}
+	edits := make([]accountNoteEdit, 0, len(r.PostForm))
 	for key, values := range r.PostForm {
 		if !strings.HasPrefix(key, "account_note_") || len(values) == 0 {
 			continue
@@ -1155,12 +1161,31 @@ func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *htt
 		if note == sibling.Description {
 			continue
 		}
-		revision, _ := strconv.ParseInt(strings.TrimSpace(r.PostFormValue("account_revision_"+accountID)), 10, 64)
-		_, _, err = h.cfg.ServerWriter.EditServer(accountID, ServerEditForm{
-			Description: &note, ExpectedRevision: revision,
-		}, ServerWriteSource{RemoteAddress: remoteIP(r)})
+		rawRevision := strings.TrimSpace(r.PostFormValue("account_revision_" + accountID))
+		revision, err := strconv.ParseInt(rawRevision, 10, 64)
 		if err != nil {
-			h.renderAccountNotesError(w, r, detail, err, drafts)
+			h.renderAccountNotesError(w, r, detail, &ServerFormError{
+				Message: "账号说明的修订号无效，请重新打开编辑层后再保存。",
+			}, nil, drafts)
+			return
+		}
+		if revision != sibling.Revision {
+			h.renderAccountNotesError(w, r, detail, nil, &ServerEditConflictView{Current: sibling}, drafts)
+			return
+		}
+		edits = append(edits, accountNoteEdit{id: accountID, note: note, revision: revision})
+	}
+	sort.Slice(edits, func(left, right int) bool { return edits[left].id < edits[right].id })
+	for _, edit := range edits {
+		_, conflict, err := h.cfg.ServerWriter.EditServer(edit.id, ServerEditForm{
+			Description: &edit.note, ExpectedRevision: edit.revision,
+		}, ServerWriteSource{RemoteAddress: remoteIP(r)})
+		if conflict != nil {
+			h.renderAccountNotesError(w, r, detail, nil, conflict, drafts)
+			return
+		}
+		if err != nil {
+			h.renderAccountNotesError(w, r, detail, err, nil, drafts)
 			return
 		}
 	}
@@ -1172,14 +1197,20 @@ func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *htt
 
 // renderAccountNotesError 按错误类型重新渲染账号说明弹层并保留输入。
 func (h *handler) renderAccountNotesError(
-	w http.ResponseWriter, r *http.Request, detail *ServerDetailView, err error, drafts map[string]string,
+	w http.ResponseWriter, r *http.Request, detail *ServerDetailView,
+	err error, conflict *ServerEditConflictView, drafts map[string]string,
 ) {
 	notice := "保存账号说明失败，请稍后重试。"
 	status := http.StatusInternalServerError
-	var formErr *ServerFormError
-	if errors.As(err, &formErr) {
-		notice = formErr.Message
-		status = http.StatusBadRequest
+	if conflict != nil {
+		notice = "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。"
+		status = http.StatusConflict
+	} else {
+		var formErr *ServerFormError
+		if errors.As(err, &formErr) {
+			notice = formErr.Message
+			status = http.StatusBadRequest
+		}
 	}
 	h.renderServerDetailPageView(w, r, detail, serverDetailRenderOptions{
 		status: status, notice: notice, drawer: serverDetailEditAccounts, accountDrafts: drafts,

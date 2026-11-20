@@ -336,6 +336,96 @@ func TestServerDetailAccountsCardAndNoteEditor(t *testing.T) {
 	}
 }
 
+// TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite 校验整份同机
+// 账号说明提交先核对全部修订号；解析失败或已过期时不写入、不显示成功。
+func TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite(t *testing.T) {
+	cases := []struct {
+		name     string
+		revision string
+		status   int
+		notice   string
+	}{
+		{
+			name:     "解析失败",
+			revision: "seven",
+			status:   http.StatusBadRequest,
+			notice:   "账号说明的修订号无效，请重新打开编辑层后再保存。",
+		},
+		{
+			name:     "修订号过期",
+			revision: "6",
+			status:   http.StatusConflict,
+			notice:   "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := newServerDetailTestStore()
+			writer := &stubServerWriter{}
+			handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+				servers: store, writer: writer,
+				topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+				topologyWriter: &stubTopologyWriter{},
+			})
+			response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/edit", url.Values{
+				"edit_scope": {"accounts"}, "server_id": {"srv-fine"},
+				"account_note_srv-other":     {"新说明"},
+				"account_revision_srv-other": {testCase.revision},
+			})
+			body := readResponseBody(t, response)
+			if response.StatusCode != testCase.status || !strings.Contains(body, testCase.notice) {
+				t.Fatalf("状态码=%d，应含 %q：\n%s", response.StatusCode, testCase.notice, body)
+			}
+			if strings.Contains(body, "已保存账号说明") {
+				t.Fatalf("修订号无效时不得显示保存成功：\n%s", body)
+			}
+			if !strings.Contains(body, `data-server-detail-drawer="accounts"`) ||
+				!strings.Contains(body, `name="account_note_srv-other" value="新说明"`) {
+				t.Fatalf("失败后应保留账号说明弹层与输入：\n%s", body)
+			}
+			if !strings.Contains(body, "每晚备份任务使用") {
+				t.Fatalf("失败后应显示存储中的原说明：\n%s", body)
+			}
+			if len(writer.editIDs) != 0 {
+				t.Fatalf("修订号无效时不应写入任何账号说明，实际 = %v", writer.editIDs)
+			}
+		})
+	}
+}
+
+// TestServerDetailAccountNotesWriteConflictDoesNotShowSuccess 校验写入阶段
+// 返回修订号冲突时重新渲染账号说明弹层，而不是跳转成保存成功。
+func TestServerDetailAccountNotesWriteConflictDoesNotShowSuccess(t *testing.T) {
+	store := newServerDetailTestStore()
+	writer := &stubServerWriter{conflict: &ServerEditConflictView{
+		Current: &ServerDetailView{ID: "srv-other", Name: "other-account", Revision: 8},
+	}}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: store, writer: writer,
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/edit", url.Values{
+		"edit_scope": {"accounts"}, "server_id": {"srv-fine"},
+		"account_note_srv-other":     {"新说明"},
+		"account_revision_srv-other": {"7"},
+	})
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("写入冲突状态码 = %d，应为 409", response.StatusCode)
+	}
+	if !strings.Contains(body, "服务器条目已被其他入口修改，以下为最新值；请核对后重新提交。") ||
+		!strings.Contains(body, `data-server-detail-drawer="accounts"`) {
+		t.Fatalf("写入冲突后应重新渲染账号说明弹层：\n%s", body)
+	}
+	if strings.Contains(body, "已保存账号说明") {
+		t.Fatalf("写入冲突时不得显示保存成功：\n%s", body)
+	}
+	if !strings.Contains(body, "每晚备份任务使用") {
+		t.Fatalf("写入冲突后仍应显示存储中的原说明：\n%s", body)
+	}
+}
+
 // TestServerDetailUnifiedPageShowsCardsAndFields 校验统一详情页的连接、地
 // 点、地址与说明卡片内容与高级操作占位。
 func TestServerDetailUnifiedPageShowsCardsAndFields(t *testing.T) {
