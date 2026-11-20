@@ -1,7 +1,6 @@
 package webui
 
 import (
-	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -69,28 +68,4 @@ func declarationFormPath(
 		"port_exposure": {exposure},
 	}
 	return "/ui/software-inventory/declarations/new?" + values.Encode()
-}
-
-// handleSoftwareInventoryTodos 渲染三类待办。列表内容来自领域模块，与命
-// 令行 `inventory todo` 使用同一个计算结果。
-func (h *handler) handleSoftwareInventoryTodos(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "软件清单待办页只接受 GET 请求。")
-		return
-	}
-	todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos()
-	if err != nil {
-		h.renderError(w, r, http.StatusInternalServerError, "读取软件清单待办失败", "读取软件清单待办失败，请稍后重试。")
-		return
-	}
-	data := pageData{Title: "软件清单待办", SoftwareInventoryTodos: todos}
-	switch r.URL.Query().Get("notice") {
-	case "declaration-added":
-		data.SoftwareInventoryNotice = "已登记软件声明。"
-	case "declaration-edited":
-		data.SoftwareInventoryNotice = "已修改软件声明。"
-	case "declaration-claimed":
-		data.SoftwareInventoryNotice = "已认领实测条目。"
-	}
-	h.renderPage(w, r, http.StatusOK, "softwareinventory-todos.tmpl", data)
 }

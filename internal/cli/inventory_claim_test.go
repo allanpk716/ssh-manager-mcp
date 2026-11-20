@@ -69,10 +69,9 @@ func TestInventoryClaimAndUnclaimCLI(t *testing.T) {
 	}
 	mustInventoryCli(t, "", "inventory", "edit", declarationID, "--version", "1.1")
 	view := mustInventoryCli(t, "", "inventory", "view", "工作站")
-	if !strings.Contains(view, "自定义网站服务 0.9（来源：两者合成）") ||
-		!strings.Contains(view, "声明版本不一致：1.1") ||
-		strings.Contains(view, "未识别进程  ") {
-		t.Fatalf("认领后的查看结果应只显示合成条目：\n%s", view)
+	if !strings.Contains(view, "未识别进程 0.9（来源：实测）") ||
+		strings.Contains(view, "自定义网站服务") {
+		t.Fatalf("认领后的查看结果应只显示实测条目：\n%s", view)
 	}
 
 	unclaimOutput := mustInventoryCli(t, "", "inventory", "unclaim", declarationID)
@@ -80,10 +79,9 @@ func TestInventoryClaimAndUnclaimCLI(t *testing.T) {
 		t.Fatalf("取消认领输出 = %q", unclaimOutput)
 	}
 	view = mustInventoryCli(t, "", "inventory", "view", "工作站")
-	if !strings.Contains(view, "自定义网站服务 1.1（来源：声明）") ||
-		!strings.Contains(view, "对不上：声明没有认领实测条目") ||
-		!strings.Contains(view, "未识别进程") {
-		t.Fatalf("取消认领后应重新显示声明与实测条目：\n%s", view)
+	if !strings.Contains(view, "未识别进程 0.9（来源：实测）") ||
+		strings.Contains(view, "自定义网站服务") {
+		t.Fatalf("取消认领后可见结果仍应只有实测条目：\n%s", view)
 	}
 
 	todo := mustInventoryCli(t, "", "inventory", "todo")

@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -33,6 +35,27 @@ func TestInventoryClientExportsCycloneDXOnline(t *testing.T) {
 	}
 	if profileValue != "inventory-profile" {
 		t.Fatalf("客户端导出的 profile 名 = %q，应为 inventory-profile", profileValue)
+	}
+}
+
+func TestInventoryClientExportsCSVOnline(t *testing.T) {
+	stop := newInventoryClientFixture(t)
+	defer stop()
+
+	output := mustInventoryCli(t, "", "inventory", "export", "--format", "csv",
+		"--name", "nginx", "--version", "1.25.3",
+		"--site", "总部", "--network", "总部物理局域网")
+	blob := []byte(output)
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("客户端导出缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("客户端导出不是合法 CSV：%v\n%s", err, output)
+	}
+	if len(rows) != 2 || rows[1][0] != "gpu-设备" || rows[1][1] != "nginx" ||
+		rows[1][2] != "1.25.3" || rows[1][4] != "0.0.0.0:80/tcp" {
+		t.Fatalf("客户端按条件导出的 CSV 行 = %#v", rows)
 	}
 }
 

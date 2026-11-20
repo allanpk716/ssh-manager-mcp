@@ -8,7 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"ssh-manager-mcp/internal/models"
+	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 )
 
@@ -47,12 +50,29 @@ func inventoryDeclarationID(t *testing.T, output string) string {
 	return fields[len(fields)-1]
 }
 
-// TestInventoryDeclarationCLILifecycle 覆盖声明的命令行新增、查看、搜索、
-// 修改、删除确认，以及查看与搜索的 JSON Lines 输出。
+// TestInventoryDeclarationCLILifecycle 覆盖声明的命令行新增、修改、删除确
+// 认。查看与搜索只显示实测条目；声明的修改与删除通过存储证明仍然可用。
 func TestInventoryDeclarationCLILifecycle(t *testing.T) {
-	newSecretsEnv(t)
+	dbPath, masterKey := newSecretsEnv(t)
 	mustInventoryCli(t, "", "devices", "add", "网络存储")
 	mustInventoryCli(t, "", "devices", "add", "工作站")
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"网络存储": {{
+			Category: softwareinventory.CategoryServiceProgram,
+			Name:     "OpenSSH", Version: "1:9.6p1-3ubuntu1",
+			PackageURL:  "pkg:deb/ubuntu/openssh-server@1:9.6p1-3ubuntu1",
+			CollectedAt: time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC),
+			ListeningPorts: []softwareinventory.ListeningPort{{
+				Address: "0.0.0.0", Port: 22, Protocol: "tcp",
+				Exposure: softwareinventory.ExposureAllAddresses,
+			}},
+		}},
+		"工作站": {{
+			Category: softwareinventory.CategorySystemPackage,
+			Name:     "libc6", Version: "2.39-0ubuntu8",
+			CollectedAt: time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC),
+		}},
+	})
 
 	addOutput := mustInventoryCli(t, "", "inventory", "add", "网络存储",
 		"--category", "service_program", "--name", "OpenSSH",
@@ -67,13 +87,16 @@ func TestInventoryDeclarationCLILifecycle(t *testing.T) {
 
 	view := mustInventoryCli(t, "", "inventory", "view", "网络存储")
 	for _, want := range []string{
-		"OpenSSH", "1:9.6p1-3ubuntu1", "0.0.0.0:22/tcp", "公网",
+		"OpenSSH", "1:9.6p1-3ubuntu1", "0.0.0.0:22/tcp", "监听所有地址",
 		"pkg:deb/ubuntu/openssh-server@1:9.6p1-3ubuntu1",
-		"cpe:2.3:a:openbsd:openssh:9.6p1:-:*:*:*:*:*:*", "声明",
+		"实测",
 	} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("按设备查看缺少 %q：\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "cpe:2.3:a:openbsd:openssh") {
+		t.Fatalf("声明独有的标识不应进入查看结果：\n%s", view)
 	}
 	workstationView := mustInventoryCli(t, "", "inventory", "view", "工作站")
 	if !strings.Contains(workstationView, "系统包：1 条") || strings.Contains(workstationView, "libc6") {
@@ -114,9 +137,28 @@ func TestInventoryDeclarationCLILifecycle(t *testing.T) {
 		"--version", "1:9.8p1-3ubuntu1",
 		"--listen", "127.0.0.1,22,tcp,local_machine")
 	view = mustInventoryCli(t, "", "inventory", "view", "网络存储")
-	if !strings.Contains(view, "1:9.8p1-3ubuntu1") || !strings.Contains(view, "127.0.0.1:22/tcp") ||
-		!strings.Contains(view, "仅本机") {
-		t.Fatalf("修改声明失败：\n%s", view)
+	if !strings.Contains(view, "1:9.6p1-3ubuntu1") || strings.Contains(view, "1:9.8p1-3ubuntu1") {
+		t.Fatalf("修改声明不应改变实测查看结果：\n%s", view)
+	}
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarations, err := st.SearchSoftwareDeclarations("", store.AllSoftwareDevices())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var edited *store.SoftwareDeclarationView
+	for i := range declarations {
+		if declarations[i].Name == "OpenSSH" {
+			edited = &declarations[i]
+		}
+	}
+	if len(declarations) != 2 || edited == nil || edited.Version != "1:9.8p1-3ubuntu1" {
+		t.Fatalf("修改后的声明应保留在存储里：%+v", declarations)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
 	}
 
 	oldInteractive := inventoryStdinIsInteractive
@@ -129,8 +171,20 @@ func TestInventoryDeclarationCLILifecycle(t *testing.T) {
 	inventoryStdinIsInteractive = func() bool { return true }
 	mustInventoryCli(t, "y\n", "inventory", "rm", id)
 	view = mustInventoryCli(t, "", "inventory", "view", "网络存储")
-	if strings.Contains(view, "OpenSSH") {
-		t.Fatalf("声明删除后不应继续显示：\n%s", view)
+	if !strings.Contains(view, "OpenSSH 1:9.6p1-3ubuntu1") {
+		t.Fatalf("删除声明不应删除实测条目：\n%s", view)
+	}
+	st, err = store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	declarations, err = st.SearchSoftwareDeclarations("", store.AllSoftwareDevices())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(declarations) != 1 || declarations[0].Name != "libc6" {
+		t.Fatalf("删除后的声明集合 = %+v", declarations)
 	}
 }
 
@@ -153,9 +207,10 @@ func TestInventoryClientWritesRefused(t *testing.T) {
 	}
 }
 
-// TestInventoryAcceptsAllExposureLevels 钉住声明可用的六档暴露级别。
+// TestInventoryAcceptsAllExposureLevels 钉住声明命令仍接受六档暴露级别；
+// 声明保留在存储里，不进入使用者可见的实测清单。
 func TestInventoryAcceptsAllExposureLevels(t *testing.T) {
-	newSecretsEnv(t)
+	dbPath, masterKey := newSecretsEnv(t)
 	mustInventoryCli(t, "", "devices", "add", "网络存储")
 	addOutput := mustInventoryCli(t, "", "inventory", "add", "网络存储",
 		"--category", "service_program", "--name", "nginx", "--version", "1.25.3",
@@ -167,9 +222,35 @@ func TestInventoryAcceptsAllExposureLevels(t *testing.T) {
 		"--listen", "0.0.0.0,10006,tcp,public_network")
 	id := inventoryDeclarationID(t, addOutput)
 	view := mustInventoryCli(t, "", "inventory", "view", "网络存储")
-	for _, label := range []string{"仅本机", "监听特定地址", "监听所有地址", "局域网", "虚拟局域网", "公网"} {
-		if !strings.Contains(view, label) {
-			t.Fatalf("六档暴露级别缺少 %q：\n%s", label, view)
+	if strings.Contains(view, "nginx") {
+		t.Fatalf("声明不应进入使用者可见清单：\n%s", view)
+	}
+	st, err := store.Open(dbPath, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	declarations, err := st.SearchSoftwareDeclarations("", store.AllSoftwareDevices())
+	if err != nil || len(declarations) != 1 {
+		t.Fatalf("读取声明失败：%v %+v", err, declarations)
+	}
+	wantExposure := map[softwareinventory.Exposure]bool{
+		softwareinventory.ExposureLocalMachine:            false,
+		softwareinventory.ExposureSpecificAddress:         false,
+		softwareinventory.ExposureAllAddresses:            false,
+		softwareinventory.ExposureLocalAreaNetwork:        false,
+		softwareinventory.ExposureVirtualLocalAreaNetwork: false,
+		softwareinventory.ExposurePublicNetwork:           false,
+	}
+	for _, port := range declarations[0].ListeningPorts {
+		if _, ok := wantExposure[port.Exposure]; !ok {
+			t.Fatalf("声明端口出现未知暴露级别：%+v", port)
+		}
+		wantExposure[port.Exposure] = true
+	}
+	for exposure, seen := range wantExposure {
+		if !seen {
+			t.Fatalf("六档暴露级别缺少 %q：%+v", exposure, declarations[0].ListeningPorts)
 		}
 	}
 	mustInventoryCli(t, "", "inventory", "rm", id, "--yes")
@@ -207,10 +288,21 @@ func TestInventoryAuditSourceFromCLI(t *testing.T) {
 }
 
 // TestInventoryEncryptedBackupRoundTrip 走真实加密备份命令：备份文件导入新
-// 主键的新库后，软件声明与监听端口仍然可以查询。
+// 主键的新库后，实测清单可以查看，软件声明也仍保留在存储里。
 func TestInventoryEncryptedBackupRoundTrip(t *testing.T) {
 	newSecretsEnv(t)
 	mustInventoryCli(t, "", "devices", "add", "网络存储")
+	seedInventoryObservedForExport(t, map[string][]models.SoftwareObservedItem{
+		"网络存储": {{
+			Category: softwareinventory.CategoryServiceProgram,
+			Name:     "nginx", Version: "1.25.3",
+			CollectedAt: time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC),
+			ListeningPorts: []softwareinventory.ListeningPort{{
+				Address: "0.0.0.0", Port: 443, Protocol: "tcp",
+				Exposure: softwareinventory.ExposureAllAddresses,
+			}},
+		}},
+	})
 	mustInventoryCli(t, "", "inventory", "add", "网络存储",
 		"--category", "service_program", "--name", "nginx", "--version", "1.25.3",
 		"--listen", "0.0.0.0,443,tcp,public_network")
@@ -240,7 +332,17 @@ func TestInventoryEncryptedBackupRoundTrip(t *testing.T) {
 	})
 	mustInventoryCli(t, "", "import", matches[0], "--passphrase-file", passFile)
 	view := mustInventoryCli(t, "", "inventory", "view", "网络存储")
-	if !strings.Contains(view, "nginx 1.25.3") || !strings.Contains(view, "0.0.0.0:443/tcp") {
+	if !strings.Contains(view, "nginx 1.25.3") || !strings.Contains(view, "0.0.0.0:443/tcp") ||
+		!strings.Contains(view, "实测") {
 		t.Fatalf("加密备份恢复后的软件清单不完整：\n%s", view)
+	}
+	st, err := store.Open(os.Getenv("SSHMGR_STORE"), mustDecodeHex(t, os.Getenv("SSHMGR_MASTERKEY_HEX")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	declarations, err := st.SearchSoftwareDeclarations("", store.AllSoftwareDevices())
+	if err != nil || len(declarations) != 1 || declarations[0].Name != "nginx" {
+		t.Fatalf("恢复后的声明数据缺失：%v %+v", err, declarations)
 	}
 }

@@ -29,7 +29,7 @@
 {{with .Client.Machine}}
 <p><strong>机器 {{.Name}}</strong>{{if .SitePath}} · {{.SitePath}}{{end}}</p>
 {{with $.Client.Software}}
-<p>最近采集 {{.LastCollectedAt.Format "2006-01-02 15:04:05"}} · {{.ItemCount}} 个软件 · {{.PendingExposureCount}} 个待确认暴露</p>
+<p>最近采集 {{.LastCollectedAt.Format "2006-01-02 15:04:05"}} · {{.ItemCount}} 个软件 · {{.UnidentifiedProcessCount}} 个未识别进程</p>
 <ul>{{range .TopItems}}<li>{{.}}</li>{{end}}</ul>
 <a href="/ui/software-inventory/devices?device={{$.Client.Machine.Name | urlquery}}">查看全部</a>
 <form method="post" action="/ui/software-inventory/collect?device={{$.Client.Machine.Name | urlquery}}">

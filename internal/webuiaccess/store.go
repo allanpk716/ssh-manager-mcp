@@ -449,7 +449,8 @@ func (s managerStore) ClientDetail(id string) (*webui.ClientDetail, error) {
 	if detail.Software != nil {
 		out.Software = &webui.ClientSoftwareSummary{
 			LastCollectedAt: detail.Software.LastCollectedAt, ItemCount: detail.Software.ItemCount,
-			PendingExposureCount: detail.Software.PendingExposureCount, TopItems: append([]string(nil), detail.Software.TopItems...),
+			UnidentifiedProcessCount: detail.Software.UnidentifiedProcessCount,
+			TopItems:                 append([]string(nil), detail.Software.TopItems...),
 		}
 	}
 	out.Secrets = clientResources(detail.Secrets)

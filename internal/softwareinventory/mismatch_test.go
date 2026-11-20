@@ -6,10 +6,10 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// TestUnifiedQueryCoversObservedOnlyAndMismatchRules 覆盖统一查询的合成基
-// 线：只有实测、没有声明的设备能查到；受管设备上的未匹配声明标为对不上；
-// 不受管设备上的声明不算对不上。
-func TestUnifiedQueryCoversObservedOnlyAndMismatchRules(t *testing.T) {
+// TestUnifiedQueryOutputsObservedOnlyAndKeepsDeclarations 覆盖查询收口：
+// 只有实测、没有声明的设备能查到；声明、认领合成与「对不上」不进入使用
+// 者可见结果，但生效声明保留在存储里。
+func TestUnifiedQueryOutputsObservedOnlyAndKeepsDeclarations(t *testing.T) {
 	manager, st := newTestManager(t)
 	mustDevice(t, st, "受管甲", true)
 	mustDevice(t, st, "只有实测", true)
@@ -57,23 +57,25 @@ func TestUnifiedQueryCoversObservedOnlyAndMismatchRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := map[string]map[string]QueryItem{}
-	for _, device := range result.Devices {
-		got[device.DeviceName] = map[string]QueryItem{}
-		for _, item := range device.Items {
-			got[device.DeviceName][item.Name] = item
-		}
-	}
-	if len(got["只有实测"]) != 1 || got["只有实测"]["observed-only"].Source != SourceObserved {
+	if findQueryDevice(result, "只有实测") == nil ||
+		len(findQueryDevice(result, "只有实测").Items) != 1 ||
+		findQueryDevice(result, "只有实测").Items[0].Source != SourceObserved {
 		t.Fatalf("只有实测的设备应能被统一查询：%+v", result.Devices)
 	}
-	if item := got["受管甲"]["没有对应的声明"]; item.Source != SourceDeclared || !item.Mismatch {
-		t.Fatalf("受管设备未认领到实测的声明 = %+v", item)
+	if item := findQueryItem(result, "没有对应的声明"); item != nil {
+		t.Fatalf("声明不应进入使用者可见查询：%+v", item)
 	}
-	if item := got["受管甲"]["已认领后消失的声明"]; item.Source != SourceDeclared || !item.Mismatch {
-		t.Fatalf("认领的实测消失后的声明 = %+v", item)
+	if item := findQueryItem(result, "已认领后消失的声明"); item != nil {
+		t.Fatalf("认领的实测消失后，声明不应进入查询：%+v", item)
 	}
-	if item := got["不受管设备"]["网络存储声明"]; item.Source != SourceDeclared || item.Mismatch {
-		t.Fatalf("不受管设备上的声明不应标为对不上：%+v", item)
+	if item := findQueryItem(result, "网络存储声明"); item != nil {
+		t.Fatalf("不受管设备声明不应进入查询：%+v", item)
+	}
+	storedDeclarations, err := st.SearchSoftwareDeclarations("", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(storedDeclarations) != 3 {
+		t.Fatalf("三条生效声明应保留在存储里：%+v", storedDeclarations)
 	}
 }

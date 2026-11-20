@@ -122,28 +122,6 @@ func (h *handler) buildHomeView(r *http.Request) (*homeView, error) {
 			Href:   "/ui/authorization/",
 		})
 	}
-	if h.cfg.SoftwareInventory != nil && h.caps.ShowSoftwareInventoryArea {
-		todos, err := h.cfg.SoftwareInventory.SoftwareInventoryTodos()
-		if err != nil {
-			return nil, err
-		}
-		unidentified := len(todos.UnidentifiedProcesses)
-		stale := len(todos.StaleDevices)
-		if unidentified > 0 || stale > 0 {
-			details := make([]string, 0, 2)
-			if unidentified > 0 {
-				details = append(details, homeCountText(unidentified, "个未识别进程待认领"))
-			}
-			if stale > 0 {
-				details = append(details, homeCountText(stale, "台设备清单已过期"))
-			}
-			view.Tasks = append(view.Tasks, HomeTask{
-				Title:  "软件清单有待办",
-				Detail: strings.Join(details, "、"),
-				Href:   "/ui/software-inventory/todos",
-			})
-		}
-	}
 	if h.cfg.Ops != nil && h.caps.CanQueryVaultAudit {
 		rows, err := h.cfg.Ops.QueryAudit(OpsAuditQuery{Limit: 5})
 		if err != nil {

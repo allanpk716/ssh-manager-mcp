@@ -25,6 +25,9 @@ const softwareInventoryMaxBodyBytes = 4 << 10
 type softwareInventoryRequest struct {
 	Device                string `json:"device"`
 	Name                  string `json:"name"`
+	ExactVersion          string `json:"exact_version"`
+	Site                  string `json:"site"`
+	Network               string `json:"network"`
 	MinimumExposure       string `json:"minimum_exposure"`
 	Category              string `json:"category"`
 	IncludeSystemPackages bool   `json:"include_system_packages"`
@@ -99,6 +102,9 @@ func (r *ServeRunner) handleSoftwareInventory(w http.ResponseWriter, req *http.R
 	result, err := softwareinventory.New(r.st).Query(softwareinventory.QueryOptions{
 		Device:                in.Device,
 		Name:                  in.Name,
+		ExactVersion:          in.ExactVersion,
+		Site:                  in.Site,
+		Network:               in.Network,
 		MinimumExposure:       softwareinventory.Exposure(in.MinimumExposure),
 		Category:              softwareinventory.Category(in.Category),
 		IncludeSystemPackages: in.IncludeSystemPackages,

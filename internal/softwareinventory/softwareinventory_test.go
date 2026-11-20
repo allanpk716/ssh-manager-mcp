@@ -50,9 +50,9 @@ func mustDevice(t *testing.T, st *store.Store, name string, needServer bool) str
 	return device.ID
 }
 
-// TestDeclarationVisibilityAndQueries 覆盖声明的字段保存、按设备查看、跨设备
-// 搜索，以及可见设备范围：owner 能看全部设备，profile 只能看至少有一个
-// 服务器条目被授权的受管设备，看不到不受管设备。
+// TestDeclarationVisibilityAndQueries 覆盖声明字段保留、实测清单查看、跨
+// 设备搜索，以及可见设备范围：owner 能看全部设备，profile 只能看至少有
+// 一个服务器条目被授权的受管设备，看不到不受管设备。
 func TestDeclarationVisibilityAndQueries(t *testing.T) {
 	manager, st := newTestManager(t)
 	mustDevice(t, st, "受管甲", true)
@@ -85,6 +85,47 @@ func TestDeclarationVisibilityAndQueries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	storedDeclarations, err := st.SearchSoftwareDeclarations("", AllDevicesVisible())
+	if err != nil {
+		t.Fatal(err)
+	}
+	declarationByID := make(map[string]SoftwareDeclarationView, len(storedDeclarations))
+	for _, row := range storedDeclarations {
+		declarationByID[row.ID] = row
+	}
+	storedOpenSSH := declarationByID[opensshID]
+	if storedOpenSSH.Name != "OpenSSH" || storedOpenSSH.Version != "1:9.6p1-3ubuntu1" ||
+		storedOpenSSH.PackageURL != "pkg:deb/ubuntu/openssh-server@1:9.6p1-3ubuntu1" ||
+		storedOpenSSH.CPE != "cpe:2.3:a:openbsd:openssh:9.6p1:-:*:*:*:*:*:*" ||
+		storedOpenSSH.BelongsTo != "系统服务" || storedOpenSSH.Note != "管理员登录入口" ||
+		len(storedOpenSSH.ListeningPorts) != 1 ||
+		storedOpenSSH.ListeningPorts[0].Exposure != ExposurePublicNetwork {
+		t.Fatalf("声明字段未被原样保存：%+v", storedOpenSSH)
+	}
+	for deviceName, items := range map[string][]models.SoftwareObservedItem{
+		"受管甲": {
+			{
+				Category: CategoryServiceProgram, Name: "OpenSSH", Version: "1:9.6p1-3ubuntu1",
+				PackageURL: "pkg:deb/ubuntu/openssh-server@1:9.6p1-3ubuntu1",
+				ListeningPorts: []ListeningPort{{
+					Address: "0.0.0.0", Port: 22, Protocol: "tcp", Exposure: ExposureAllAddresses,
+				}},
+			},
+			{Category: CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+		},
+		"受管乙": {
+			{Category: CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+		},
+		"网络存储": {
+			{Category: CategoryOperatingSystem, Name: "Synology DSM", Version: "7.2.2-72806"},
+		},
+	} {
+		if err := st.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
+			Items: items, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	ownerInventory, err := manager.ViewDevice("受管甲", AllDevicesVisible(), DeviceViewOptions{})
 	if err != nil {
@@ -100,14 +141,12 @@ func TestDeclarationVisibilityAndQueries(t *testing.T) {
 	item := serviceGroup.Items[0]
 	if item.Name != "OpenSSH" || item.Version != "1:9.6p1-3ubuntu1" ||
 		item.PackageURL != "pkg:deb/ubuntu/openssh-server@1:9.6p1-3ubuntu1" ||
-		item.CPE != "cpe:2.3:a:openbsd:openssh:9.6p1:-:*:*:*:*:*:*" ||
-		item.BelongsTo != "系统服务" || item.Note != "管理员登录入口" ||
-		item.Source != SourceDeclared {
-		t.Fatalf("声明字段未被原样保存：%+v", item)
+		item.Source != SourceObserved || item.CollectedAt == nil {
+		t.Fatalf("可见查询条目 = %+v", item)
 	}
 	if len(item.ListeningPorts) != 1 || item.ListeningPorts[0].Address != "0.0.0.0" ||
 		item.ListeningPorts[0].Port != 22 || item.ListeningPorts[0].Protocol != "tcp" ||
-		item.ListeningPorts[0].Exposure != ExposurePublicNetwork {
+		item.ListeningPorts[0].Exposure != ExposureAllAddresses {
 		t.Fatalf("监听端口未被原样保存：%+v", item.ListeningPorts)
 	}
 	packageGroup := ownerInventory.Groups[1]
@@ -187,14 +226,23 @@ func TestDeclarationEditDeleteAndAudit(t *testing.T) {
 	}, CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	inventory, err := manager.ViewDevice("工作站", AllDevicesVisible(), DeviceViewOptions{IncludeSystemPackages: true})
+	declarations, err := st.SearchSoftwareDeclarations("", AllDevicesVisible())
 	if err != nil {
 		t.Fatal(err)
 	}
-	item := inventory.Groups[0].Items[0]
-	if item.Version != "16.4" || item.PackageURL != "pkg:docker/library/postgres@16.4" ||
-		len(item.ListeningPorts) != 1 || item.ListeningPorts[0].Exposure != ExposureVirtualLocalAreaNetwork {
-		t.Fatalf("修改后的声明 = %+v", item)
+	edited := SoftwareDeclarationView{}
+	found := false
+	for _, row := range declarations {
+		if row.ID == id {
+			edited, found = row, true
+			break
+		}
+	}
+	if !found || edited.Version != "16.4" ||
+		edited.PackageURL != "pkg:docker/library/postgres@16.4" ||
+		len(edited.ListeningPorts) != 1 ||
+		edited.ListeningPorts[0].Exposure != ExposureVirtualLocalAreaNetwork {
+		t.Fatalf("修改后的声明 = %+v", edited)
 	}
 
 	rows, err := st.QueryAudit(store.AuditFilter{Actions: []string{
@@ -347,14 +395,14 @@ func TestSoftwareInventoryBackupProfileSnapshotAndRevision(t *testing.T) {
 	if err := target.ImportSnapshot(fullSnapshot); err != nil {
 		t.Fatal(err)
 	}
-	restored, err := New(target).ViewDevice("受管甲", AllDevicesVisible(), DeviceViewOptions{})
+	restoredDeclarations, err := target.SearchSoftwareDeclarations("", AllDevicesVisible())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(restored.Groups) != 1 || len(restored.Groups[0].Items) != 1 {
-		t.Fatalf("恢复后的软件清单 = %+v", restored)
+	if len(restoredDeclarations) != 1 {
+		t.Fatalf("恢复后的软件声明 = %+v", restoredDeclarations)
 	}
-	item := restored.Groups[0].Items[0]
+	item := restoredDeclarations[0]
 	if item.Name != "OpenSSH" || item.Version != "1:9.6p1-3ubuntu1" ||
 		len(item.ListeningPorts) != 1 || item.ListeningPorts[0].Exposure != ExposurePublicNetwork {
 		t.Fatalf("全量导出没有逐字段恢复声明与端口：%+v", item)

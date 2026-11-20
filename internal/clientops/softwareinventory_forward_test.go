@@ -49,7 +49,8 @@ func TestSoftwareInventoryForwarder_HappyPath(t *testing.T) {
 	forwarder := newTestSoftwareInventoryForwarder(t, srv)
 	defer forwarder.Close()
 	result, err := forwarder.QuerySoftwareInventory(mcpserver.QuerySoftwareInventoryInput{
-		Device: "gpu-设备", Name: "nginx", MinimumExposure: "all_addresses",
+		Device: "gpu-设备", Name: "nginx", ExactVersion: "1.25.3",
+		Site: "总部 / 机房", Network: "总部物理局域网", MinimumExposure: "all_addresses",
 		Category: "service_program", IncludeSystemPackages: true,
 	})
 	if err != nil {
@@ -59,7 +60,9 @@ func TestSoftwareInventoryForwarder_HappyPath(t *testing.T) {
 		gotAuth != "Bearer devcode-1" {
 		t.Fatalf("请求形状不对：method=%s path=%s auth=%q", gotMethod, gotPath, gotAuth)
 	}
-	if gotBody["device"] != "gpu-设备" || gotBody["minimum_exposure"] != "all_addresses" ||
+	if gotBody["device"] != "gpu-设备" || gotBody["exact_version"] != "1.25.3" ||
+		gotBody["site"] != "总部 / 机房" || gotBody["network"] != "总部物理局域网" ||
+		gotBody["minimum_exposure"] != "all_addresses" ||
 		gotBody["include_system_packages"] != true {
 		t.Fatalf("请求体 = %+v", gotBody)
 	}

@@ -1,10 +1,13 @@
 package webuisoftwareinventory
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/csv"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -49,6 +52,284 @@ func addTestDevice(t *testing.T, st *store.Store, name string) {
 	}
 }
 
+// TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters 钉住首页的
+// 公共数据契约：设备摘要来自统一实测查询，搜索复用精确版本、地点与网络
+// 条件，声明数据不进入页面。
+func TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters(t *testing.T) {
+	st, _ := newTestStore(t)
+	for _, site := range []struct{ name, parent string }{
+		{name: "公司"},
+		{name: "总部机房", parent: "公司"},
+		{name: "分部机房"},
+	} {
+		if _, err := st.AddSiteWithParent(site.name, "", site.parent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, network := range []models.Network{
+		{Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司"},
+		{Name: "跨地点虚拟局域网", Type: models.NetworkVirtual},
+		{Name: "分部物理局域网", Type: models.NetworkPhysical, SiteName: "分部机房"},
+	} {
+		if _, err := st.AddNetwork(network); err != nil {
+			t.Fatal(err)
+		}
+	}
+	credentialID, err := st.SetCredential(&models.Credential{
+		Type: models.CredPassword, Secret: []byte("test-password"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := map[string]string{}
+	for _, device := range []struct{ name, site, network string }{
+		{name: "工作站", site: "总部机房", network: "总部物理局域网"},
+		{name: "虚拟网设备", site: "公司", network: "跨地点虚拟局域网"},
+		{name: "分部失败设备", site: "分部机房", network: "分部物理局域网"},
+	} {
+		if _, err := st.AddDeviceAtSite(device.name, "", "", device.site); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.AddNetworkMembership(device.name, device.network, "192.0.2.10"); err != nil {
+			t.Fatal(err)
+		}
+		server, err := st.AddServerWithCredentialsToDevice(&models.Server{
+			Name: device.name + "-ssh", Host: "192.0.2.10", Port: 22, User: "owner",
+			AuthMethod: models.AuthPassword, CredentialID: credentialID,
+		}, nil, nil, device.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		servers[device.name] = server.ServerID
+	}
+	if _, err := st.AddDeviceAtSite("不受管存储", "", "", "分部机房"); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	seed := func(device string, collectedAt time.Time, items []models.SoftwareObservedItem) {
+		t.Helper()
+		st.NowFn = func() time.Time { return collectedAt }
+		if err := st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: items, ServerID: servers[device],
+			CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("工作站", now.Add(-10*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+		{Category: models.SoftwareCategoryDriverFirmware, Name: "Linux 内核", Version: "6.8.0-49-generic"},
+		{Category: models.SoftwareCategoryServiceProgram, Name: "nginx", Version: "1.24.0"},
+		{Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway", ExecutablePath: "/opt/gateway/gateway"},
+		{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+		{Category: models.SoftwareCategorySystemPackage, Name: "base-files", Version: "13.5ubuntu3"},
+	})
+	seed("虚拟网设备", now.Add(-10*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategoryServiceProgram, Name: "OpenSSL", Version: "3.0.2"},
+	})
+	seed("分部失败设备", now.Add(-9*24*time.Hour), []models.SoftwareObservedItem{
+		{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2-0ubuntu1.18"},
+	})
+	st.NowFn = func() time.Time { return now.Add(-time.Hour) }
+	if err := st.RecordSoftwareCollectionFailure(
+		"分部失败设备", "连接超时，端口不通", servers["分部失败设备"], false, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	st.NowFn = nil
+	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+
+	devices, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(devices) != 4 {
+		t.Fatalf("设备卡片应包含全部设备：%+v", devices)
+	}
+	var workstation, failed, unmanaged *webui.SoftwareInventoryDeviceSummary
+	for i := range devices {
+		switch devices[i].Name {
+		case "工作站":
+			workstation = &devices[i]
+		case "分部失败设备":
+			failed = &devices[i]
+		case "不受管存储":
+			unmanaged = &devices[i]
+		}
+	}
+	if workstation == nil || failed == nil || unmanaged == nil {
+		t.Fatalf("设备卡片缺失：%+v", devices)
+	}
+	if workstation.SystemName != "Ubuntu" || workstation.SystemVersion != "24.04.1 LTS" ||
+		workstation.KernelName != "Linux 内核" || workstation.KernelVersion != "6.8.0-49-generic" ||
+		workstation.ImportantSoftwareCount != 4 || workstation.AllSoftwareCount != 6 ||
+		workstation.UnidentifiedProcessCount != 1 ||
+		len(workstation.StatusLabels) != 1 || workstation.StatusLabels[0] != "正常" {
+		t.Fatalf("工作站设备摘要不符：%+v", workstation)
+	}
+	if len(failed.StatusLabels) != 2 || failed.StatusLabels[0] != "采集失败" ||
+		failed.StatusLabels[1] != "清单过期" || failed.Status.LastFailureReason != "连接超时，端口不通" {
+		t.Fatalf("采集失败且过期的设备摘要不符：%+v", failed)
+	}
+	if len(unmanaged.StatusLabels) != 1 || unmanaged.StatusLabels[0] != "不采集（不受管设备）" {
+		t.Fatalf("不受管设备状态不符：%+v", unmanaged)
+	}
+
+	inCompany, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Site: "公司"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inCompany) != 2 || inCompany[0].Name != "工作站" || inCompany[1].Name != "虚拟网设备" {
+		t.Fatalf("上级地点应包含下级地点设备：%+v", inCompany)
+	}
+	inPhysical, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Network: "总部物理局域网"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inPhysical) != 1 || inPhysical[0].Name != "工作站" {
+		t.Fatalf("物理局域网应按成员筛选设备：%+v", inPhysical)
+	}
+	inVirtual, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{Network: "跨地点虚拟局域网"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inVirtual) != 1 || inVirtual[0].Name != "虚拟网设备" {
+		t.Fatalf("虚拟局域网应按成员筛选设备：%+v", inVirtual)
+	}
+
+	exact, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{
+		Name: "openssl", ExactVersion: "3.0.2-0ubuntu1.18",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exact) != 2 || exact[0].DeviceName != "分部失败设备" || exact[1].DeviceName != "工作站" {
+		t.Fatalf("精确版本搜索应只返回拥有对应条目的设备：%+v", exact)
+	}
+	if len(exact[1].Rows) != 1 || exact[1].Rows[0].Item.Name != "openssl" ||
+		exact[1].Rows[0].Item.CategoryLabel != "系统包" {
+		t.Fatalf("精确版本搜索应返回逐字相等的系统包：%+v", exact[1])
+	}
+	exactInCompany, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{
+		Name: "openssl", ExactVersion: "3.0.2-0ubuntu1.18", Site: "公司",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exactInCompany) != 1 || exactInCompany[0].DeviceName != "工作站" {
+		t.Fatalf("地点条件应同时缩小搜索结果：%+v", exactInCompany)
+	}
+	withoutVersion, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{Name: "openssl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutVersion) != 3 || withoutVersion[0].DeviceName != "分部失败设备" ||
+		withoutVersion[1].DeviceName != "工作站" || withoutVersion[2].DeviceName != "虚拟网设备" {
+		t.Fatalf("版本留空表示不筛版本：%+v", withoutVersion)
+	}
+	linux, err := source.SearchSoftwareInventory(webui.SoftwareInventoryFilter{Name: "Linux"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(linux) != 1 || len(linux[0].Rows) != 1 ||
+		linux[0].Rows[0].Item.SearchCategoryLabel != "操作系统与内核" {
+		t.Fatalf("搜索默认视图应把操作系统与内核合成一个突出类别：%+v", linux)
+	}
+}
+
+// TestSourceExportsCSVFromUnifiedQuery 验证导出接口复用统一查询条件，并
+// 输出能被标准解析器读回的平铺 CSV 总表。
+func TestSourceExportsCSVFromUnifiedQuery(t *testing.T) {
+	st, _ := newTestStore(t)
+	if _, err := st.AddSite("公司", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddSite("分部机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "总部物理局域网", Type: models.NetworkPhysical, SiteName: "公司",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, device := range []struct{ name, site string }{
+		{name: "工作站", site: "公司"}, {name: "分部工作站", site: "分部机房"},
+	} {
+		if _, err := st.AddDeviceAtSite(device.name, "", "", device.site); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := st.AddNetworkMembership("工作站", "总部物理局域网", "192.0.2.10"); err != nil {
+		t.Fatal(err)
+	}
+	seed := func(device string, items ...models.SoftwareObservedItem) {
+		t.Helper()
+		if err := st.ReplaceSoftwareObservedItems(device, store.SoftwareObservedWrite{
+			Items: items, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
+		}, store.CLISource()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seed("工作站",
+		models.SoftwareObservedItem{
+			Category: softwareinventory.CategoryServiceProgram,
+			Name:     "nginx", Version: "1.25.3",
+			ListeningPorts: []softwareinventory.ListeningPort{{
+				Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+				Exposure: softwareinventory.ExposureAllAddresses,
+			}},
+		},
+		models.SoftwareObservedItem{
+			Category: softwareinventory.CategorySystemPackage,
+			Name:     "libc6", Version: "2.39-0ubuntu8",
+		},
+	)
+	seed("分部工作站", models.SoftwareObservedItem{
+		Category: softwareinventory.CategoryServiceProgram,
+		Name:     "nginx", Version: "1.24.0",
+	})
+	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+
+	blob, err := source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
+		Name: "nginx", ExactVersion: "1.25.3", Site: "公司", Network: "总部物理局域网",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readExportCSV(t, blob)
+	if len(rows) != 2 || rows[1][0] != "工作站" || rows[1][1] != "nginx" ||
+		rows[1][5] != "监听所有地址" {
+		t.Fatalf("当前筛选导出行 = %#v", rows)
+	}
+
+	blob, err = source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
+		Device: "分部工作站",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = readExportCSV(t, blob)
+	if len(rows) != 2 || rows[1][0] != "分部工作站" || rows[1][2] != "1.24.0" {
+		t.Fatalf("单台设备导出行 = %#v", rows)
+	}
+}
+
+func readExportCSV(t *testing.T, blob []byte) [][]string {
+	t.Helper()
+	if !bytes.HasPrefix(blob, []byte("\uFEFF")) {
+		t.Fatalf("导出缺少 UTF-8 字节顺序标记：%q", blob)
+	}
+	rows, err := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(blob, []byte("\uFEFF")))).ReadAll()
+	if err != nil {
+		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, blob)
+	}
+	if len(rows) == 0 || strings.Join(rows[0], "|") !=
+		"设备|软件名|版本|类别|监听端口|暴露级别|采集时间" {
+		t.Fatalf("导出表头 = %#v", rows)
+	}
+	return rows
+}
+
 // TestSourceBuildsDeviceViewFromUnifiedQuery 验证适配层把统一查询、采集
 // 状态与变化历史合成 Web UI 页面数据，并把系统包整理成默认折叠分组。
 func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
@@ -69,81 +350,133 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 	}
 	server, err := st.GetServerByName("工作站-ssh")
 	if err != nil || server == nil {
-		t.Fatalf("取服务器条目失败：%v %+v", err, server)
+		t.Fatalf("取采集用服务器条目失败：%v %+v", err, server)
 	}
-	firstAt := confirmedAt.Add(time.Hour)
-	st.NowFn = func() time.Time { return firstAt }
+	collectedAt := confirmedAt.Add(time.Hour)
+	st.NowFn = func() time.Time { return collectedAt }
 	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
 		Items: []models.SoftwareObservedItem{
-			{
-				Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
-				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef",
-				ContainerRunning: true, ListeningPorts: []models.SoftwareListeningPort{{
-					Address: "0.0.0.0", Port: 5432, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
-				}},
-			},
-			{Category: models.SoftwareCategorySystemPackage, Name: "curl", Version: "8.8.0-1"},
-		},
-		ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
-	}, store.CLISource()); err != nil {
-		t.Fatal(err)
-	}
-	secondAt := firstAt.Add(24 * time.Hour)
-	st.NowFn = func() time.Time { return secondAt }
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
-		Items: []models.SoftwareObservedItem{
-			{
-				Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
-				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef",
-				ContainerRunning: true, ListeningPorts: []models.SoftwareListeningPort{{
-					Address: "0.0.0.0", Port: 5432, Protocol: "tcp", Exposure: models.SoftwareExposureAllAddresses,
-				}},
-			},
+			{Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "24.04.1 LTS"},
+			{Category: models.SoftwareCategoryServiceProgram, Name: "nginx", Version: "1.24.0"},
+			{Category: models.SoftwareCategoryContainerImage, Name: "postgres", Version: "16.4",
+				BelongsTo: "Docker", ContainerTag: "16-alpine", ContainerRunning: true},
+			{Category: models.SoftwareCategoryDriverFirmware, Name: "Linux 内核", Version: "6.8.0-49-generic"},
+			{Category: models.SoftwareCategoryDriverFirmware, Name: "NVIDIA 显卡驱动", Version: "550.120"},
 			{Category: models.SoftwareCategorySystemPackage, Name: "curl", Version: "8.9.1-1"},
+			{Category: models.SoftwareCategorySystemPackage, Name: "openssl", Version: "3.0.2"},
+			{Category: models.SoftwareCategoryUnidentified, Name: "unknown-gateway",
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+				ListeningPorts: []models.SoftwareListeningPort{{
+					Address: "127.0.0.1", Port: 8443, Protocol: "tcp",
+					Exposure: models.SoftwareExposureLocal,
+				}}},
 		},
 		ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	st.NowFn = func() time.Time { return secondAt.Add(time.Second) }
+	profileID, err := st.AddProfile("运维")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{server.ID}); err != nil {
+		t.Fatal(err)
+	}
+	clientID, _, err := st.AddCacheToken("laptop-client", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectSudo(server.Name, true, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector(
+		"工作站", "laptop-client", server.Name, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	st.NowFn = func() time.Time { return collectedAt.Add(time.Hour) }
 	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if device.Name != "工作站" || !device.Status.Managed || device.Status.CollectorLabel != "权威端" ||
-		device.Status.LastSuccessAt == nil || device.Status.LastSuccessAt.Unix() != secondAt.Unix() {
-		t.Fatalf("设备页面数据或采集状态不符：%+v", device)
+	if device.Name != "工作站" || !device.Status.Managed {
+		t.Fatalf("设备页面基础数据不符：%+v", device)
 	}
-	if len(device.Groups) != 3 || device.Groups[0].CategoryLabel != "服务程序" ||
-		device.Groups[1].CategoryLabel != "容器镜像" || device.Groups[2].CategoryLabel != "系统包" {
-		t.Fatalf("设备页面类别分组不符：%+v", device.Groups)
+	if device.Status.Collector != clientID || device.Status.CollectorName != "laptop-client" ||
+		device.Status.CollectorLabel != "客户端实例 laptop-client" ||
+		device.Status.PreferredServerEntry != server.Name {
+		t.Fatalf("设备页面采集执行者状态不符：%+v", device.Status)
 	}
-	declared := device.Groups[0].Items[0]
-	if declared.Version != "1.2.3+build.7" || declared.Source != "声明" ||
-		declared.ConfirmedAt == nil || declared.ConfirmedAt.Unix() != confirmedAt.Unix() ||
-		len(declared.ListeningPorts) != 1 || declared.ListeningPorts[0].ExposureLabel != "局域网" {
-		t.Fatalf("声明条目页面数据不符：%+v", declared)
+	if device.Summary.SystemName != "Ubuntu" || device.Summary.SystemVersion != "24.04.1 LTS" ||
+		device.Summary.KernelName != "Linux 内核" || device.Summary.KernelVersion != "6.8.0-49-generic" ||
+		device.Summary.ImportantSoftwareCount != 6 || device.Summary.AllSoftwareCount != 8 ||
+		device.Summary.UnidentifiedProcessCount != 1 {
+		t.Fatalf("设备页面摘要应与首页卡片同口径：%+v", device.Summary)
 	}
-	container := device.Groups[1].Items[0]
-	if container.Version != "16.4" || container.Source != "实测" || container.BelongsTo != "Docker" ||
-		container.ContainerTag != "16-alpine" || container.ContainerDigest != "sha256:abcdef" ||
-		!container.ContainerRunning || container.ListeningPorts[0].ExposureLabel != "监听所有地址" {
-		t.Fatalf("容器镜像条目页面数据不符：%+v", container)
+	cards, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !device.Groups[2].SystemPackages || device.Groups[2].SystemPackageCount != 1 ||
-		len(device.Groups[2].Items) != 1 || device.Groups[2].Items[0].Version != "8.9.1-1" {
-		t.Fatalf("系统包分组应保留全量数据并给出数量：%+v", device.Groups[2])
+	if len(cards) != 1 || !reflect.DeepEqual(cards[0], device.Summary) {
+		t.Fatalf("首页卡片与设备详情的摘要与状态口径应完全一致：%+v %+v", cards, device.Summary)
 	}
-	var versionChange *webui.SoftwareInventoryChange
-	for i := range device.History {
-		if device.History[i].KindLabel == "版本变化" && device.History[i].Name == "curl" {
-			versionChange = &device.History[i]
+	labels := make([]string, 0, len(device.Groups))
+	for _, group := range device.Groups {
+		labels = append(labels, group.CategoryLabel)
+	}
+	wantedLabels := []string{
+		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+	}
+	if strings.Join(labels, "|") != strings.Join(wantedLabels, "|") {
+		t.Fatalf("设备页面分组顺序不符：%v", labels)
+	}
+	if len(device.Groups[0].Items) != 2 || device.Groups[0].Items[0].Name != "Ubuntu" ||
+		device.Groups[0].Items[1].Name != "Linux 内核" {
+		t.Fatalf("操作系统与内核应合并为一个分组：%+v", device.Groups[0].Items)
+	}
+	if device.Groups[0].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[0].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[1].CategoryCode != softwareinventory.DisplayCategoryOperatingSystemKernel.Code() ||
+		device.Groups[0].Items[1].SearchCategoryLabel != "操作系统与内核" {
+		t.Fatalf("页面分组与搜索类别应使用领域展示类别：%+v", device.Groups[0])
+	}
+	if len(device.Groups[3].Items) != 1 || device.Groups[3].Items[0].Name != "NVIDIA 显卡驱动" {
+		t.Fatalf("内核不应重复出现在驱动与固件分组：%+v", device.Groups[3].Items)
+	}
+	if !device.Groups[4].SystemPackages || device.Groups[4].SystemPackageCount != 2 {
+		t.Fatalf("系统包分组应折叠并给出数量：%+v", device.Groups[4])
+	}
+	if device.Groups[4].CategoryCode != softwareinventory.DisplayCategorySystemPackage.Code() ||
+		device.Groups[4].Items[0].CategoryCode != softwareinventory.DisplayCategorySystemPackage.Code() {
+		t.Fatalf("系统包分组与条目应带稳定类别代号：%+v", device.Groups[4])
+	}
+	process := device.Groups[5].Items[0]
+	if process.ProcessName != "gateway" || process.ExecutablePath != "/opt/gateway/gateway" ||
+		process.ProcessID != 8123 || process.ListeningPorts[0].ExposureLabel != "仅本机" {
+		t.Fatalf("未识别进程条目应保留进程可得信息：%+v", process)
+	}
+	if len(device.Advanced.ClientInstances) != 1 ||
+		device.Advanced.ClientInstances[0].Name != "laptop-client" ||
+		device.Advanced.ClientInstances[0].ProfileName != "运维" {
+		t.Fatalf("高级区客户端实例数据不符：%+v", device.Advanced.ClientInstances)
+	}
+	if len(device.Advanced.ServerEntries) != 1 ||
+		device.Advanced.ServerEntries[0].Name != server.Name ||
+		!device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("高级区采集用服务器条目数据不符：%+v", device.Advanced.ServerEntries)
+	}
+	for _, group := range device.Groups {
+		for _, item := range group.Items {
+			if item.Name == "自建网关" || item.Source == "声明" {
+				t.Fatalf("声明不应进入设备页面：%+v", item)
+			}
 		}
 	}
-	if versionChange == nil || versionChange.OldValue != "8.8.0-1" || versionChange.NewValue != "8.9.1-1" {
-		t.Fatalf("变化历史页面数据不符：%+v", device.History)
+	declarations, err := st.SearchSoftwareDeclarations("", softwareinventory.AllDevicesVisible())
+	if err != nil || len(declarations) != 1 || declarations[0].Version != "1.2.3+build.7" {
+		t.Fatalf("声明应保留在存储里：%v %+v", err, declarations)
 	}
 
 	if _, err := source.SoftwareInventoryDevice("不存在"); err == nil {
@@ -262,222 +595,9 @@ func TestSourceBuildsTodosFromDomainResult(t *testing.T) {
 	}
 }
 
-// TestSourceAddsDeclarationAndClaimsObservedItem 验证声明表单先走领域模块
-// 新增，再用实测条目稳定键认领，并把 Web UI 来源写入两条审计。
-func TestSourceAddsDeclarationAndClaimsObservedItem(t *testing.T) {
-	st, _ := newTestStore(t)
-	addTestDevice(t, st, "工作站")
-	server, err := st.GetServerByName("工作站-ssh")
-	if err != nil || server == nil {
-		t.Fatalf("取服务器条目失败：%v %+v", err, server)
-	}
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
-		Items: []models.SoftwareObservedItem{{
-			StableKey: "unidentified-8443", Category: models.SoftwareCategoryUnidentified,
-			Name: "unknown-gateway", ExecutablePath: "/opt/gateway/gateway",
-			ListeningPorts: []models.SoftwareListeningPort{{
-				Address: "0.0.0.0", Port: 8443, Protocol: "tcp",
-				Exposure: models.SoftwareExposureAllAddresses,
-			}},
-		}}, ServerID: server.ID, CommandSetVersion: "linux-v1", SystemType: "ubuntu",
-	}, store.CLISource()); err != nil {
-		t.Fatal(err)
-	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-
-	id, err := source.AddSoftwareInventoryDeclaration(webui.SoftwareInventoryDeclarationForm{
-		Device: "工作站", Category: "service_program", Name: "业务网关", Version: "2.1.0",
-		ListeningPorts: []webui.SoftwareInventoryFormPort{{
-			Address: "0.0.0.0", Port: 8443, Protocol: "tcp",
-			Exposure: "virtual_local_area_network",
-		}},
-		ObservedStableKey: "unidentified-8443",
-	}, webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
-		Device: "工作站", Name: "业务网关", Visibility: softwareinventory.AllDevicesVisible(),
-		IncludeSystemPackages: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
-		result.Devices[0].Items[0].Source != softwareinventory.SourceCombined {
-		t.Fatalf("新增并认领后应合成一条软件条目：%+v", result.Devices)
-	}
-	rows, err := st.QueryAudit(store.AuditFilter{
-		Actions: []string{"software-declaration-add", "software-declaration-claim"},
-		Source:  store.AuditSourceWebUI, SourceIP: "198.51.100.9", Limit: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	actions := map[string]bool{}
-	for _, row := range rows {
-		actions[row.Action] = true
-	}
-	if len(rows) != 2 || !actions["software-declaration-add"] || !actions["software-declaration-claim"] {
-		t.Fatalf("新增与认领应各写一条 Web UI 来源审计：%+v", rows)
-	}
-	if id == "" {
-		t.Fatal("新增声明应返回声明标识符")
-	}
-}
-
-// TestSourceEditsClaimsAndDeletesDeclaration 验证修改、认领与删除都调用软
-// 件清单领域模块，并统一记录 Web UI 加来源地址的审计。
-func TestSourceEditsClaimsAndDeletesDeclaration(t *testing.T) {
-	st, _ := newTestStore(t)
-	addTestDevice(t, st, "工作站")
-	manager := softwareinventory.New(st)
-	id, err := manager.AddDeclaration(softwareinventory.Declaration{
-		Device: "工作站", Category: softwareinventory.CategoryServiceProgram,
-		Name: "业务网关", Version: "2.1.0",
-	}, softwareinventory.CLISource())
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-	form := webui.SoftwareInventoryDeclarationForm{
-		ID: id, Device: "工作站", Category: "service_program",
-		Name: "业务网关", Version: "2.2.0", PackageURL: "pkg:generic/gateway@2.2.0",
-		ListeningPorts: []webui.SoftwareInventoryFormPort{{
-			Address: "0.0.0.0", Port: 8443, Protocol: "tcp", Exposure: "public_network",
-		}},
-	}
-	if err := source.EditSoftwareInventoryDeclaration(
-		id, form, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := source.ClaimSoftwareInventoryDeclaration(
-		id, "observed-1", webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err == nil {
-		t.Fatal("认领不存在的实测条目应失败")
-	}
-	declaration, err := source.SoftwareInventoryDeclaration(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if declaration.Version != "2.2.0" || declaration.PackageURL != "pkg:generic/gateway@2.2.0" ||
-		len(declaration.ListeningPorts) != 1 || declaration.ListeningPorts[0].Exposure != "public_network" {
-		t.Fatalf("修改后的声明页面数据不符：%+v", declaration)
-	}
-	if err := source.DeleteSoftwareInventoryDeclaration(
-		id, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := source.SoftwareInventoryDeclaration(id); err == nil {
-		t.Fatal("删除后的声明不应再可读")
-	}
-	rows, err := st.QueryAudit(store.AuditFilter{
-		Actions: []string{"software-declaration-edit", "software-declaration-rm"},
-		Source:  store.AuditSourceWebUI, SourceIP: "192.0.2.7", Limit: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	actions := map[string]bool{}
-	for _, row := range rows {
-		actions[row.Action] = true
-	}
-	if len(rows) != 2 || !actions["software-declaration-edit"] || !actions["software-declaration-rm"] {
-		t.Fatalf("修改与删除应各写一条 Web UI 来源审计：%+v", rows)
-	}
-}
-
-// TestSourceReviewsDeclarationDrafts 覆盖草稿列出、按原样确认、修改后确
-// 认与驳回；确认进入生效声明，驳回后消失，全部写审计为 Web UI 来源。
-func TestSourceReviewsDeclarationDrafts(t *testing.T) {
-	st, _ := newTestStore(t)
-	addTestDevice(t, st, "工作站")
-	manager := softwareinventory.New(st)
-	ids, err := manager.SubmitDeclarationDrafts([]models.SoftwareDeclarationDraft{
-		{
-			SoftwareDeclaration: models.SoftwareDeclaration{
-				Device: "工作站", Category: softwareinventory.CategoryServiceProgram,
-				Name: "业务网关", Version: "2.1.0",
-			},
-		},
-		{
-			SoftwareDeclaration: models.SoftwareDeclaration{
-				Device: "工作站", Category: softwareinventory.CategoryServiceProgram,
-				Name: "旧网关", Version: "1.0",
-			},
-		},
-		{
-			SoftwareDeclaration: models.SoftwareDeclaration{
-				Device: "工作站", Category: softwareinventory.CategoryServiceProgram,
-				Name: "驳回网关", Version: "0.9",
-			},
-		},
-	}, softwareinventory.AllDevicesVisible(), softwareinventory.AgentSource())
-	if err != nil || len(ids) != 3 {
-		t.Fatalf("提交三条草稿失败：%v %v", err, ids)
-	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-
-	drafts, err := source.SoftwareInventoryDrafts()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(drafts) != 3 || drafts[0].ID != ids[0] || drafts[0].Device != "工作站" ||
-		drafts[0].CategoryLabel != "服务程序" || drafts[0].Name != "业务网关" {
-		t.Fatalf("草稿页面数据不符：%+v", drafts)
-	}
-	if err := source.ConfirmSoftwareInventoryDraft(
-		ids[0], nil, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	modified := webui.SoftwareInventoryDeclarationForm{
-		ID: ids[1], Device: "工作站", Category: "service_program",
-		Name: "旧网关", Version: "1.1.0",
-		ListeningPorts: []webui.SoftwareInventoryFormPort{{
-			Address: "0.0.0.0", Port: 9090, Protocol: "tcp", Exposure: "local_area_network",
-		}},
-	}
-	if err := source.ConfirmSoftwareInventoryDraft(
-		ids[1], &modified, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := source.RejectSoftwareInventoryDraft(
-		ids[2], webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
-	); err != nil {
-		t.Fatal(err)
-	}
-	result, err := manager.Query(softwareinventory.QueryOptions{
-		Device: "工作站", Visibility: softwareinventory.AllDevicesVisible(), IncludeSystemPackages: true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 2 {
-		t.Fatalf("两条确认草稿应进入生效清单：%+v", result.Devices)
-	}
-	remaining, err := source.SoftwareInventoryDrafts()
-	if err != nil || len(remaining) != 0 {
-		t.Fatalf("确认与驳回后的草稿都应消失：%v %+v", err, remaining)
-	}
-	rows, err := st.QueryAudit(store.AuditFilter{
-		Actions: []string{"software-declaration-confirm", "software-declaration-confirm-edit", "software-declaration-reject"},
-		Source:  store.AuditSourceWebUI, SourceIP: "192.0.2.7", Limit: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 3 {
-		t.Fatalf("草稿确认、修改后确认与驳回应各写一条 Web UI 来源审计：%+v", rows)
-	}
-}
-
-// TestSourceCollectorSettingsAndSudo 验证采集设置读取、登记校验错误透
-// 出、成功登记与 sudo 开关写入 Web UI 来源审计。
-func TestSourceCollectorSettingsAndSudo(t *testing.T) {
+// TestSourceDeviceAdvancedSettingsAndSudo 验证设备页高级采集设置：登记
+// 校验错误透出、成功登记改变设备视图、sudo 开关写入 Web UI 来源审计。
+func TestSourceDeviceAdvancedSettingsAndSudo(t *testing.T) {
 	st, _ := newTestStore(t)
 	addTestDevice(t, st, "工作站")
 	server, err := st.GetServerByName("工作站-ssh")
@@ -496,15 +616,19 @@ func TestSourceCollectorSettingsAndSudo(t *testing.T) {
 	}
 	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
 
-	settings, err := source.SoftwareInventorySettings()
+	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(settings.Devices) != 1 || settings.Devices[0].Name != "工作站" ||
-		len(settings.Servers) != 1 || settings.Servers[0].Name != server.Name ||
-		len(settings.ClientInstances) != 1 || settings.ClientInstances[0].Name != "laptop-client" ||
-		settings.ClientInstances[0].ProfileName != "运维" {
-		t.Fatalf("采集设置页面数据不符：%+v", settings)
+	if len(device.Advanced.ClientInstances) != 1 ||
+		device.Advanced.ClientInstances[0].Name != "laptop-client" ||
+		device.Advanced.ClientInstances[0].ProfileName != "运维" {
+		t.Fatalf("设备页高级区客户端实例数据不符：%+v", device.Advanced.ClientInstances)
+	}
+	if len(device.Advanced.ServerEntries) != 1 ||
+		device.Advanced.ServerEntries[0].Name != server.Name ||
+		device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("设备页高级区采集用服务器条目数据不符：%+v", device.Advanced.ServerEntries)
 	}
 	err = source.SetSoftwareInventoryCollector(webui.SoftwareInventoryCollectorForm{
 		Device: "工作站", Collector: "不存在的客户端", ServerEntry: server.Name,
@@ -518,17 +642,25 @@ func TestSourceCollectorSettingsAndSudo(t *testing.T) {
 	}, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"}); err != nil {
 		t.Fatal(err)
 	}
+	device, err = source.SoftwareInventoryDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if device.Status.CollectorLabel != "客户端实例 laptop-client" ||
+		device.Status.PreferredServerEntry != server.Name {
+		t.Fatalf("登记后的设备页采集执行者状态不符：%+v", device.Status)
+	}
 	if err := source.SetSoftwareInventorySudo(
 		server.Name, true, webui.SoftwareInventoryWriteSource{RemoteAddress: "192.0.2.7"},
 	); err != nil {
 		t.Fatal(err)
 	}
-	settings, err = source.SoftwareInventorySettings()
+	device, err = source.SoftwareInventoryDevice("工作站")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.Servers[0].SudoEnabled != true {
-		t.Fatalf("sudo 开关打开后的设置页面数据不符：%+v", settings.Servers[0])
+	if !device.Advanced.ServerEntries[0].SudoEnabled {
+		t.Fatalf("sudo 开关打开后的设备页数据不符：%+v", device.Advanced.ServerEntries[0])
 	}
 	rows, err := st.QueryAudit(store.AuditFilter{
 		Actions: []string{"software-collect-collector", "software-collect-sudo"},

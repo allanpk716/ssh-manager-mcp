@@ -17,13 +17,11 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 			{ID: "pair-2", Name: "old-request", State: "completed"},
 		},
 	}
-	software := &stubSoftwareInventorySource{todos: SoftwareInventoryTodos{
-		UnidentifiedProcesses: []SoftwareInventoryUnidentifiedProcess{
-			{DeviceName: "工作站", Name: "业务网关"},
-			{DeviceName: "工作站", Name: "数据网关"},
-		},
-		StaleDevices: []SoftwareInventoryStaleDevice{{DeviceName: "软路由"}},
-	}}
+	software := &stubSoftwareInventorySource{devices: []SoftwareInventoryDeviceSummary{
+		{Name: "工作站", Status: SoftwareInventoryStatus{Managed: true}, StatusLabels: []string{"正常"}},
+		{Name: "软路由", Status: SoftwareInventoryStatus{Managed: true}, StatusLabels: []string{"清单过期"}},
+	},
+	}
 	ops := &stubOpsStore{rows: []OpsAuditRow{
 		{ID: 12, TS: time.Unix(1800000120, 0), Action: "cache.pull", Command: "客户端 mini6-claude 完成同步", Status: "ok"},
 		{ID: 11, TS: time.Unix(1800000060, 0), Action: "secret.grant", Command: "机密项 HF_TOKEN 授权给 3090x2", Status: "ok"},
@@ -66,7 +64,6 @@ func TestAuthorityHomePageShowsOverviewAndFiveTabs(t *testing.T) {
 		"1 个配对请求待审批",
 		"macbook-air 请求接入",
 		"2 台服务器需要注意",
-		"2 个未识别进程待认领、1 台设备清单已过期",
 		"3", "服务器", "1", "客户端", "2", "profile",
 		"客户端 mini6-claude 完成同步",
 		"机密项 HF_TOKEN 授权给 3090x2",

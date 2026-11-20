@@ -3,20 +3,28 @@
 <p><a href="/ui/software-inventory/">返回软件清单</a></p>
 <h1>{{.SoftwareInventoryDevice.Name}} · 软件清单</h1>
 {{if .SoftwareInventoryNotice}}<p class="form-success">{{.SoftwareInventoryNotice}}</p>{{end}}
+{{if .SoftwareInventoryResumeNotice}}<p class="form-success">{{.SoftwareInventoryResumeNotice}}</p>{{end}}
 {{if .SoftwareInventoryError}}<p class="form-error">{{.SoftwareInventoryError}}</p>{{end}}
 
-<h2>采集状态</h2>
-<dl class="software-status">
-<dt>采集执行者</dt><dd>{{if .SoftwareInventoryDevice.Status.Managed}}{{.SoftwareInventoryDevice.Status.CollectorLabel}}{{else}}不受管设备，没有采集执行者{{end}}</dd>
-<dt>上次成功</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastSuccessAt}}</dd>
-<dt>上次失败</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastFailureAt}}{{if .SoftwareInventoryDevice.Status.LastFailureReason}}（{{.SoftwareInventoryDevice.Status.LastFailureReason}}）{{end}}</dd>
-<dt>清单是否过期</dt><dd>{{if .SoftwareInventoryDevice.Status.Stale}}清单已过期{{else}}清单未过期{{end}}</dd>
-<dt>采集用服务器条目</dt><dd>{{if .SoftwareInventoryDevice.Status.ServerEntry}}{{.SoftwareInventoryDevice.Status.ServerEntry}}{{else}}-{{end}}</dd>
+<article class="record-card">
+<h2>设备摘要</h2>
+<p class="status-badges">{{range .SoftwareInventoryDevice.Summary.StatusLabels}}<span class="status-badge">{{.}}</span>{{end}}</p>
+<dl class="field-list">
+<dt>系统与内核</dt><dd>{{if .SoftwareInventoryDevice.Summary.KernelName}}{{if .SoftwareInventoryDevice.Summary.SystemName}}{{.SoftwareInventoryDevice.Summary.SystemName}} {{.SoftwareInventoryDevice.Summary.SystemVersion}}{{else}}-{{end}}；{{.SoftwareInventoryDevice.Summary.KernelName}} {{.SoftwareInventoryDevice.Summary.KernelVersion}}{{else if .SoftwareInventoryDevice.Summary.SystemName}}{{.SoftwareInventoryDevice.Summary.SystemName}} {{.SoftwareInventoryDevice.Summary.SystemVersion}}{{else}}-{{end}}</dd>
+<dt>重点软件</dt><dd>{{.SoftwareInventoryDevice.Summary.ImportantSoftwareCount}}</dd>
+<dt>全部软件</dt><dd>{{.SoftwareInventoryDevice.Summary.AllSoftwareCount}}</dd>
+<dt>未识别进程</dt><dd>{{.SoftwareInventoryDevice.Summary.UnidentifiedProcessCount}}</dd>
+<dt>采集时间</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastSuccessAt}}</dd>
+{{if .SoftwareInventoryDevice.Status.LastFailureReason}}<dt>上次失败原因</dt><dd>{{.SoftwareInventoryDevice.Status.LastFailureReason}}</dd>{{end}}
 </dl>
-{{if .SoftwareInventoryDevice.Status.Managed}}<form method="post" action="/ui/software-inventory/collect?device={{.SoftwareInventoryDevice.Name | urlquery}}">
+{{if .SoftwareInventoryDevice.Status.Managed}}
+<form method="post" action="/ui/software-inventory/collect?device={{.SoftwareInventoryDevice.Name | urlquery}}">
 <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 <button type="submit">立即采集</button>
-</form>{{end}}
+</form>
+{{end}}
+<a class="button-link" href="/ui/software-inventory/export?device={{.SoftwareInventoryDevice.Name | urlquery}}">导出这台设备</a>
+</article>
 
 {{range .SoftwareInventoryDevice.Groups}}
 <h2>{{if .SystemPackages}}{{.CategoryLabel}}（{{.SystemPackageCount}} 条，默认折叠）{{else}}{{.CategoryLabel}}{{end}}</h2>
@@ -42,6 +50,66 @@
 </li>
 {{else}}<li class="empty-text">暂无变化历史。</li>{{end}}
 </ul>
+
+{{if .SoftwareInventoryDevice.Status.Managed}}
+<details id="software-inventory-advanced"{{if .SoftwareInventoryAdvancedOpen}} open{{end}}>
+<summary>高级采集设置</summary>
+<p class="form-help">这里集中低频设置：采集执行者、采集用服务器条目与 sudo 采集开关；默认视图不需要改动它们。</p>
+{{with .SoftwareInventoryCollectorForm}}{{if .Error}}<div class="operation-refusal">{{.Error}}</div>{{end}}{{if .SudoError}}<div class="operation-refusal">{{.SudoError}}</div>{{end}}{{end}}
+
+<h3>采集执行者与采集用服务器条目</h3>
+<form method="post" action="/ui/software-inventory/devices/collector">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="device" value="{{.SoftwareInventoryDevice.Name}}">
+<div class="form-field">
+<label for="software-inventory-collector">采集执行者</label>
+<select id="software-inventory-collector" name="collector">
+{{with .SoftwareInventoryCollectorForm}}<option value=""{{if .Collector}} selected{{end}}>权威端</option>
+{{if .InvalidCollector}}<option value="{{.Collector}}" selected>{{.Collector}}（不是有效的客户端实例）</option>
+{{end}}
+{{range $.SoftwareInventoryDevice.Advanced.ClientInstances}}<option value="{{.Name}}"{{if eq $.SoftwareInventoryCollectorForm.Collector .Name}} selected{{end}}>{{.Name}}（profile：{{.ProfileName}}）</option>
+{{end}}{{end}}
+</select>
+<p class="form-help">权威端没有网络路径的设备可改为客户端实例采集；登记前校验设备码有效，且它绑定的 profile 包含采集用服务器条目。</p>
+</div>
+<div class="form-field">
+<label for="software-inventory-server-entry">采集用服务器条目</label>
+<select id="software-inventory-server-entry" name="server_entry">
+<option value="">自动选择</option>
+{{range .SoftwareInventoryDevice.Advanced.ServerEntries}}<option value="{{.Name}}"{{if and $.SoftwareInventoryCollectorForm (eq $.SoftwareInventoryCollectorForm.ServerEntry .Name)}} selected{{end}}>{{.Name}}</option>
+{{end}}
+</select>
+</div>
+<button type="submit">保存采集执行者</button>
+</form>
+
+<h3>sudo 采集开关</h3>
+<ul class="record-cards">
+{{range .SoftwareInventoryDevice.Advanced.ServerEntries}}
+<li class="record-card"><h3>{{.Name}}</h3>
+<dl class="field-list"><dt>当前状态</dt><dd>{{if .SudoEnabled}}已打开{{else}}已关闭{{end}}</dd></dl>
+</li>
+{{else}}<li class="empty-text">这台设备没有服务器条目。</li>{{end}}
+</ul>
+<form method="post" action="/ui/software-inventory/devices/sudo">
+<input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+<input type="hidden" name="device" value="{{.SoftwareInventoryDevice.Name}}">
+<div class="form-field">
+<label for="software-inventory-sudo-entry">服务器条目</label>
+<select id="software-inventory-sudo-entry" name="server_entry">
+{{range .SoftwareInventoryDevice.Advanced.ServerEntries}}<option value="{{.Name}}"{{if eq $.SoftwareInventorySudoServer .Name}} selected{{end}}>{{.Name}}</option>
+{{end}}
+</select>
+</div>
+<div class="form-field">
+<label for="software-inventory-sudo-enabled">允许用 sudo 采集</label>
+<input type="checkbox" id="software-inventory-sudo-enabled" name="sudo_enabled" value="1"{{if .SoftwareInventorySudoEnabled}} checked{{end}}>
+</div>
+<p class="form-help">打开需要最近 5 分钟内重新验证管理员口令；关闭不需要。打开后复用该条目已有的 sudo 凭据。</p>
+<button type="submit">保存 sudo 采集开关</button>
+</form>
+</details>
+{{end}}
 </section>
 {{end}}
 
@@ -49,21 +117,24 @@
 <ul class="record-cards">
 {{range .}}
 <li class="record-card">
-<h3>{{.Name}}</h3>
+<h3>{{if eq .CategoryLabel "未识别进程"}}未识别{{if .ProcessName}} · {{.ProcessName}}{{else if .Name}} · {{.Name}}{{end}}{{else}}{{.Name}}{{end}}</h3>
 <dl class="field-list">
+{{if eq .CategoryLabel "未识别进程"}}
+<dt>进程名</dt><dd>{{if .ProcessName}}{{.ProcessName}}{{else}}进程名不可见{{end}}</dd>
+{{if .ExecutablePath}}<dt>可执行文件路径</dt><dd>{{.ExecutablePath}}</dd>{{end}}
+{{if .ProcessID}}<dt>进程号</dt><dd>{{.ProcessID}}</dd>{{end}}
+{{else}}
 <dt>名称</dt><dd>{{.Name}}</dd>
-<dt>精确版本</dt><dd>{{.Version}}</dd>
-<dt>来源</dt><dd>{{.Source}}</dd>
-<dt>采集或确认时间</dt><dd>{{if .CollectedAt}}采集：{{formatOptionalTime .CollectedAt}}{{else if .ConfirmedAt}}确认：{{formatOptionalTime .ConfirmedAt}}{{else}}-{{end}}</dd>
+{{end}}
+<dt>精确版本</dt><dd>{{if .Version}}{{.Version}}{{else}}-{{end}}</dd>
+<dt>采集时间</dt><dd>{{formatOptionalTime .CollectedAt}}</dd>
 <dt>监听端口与暴露级别</dt><dd>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
 {{if .BelongsTo}}<dt>所属</dt><dd>{{.BelongsTo}}</dd>{{end}}
 {{if .ContainerTag}}<dt>标签</dt><dd>{{.ContainerTag}}</dd>{{end}}
 {{if .ContainerDigest}}<dt>摘要</dt><dd>{{.ContainerDigest}}</dd>{{end}}
-{{if .CategoryLabel}}<dt>类别</dt><dd>{{.CategoryLabel}}</dd>{{end}}
-{{if eq .CategoryLabel "容器镜像"}}<dt>运行状态</dt><dd>{{if eq .Source "声明"}}未确认{{else if .ContainerRunning}}运行中{{else}}未运行{{end}}</dd>{{end}}
+{{if eq .CategoryLabel "容器镜像"}}<dt>运行状态</dt><dd>{{if .ContainerRunning}}运行中{{else}}未运行{{end}}</dd>{{end}}
 {{if .PackageURL}}<dt>软件包统一地址</dt><dd>{{.PackageURL}}</dd>{{end}}
 {{if .CPE}}<dt>常见平台枚举</dt><dd>{{.CPE}}</dd>{{end}}
-{{if .Note}}<dt>备注</dt><dd>{{.Note}}</dd>{{end}}
 </dl>
 </li>
 {{else}}<li class="empty-text">暂无软件条目。</li>{{end}}
