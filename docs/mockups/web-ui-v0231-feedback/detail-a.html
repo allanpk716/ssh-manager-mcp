@@ -1,0 +1,574 @@
+<!-- PROTOTYPE（抛弃式原型）：服务器详情·分区就地编辑 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#F5F6F8">
+  <title>NUC10 · root 登录 · sshmgr 权威端</title>
+  <style>
+    :root { color-scheme: light; --bg:#F5F6F8; --card:#FFFFFF; --primary:#2563EB; --primary-soft:#EFF6FF; --text:#111827; --muted:#6B7280; --warning:#D97706; --warning-soft:#FEF3C7; --danger:#DC2626; --danger-soft:#FEF2F2; --success:#059669; --success-soft:#ECFDF5; --line:#E5E7EB; --shadow:0 1px 2px rgba(0,0,0,.06); }
+    * { box-sizing:border-box; }
+    [hidden] { display:none !important; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif; font-size:15px; -webkit-font-smoothing:antialiased; }
+    body.modal-open { overflow:hidden; }
+    button,input,select,textarea { font:inherit; }
+    button,a { -webkit-tap-highlight-color:transparent; }
+    button { color:inherit; }
+    button:disabled { opacity:.45; cursor:not-allowed; }
+    button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible { outline:3px solid rgba(37,99,235,.25); outline-offset:2px; }
+    svg { display:block; flex:0 0 auto; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; }
+    .page { width:100%; max-width:960px; margin:0 auto; padding:10px 16px calc(104px + env(safe-area-inset-bottom)); }
+    .back-link { display:inline-flex; align-items:center; min-height:44px; margin-left:-8px; padding:0 8px; color:var(--muted); text-decoration:none; font-size:14px; font-weight:500; }
+    .back-link span { margin-right:3px; color:var(--primary); font-size:28px; line-height:1; }
+    h1 { margin:0; font-size:22px; line-height:30px; letter-spacing:-.02em; }
+    .subtitle { margin:4px 0 0; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:13px; line-height:20px; overflow-wrap:anywhere; }
+    .header-status { display:inline-flex; align-items:center; gap:6px; min-height:28px; margin-top:10px; padding:3px 9px; border-radius:8px; background:#FFFFFF; box-shadow:var(--shadow); color:#374151; font-size:13px; line-height:20px; }
+    .status-dot { flex:0 0 8px; width:8px; height:8px; border-radius:50%; background:#9CA3AF; }
+    .header-status.success,.list-preview-state.success { color:#047857; }
+    .header-status.success .status-dot,.list-preview-state.success .status-dot { background:var(--success); }
+    .header-status.failure,.list-preview-state.failure { color:#991B1B; }
+    .header-status.failure .status-dot,.list-preview-state.failure .status-dot { background:var(--danger); }
+    .detail-section { display:grid; gap:12px; margin-top:16px; }
+    .card { min-width:0; padding:16px; border:1px solid transparent; border-radius:12px; background:var(--card); box-shadow:var(--shadow); transition:box-shadow .2s ease,border-color .2s ease; }
+    .card.saved { border-color:#A7F3D0; box-shadow:0 0 0 3px rgba(5,150,105,.09),var(--shadow); }
+    .card-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:34px; }
+    .card-heading h2 { margin:0; font-size:17px; line-height:25px; letter-spacing:-.01em; }
+    .edit-button { min-width:44px; min-height:44px; margin:-8px -8px -8px 0; padding:0 8px; border:0; border-radius:8px; background:transparent; color:var(--primary); cursor:pointer; font-size:14px; font-weight:650; }
+    .info-list { margin:6px 0 0; }
+    .info-row { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; min-height:44px; padding:11px 0; border-bottom:1px solid #F0F1F3; }
+    .info-row:last-child { border-bottom:0; }
+    .info-label { flex:0 0 auto; color:var(--muted); font-size:14px; line-height:22px; }
+    .info-value { min-width:0; text-align:right; line-height:22px; overflow-wrap:anywhere; }
+    .field-note { display:block; margin-top:2px; color:var(--muted); font-size:12px; font-weight:400; }
+    .fingerprint-box { margin-top:8px; border:1px solid #EEF0F3; border-radius:9px; background:#F9FAFB; overflow:hidden; }
+    .fingerprint-box summary { display:flex; align-items:center; justify-content:space-between; min-height:44px; padding:0 12px; cursor:pointer; color:#374151; font-size:14px; font-weight:550; list-style:none; }
+    .fingerprint-box summary::-webkit-details-marker { display:none; }
+    .fingerprint-box summary::after { content:"展开"; color:var(--primary); }
+    .fingerprint-box[open] summary::after { content:"收起"; }
+    .fingerprint-value { margin:0; padding:0 12px 12px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:12px; line-height:19px; overflow-wrap:anywhere; }
+    .primary-button,.secondary-button,.danger-button { min-height:44px; border:0; border-radius:10px; cursor:pointer; font-weight:650; white-space:nowrap; }
+    .primary-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:0 16px; background:var(--primary); color:#FFFFFF; box-shadow:0 1px 2px rgba(37,99,235,.2); }
+    .primary-button:active { background:#1D4ED8; }
+    .secondary-button { display:inline-flex; align-items:center; justify-content:center; gap:7px; padding:0 13px; border:1px solid var(--line); background:#FFFFFF; color:#374151; box-shadow:var(--shadow); font-size:14px; }
+    .danger-button { width:100%; border:1px solid #FECACA; background:#FFFFFF; color:var(--danger); }
+    .test-area { margin-top:14px; }
+    .test-button { width:100%; }
+    .test-result { border-radius:11px; padding:12px; font-size:14px; line-height:21px; animation:fade-in .16s ease-out; }
+    .test-result.running { display:flex; align-items:center; gap:10px; background:var(--primary-soft); color:#1E40AF; }
+    .test-result.success { background:var(--success-soft); color:#065F46; }
+    .test-result.failure { background:var(--danger-soft); color:#991B1B; }
+    .result-main { display:flex; align-items:flex-start; gap:8px; font-weight:700; }
+    .result-main svg { margin-top:2px; }
+    .result-detail { margin:5px 0 0 23px; }
+    .candidate-toggle { min-height:36px; margin:7px 0 0 23px; padding:0; border:0; background:transparent; color:#991B1B; cursor:pointer; font-size:13px; font-weight:650; text-decoration:underline; }
+    .candidate-list { margin:7px 0 0 23px; padding:0; list-style:none; }
+    .candidate-list li { padding:8px 0; border-top:1px solid #FECACA; font-size:13px; line-height:20px; }
+    .candidate-network { display:block; color:#B91C1C; font-weight:650; }
+    .test-footer { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:11px; }
+    .test-again { flex:1; }
+    .demo-link { color:#9CA3AF; font-size:12px; text-decoration:underline; }
+    .spinner { flex:0 0 18px; width:18px; height:18px; border:2.5px solid #BFDBFE; border-top-color:var(--primary); border-radius:50%; animation:spin .8s linear infinite; }
+    .list-preview { margin-top:12px; padding:11px 12px; border:1px solid #E5E7EB; border-radius:10px; background:#FAFBFC; }
+    .list-preview-title { margin:0 0 7px; color:var(--muted); font-size:12px; font-weight:600; }
+    .list-preview-row { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#374151; font-size:13px; line-height:20px; }
+    .list-preview-state { display:flex; align-items:center; gap:5px; color:#4B5563; }
+    .list-preview-state .status-dot { width:7px; height:7px; }
+    .card-help { margin:9px 0 0; color:var(--muted); font-size:13px; line-height:20px; }
+    .location-value { margin:8px 0 0; font-size:21px; line-height:30px; font-weight:750; }
+    .address-list { margin-top:7px; }
+    .address-item { display:flex; align-items:center; justify-content:space-between; gap:10px; min-height:76px; padding:12px 0; border-bottom:1px solid #F0F1F3; }
+    .address-item:last-of-type { border-bottom:0; }
+    .address-copy { min-width:0; }
+    .network-heading { display:flex; flex-wrap:wrap; align-items:center; gap:7px; }
+    .network-name { font-weight:650; }
+    .type-tag { display:inline-flex; align-items:center; min-height:22px; padding:1px 7px; border-radius:5px; background:#F3F4F6; color:#4B5563; font-size:12px; line-height:18px; }
+    .ip-address { display:block; margin-top:6px; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace; font-size:14px; line-height:20px; overflow-wrap:anywhere; }
+    .address-hint { margin:8px 0 0; padding:8px 9px; border-radius:8px; background:var(--warning-soft); color:#92400E; font-size:12px; line-height:18px; }
+    .description-list { margin-top:6px; }
+    .description-row { display:grid; grid-template-columns:84px minmax(0,1fr); gap:4px 10px; padding:11px 0; border-bottom:1px solid #F0F1F3; }
+    .description-row:last-child { border-bottom:0; }
+    .description-label { color:var(--muted); font-size:14px; line-height:24px; }
+    .description-value { min-width:0; line-height:24px; overflow-wrap:anywhere; }
+    .account-list { margin-top:7px; }
+    .account-row { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:68px; padding:12px 0; border-bottom:1px solid #F0F1F3; }
+    .account-row:last-child { border-bottom:0; }
+    .account-name { display:block; font-weight:650; line-height:22px; }
+    .account-note { display:block; margin-top:3px; color:var(--muted); font-size:13px; line-height:20px; }
+    .account-state { display:flex; align-items:center; gap:5px; flex:0 0 auto; color:#4B5563; font-size:12px; line-height:18px; }
+    .advanced-card { padding-top:7px; }
+    .advanced-card summary { display:flex; align-items:center; justify-content:space-between; min-height:52px; cursor:pointer; font-weight:700; list-style:none; }
+    .advanced-card summary::-webkit-details-marker { display:none; }
+    .advanced-card summary::after { content:"展开"; color:var(--primary); }
+    .advanced-card[open] summary::after { content:"收起"; }
+    .advanced-body { padding-bottom:3px; }
+    .advanced-note { margin:0 0 12px; color:var(--muted); font-size:13px; line-height:20px; }
+    .advanced-actions { display:grid; gap:10px; }
+    .advanced-actions .secondary-button { width:100%; }
+    .mobile-nav { position:fixed; z-index:50; right:0; bottom:0; left:0; display:grid; grid-template-columns:repeat(5,1fr); padding:5px 4px calc(5px + env(safe-area-inset-bottom)); border-top:1px solid rgba(229,231,235,.9); background:rgba(255,255,255,.97); box-shadow:0 -1px 8px rgba(17,24,39,.035); backdrop-filter:blur(14px); }
+    .nav-link { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:3px; min-height:54px; border-radius:9px; color:var(--muted); text-decoration:none; font-size:11px; line-height:16px; }
+    .nav-link[aria-current="page"] { color:var(--primary); font-weight:650; }
+    .nav-link svg { width:22px; height:22px; }
+    .drawer-shell,.confirm-shell { position:fixed; z-index:100; inset:0; display:flex; align-items:flex-end; justify-content:center; }
+    .confirm-shell { align-items:center; padding:18px; }
+    .drawer-backdrop,.confirm-backdrop { position:absolute; inset:0; width:100%; height:100%; padding:0; border:0; background:rgba(17,24,39,.46); cursor:default; animation:fade-in .18s ease-out; }
+    .drawer { position:relative; width:100%; max-width:640px; max-height:min(89vh,770px); overflow-y:auto; padding:9px 20px calc(20px + env(safe-area-inset-bottom)); border-radius:20px 20px 0 0; background:#FFFFFF; box-shadow:0 -12px 40px rgba(17,24,39,.16); animation:slide-up .22s ease-out; }
+    .drawer-handle { width:38px; height:4px; margin:0 auto 10px; border-radius:99px; background:#D1D5DB; }
+    .drawer-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+    .drawer-header h2 { margin:0; font-size:19px; line-height:28px; }
+    .close-button { display:grid; place-items:center; flex:0 0 44px; width:44px; height:44px; margin-right:-9px; border:0; border-radius:50%; background:transparent; color:var(--muted); cursor:pointer; }
+    .drawer-caption { margin:3px 0 14px; color:var(--muted); font-size:13px; line-height:20px; }
+    .drawer-actions { display:flex; gap:10px; margin-top:18px; }
+    .drawer-actions button { flex:1; }
+    .form-grid { display:grid; gap:13px; }
+    .form-field { display:grid; gap:6px; }
+    .form-field > span { color:var(--muted); font-size:13px; line-height:19px; }
+    .form-input,.form-select,.form-textarea { width:100%; min-width:0; border:1px solid #D8DDE5; border-radius:9px; background:#FFFFFF; color:var(--text); }
+    .form-input,.form-select { min-height:44px; padding:0 11px; }
+    .form-textarea { min-height:88px; padding:10px 11px; line-height:21px; resize:vertical; }
+    .static-value { display:flex; align-items:center; min-height:44px; padding:0 11px; border:1px solid #E5E7EB; border-radius:9px; background:#F9FAFB; color:#374151; font-size:13px; overflow-wrap:anywhere; }
+    .address-editor { display:grid; gap:10px; }
+    .address-edit-row { padding:10px; border:1px solid #E5E7EB; border-radius:11px; background:#FAFBFC; }
+    .address-edit-fields { display:grid; grid-template-columns:minmax(0,.85fr) minmax(0,1fr); gap:8px; }
+    .remove-row-button { width:100%; min-height:38px; margin-top:8px; padding:0; border:0; border-radius:8px; background:transparent; color:var(--danger); cursor:pointer; font-size:13px; font-weight:600; }
+    .editor-hint { margin:8px 0 0; padding:9px; border-radius:8px; background:var(--warning-soft); color:#92400E; font-size:12px; line-height:19px; }
+    .hint-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .hint-text { flex:1; }
+    .confirm-network-button { flex:0 0 auto; min-height:34px; padding:0 10px; border:0; border-radius:8px; background:#FFFFFF; color:var(--warning); cursor:pointer; font-size:12px; font-weight:700; }
+    .add-row-button { width:100%; }
+    .tree { max-height:310px; margin-top:10px; padding:4px; overflow-y:auto; border:1px solid var(--line); border-radius:12px; background:#FFFFFF; }
+    .tree-row { display:flex; align-items:center; padding-left:calc(var(--depth) * 17px); }
+    .tree-toggle { display:grid; flex:0 0 38px; place-items:center; width:38px; height:44px; border:0; background:transparent; color:var(--muted); cursor:pointer; font-size:17px; }
+    .tree-toggle:disabled { opacity:0; cursor:default; }
+    .tree-toggle span { display:block; transition:transform .15s ease; }
+    .tree-toggle[aria-expanded="true"] span { transform:rotate(90deg); }
+    .tree-select { display:flex; flex:1; align-items:center; gap:9px; min-width:0; min-height:44px; padding:0 9px; border:0; border-radius:8px; background:transparent; cursor:pointer; text-align:left; }
+    .tree-select[aria-pressed="true"] { background:var(--primary-soft); color:var(--primary); font-weight:650; }
+    .radio-dot { display:grid; flex:0 0 18px; place-items:center; width:18px; height:18px; border:1.5px solid #C3C9D2; border-radius:50%; background:#FFFFFF; }
+    .tree-select[aria-pressed="true"] .radio-dot { border-color:var(--primary); }
+    .tree-select[aria-pressed="true"] .radio-dot::after { content:""; width:9px; height:9px; border-radius:50%; background:var(--primary); }
+    .account-edit-list { display:grid; gap:10px; }
+    .confirm-dialog { position:relative; width:100%; max-width:400px; max-height:calc(100vh - 36px); overflow-y:auto; padding:18px; border-radius:16px; background:#FFFFFF; box-shadow:0 20px 60px rgba(17,24,39,.24); animation:fade-in .16s ease-out; }
+    .confirm-dialog h2 { margin:0; font-size:19px; line-height:27px; }
+    .confirm-dialog p { margin:9px 0 0; color:#374151; font-size:14px; line-height:23px; }
+    .confirm-box { margin-top:13px; padding:12px; border:1px solid #FECACA; border-radius:11px; background:#FFF7F7; color:#7F1D1D; font-size:13px; line-height:21px; }
+    .confirm-check { display:flex; align-items:flex-start; gap:9px; margin-top:13px; color:#374151; font-size:14px; line-height:21px; }
+    .confirm-check input { width:20px; height:20px; margin:1px 0 0; accent-color:var(--danger); }
+    .select-device { margin-top:13px; }
+    .confirm-actions { display:flex; gap:10px; margin-top:16px; }
+    .confirm-actions button { flex:1; }
+    .toast { position:fixed; z-index:200; top:16px; left:50%; display:flex; align-items:center; gap:10px; width:max-content; max-width:calc(100% - 32px); min-height:48px; padding:10px 15px; border:1px solid #A7F3D0; border-radius:12px; background:#FFFFFF; color:#065F46; box-shadow:0 8px 30px rgba(17,24,39,.14); transform:translateX(-50%); font-size:14px; line-height:20px; animation:toast-in .2s ease-out; }
+    @keyframes fade-in { from { opacity:0; } to { opacity:1; } }
+    @keyframes slide-up { from { transform:translateY(30px); opacity:.6; } to { transform:translateY(0); opacity:1; } }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @keyframes toast-in { from { transform:translate(-50%,-10px); opacity:0; } to { transform:translate(-50%,0); opacity:1; } }
+    @media (min-width:768px) { .page { padding-top:24px; } .mobile-nav { display:none; } }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <a class="back-link" href="../web-ui-ia/servers.html"><span aria-hidden="true">‹</span>服务器</a>
+    <h1>NUC10 · root 登录</h1>
+    <p class="subtitle">192.168.100.40 · 端口 22</p>
+    <div class="header-status success" id="headerStatus" aria-live="polite"><span class="status-dot" aria-hidden="true"></span><span>上次测试：今天 10:12 已连上</span></div>
+    <div class="detail-section">
+      <section class="card" id="connectionCard" aria-labelledby="connectionTitle">
+        <div class="card-heading"><h2 id="connectionTitle">连接</h2><button class="edit-button" type="button" data-edit="connection">编辑</button></div>
+        <dl class="info-list">
+          <div class="info-row"><dt class="info-label">登录用户</dt><dd class="info-value" id="viewUser">root</dd></div>
+          <div class="info-row"><dt class="info-label">端口</dt><dd class="info-value mono" id="viewPort">22</dd></div>
+          <div class="info-row"><dt class="info-label">凭据</dt><dd class="info-value" id="viewCredential">生产私钥<span class="field-note">更新于 2026-11-18</span></dd></div>
+        </dl>
+        <details class="fingerprint-box"><summary>主机密钥指纹</summary><p class="fingerprint-value">SHA256:8Ft2f6ymNQ9gDs0GPWhF1Lb0Wqb2HhKca3Vlm2Sgh6Yk</p></details>
+        <div class="test-area" id="testArea" aria-live="polite"></div>
+        <div class="list-preview" aria-label="服务器列表卡片上的显示"><p class="list-preview-title">服务器列表卡片上的显示</p><div class="list-preview-row"><strong>NUC10 · root 登录</strong><span class="list-preview-state" id="listPreviewState"><span class="status-dot" aria-hidden="true"></span><span>今天 10:12 已连上</span></span></div></div>
+      </section>
+      <section class="card" id="locationCard" aria-labelledby="locationTitle">
+        <div class="card-heading"><h2 id="locationTitle">地点</h2><button class="edit-button" type="button" data-edit="location">编辑</button></div>
+        <p class="location-value" id="viewLocation">家 A</p>
+        <p class="card-help">地点登记在设备上。同一台机器上的多个服务器条目共用这个地点。</p>
+      </section>
+      <section class="card" id="addressCard" aria-labelledby="addressTitle">
+        <div class="card-heading"><h2 id="addressTitle">地址</h2><button class="edit-button" type="button" data-edit="address">编辑</button></div>
+        <div class="address-list" id="viewAddressList"></div>
+        <p class="card-help">地址登记在设备上，同一台机器上的所有服务器条目共用。「其他（公网或未登记网络）」每台设备最多一行。</p>
+      </section>
+      <section class="card" id="descriptionCard" aria-labelledby="descriptionTitle">
+        <div class="card-heading"><h2 id="descriptionTitle">说明</h2><button class="edit-button" type="button" data-edit="description">编辑</button></div>
+        <dl class="description-list"></dl>
+      </section>
+      <section class="card" id="accountsCard" aria-labelledby="accountsTitle">
+        <div class="card-heading"><h2 id="accountsTitle">同一台机器上的其他账号</h2><button class="edit-button" type="button" data-edit="accounts">编辑</button></div>
+        <div class="account-list" id="viewAccountList"></div>
+        <p class="card-help">这些服务器条目与当前条目在同一台设备上，共用上方地点与地址；端口、用户、凭据各自独立。</p>
+      </section>
+      <details class="card advanced-card" id="advancedCard"><summary><span>高级操作</span></summary><div class="advanced-body"><p class="advanced-note">这里只放低频且有风险的操作。改挂会改变这个条目关联的设备。</p><div class="advanced-actions"><button class="secondary-button" type="button" id="openMoveConfirm">改挂到另一台设备</button><button class="danger-button" type="button" id="deleteEntry">删除服务器条目</button></div></div></details>
+    </div>
+  </main>
+  <nav class="mobile-nav" aria-label="一级导航">
+    <a class="nav-link" href="../web-ui-ia/home.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M4 11.5 12 4l8 7.5"/><path d="M6.5 10.5V20h11v-9.5"/></svg>主页</a>
+    <a class="nav-link" href="../web-ui-ia/servers.html" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="5" width="16" height="6" rx="2"/><rect x="4" y="13" width="16" height="6" rx="2"/><path d="M7.5 8h.01M7.5 16h.01"/></svg>服务器</a>
+    <a class="nav-link" href="../web-ui-ia/clients.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="4" y="5" width="16" height="14" rx="2.5"/><path d="M8 9.5h8M8 13h5"/></svg>客户端</a>
+    <a class="nav-link" href="../web-ui-ia/authorization.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M7 10V8a5 5 0 0 1 10 0v2"/><rect x="5" y="10" width="14" height="10" rx="2.5"/></svg>授权</a>
+    <a class="nav-link" href="../web-ui-ia/more.html"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M5 7h14M5 12h14M5 17h14"/></svg>更多</a>
+  </nav>
+  <div class="drawer-shell" id="drawerShell" hidden>
+    <button class="drawer-backdrop" type="button" id="drawerBackdrop" aria-label="关闭编辑层" tabindex="-1"></button>
+    <section class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawerTitle">
+      <div class="drawer-handle" aria-hidden="true"></div>
+      <div class="drawer-header"><h2 id="drawerTitle">编辑</h2><button class="close-button" type="button" id="drawerClose" aria-label="关闭"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg></button></div>
+      <p class="drawer-caption" id="drawerCaption"></p>
+      <div id="drawerBody"></div>
+      <div class="drawer-actions"><button class="secondary-button" type="button" id="drawerCancel">取消</button><button class="primary-button" type="button" id="drawerSave">保存</button></div>
+    </section>
+  </div>
+  <div class="confirm-shell" id="moveShell" hidden>
+    <button class="confirm-backdrop" type="button" id="moveBackdrop" aria-label="关闭改挂确认" tabindex="-1"></button>
+    <section class="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="moveTitle">
+      <h2 id="moveTitle">确认改挂</h2>
+      <p>准备把「NUC10 · root 登录」关联到：</p>
+      <label class="form-field select-device"><span>目标设备</span><select class="form-select" id="moveTarget"><option>Mac mini · 办公桌</option><option>软路由 · 家 A 弱电箱</option><option>4090x2 · 机架 2</option></select></label>
+      <div class="confirm-box">改挂后这个条目将使用目标机器的地点与地址；登录信息、授权、其他地址不变；软件清单留在原机器。</div>
+      <label class="confirm-check"><input type="checkbox" id="moveUnderstand">我已了解</label>
+      <div class="confirm-actions"><button class="secondary-button" type="button" id="moveCancel">取消</button><button class="danger-button" type="button" id="moveConfirm" disabled>确认改挂</button></div>
+    </section>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <script>
+    "use strict";
+    const state = {
+      connection: { user:"root", port:22, credential:"生产私钥" },
+      locationId:"home-a",
+      addresses: [
+        { id:"address-home", network:"家A-办公网", value:"192.168.100.40" },
+        { id:"address-netbird", network:"NetBird", value:"100.121.176.40" },
+        { id:"address-other", network:"其他（公网或未登记网络）", value:"192.168.100.188" }
+      ],
+      description: {
+        purpose:"家庭服务器与内网服务入口",
+        deployed:"Docker、Home Assistant、内网网站、文件同步服务",
+        hardware:"Intel NUC，16 GB 内存，1 TB 固态硬盘",
+        attention:"重启后 Docker 服务需人工确认；不要随意改动网卡配置。",
+        remark:"2026-11-18 更换过固态硬盘。"
+      },
+      accounts: [
+        { id:"backup", user:"backup", note:"每晚备份任务使用", test:"昨天 23:20 已连上", state:"success" },
+        { id:"deploy", user:"deploy", note:"部署脚本使用", test:"今天 09:41 连不上", state:"failure" }
+      ],
+      test: { state:"success", time:"今天 10:12", address:"192.168.100.40", network:"家A-办公网", elapsed:23, reason:"端口不通", firstRun:true },
+      nextOutcome:"success",
+      testing:false
+    };
+    const locations = [
+      { id:"home-a", name:"家 A", expanded:true, children:[] },
+      { id:"company", name:"公司", expanded:true, children:[
+        { id:"plant-1", name:"一厂区", expanded:true, children:[
+          { id:"building-1", name:"1 号楼", children:[] },
+          { id:"building-3", name:"3 号楼", children:[] }
+        ] },
+        { id:"plant-2", name:"二厂区", children:[] }
+      ] }
+    ];
+    const networks = [
+      { name:"家A-办公网", type:"物理局域网" },
+      { name:"公司-办公网", type:"物理局域网" },
+      { name:"NetBird", type:"虚拟局域网" },
+      { name:"其他（公网或未登记网络）", type:"其他" }
+    ];
+    const homeSubnet = { address:3232261120, prefix:24 };
+    const otherNetworkName = "其他（公网或未登记网络）";
+    let draft = null;
+    let activeEditor = null;
+    let lastFocused = null;
+    let toastTimer;
+    const drawerShell = document.getElementById("drawerShell");
+    const drawerBody = document.getElementById("drawerBody");
+    const drawerTitle = document.getElementById("drawerTitle");
+    const drawerCaption = document.getElementById("drawerCaption");
+    const moveShell = document.getElementById("moveShell");
+
+    function escapeHTML(value) {
+      return String(value).replace(/[&<>'"]/g, character => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", "'":"&#39;", '"':"&quot;" })[character]);
+    }
+    function findLocation(id, nodes = locations, parents = []) {
+      for (const node of nodes) {
+        const path = [...parents, node.name];
+        if (node.id === id) return { node, path };
+        const found = findLocation(id, node.children, path);
+        if (found) return found;
+      }
+      return null;
+    }
+    function locationPath(id = state.locationId) { return findLocation(id).path.join(" / "); }
+    function networkMeta(name) { return networks.find(network => network.name === name); }
+    function ipToNumber(value) {
+      const parts = value.trim().split(".");
+      if (parts.length !== 4 || parts.some(part => !/^\d{1,3}$/.test(part) || Number(part) > 255)) return null;
+      return parts.reduce((total, part) => total * 256 + Number(part), 0);
+    }
+    function inHomeOfficeSubnet(value) {
+      const number = ipToNumber(value);
+      if (number === null) return false;
+      const prefixMask = 0xFFFFFFFF << (32 - homeSubnet.prefix);
+      return (number & prefixMask) === (homeSubnet.address & prefixMask);
+    }
+    function deviceLocationCoveredByHomeNetwork() {
+      const path = locationPath();
+      return path === "家 A" || path.startsWith("家 A / ");
+    }
+    function shouldSuggestHomeNetwork(address) {
+      return address.network === otherNetworkName && inHomeOfficeSubnet(address.value) && deviceLocationCoveredByHomeNetwork();
+    }
+    function nowLabel() {
+      const now = new Date();
+      return `今天 ${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+    }
+    function renderViewConnection() {
+      document.getElementById("viewUser").textContent = state.connection.user;
+      document.getElementById("viewPort").textContent = state.connection.port;
+      document.getElementById("viewCredential").innerHTML = `${escapeHTML(state.connection.credential)}<span class="field-note">更新于 2026-11-18</span>`;
+      document.querySelector(".subtitle").textContent = `${state.addresses[0] ? state.addresses[0].value : "尚未登记地址"} · 端口 ${state.connection.port}`;
+    }
+    function renderViewLocation() { document.getElementById("viewLocation").textContent = locationPath(); }
+    function renderViewAddresses() {
+      const content = state.addresses.map(address => {
+        const meta = networkMeta(address.network);
+        const hint = shouldSuggestHomeNetwork(address) ? `<div class="address-hint">这个地址落在 家A-办公网 的登记网段 192.168.100.0/24 内。可在「编辑」里确认归属，不会自动归入。</div>` : "";
+        return `<div class="address-item"><div class="address-copy"><div class="network-heading"><span class="network-name">${escapeHTML(address.network)}</span><span class="type-tag">${escapeHTML(meta.type)}</span></div><span class="ip-address">${escapeHTML(address.value)}</span>${hint}</div></div>`;
+      }).join("");
+      document.getElementById("viewAddressList").innerHTML = content || '<p class="card-help">这台设备还没有登记地址。</p>';
+    }
+    function renderViewDescription() {
+      const rows = [
+        ["用途", state.description.purpose],
+        ["部署了什么", state.description.deployed],
+        ["硬件", state.description.hardware],
+        ["注意事项", state.description.attention],
+        ["备注", state.description.remark]
+      ];
+      document.querySelector("#descriptionCard .description-list").innerHTML = rows.map(([label, value]) =>
+        `<div class="description-row"><dt class="description-label">${label}</dt><dd class="description-value">${escapeHTML(value || "未填写")}</dd></div>`).join("");
+    }
+    function renderViewAccounts() {
+      document.getElementById("viewAccountList").innerHTML = state.accounts.map(account => `
+        <div class="account-row"><div class="address-copy"><strong class="account-name">${escapeHTML(account.user)} 登录</strong><span class="account-note">${escapeHTML(account.note)}</span></div><span class="account-state"><span class="status-dot" aria-hidden="true" style="${account.state === "success" ? "background:var(--success)" : "background:var(--danger)"}"></span>${escapeHTML(account.test)}</span></div>`).join("");
+    }
+    function renderTestArea() {
+      const area = document.getElementById("testArea");
+      if (state.testing) {
+        area.innerHTML = '<div class="test-result running"><span class="spinner" aria-hidden="true"></span><span>正在连接…</span></div>';
+        return;
+      }
+      const test = state.test;
+      if (test.firstRun) {
+        area.innerHTML = '<button class="primary-button test-button" type="button" data-test-again>测试连接</button>';
+        return;
+      }
+      if (test.state === "success") {
+        area.innerHTML = `<div class="test-result success"><div class="result-main"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" aria-hidden="true"><path d="m5 13 4 4L19 7"/></svg><span>已连上</span></div><div class="result-detail">用的地址 ${escapeHTML(test.address)}（物理局域网 ${escapeHTML(test.network)}）· 耗时 ${test.elapsed} 毫秒</div><div class="test-footer"><button class="secondary-button test-again" type="button" data-test-again>再测一次</button><a class="demo-link" href="#" data-demo-next data-next-outcome="failure">演示失败</a></div></div>`;
+      } else {
+        area.innerHTML = `<div class="test-result failure"><div class="result-main"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg><span>连不上</span></div><div class="result-detail">原因：${escapeHTML(test.reason)}</div><button class="candidate-toggle" type="button" data-candidates aria-expanded="false">展开看每个候选地址的结果</button><ul class="candidate-list" hidden><li><strong class="candidate-network">家A-办公网 · 192.168.100.40</strong>端口不通</li><li><strong class="candidate-network">NetBird · 100.121.176.40</strong>超时</li><li><strong class="candidate-network">其他 · 192.168.100.188</strong>主机密钥指纹不符</li></ul><div class="test-footer"><button class="secondary-button test-again" type="button" data-test-again>再测一次</button><a class="demo-link" href="#" data-demo-next data-next-outcome="success">演示成功</a></div></div>`;
+      }
+    }
+    function renderTestStatus() {
+      const test = state.test;
+      const text = `${test.time} ${test.state === "success" ? "已连上" : "连不上"}`;
+      const header = document.getElementById("headerStatus");
+      header.className = `header-status ${test.state}`;
+      header.innerHTML = `<span class="status-dot" aria-hidden="true"></span><span>上次测试：${escapeHTML(text)}</span>`;
+      const preview = document.getElementById("listPreviewState");
+      preview.className = `list-preview-state ${test.state}`;
+      preview.innerHTML = `<span class="status-dot" aria-hidden="true"></span><span>${escapeHTML(text)}</span>`;
+    }
+    function renderAllView() {
+      renderViewConnection(); renderViewLocation(); renderViewAddresses(); renderViewDescription(); renderViewAccounts(); renderTestStatus(); renderTestArea();
+    }
+    function highlightCard(id) {
+      const card = document.getElementById(id);
+      card.classList.add("saved");
+      window.setTimeout(() => card.classList.remove("saved"), 1200);
+    }
+    function showToast(message) {
+      const toast = document.getElementById("toast");
+      window.clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.hidden = false;
+      toastTimer = window.setTimeout(() => { toast.hidden = true; }, 2600);
+    }
+    function openDrawer(kind) {
+      activeEditor = kind;
+      lastFocused = document.activeElement;
+      drawerShell.hidden = false;
+      document.body.classList.add("modal-open");
+      document.getElementById("drawerClose").focus();
+      if (kind === "connection") openConnectionEditor();
+      if (kind === "location") openLocationEditor();
+      if (kind === "address") openAddressEditor();
+      if (kind === "description") openDescriptionEditor();
+      if (kind === "accounts") openAccountsEditor();
+    }
+    function closeDrawer() {
+      drawerShell.hidden = true; drawerBody.innerHTML = ""; document.body.classList.remove("modal-open"); activeEditor = null; draft = null;
+      if (lastFocused instanceof HTMLElement) lastFocused.focus();
+    }
+    function openConnectionEditor() {
+      draft = { ...state.connection };
+      drawerTitle.textContent = "编辑连接";
+      drawerCaption.textContent = "只修改这个条目自己的登录信息。";
+      drawerBody.innerHTML = `<div class="form-grid"><label class="form-field"><span>登录用户</span><input class="form-input" id="draftUser" value="${escapeHTML(draft.user)}" autocomplete="off"></label><label class="form-field"><span>端口</span><input class="form-input" id="draftPort" type="number" min="1" max="65535" value="${draft.port}"></label><label class="form-field"><span>凭据</span><select class="form-select" id="draftCredential"><option>生产私钥</option><option>备用私钥</option><option>家 A 管理私钥</option></select></label><div class="form-field"><span>主机密钥指纹</span><div class="static-value">SHA256:8Ft2f6ymNQ9gDs0GPWhF1Lb0Wqb2HhKca3Vlm2Sgh6Yk</div></div></div>`;
+      document.getElementById("draftCredential").value = draft.credential;
+    }
+    function renderLocationTree(selectedId = draft) {
+      function renderNode(node, depth) {
+        const expanded = Boolean(node.expanded);
+        const selected = node.id === selectedId;
+        const children = expanded ? node.children.map(child => renderNode(child, depth + 1)).join("") : "";
+        return `<div class="tree-row" style="--depth:${depth}"><button class="tree-toggle" type="button" data-tree-toggle="${node.id}" aria-expanded="${expanded}" ${node.children.length ? "" : "disabled"} aria-label="${expanded ? "收起" : "展开"}${escapeHTML(node.name)}"><span aria-hidden="true">▸</span></button><button class="tree-select" type="button" data-tree-select="${node.id}" aria-pressed="${selected}"><span class="radio-dot" aria-hidden="true"></span><span>${escapeHTML(node.name)}</span></button></div>${children}`;
+      }
+      return locations.map(node => renderNode(node, 0)).join("");
+    }
+    function openLocationEditor() {
+      draft = state.locationId;
+      drawerTitle.textContent = "编辑地点";
+      drawerCaption.textContent = "每台机器直接选择一个地点，可选到最细一级。";
+      drawerBody.innerHTML = `<div class="tree" id="locationTree">${renderLocationTree()}</div>`;
+    }
+    function addressOptions(selected, currentIndex) {
+      const otherExists = draft.some((address, index) => address.network === otherNetworkName && index !== currentIndex);
+      return networks.map(network => {
+        const disabled = network.name === otherNetworkName && otherExists ? " disabled" : "";
+        return `<option value="${escapeHTML(network.name)}"${network.name === selected ? " selected" : ""}${disabled}>${escapeHTML(network.name)}</option>`;
+      }).join("");
+    }
+    function renderAddressEditor() {
+      const rows = draft.map((address, index) => {
+        const hint = shouldSuggestHomeNetwork(address) ? `<div class="editor-hint"><div class="hint-actions"><span class="hint-text">属于 家A-办公网？网段 192.168.100.0/24 覆盖这个地址。</span><button class="confirm-network-button" type="button" data-confirm-home="${index}">确认</button></div></div>` : "";
+        return `<div class="address-edit-row"><div class="address-edit-fields"><select class="form-select" data-network="${index}" aria-label="第 ${index + 1} 行网络">${addressOptions(address.network, index)}</select><input class="form-input" data-value="${index}" value="${escapeHTML(address.value)}" aria-label="第 ${index + 1} 行地址" autocomplete="off"></div>${hint}<button class="remove-row-button" type="button" data-remove-address="${index}">删除这行</button></div>`;
+      }).join("");
+      drawerBody.innerHTML = `<div class="address-editor">${rows}<button class="secondary-button add-row-button" type="button" id="addAddressRow">加一行地址</button><p class="drawer-caption">网络下拉包含已登记的物理局域网、虚拟局域网与「其他（公网或未登记网络）」。</p></div>`;
+    }
+    function openAddressEditor() {
+      draft = state.addresses.map(address => ({ ...address }));
+      drawerTitle.textContent = "编辑地址";
+      drawerCaption.textContent = "地址属于这台设备，保存后同一设备上的所有服务器条目一起更新。";
+      renderAddressEditor();
+    }
+    function openDescriptionEditor() {
+      draft = { ...state.description };
+      drawerTitle.textContent = "编辑说明";
+      drawerCaption.textContent = "这些内容只写给人看，用于补充这台服务器的背景。";
+      drawerBody.innerHTML = `<div class="form-grid"><label class="form-field"><span>用途</span><textarea class="form-textarea" id="draftPurpose">${escapeHTML(draft.purpose)}</textarea></label><label class="form-field"><span>部署了什么</span><textarea class="form-textarea" id="draftDeployed">${escapeHTML(draft.deployed)}</textarea></label><label class="form-field"><span>硬件</span><textarea class="form-textarea" id="draftHardware">${escapeHTML(draft.hardware)}</textarea></label><label class="form-field"><span>注意事项</span><textarea class="form-textarea" id="draftAttention">${escapeHTML(draft.attention)}</textarea></label><label class="form-field"><span>备注</span><textarea class="form-textarea" id="draftRemark">${escapeHTML(draft.remark)}</textarea></label></div>`;
+    }
+    function openAccountsEditor() {
+      draft = state.accounts.map(account => ({ ...account }));
+      drawerTitle.textContent = "编辑其他账号说明";
+      drawerCaption.textContent = "只编辑显示用的说明；账号的登录信息在各自详情页修改。";
+      drawerBody.innerHTML = `<div class="account-edit-list">${draft.map((account, index) => `<label class="form-field"><span>${escapeHTML(account.user)} 的说明</span><input class="form-input" data-account-note="${index}" value="${escapeHTML(account.note)}" autocomplete="off"></label>`).join("")}</div>`;
+    }
+    function saveEditor() {
+      if (activeEditor === "connection") {
+        const user = document.getElementById("draftUser").value.trim();
+        const port = Number(document.getElementById("draftPort").value);
+        if (!user) { showToast("请输入登录用户"); return; }
+        if (!Number.isInteger(port) || port < 1 || port > 65535) { showToast("端口必须是 1 到 65535 的整数"); return; }
+        state.connection = { user, port, credential:document.getElementById("draftCredential").value };
+        renderViewConnection(); highlightCard("connectionCard");
+      }
+      if (activeEditor === "location") {
+        state.locationId = draft; renderViewLocation(); renderViewAddresses(); highlightCard("locationCard");
+      }
+      if (activeEditor === "address") {
+        const values = [...drawerBody.querySelectorAll("[data-value]")].map(input => input.value.trim());
+        if (values.some(value => !value)) { showToast("每行地址都不能为空"); return; }
+        if (new Set(values).size !== values.length) { showToast("有两行地址完全相同"); return; }
+        state.addresses = draft.map((address, index) => ({ ...address, value:values[index] }));
+        renderViewAddresses(); renderViewConnection(); highlightCard("addressCard");
+      }
+      if (activeEditor === "description") {
+        state.description = { purpose:document.getElementById("draftPurpose").value.trim(), deployed:document.getElementById("draftDeployed").value.trim(), hardware:document.getElementById("draftHardware").value.trim(), attention:document.getElementById("draftAttention").value.trim(), remark:document.getElementById("draftRemark").value.trim() };
+        renderViewDescription(); highlightCard("descriptionCard");
+      }
+      if (activeEditor === "accounts") {
+        state.accounts = draft.map((account, index) => ({ ...account, note:drawerBody.querySelector(`[data-account-note="${index}"]`).value.trim() }));
+        renderViewAccounts(); highlightCard("accountsCard");
+      }
+      closeDrawer(); showToast("已保存");
+    }
+    function runConnectionTest() {
+      if (state.testing) return;
+      state.testing = true; renderTestArea();
+      window.setTimeout(() => {
+        state.testing = false;
+        const time = nowLabel();
+        if (state.nextOutcome === "success") {
+          state.test = { ...state.test, state:"success", time, address:"192.168.100.40", network:"家A-办公网", elapsed:23, firstRun:false };
+          state.nextOutcome = "failure";
+        } else {
+          state.test = { ...state.test, state:"failure", time, reason:"端口不通", firstRun:false };
+          state.nextOutcome = "success";
+        }
+        renderTestStatus(); renderTestArea();
+      }, 850);
+    }
+    document.addEventListener("click", event => {
+      const editButton = event.target.closest("[data-edit]");
+      if (editButton) { openDrawer(editButton.dataset.edit); return; }
+      if (event.target.closest("[data-test-again]")) { runConnectionTest(); return; }
+      const demoLink = event.target.closest("[data-demo-next]");
+      if (demoLink) {
+        event.preventDefault();
+        state.nextOutcome = demoLink.dataset.nextOutcome;
+        runConnectionTest();
+        return;
+      }
+      const candidateToggle = event.target.closest("[data-candidates]");
+      if (candidateToggle) {
+        const list = candidateToggle.nextElementSibling;
+        const expanded = candidateToggle.getAttribute("aria-expanded") !== "true";
+        candidateToggle.setAttribute("aria-expanded", String(expanded));
+        candidateToggle.textContent = expanded ? "收起每个候选地址的结果" : "展开看每个候选地址的结果";
+        list.hidden = !expanded; return;
+      }
+      const treeToggle = event.target.closest("[data-tree-toggle]");
+      if (treeToggle) {
+        const found = findLocation(treeToggle.dataset.treeToggle); found.node.expanded = !found.node.expanded;
+        document.getElementById("locationTree").innerHTML = renderLocationTree(); return;
+      }
+      const treeSelect = event.target.closest("[data-tree-select]");
+      if (treeSelect) { draft = treeSelect.dataset.treeSelect; document.getElementById("locationTree").innerHTML = renderLocationTree(); return; }
+      if (event.target.closest("#addAddressRow")) { draft.push({ id:`address-${Date.now()}`, network:"家A-办公网", value:"" }); renderAddressEditor(); return; }
+      const confirmHome = event.target.closest("[data-confirm-home]");
+      if (confirmHome) { const index = Number(confirmHome.dataset.confirmHome); draft[index].network = "家A-办公网"; renderAddressEditor(); showToast("已归入 家A-办公网，保存后生效"); return; }
+      const removeAddress = event.target.closest("[data-remove-address]");
+      if (removeAddress) { draft.splice(Number(removeAddress.dataset.removeAddress), 1); renderAddressEditor(); }
+    });
+    drawerBody.addEventListener("change", event => {
+      const networkSelect = event.target.closest("[data-network]");
+      if (networkSelect) { const index = Number(networkSelect.dataset.network); draft[index].network = networkSelect.value; renderAddressEditor(); }
+    });
+    document.getElementById("drawerClose").addEventListener("click", closeDrawer);
+    document.getElementById("drawerCancel").addEventListener("click", closeDrawer);
+    document.getElementById("drawerBackdrop").addEventListener("click", closeDrawer);
+    document.getElementById("drawerSave").addEventListener("click", saveEditor);
+    document.getElementById("openMoveConfirm").addEventListener("click", () => {
+      lastFocused = document.activeElement;
+      document.getElementById("moveUnderstand").checked = false;
+      document.getElementById("moveConfirm").disabled = true;
+      moveShell.hidden = false; document.body.classList.add("modal-open"); document.getElementById("moveCancel").focus();
+    });
+    document.getElementById("moveUnderstand").addEventListener("change", event => { document.getElementById("moveConfirm").disabled = !event.target.checked; });
+    function closeMove() { moveShell.hidden = true; document.body.classList.remove("modal-open"); if (lastFocused instanceof HTMLElement) lastFocused.focus(); }
+    document.getElementById("moveCancel").addEventListener("click", closeMove);
+    document.getElementById("moveBackdrop").addEventListener("click", closeMove);
+    document.getElementById("moveConfirm").addEventListener("click", () => { closeMove(); showToast("原型中不执行改挂"); });
+    document.getElementById("deleteEntry").addEventListener("click", () => showToast("原型中不执行删除"));
+    document.addEventListener("keydown", event => {
+      if (event.key !== "Escape") return;
+      if (!moveShell.hidden) closeMove();
+      else if (!drawerShell.hidden) closeDrawer();
+    });
+    renderAllView();
+  </script>
+</body>
+</html>
