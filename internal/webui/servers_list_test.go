@@ -83,6 +83,13 @@ func TestServerListCardsShowConnectionTestStatus(t *testing.T) {
 				FailureLabel: "端口不通", Duration: 40 * time.Millisecond,
 			}},
 		{ID: "srv-new", Name: "new", User: "root", Host: "192.0.2.12", Port: 22},
+		{ID: "srv-no-net", Name: "no-net", User: "root", Host: "192.0.2.13", Port: 22,
+			ConnectionTest: &ServerConnectionTestResultView{
+				State: ServerConnectionTestSucceeded, Succeeded: true,
+				CompletedAt:    time.Unix(1_782_000_200, 0),
+				SuccessAddress: "192.0.2.13", SuccessNetworkName: "",
+				SuccessSource: models.DialAddressSourcePhysical, Duration: 80 * time.Millisecond,
+			}},
 	}
 	handler, startup, err := New(Config{
 		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
@@ -108,8 +115,17 @@ func TestServerListCardsShowConnectionTestStatus(t *testing.T) {
 			t.Fatalf("服务器列表状态行缺少 %q：\n%s", want, page)
 		}
 	}
-	if !regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (&#43;|\+|-)\d{2}:\d{2} 已连上`).MatchString(page) {
-		t.Fatalf("成功状态行应显示测试时间：\n%s", page)
+	if regexp.MustCompile(`\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (&#43;|\+|-)\d{2}:\d{2} 已连上`).MatchString(page) {
+		t.Fatalf("服务器列表卡片应使用短时间格式：\n%s", page)
+	}
+	if !regexp.MustCompile(`((今天|昨天) \d{2}:\d{2}|\d{1,2}月\d{1,2}日 \d{2}:\d{2}|\d{4}年\d{1,2}月\d{1,2}日) 已连上`).MatchString(page) {
+		t.Fatalf("成功状态行应显示短时间：\n%s", page)
+	}
+	if regexp.MustCompile(`·\s*·`).MatchString(page) {
+		t.Fatalf("网络名为空时不得输出空段与连续分隔点：\n%s", page)
+	}
+	if !strings.Contains(page, "192.0.2.13 · 耗时 80 毫秒") {
+		t.Fatalf("网络名为空时应保留地址与耗时：\n%s", page)
 	}
 	if strings.Contains(page, "connection-test-candidate") || strings.Contains(page, "批量测试连接") {
 		t.Fatalf("列表不应出现候选地址展开或批量测试连接：\n%s", page)

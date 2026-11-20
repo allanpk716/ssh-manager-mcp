@@ -60,16 +60,17 @@
 <p class="server-card-context">{{if .SitePath}}{{.SitePath}}{{else}}地点未登记{{end}}{{if .NetworkNames}} · {{joinTags .NetworkNames}}{{end}}{{if gt .SameMachineCount 1}}<span class="same-machine-chip">同机 {{.SameMachineCount}} 个账号</span>{{end}}</p>
 {{if .AttentionReasons}}<div class="server-attention-tags" aria-label="需要注意的原因">{{range .AttentionReasons}}<span class="attention-reason-tag">{{reasonLabel .}}</span>{{end}}</div>{{end}}
 <p class="server-card-stats"><span>能看见 <strong>{{.ClientCount}}</strong> 个客户端</span><span><strong>{{.SecretCount}}</strong> 个机密项</span><span><strong>{{.SharedStoreCount}}</strong> 个共享存储</span></p>
-{{if .ConnectionTest}}
+{{if $.Caps.CanWrite}}{{if .ConnectionTest}}
 <p class="server-test-line {{if .ConnectionTest.Succeeded}}is-succeeded{{else}}is-failed{{end}}" data-server-connection-status>
 <span class="status-dot" aria-hidden="true"></span>
-<span class="server-test-copy"><strong class="server-test-title">{{formatTime .ConnectionTest.CompletedAt}} {{.ConnectionTest.ShortStatusText}}{{if not .ConnectionTest.Succeeded}}：{{.ConnectionTest.FailureLabel}}{{end}}</strong>{{if .ConnectionTest.Succeeded}}<span class="server-test-detail">{{.ConnectionTest.SuccessAddress}} · {{.ConnectionTest.SuccessNetworkLabel}} · 耗时 {{.ConnectionTest.Duration.Milliseconds}} 毫秒</span>{{end}}</span>
+<span class="server-test-copy"><strong class="server-test-title">{{formatConnectionTestCardTime .ConnectionTest.CompletedAt}} {{.ConnectionTest.ShortStatusText}}{{if not .ConnectionTest.Succeeded}}：{{.ConnectionTest.FailureLabel}}{{end}}</strong>{{if .ConnectionTest.Succeeded}}<span class="server-test-detail">{{.ConnectionTest.SuccessSummaryText}}</span>{{end}}</span>
 </p>
 {{else}}
 <p class="server-test-line is-untested" data-server-connection-status>
 <span class="status-dot" aria-hidden="true"></span>
 <span class="server-test-copy"><strong class="server-test-title">从未测试</strong></span>
 </p>
+{{end}}
 {{end}}
 <div class="server-row-actions">
 <a href="/ui/servers/{{.ID}}">详情</a>

@@ -10,6 +10,7 @@
 {{else}}
 <span class="connection-test-icon" aria-hidden="true">✗</span>
 <span class="connection-test-main"><strong>连不上</strong> · {{.FailureLabel}}</span>
+{{if .Hint}}<span class="connection-test-hint">{{.Hint}}</span>{{end}}
 <button type="button" class="connection-test-candidate-toggle" data-connection-test-candidates aria-expanded="false" aria-controls="server-connection-test-candidates">展开看每个候选地址的结果</button>
 <ul id="server-connection-test-candidates" class="connection-test-candidate-list" hidden>
 {{range .Attempts}}<li class="connection-test-candidate"><span>{{.NetworkLabel}}</span><span class="mono">{{.Address}}</span><span>{{if .OK}}已连上{{else}}{{.FailureLabel}}{{end}} · 耗时 {{.Duration.Milliseconds}} 毫秒</span></li>{{end}}

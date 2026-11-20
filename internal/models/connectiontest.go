@@ -27,6 +27,9 @@ const (
 	ConnectionTestFailureHostKeyMismatch ConnectionTestFailureReason = "host-key-mismatch"
 	// ConnectionTestFailureTimeout 表示候选地址在限定时间内没有连上。
 	ConnectionTestFailureTimeout ConnectionTestFailureReason = "timeout"
+	// ConnectionTestFailureConnectedSaveFailed 表示 SSH 已经连上，但连接后
+	// 的保存步骤（例如回写 shell 探测结果或写审计）失败。
+	ConnectionTestFailureConnectedSaveFailed ConnectionTestFailureReason = "connected-save-failed"
 	// ConnectionTestFailureOther 表示未归入以上类别的失败。
 	ConnectionTestFailureOther ConnectionTestFailureReason = "other"
 )
@@ -43,6 +46,8 @@ func (r ConnectionTestFailureReason) Label() string {
 		return "主机密钥不符"
 	case ConnectionTestFailureTimeout:
 		return "超时"
+	case ConnectionTestFailureConnectedSaveFailed:
+		return "已连上，但保存连接结果失败"
 	case ConnectionTestFailureOther, "":
 		return "其他连接失败"
 	default:
@@ -63,9 +68,12 @@ type ServerConnectionTestAttempt struct {
 // ServerConnectionTestResult 是按服务器条目保存的最近一次连接测试完成结果。
 // 字段只允许结构化、可展示事实，不得放入登录凭据、私钥口令或提权口令。
 type ServerConnectionTestResult struct {
-	CompletedAt        time.Time                     `json:"completed_at"`
-	Succeeded          bool                          `json:"succeeded"`
-	FailureReason      ConnectionTestFailureReason   `json:"failure_reason,omitempty"`
+	CompletedAt   time.Time                   `json:"completed_at"`
+	Succeeded     bool                        `json:"succeeded"`
+	FailureReason ConnectionTestFailureReason `json:"failure_reason,omitempty"`
+	// Hint 是连接测试失败时的可操作提示。它由程序内写定的白话文本组成，
+	// 不包含底层错误或任何登录凭据、私钥口令、提权口令。
+	Hint               string                        `json:"hint,omitempty"`
 	SuccessAddress     string                        `json:"success_address,omitempty"`
 	SuccessNetworkName string                        `json:"success_network_name,omitempty"`
 	SuccessSource      DialAddressSource             `json:"success_source,omitempty"`

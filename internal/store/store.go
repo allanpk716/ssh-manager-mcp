@@ -358,6 +358,11 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "audit_log", "injected_share_names", "TEXT"); err != nil {
 		return err
 	}
+	// 规格 #326：连接测试结果补「可操作提示」列。旧库自动加列，旧行提示
+	// 为空；新保存的结果整体覆盖这一列。
+	if err := addColumnIfMissing(db, "server_connection_test_results", "hint", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	rows, err := db.Query(`PRAGMA table_info(host_keys)`)
 	if err != nil {
 		return err

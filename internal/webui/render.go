@@ -314,6 +314,9 @@ var pageFuncs = template.FuncMap{
 	"formatUnixTime":         formatUnixTime,
 	"sharesSMBPrerequisites": func() string { return sharesSMBPrerequisites },
 	"formatTime":             func(value time.Time) string { return value.Format("2006-01-02 15:04:05 Z07:00") },
+	"formatConnectionTestCardTime": func(value time.Time) string {
+		return formatConnectionTestCardTime(value, time.Now())
+	},
 	"formatOptionalTime": func(value *time.Time) string {
 		if value == nil {
 			return "-"

@@ -3805,6 +3805,14 @@ button.danger {
   overflow-wrap: anywhere;
 }
 
+.connection-test-hint {
+  flex: 1 1 100%;
+  color: #9f1239;
+  font-size: 13px;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
 .connection-test-spinner {
   flex: 0 0 16px;
   width: 16px;

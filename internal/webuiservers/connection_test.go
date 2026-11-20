@@ -2,6 +2,7 @@ package webuiservers
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -115,6 +116,31 @@ func TestConnectionTesterFromOpenerUsesShutdownContext(t *testing.T) {
 	status := waitConnectionTestStatus(t, tester, taskID)
 	if status.State != webui.ServerConnectionTestFailed || status.Message != "连接被取消" {
 		t.Fatalf("已关闭的任务应继承关闭上下文并立即失败：%+v", status)
+	}
+}
+
+// TestConnectionTesterOpenFailureIsNotCanceled 覆盖任务公共边界：打不开加
+// 密库这类非取消错误归为其他连接失败，显示固定白话说明，不回显底层错误。
+func TestConnectionTesterOpenFailureIsNotCanceled(t *testing.T) {
+	openErr := errors.New("open vault with master-key-secret failed")
+	tester := ConnectionTesterFromOpener(func() (*servermanage.Manager, func(), error) {
+		return nil, func() {}, openErr
+	})
+
+	taskID, err := tester.StartServerTest("srv-missing", true, webui.ServerWriteSource{}, webui.ServerConnectionAnchor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := waitConnectionTestStatus(t, tester, taskID)
+	if status.State != webui.ServerConnectionTestFailed {
+		t.Fatalf("打开加密库失败的任务应失败：%+v", status)
+	}
+	if status.Message == "连接被取消" || strings.Contains(status.Message, "master-key-secret") ||
+		status.Message == "" {
+		t.Fatalf("非取消错误不得显示为连接被取消或底层错误：%q", status.Message)
+	}
+	if status.Result == nil || status.Result.FailureLabel != "其他连接失败" || !status.Result.CompletedAt.IsZero() {
+		t.Fatalf("非取消错误应归为其他连接失败且不带零值完成时间：%+v", status.Result)
 	}
 }
 

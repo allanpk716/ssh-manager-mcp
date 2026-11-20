@@ -181,6 +181,14 @@ test("服务器详情连接测试成功后原位显示并跨重启保存", async
     await expect(page.locator("#server-last-test")).toContainText(/上次测试：.+ 已连上/);
     await expect(page.getByText("服务器列表卡片上的显示")).toHaveCount(0);
 
+    const retestButton = page.getByRole("button", { name: "测试连接", exact: true });
+    await expect(retestButton).toBeVisible();
+    await expect(retestButton).toBeEnabled();
+    await startInlineConnectionTest(page);
+    await expect(
+      page.locator(".connection-test-result.is-succeeded"),
+    ).toContainText("已连上 · 用的地址 127.0.0.1（连接测试局域网）", { timeout: 15_000 });
+
     const restartedURL = await ui.restart();
     await page.goto(restartedURL);
     await page.getByRole("heading", { name: "状态总览" }).waitFor();

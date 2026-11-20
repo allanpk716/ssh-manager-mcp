@@ -543,6 +543,7 @@ func TestServerWizardTestFailuresReusesSharedResult(t *testing.T) {
 			AnchorCopied: true, AnchorCopyFromServerName: "sibling", AnchorCopyConflict: true,
 			Result: &ServerConnectionTestResultView{
 				State: ServerConnectionTestFailed, FailureLabel: item.label,
+				Hint: "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
 				Attempts: []ServerConnectionTestAttemptView{{
 					NetworkName: "家A局域网", Address: "192.0.2.20",
 					Source: models.DialAddressSourcePhysical, FailureLabel: item.label,
@@ -556,6 +557,7 @@ func TestServerWizardTestFailuresReusesSharedResult(t *testing.T) {
 		for _, want := range []string{
 			`class="connection-test-result is-failed"`,
 			"连不上</strong> · " + item.label,
+			"请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
 			"展开看每个候选地址的结果",
 			`aria-expanded="false"`,
 			"家A局域网",

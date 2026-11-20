@@ -606,6 +606,12 @@ func (h *handler) handleServerDetailTest(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		view := h.serverConnectionTaskView(detail, taskID)
+		if view != nil && view.State == ServerConnectionTestRunning {
+			// 进行中内容每秒都相同；返回 204 让 htmx 不改写无障碍动态提
+			// 醒区域，只有完成态变化时才替换一次结果。
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		if view == nil {
 			view = detail.ConnectionTest
 		}
@@ -674,9 +680,11 @@ func (h *handler) runningConnectionTestView(serverID, taskID string) *ServerConn
 func (h *handler) renderConnectionTestFragment(
 	w http.ResponseWriter, r *http.Request, view *ServerConnectionTestResultView, updateHeader bool,
 ) {
+	persistedResult := view != nil && view.Persisted && !view.CompletedAt.IsZero() &&
+		view.State != ServerConnectionTestRunning
 	h.renderPage(w, r, http.StatusOK, "server-connection-test-result.tmpl", pageData{
 		ServerConnectionTest:             view,
-		ServerConnectionTestUpdateHeader: updateHeader && view != nil && view.State != ServerConnectionTestRunning,
+		ServerConnectionTestUpdateHeader: updateHeader && persistedResult,
 	})
 }
 

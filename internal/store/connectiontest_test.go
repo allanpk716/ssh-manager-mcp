@@ -38,6 +38,7 @@ func TestServerConnectionTestResultPersistOverwriteAndReopen(t *testing.T) {
 	second := models.ServerConnectionTestResult{
 		CompletedAt: time.Unix(1_782_000_100, 0), Succeeded: false,
 		FailureReason: models.ConnectionTestFailurePortUnreachable,
+		Hint:          "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
 		Duration:      240 * time.Millisecond,
 		Attempts: []models.ServerConnectionTestAttempt{{
 			NetworkName: "办公网", Address: "192.0.2.10", Source: models.DialAddressSourcePhysical,
@@ -112,6 +113,7 @@ func TestServerConnectionTestResultsBatchRead(t *testing.T) {
 			result.SuccessNetworkName = "办公网"
 		} else {
 			result.FailureReason = models.ConnectionTestFailureTimeout
+			result.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
 		}
 		if err := st.SaveServerConnectionTestResult(id, result); err != nil {
 			t.Fatal(err)
@@ -135,6 +137,9 @@ func TestServerConnectionTestResultsBatchRead(t *testing.T) {
 		if result == nil || result.CompletedAt.IsZero() || result.Duration != 90*time.Millisecond {
 			t.Fatalf("服务器 %s 的批量结果不完整：%+v", id, result)
 		}
+		if !result.Succeeded && result.Hint == "" {
+			t.Fatalf("服务器 %s 的批量结果应带回结构化提示：%+v", id, result)
+		}
 	}
 	if got[neverTested] != nil {
 		t.Fatalf("从未测试的服务器不应出现在批量结果里：%+v", got[neverTested])
@@ -143,6 +148,69 @@ func TestServerConnectionTestResultsBatchRead(t *testing.T) {
 	empty, err := st.ServerConnectionTestResults(nil)
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("空列表应返回空结果且不报错：%v %+v", err, empty)
+	}
+}
+
+// TestOpenAddsHintColumnToOldServerConnectionTestResultTable 覆盖旧库升级：
+// 已有连接测试结果表缺少提示列时自动补列，旧行提示为空，新结果可保存并读
+// 回结构化提示。
+func TestOpenAddsHintColumnToOldServerConnectionTestResultTable(t *testing.T) {
+	key := make([]byte, 32)
+	randRead(t, key)
+	database := filepath.Join(t.TempDir(), "old-result-hint.db")
+	st, err := Open(database, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServer(&models.Server{Name: "web", Host: "192.0.2.10", Port: 22})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`DROP TABLE server_connection_test_results`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`CREATE TABLE server_connection_test_results (
+  server_id TEXT PRIMARY KEY REFERENCES servers(id) ON DELETE CASCADE,
+  completed_at INTEGER NOT NULL,
+  succeeded INTEGER NOT NULL CHECK(succeeded IN (0,1)),
+  failure_reason TEXT NOT NULL DEFAULT '',
+  success_address TEXT NOT NULL DEFAULT '',
+  success_network_name TEXT NOT NULL DEFAULT '',
+  success_source TEXT NOT NULL DEFAULT '',
+  duration_ns INTEGER NOT NULL DEFAULT 0,
+  attempts_json TEXT NOT NULL DEFAULT '[]'
+)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.db.Exec(`INSERT INTO server_connection_test_results(
+server_id,completed_at,succeeded,failure_reason,success_address,
+success_network_name,success_source,duration_ns,attempts_json)
+VALUES(?,1782000000,0,'timeout','','','',90000,'[]')`, added); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(database, key)
+	if err != nil {
+		t.Fatalf("旧库升级失败：%v", err)
+	}
+	defer reopened.Close()
+	old, err := reopened.ServerConnectionTestResult(added)
+	if err != nil || old == nil || old.Hint != "" || old.FailureReason != models.ConnectionTestFailureTimeout {
+		t.Fatalf("升级后应读回旧结果且提示为空：%v %+v", err, old)
+	}
+	withHint := models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_100, 0), FailureReason: models.ConnectionTestFailureTimeout,
+		Hint: "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
+	}
+	if err := reopened.SaveServerConnectionTestResult(added, withHint); err != nil {
+		t.Fatalf("升级后保存提示失败：%v", err)
+	}
+	got, err := reopened.ServerConnectionTestResult(added)
+	if err != nil || got == nil || got.Hint != withHint.Hint {
+		t.Fatalf("升级后应读回结构化提示：%v %+v", err, got)
 	}
 }
 

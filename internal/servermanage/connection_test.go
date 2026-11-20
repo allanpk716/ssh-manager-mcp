@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"io"
 	"net"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/ssh"
 
@@ -19,6 +22,8 @@ import (
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/testsshd"
+
+	_ "modernc.org/sqlite"
 )
 
 // connectionShellScript 按指定 shell 家族回答现有两条固定探测命令，并记录
@@ -495,6 +500,111 @@ func TestManagerConnectionTestPortUnreachable(t *testing.T) {
 
 // TestManagerConnectionTestCanceledDoesNotPersistResult 钉住进行中任务的
 // 边界：调用方取消时还没有完成结果，不得写入最近一次完成结果。
+// blockConnectionTestAuditWrites 用第二个 SQLite 连接安装触发器，让审计表
+// 插入失败；服务器条目与连接测试结果表的写入不受影响，供保存顺序与连接后
+// 保存步骤失败的测试使用。
+func blockConnectionTestAuditWrites(t *testing.T) {
+	t.Helper()
+	db, err := sql.Open("sqlite", os.Getenv("SSHMGR_STORE")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.Exec(`CREATE TRIGGER IF NOT EXISTS block_audit_insert
+BEFORE INSERT ON audit_log
+BEGIN SELECT RAISE(ABORT, 'audit blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestManagerConnectionTestConnectedSaveFailureKeepsConnectedFacts 覆盖已连
+// 上但连接后保存步骤失败：整体记为失败并使用自含白话原因，实际连上的地址
+// 与逐地址成功行如实保留，最近结果按失败保存。
+func TestManagerConnectionTestConnectedSaveFailureKeepsConnectedFacts(t *testing.T) {
+	manager, st, targetDevice := newConnectionTestStore(t, true)
+	hostKey := fixedConnectionHostKey(t)
+	script := &connectionShellScript{family: "powershell"}
+	address, _, stopServer := testsshd.Start(t, testsshd.Options{
+		Password: "login-secret", HostKey: hostKey, Exec: script.exec,
+	})
+	defer stopServer()
+	host, port := splitConnectionAddress(t, address)
+	if err := addConnectionMembership(t, st, targetDevice.Name, host, false); err != nil {
+		t.Fatal(err)
+	}
+	added := addConnectionServer(t, st, targetDevice.Name, host, port)
+	srv, err := st.GetServer(added.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveEntryPin(srv, hostKey.PublicKey().Marshal()); err != nil {
+		t.Fatal(err)
+	}
+	blockConnectionTestAuditWrites(t)
+
+	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{
+		Identifier: added.ServerID, ProbeShell: true,
+	})
+	if err == nil {
+		t.Fatal("连接后的保存步骤失败应返回错误")
+	}
+	if result.Succeeded || result.FailureReason != models.ConnectionTestFailureConnectedSaveFailed {
+		t.Fatalf("已连上但保存失败应使用自含失败原因：%+v", result)
+	}
+	if result.SuccessAddress != host || len(result.Attempts) != 1 || !result.Attempts[0].OK {
+		t.Fatalf("已连上的地址与逐地址成功行应如实保留：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Succeeded ||
+		persisted.FailureReason != models.ConnectionTestFailureConnectedSaveFailed ||
+		persisted.SuccessAddress != host || len(persisted.Attempts) != 1 || !persisted.Attempts[0].OK {
+		t.Fatalf("已连上但保存失败的最近结果应按失败保存并保留连上事实：%v %+v", persistErr, persisted)
+	}
+	if strings.Contains(err.Error(), "login-secret") {
+		t.Fatalf("保存失败错误不得包含登录密码：%v", err)
+	}
+}
+
+// TestManagerConnectionTestSuccessSavesResultBeforeAudit 覆盖成功路径的保
+// 存顺序：先写最近结果，再写审计；审计失败照旧返回错误。
+func TestManagerConnectionTestSuccessSavesResultBeforeAudit(t *testing.T) {
+	manager, st, targetDevice := newConnectionTestStore(t, true)
+	hostKey := fixedConnectionHostKey(t)
+	address, _, stopServer := testsshd.Start(t, testsshd.Options{
+		Password: "login-secret", HostKey: hostKey,
+		Exec: (&connectionShellScript{family: "posix"}).exec,
+	})
+	defer stopServer()
+	host, port := splitConnectionAddress(t, address)
+	if err := addConnectionMembership(t, st, targetDevice.Name, host, false); err != nil {
+		t.Fatal(err)
+	}
+	added := addConnectionServer(t, st, targetDevice.Name, host, port)
+	srv, err := st.GetServer(added.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveEntryPin(srv, hostKey.PublicKey().Marshal()); err != nil {
+		t.Fatal(err)
+	}
+	blockConnectionTestAuditWrites(t)
+
+	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{
+		Identifier: added.ServerID, ProbeShell: false,
+	})
+	if err == nil {
+		t.Fatal("审计写入失败应照旧返回错误")
+	}
+	if result == nil || !result.Succeeded || !result.Persisted {
+		t.Fatalf("审计失败前连接结果应已按成功保存：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || !persisted.Succeeded ||
+		persisted.SuccessAddress != host || persisted.CompletedAt.IsZero() {
+		t.Fatalf("成功路径应先保存最近结果再写审计：%v %+v", persistErr, persisted)
+	}
+}
+
 func TestManagerConnectionTestCanceledDoesNotPersistResult(t *testing.T) {
 	manager, st, targetDevice := newConnectionTestStore(t, false)
 	added := addConnectionServer(t, st, targetDevice.Name, "127.0.0.1", 1)
@@ -508,6 +618,111 @@ func TestManagerConnectionTestCanceledDoesNotPersistResult(t *testing.T) {
 	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
 	if persistErr != nil || persisted != nil {
 		t.Fatalf("取消不应写入最近一次完成结果：%v %+v", persistErr, persisted)
+	}
+}
+
+// TestManagerConnectionTestEarlyExitKeepsPreviousResult 覆盖拨号前提前退出
+// 的边界：读取存储或服务器条目失败时不写入新的最近结果，也不得把零值完成
+// 时间带回页面。
+func TestManagerConnectionTestEarlyExitKeepsPreviousResult(t *testing.T) {
+	vaultDir := t.TempDir()
+	database := filepath.Join(vaultDir, "store.db")
+	t.Setenv("SSHMGR_STORE", database)
+	if err := roles.Save(roles.State{Role: roles.RoleStandalone, SetupComplete: true}); err != nil {
+		t.Fatal(err)
+	}
+	masterKey, err := store.GenerateMasterKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Open(database, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServer(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "deploy", ShellType: models.ShellPOSIX,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := models.ServerConnectionTestResult{
+		CompletedAt: time.Unix(1_782_000_000, 0), Succeeded: true,
+		SuccessAddress: "192.0.2.10", Duration: 80 * time.Millisecond,
+	}
+	if err := st.SaveServerConnectionTestResult(added, previous); err != nil {
+		t.Fatal(err)
+	}
+	manager := New(st)
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	closed, err := manager.TestConnection(context.Background(), ConnectionTestRequest{Identifier: "web"})
+	if err == nil || closed == nil || !closed.CompletedAt.IsZero() || closed.Succeeded {
+		t.Fatalf("存储读取失败应提前返回零值完成结果：%v %+v", err, closed)
+	}
+
+	reopened, err := store.Open(database, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	persisted, err := reopened.ServerConnectionTestResult(added)
+	if err != nil || persisted == nil || !persisted.Succeeded ||
+		!persisted.CompletedAt.Equal(previous.CompletedAt) {
+		t.Fatalf("提前退出不得覆盖既有最近结果：%v %+v", err, persisted)
+	}
+
+	missing, err := New(reopened).TestConnection(
+		context.Background(), ConnectionTestRequest{Identifier: "server-does-not-exist"},
+	)
+	if err == nil || missing == nil || !missing.CompletedAt.IsZero() || missing.Succeeded {
+		t.Fatalf("服务器条目不存在应提前返回零值完成结果：%v %+v", err, missing)
+	}
+	persistedAfterMissing, err := reopened.ServerConnectionTestResult(added)
+	if err != nil || persistedAfterMissing == nil || !persistedAfterMissing.Succeeded {
+		t.Fatalf("查不到服务器条目不得影响既有最近结果：%v %+v", err, persistedAfterMissing)
+	}
+}
+
+// TestManagerConnectionTestPersistsActionableHint 覆盖拨号层白话提示的公共
+// 边界：提示作为结构化字段进入返回结果与最近结果，不靠解析底层错误。
+func TestManagerConnectionTestPersistsActionableHint(t *testing.T) {
+	manager, st, targetDevice := newConnectionTestStore(t, false)
+	if err := addConnectionTestNetwork(t, st, "备用局域网", models.NetworkPhysical); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetworkMembership(targetDevice.Name, "备用局域网", "127.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	loginCredential := &models.Credential{Type: models.CredPassword, Secret: []byte("login-secret")}
+	added, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "fallback-only", Host: "127.0.0.1", Port: port, User: "deploy",
+		ShellType: models.ShellPOSIX,
+	}, loginCredential, nil, targetDevice.Name)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := manager.TestConnection(context.Background(), ConnectionTestRequest{Identifier: added.ServerID})
+	if err == nil {
+		t.Fatal("兜底地址端口不通应失败")
+	}
+	wantHint := "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
+	if result.Hint != wantHint {
+		t.Fatalf("返回结果应带结构化提示：%+v", result)
+	}
+	persisted, persistErr := st.ServerConnectionTestResult(added.ServerID)
+	if persistErr != nil || persisted == nil || persisted.Hint != wantHint {
+		t.Fatalf("最近结果应持久保存结构化提示：%v %+v", persistErr, persisted)
 	}
 }
 

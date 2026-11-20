@@ -83,6 +83,9 @@ type ServerDialResult struct {
 	SuccessSource      models.DialAddressSource
 	Duration           time.Duration
 	ConnectionNotes    []string
+	// Hint 是程序内写定的可操作提示；只含白话说明，不含秘密。页面展示使
+	// 用这个结构化字段，不解析底层错误文本。
+	Hint string
 }
 
 // ServerDialError 汇总一次按服务器条目拨号的逐地址失败结果；Unwrap 回到第
@@ -522,6 +525,7 @@ func ConnectServerEntryWithResult(
 		SuccessCache: req.SuccessCache, Now: time.Now(),
 	})
 	if err != nil {
+		result.Hint = connectionTestPlanHint(err)
 		return nil, result, err
 	}
 	plan := planned.Plan
@@ -660,12 +664,35 @@ func ConnectServerEntryWithResult(
 	result.Duration = time.Since(totalStarted)
 	dialErr := &ServerDialError{Failures: failures, Port: req.Server.Port}
 	if plan.FallbackOnlyReason != "" {
-		dialErr.Hint = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
+		dialErr.Hint = fallbackRegisterCommonNetworkHint
 		if plan.FallbackOnlyReason == FallbackOnlyLocalDeviceDeleted {
-			dialErr.Hint = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
+			dialErr.Hint = fallbackLocalDeviceDeletedHint
 		}
 	}
+	result.Hint = dialErr.Hint
 	return nil, result, dialErr
+}
+
+// 连接测试的可操作提示是程序内写定的白话文本，不包含任何秘密；持久保存与
+// 页面展示都使用结构化字段，不解析底层错误。
+const (
+	fallbackRegisterCommonNetworkHint    = "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。"
+	fallbackLocalDeviceDeletedHint       = "本机设备设定指向的设备已不存在，请重新设定本机设备。"
+	firstTrustNoCommonVirtualLanHint     = "请用带外锚定，或先从虚拟局域网内的机器连接一次。"
+	firstTrustVirtualLanAlsoPhysicalHint = "请把虚拟局域网地址与物理局域网地址分开登记，或改用带外锚定。"
+)
+
+// connectionTestPlanHint 返回规划阶段拒绝连接时的可操作提示；其他规划错误
+// 没有固定提示，返回空串。
+func connectionTestPlanHint(err error) string {
+	switch {
+	case errors.Is(err, ErrFirstTrustNoCommonVirtualLan):
+		return firstTrustNoCommonVirtualLanHint
+	case errors.Is(err, ErrFirstTrustVirtualLanAddressAlsoPhysical):
+		return firstTrustVirtualLanAlsoPhysicalHint
+	default:
+		return ""
+	}
 }
 
 // ConnectServerEntry 保留既有三返回值形态，供不需要结构化结果的调用方使
@@ -694,6 +721,10 @@ func connectionTestFailureReason(err error, category models.ProbeErrorCategory) 
 }
 
 func isAuthenticationFailure(err error) bool {
+	// golang.org/x/crypto/ssh v0.41.0 没有提供可判断类型的“登录认证被拒
+	// 绝”错误；库的认证路径把拒绝原因拼进错误文本（unable to authenticate、
+	// no supported methods remain）。因此这里只能按这两段固定错误文本识别，
+	// 并用真实本地 SSH 测试服务器的错误口令与错误密钥用例钉住该分类。
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "unable to authenticate") ||
 		strings.Contains(message, "no supported methods remain")

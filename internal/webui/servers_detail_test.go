@@ -416,6 +416,11 @@ func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 		!strings.Contains(initial, `aria-live="polite"`) || !strings.Contains(initial, "从未测试") {
 		t.Fatalf("详情页应有稳定的连接测试动态结果区：\n%s", initial)
 	}
+	liveStart := strings.Index(initial, `id="server-connection-test-live"`)
+	formStart := strings.Index(initial, `action="/ui/servers/srv-fine/test"`)
+	if liveStart < 0 || formStart < 0 || !strings.Contains(initial[liveStart:formStart], "</div>") {
+		t.Fatalf("测试连接表单应在动态结果区域外，完成后不得被局部替换删除：\n%s", initial)
+	}
 	csrf := serversCSRF(t, handler, cookie)
 	request := httptest.NewRequest(http.MethodPost, "/ui/servers/srv-fine/test", strings.NewReader(url.Values{
 		"csrf_token": {csrf},
@@ -444,6 +449,19 @@ func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 		t.Fatalf("测试连接应启动 srv-fine 任务，实际 %v", tester.starts)
 	}
 
+	runningPoll := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	runningPoll.Host = "127.0.0.1:18080"
+	runningPoll.Header.Set("HX-Request", "true")
+	runningPoll.AddCookie(cookie)
+	runningPollRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(runningPollRecorder, runningPoll)
+	runningPollResponse := runningPollRecorder.Result()
+	runningPollBody := readResponseBody(t, runningPollResponse)
+	if runningPollResponse.StatusCode != http.StatusNoContent || runningPollBody != "" {
+		t.Fatalf("进行中轮询应返回 204 且不改写无障碍动态提醒区域，状态码=%d 响应=%q",
+			runningPollResponse.StatusCode, runningPollBody)
+	}
+
 	tester.status = &ServerConnectionTestStatus{
 		ID: "task-1", State: ServerConnectionTestSucceeded, ServerID: "srv-fine",
 		HandshakeAddress: "192.0.2.10:22",
@@ -451,6 +469,7 @@ func TestServerDetailTestConnectionStartsTask(t *testing.T) {
 			State: ServerConnectionTestSucceeded, Succeeded: true,
 			CompletedAt: time.Unix(1_782_000_000, 0), SuccessAddress: "192.0.2.10",
 			SuccessNetworkName: "办公网", Duration: 42 * time.Millisecond,
+			Persisted: true,
 			Attempts: []ServerConnectionTestAttemptView{{
 				NetworkName: "办公网", Address: "192.0.2.10", OK: true,
 				Duration: 40 * time.Millisecond,
@@ -484,6 +503,7 @@ func TestServerDetailConnectionTestFailureFragmentCoversCandidates(t *testing.T)
 		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-fine",
 		Result: &ServerConnectionTestResultView{
 			State: ServerConnectionTestFailed, FailureLabel: "端口不通",
+			Hint: "请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
 			Attempts: []ServerConnectionTestAttemptView{{
 				Address: "192.0.2.10", Source: models.DialAddressSourceFallback,
 				FailureLabel: "端口不通", Duration: 23 * time.Millisecond,
@@ -503,6 +523,7 @@ func TestServerDetailConnectionTestFailureFragmentCoversCandidates(t *testing.T)
 	page := readResponseBody(t, recorder.Result())
 	for _, want := range []string{
 		"连不上", "端口不通", `aria-expanded="false"`, "展开看每个候选地址的结果",
+		"请补登记本机设备与目标设备的共同网络；单机部署与权威端也可先设定本机设备。",
 		"其他（公网或未登记网络）", "192.0.2.10", "耗时 23 毫秒",
 	} {
 		if !strings.Contains(page, want) {
@@ -514,6 +535,36 @@ func TestServerDetailConnectionTestFailureFragmentCoversCandidates(t *testing.T)
 	}
 	if !strings.Contains(page, `hidden`) {
 		t.Fatalf("候选地址默认应收起：\n%s", page)
+	}
+}
+
+// TestServerDetailConnectionTestFragmentWithoutPersistedResult 校验没有持久
+// 结果时页头带外更新不渲染零值时间，原有「上次测试」显示保持不变。
+func TestServerDetailConnectionTestFragmentWithoutPersistedResult(t *testing.T) {
+	tester := &stubServerConnectionTester{status: &ServerConnectionTestStatus{
+		ID: "task-1", State: ServerConnectionTestFailed, ServerID: "srv-fine",
+		Result: &ServerConnectionTestResultView{
+			State: ServerConnectionTestFailed, FailureLabel: "其他连接失败",
+		},
+	}}
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{}, tester: tester,
+	})
+	request := httptest.NewRequest(http.MethodGet, "/ui/servers/srv-fine/test?task=task-1", nil)
+	request.Host = "127.0.0.1:18080"
+	request.Header.Set("HX-Request", "true")
+	request.AddCookie(cookie)
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+	page := readResponseBody(t, recorder.Result())
+	for _, want := range []string{"连不上", "其他连接失败"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("未持久化的失败片段缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, `id="server-last-test"`) ||
+		strings.Contains(page, "上次测试：0001-01-01") || strings.Contains(page, "hx-swap-oob") {
+		t.Fatalf("没有持久结果时不得带外更新页头为零值时间：\n%s", page)
 	}
 }
 

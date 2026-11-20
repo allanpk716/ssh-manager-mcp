@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS server_connection_test_results (
   completed_at INTEGER NOT NULL,
   succeeded INTEGER NOT NULL CHECK(succeeded IN (0,1)),
   failure_reason TEXT NOT NULL DEFAULT '',
+  hint TEXT NOT NULL DEFAULT '',
   success_address TEXT NOT NULL DEFAULT '',
   success_network_name TEXT NOT NULL DEFAULT '',
   success_source TEXT NOT NULL DEFAULT '',
@@ -41,12 +42,13 @@ func (s *Store) SaveServerConnectionTestResult(
 	_, err = s.db.Exec(`
 		INSERT INTO server_connection_test_results(
 			server_id,completed_at,succeeded,failure_reason,success_address,
-			success_network_name,success_source,duration_ns,attempts_json
-		) VALUES(?,?,?,?,?,?,?,?,?)
+			success_network_name,success_source,duration_ns,attempts_json,hint
+		) VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(server_id) DO UPDATE SET
 			completed_at=excluded.completed_at,
 			succeeded=excluded.succeeded,
 			failure_reason=excluded.failure_reason,
+			hint=excluded.hint,
 			success_address=excluded.success_address,
 			success_network_name=excluded.success_network_name,
 			success_source=excluded.success_source,
@@ -54,7 +56,7 @@ func (s *Store) SaveServerConnectionTestResult(
 			attempts_json=excluded.attempts_json`,
 		serverID, result.CompletedAt.Unix(), result.Succeeded, string(result.FailureReason),
 		result.SuccessAddress, result.SuccessNetworkName, string(result.SuccessSource),
-		int64(result.Duration), string(attempts),
+		int64(result.Duration), string(attempts), result.Hint,
 	)
 	return err
 }
@@ -65,7 +67,7 @@ func (s *Store) ServerConnectionTestResult(serverID string) (*models.ServerConne
 	var row serverConnectionTestResultRow
 	err := s.db.QueryRow(`
 		SELECT completed_at,succeeded,failure_reason,success_address,
-		       success_network_name,success_source,duration_ns,attempts_json
+		       success_network_name,success_source,duration_ns,attempts_json,hint
 		FROM server_connection_test_results WHERE server_id=?`, serverID,
 	).Scan(row.scanTargets()...)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -94,7 +96,7 @@ func (s *Store) ServerConnectionTestResults(
 	}
 	rows, err := s.db.Query(`
 		SELECT server_id,completed_at,succeeded,failure_reason,success_address,
-		       success_network_name,success_source,duration_ns,attempts_json
+		       success_network_name,success_source,duration_ns,attempts_json,hint
 		FROM server_connection_test_results WHERE server_id IN (`+placeholders+`)`, args...)
 	if err != nil {
 		return nil, err
@@ -121,6 +123,7 @@ type serverConnectionTestResultRow struct {
 	completedAt    int64
 	succeeded      bool
 	failureReason  string
+	hint           string
 	successAddress string
 	successNetwork string
 	successSource  string
@@ -131,7 +134,7 @@ type serverConnectionTestResultRow struct {
 func (r *serverConnectionTestResultRow) scanTargets() []any {
 	return []any{
 		&r.completedAt, &r.succeeded, &r.failureReason, &r.successAddress,
-		&r.successNetwork, &r.successSource, &r.duration, &r.attemptsJSON,
+		&r.successNetwork, &r.successSource, &r.duration, &r.attemptsJSON, &r.hint,
 	}
 }
 
@@ -139,6 +142,7 @@ func (r serverConnectionTestResultRow) result() (*models.ServerConnectionTestRes
 	result := &models.ServerConnectionTestResult{
 		CompletedAt: time.Unix(r.completedAt, 0), Succeeded: r.succeeded,
 		FailureReason:  models.ConnectionTestFailureReason(r.failureReason),
+		Hint:           r.hint,
 		SuccessAddress: r.successAddress, SuccessNetworkName: r.successNetwork,
 		SuccessSource: models.DialAddressSource(r.successSource),
 		Duration:      time.Duration(r.duration),
