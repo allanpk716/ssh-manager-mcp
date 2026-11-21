@@ -3,6 +3,7 @@ package softwareinventory
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
@@ -118,6 +119,92 @@ func TestParseWindowsFullFixtures(t *testing.T) {
 				t.Fatalf("看得到进程但注册表认不出的监听进程 = %+v", ferryman)
 			}
 		})
+	}
+}
+
+// TestParseWindowsV2FullFixture 钉住第 2 版输出的解析口径：操作系统条目带
+// 完整四段版本号并收编系统自带服务的监听端口；第三方监听程序带文件版本；
+// 未识别进程条目名优先取产品名。
+func TestParseWindowsV2FullFixture(t *testing.T) {
+	// 派生夹具，待替换为真实输出。
+	collection, err := parseWindowsInventoryOutput(
+		windowsFixtureOutput(t, "win10-powershell-full-v2-derived.txt"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.CommandSetVersion != "windows-v2" ||
+		collection.SystemType != "windows" || collection.Incomplete {
+		t.Fatalf("解析结论 = 版本 %q、系统 %q、不完整 %v、说明 %v",
+			collection.CommandSetVersion, collection.SystemType,
+			collection.Incomplete, collection.Notes)
+	}
+
+	operatingSystem := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryOperatingSystem, "Windows 10 Pro",
+	)
+	if operatingSystem.Version != "10.0.19045.6456" {
+		t.Fatalf("操作系统条目版本 = %q，应为完整四段版本号", operatingSystem.Version)
+	}
+	if operatingSystem.ProcessID != 0 {
+		t.Fatalf("系统自带服务的端口来自多个进程，操作系统条目不应带进程编号：%+v",
+			operatingSystem)
+	}
+	if findObservedPort(operatingSystem, "::", 135, "tcp") == nil ||
+		findObservedPort(operatingSystem, "::", 445, "tcp") == nil {
+		t.Fatalf("操作系统条目应收编系统自带服务的监听端口 135 与 445：%+v",
+			operatingSystem.ListeningPorts)
+	}
+
+	// 系统自带服务不单独成条：服务程序类别里查不到它们。
+	for _, serviceName := range []string{"RpcSs", "CDPSvc", "Spooler", "EventLog", "Dnscache"} {
+		for _, item := range collection.Items {
+			if item.Category == models.SoftwareCategoryServiceProgram && item.Name == serviceName {
+				t.Fatalf("系统自带服务 %s 不应单独成条：%+v", serviceName, item)
+			}
+		}
+	}
+	// 第三方服务带文件版本。
+	sshService := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryServiceProgram, "sshd",
+	)
+	if sshService.Version != "9.9.2.0" {
+		t.Fatalf("sshd 服务程序条目应带文件版本 9.9.2.0：%+v", sshService)
+	}
+
+	// 未识别进程条目名优先取产品名；读不到文件版本的条目版本为空。
+	deepSeek := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryUnidentified, "DeepSeek Harness",
+	)
+	if deepSeek.Version != "1.2.3.4" || deepSeek.ProcessName != "DeepSeek Harness" ||
+		deepSeek.ExecutablePath == "" {
+		t.Fatalf("未识别进程 DeepSeek Harness 应带文件版本与可执行文件路径：%+v", deepSeek)
+	}
+	antFeeding := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryUnidentified, "ant-feeding-log",
+	)
+	if antFeeding.Version != "" {
+		t.Fatalf("没有版本资源的可执行文件应留空版本：%+v", antFeeding)
+	}
+}
+
+// TestParseWindowsV1FallsBackWhenVersionKeysMissing 钉住第 2 版解析对老系
+// 统的回退：主版本或次版本号键缺失时，操作系统条目版本回退第 1 版口径，
+// 不拼出不完整的四段版本号。
+func TestParseWindowsV1FallsBackWhenVersionKeysMissing(t *testing.T) {
+	// 派生夹具：去掉 os 节的两个版本号键，模拟 Windows 10 之前的老系统。
+	base := windowsFixtureOutput(t, "win10-powershell-full-v2-derived.txt")
+	trimmed := strings.Replace(base, "CurrentMajorVersionNumber\t10\r\n", "", 1)
+	trimmed = strings.Replace(trimmed, "CurrentMinorVersionNumber\t0\r\n", "", 1)
+	collection, err := parseWindowsInventoryOutput(trimmed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatingSystem := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryOperatingSystem, "Windows 10 Pro",
+	)
+	if operatingSystem.Version != "22H2" {
+		t.Fatalf("版本号键缺失时操作系统条目版本应回退 DisplayVersion：%+v", operatingSystem)
 	}
 }
 
