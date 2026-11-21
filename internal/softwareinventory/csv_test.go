@@ -54,24 +54,66 @@ func TestMarshalCSVProducesFlatSoftwareTable(t *testing.T) {
 	}
 
 	rows := readCSVForTest(t, blob)
-	wantHeader := []string{"设备", "软件名", "版本", "类别", "监听端口", "暴露级别", "采集时间"}
-	if len(rows) != 3 {
-		t.Fatalf("CSV 行数 = %d（含表头应为 3）：\n%q", len(rows), blob)
+	wantHeader := []string{"设备", "软件名", "版本", "缺版本", "类别", "监听端口", "暴露级别", "采集时间"}
+	if len(rows) != 2 {
+		t.Fatalf("CSV 行数 = %d（含表头应为 2，没有监听端口的系统包不导出）：\n%q", len(rows), blob)
 	}
 	if strings.Join(rows[0], "|") != strings.Join(wantHeader, "|") {
 		t.Fatalf("表头 = %v，想要 %v", rows[0], wantHeader)
 	}
 	wantFirst := []string{
-		"gpu工作站", "nginx,网页服务\n含引号\"特\"", "1.25.3", "服务程序",
+		"gpu工作站", "nginx,网页服务\n含引号\"特\"", "1.25.3", "", "服务程序",
 		"0.0.0.0:80/tcp;192.0.2.10:8443/tcp", "监听所有地址;监听特定地址",
 		"2026-11-01T08:00:00Z",
 	}
 	if strings.Join(rows[1], "|") != strings.Join(wantFirst, "|") {
 		t.Fatalf("多端口软件行 = %#v，想要 %#v", rows[1], wantFirst)
 	}
-	wantSecond := []string{"gpu工作站", "libc6", "2.39-0ubuntu8", "系统包", "", "", ""}
-	if strings.Join(rows[2], "|") != strings.Join(wantSecond, "|") {
-		t.Fatalf("无端口软件行 = %#v，想要 %#v", rows[2], wantSecond)
+}
+
+// TestMarshalCSVExportsFocusListOnlyWithMissingVersionColumn 钉住平铺总表
+// 的两个重点清单口径：即使查询结果带着系统包（例如按名称搜索时自动包
+// 含），没有监听端口的系统包也不导出；版本为空的条目在「缺版本」列标
+// 「是」。
+func TestMarshalCSVExportsFocusListOnlyWithMissingVersionColumn(t *testing.T) {
+	manager, st := newTestManager(t)
+	mustDevice(t, st, "工作站", true)
+	mustObservedItems(t, st, "工作站",
+		models.SoftwareObservedItem{
+			Category: CategorySystemPackage, Name: "nginx", Version: "1.25.3",
+			ListeningPorts: []models.SoftwareListeningPort{{
+				Address: "0.0.0.0", Port: 80, Protocol: "tcp",
+				Exposure: models.SoftwareExposureAllAddresses,
+			}},
+		},
+		models.SoftwareObservedItem{Category: CategorySystemPackage, Name: "libc6", Version: "2.39-0ubuntu8"},
+		models.SoftwareObservedItem{Category: CategoryUnidentified, Name: "unknown-gateway"},
+	)
+
+	result, err := manager.Query(QueryOptions{
+		Name: "", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := MarshalCSV(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readCSVForTest(t, blob)
+	if len(rows) != 3 {
+		t.Fatalf("CSV 行数 = %d（含表头应为 3：表头、nginx、缺版本网关）：\n%q", len(rows), blob)
+	}
+	for _, row := range rows[1:] {
+		if row[1] == "libc6" {
+			t.Fatalf("没有监听端口的系统包不应出现在 CSV 里：%#v", row)
+		}
+	}
+	if rows[1][1] != "nginx" || rows[1][3] != "" {
+		t.Fatalf("有版本的 nginx 行缺版本列应为空：%#v", rows[1])
+	}
+	if rows[2][1] != "unknown-gateway" || rows[2][3] != "是" {
+		t.Fatalf("版本为空的条目缺版本列应为「是」：%#v", rows[2])
 	}
 }
 
@@ -100,7 +142,7 @@ func TestMarshalCSVUsesSharedDisplayCategory(t *testing.T) {
 	if len(rows) != 4 {
 		t.Fatalf("CSV 应有一条表头和三条软件条目，得到 %d 行", len(rows))
 	}
-	got := []string{rows[1][3], rows[2][3], rows[3][3]}
+	got := []string{rows[1][4], rows[2][4], rows[3][4]}
 	want := []string{"操作系统与内核", "操作系统与内核", "驱动与固件"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("CSV 类别 = %v，想要 %v", got, want)

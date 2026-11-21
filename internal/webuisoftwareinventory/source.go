@@ -244,10 +244,12 @@ func (s openerSource) ExportSoftwareInventoryCSV(
 		return nil, err
 	}
 	defer done()
+	// 总表只导出重点清单：查询走默认口径，不带 include_system_packages；
+	// MarshalCSV 内部对没有监听端口的系统包再过滤一次作为保险。
 	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
 		Device: filter.Device, Name: filter.Name, ExactVersion: filter.ExactVersion,
 		Site: filter.Site, Network: filter.Network,
-		IncludeSystemPackages: true, Visibility: softwareinventory.AllDevicesVisible(),
+		Visibility: softwareinventory.AllDevicesVisible(),
 	})
 	if err != nil {
 		return nil, deviceError(filter.Device, err)

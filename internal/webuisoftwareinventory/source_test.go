@@ -298,7 +298,7 @@ func TestSourceExportsCSVFromUnifiedQuery(t *testing.T) {
 	}
 	rows := readExportCSV(t, blob)
 	if len(rows) != 2 || rows[1][0] != "工作站" || rows[1][1] != "nginx" ||
-		rows[1][5] != "监听所有地址" {
+		rows[1][3] != "" || rows[1][6] != "监听所有地址" {
 		t.Fatalf("当前筛选导出行 = %#v", rows)
 	}
 
@@ -324,7 +324,7 @@ func readExportCSV(t *testing.T, blob []byte) [][]string {
 		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, blob)
 	}
 	if len(rows) == 0 || strings.Join(rows[0], "|") !=
-		"设备|软件名|版本|类别|监听端口|暴露级别|采集时间" {
+		"设备|软件名|版本|缺版本|类别|监听端口|暴露级别|采集时间" {
 		t.Fatalf("导出表头 = %#v", rows)
 	}
 	return rows

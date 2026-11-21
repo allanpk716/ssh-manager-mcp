@@ -340,7 +340,7 @@ func TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters(t *testing.T) 
 	}
 	if len(rows) != 2 || rows[1][0] != "可见设备" || rows[1][1] != "nginx" ||
 		rows[1][2] != "{{sshmgr-secret:SOFTWARE_VERSION_TOKEN}}" ||
-		rows[1][5] != "监听所有地址" {
+		rows[1][6] != "监听所有地址" {
 		t.Fatalf("筛选后的 CSV 行 = %#v", rows)
 	}
 
