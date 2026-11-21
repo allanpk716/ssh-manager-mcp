@@ -202,7 +202,10 @@ type SoftwareInventoryRoundView struct {
 	// StatusText 是整轮状态：「采集进行中」/「本机采集已完成，等待客户
 	// 端实例回传结果」/「采集已完成」。
 	StatusText string
-	Devices    []SoftwareInventoryRoundDeviceView
+	// ScopeText 是采集范围说明；只有单台轮次非空，例如「本轮只采集设
+	// 备 工作站」。
+	ScopeText string
+	Devices   []SoftwareInventoryRoundDeviceView
 }
 
 // SoftwareInventoryRoundDeviceView 是采集轮次里一台设备的展示数据，

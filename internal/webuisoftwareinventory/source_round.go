@@ -42,6 +42,9 @@ func roundView(snapshot softwareinventory.RoundSnapshot) *webui.SoftwareInventor
 		Running:    snapshot.Running(),
 		Refreshing: snapshot.NeedsRefresh(),
 	}
+	if snapshot.Device != "" {
+		view.ScopeText = "本轮只采集设备 " + snapshot.Device
+	}
 	view.SummaryText = fmt.Sprintf(
 		"已完成 %d/%d 台，成功 %d 台，等待客户端 %d 台，失败 %d 台",
 		snapshot.Succeeded+snapshot.Failed, len(snapshot.Devices),

@@ -143,6 +143,24 @@ func TestSoftwareInventoryRoundPageRendersFinishedRound(t *testing.T) {
 	}
 }
 
+// TestSoftwareInventoryRoundPageShowsSingleDeviceScope 验证单台轮次的进度
+// 页在整轮状态前标注采集范围，避免误读成全部采集。
+func TestSoftwareInventoryRoundPageShowsSingleDeviceScope(t *testing.T) {
+	view := roundViewForTest()
+	view.ScopeText = "本轮只采集设备 工作站"
+	view.SummaryText = "已完成 0/1 台，成功 0 台，等待客户端 0 台，失败 0 台"
+	view.Devices = []SoftwareInventoryRoundDeviceView{
+		{DeviceName: "工作站", StatusText: "采集中"},
+	}
+	source := &stubSoftwareInventorySource{roundView: view}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+
+	body := readResponseBody(t, doGetWithCookie(t, handler, cookie, "/ui/software-inventory/round"))
+	if !strings.Contains(body, "本轮只采集设备 工作站 · 采集进行中：已完成 0/1 台，成功 0 台，等待客户端 0 台，失败 0 台") {
+		t.Fatalf("单台轮次进度页应在状态前标注采集范围：\n%s", body)
+	}
+}
+
 // TestSoftwareInventoryRoundPageWithoutRound 验证没有轮次时进度页显示提示。
 func TestSoftwareInventoryRoundPageWithoutRound(t *testing.T) {
 	source := &stubSoftwareInventorySource{}
@@ -182,6 +200,7 @@ func TestSoftwareInventoryHomeShowsRoundEntry(t *testing.T) {
 			Running:     true,
 			Refreshing:  true,
 			StatusText:  "采集进行中",
+			ScopeText:   "本轮只采集设备 工作站",
 			SummaryText: "已完成 1/3 台，成功 1 台，等待客户端 0 台，失败 0 台",
 		},
 	}
@@ -189,7 +208,8 @@ func TestSoftwareInventoryHomeShowsRoundEntry(t *testing.T) {
 	body := readResponseBody(t, doGetWithCookie(t, handler, cookie, "/ui/software-inventory/"))
 	for _, wanted := range []string{
 		`href="/ui/software-inventory/round"`, ">采集进行中</a>",
-		"2026-11-21 16:50:05", "已完成 1/3 台，成功 1 台，等待客户端 0 台，失败 0 台",
+		"2026-11-21 16:50:05", "本轮只采集设备 工作站",
+		"已完成 1/3 台，成功 1 台，等待客户端 0 台，失败 0 台",
 	} {
 		if !strings.Contains(body, wanted) {
 			t.Fatalf("首页进行中入口缺少 %q：\n%s", wanted, body)

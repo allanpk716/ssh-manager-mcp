@@ -2,7 +2,7 @@
 <section class="software-inventory-round"{{if and .SoftwareInventoryRound .SoftwareInventoryRound.Refreshing}} id="software-inventory-round" hx-get="/ui/software-inventory/round" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
 <h1>采集进度</h1>
 {{if .SoftwareInventoryRound}}
-<p>{{.SoftwareInventoryRound.StatusText}}：{{.SoftwareInventoryRound.SummaryText}}</p>
+<p>{{if .SoftwareInventoryRound.ScopeText}}{{.SoftwareInventoryRound.ScopeText}} · {{end}}{{.SoftwareInventoryRound.StatusText}}：{{.SoftwareInventoryRound.SummaryText}}</p>
 <ul class="record-cards">
 {{range .SoftwareInventoryRound.Devices}}
 <li class="record-card"><h3>{{.DeviceName}}</h3><p>{{.StatusText}}</p></li>

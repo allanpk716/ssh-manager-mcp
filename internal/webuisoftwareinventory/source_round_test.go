@@ -96,6 +96,9 @@ func TestSourceStartsRoundAndBuildsRoundView(t *testing.T) {
 	if view.StatusText != "本机采集已完成，等待客户端实例回传结果" {
 		t.Fatalf("整轮状态 = %q，应为等待客户端实例回传结果", view.StatusText)
 	}
+	if view.ScopeText != "" {
+		t.Fatalf("全部轮次不应有采集范围说明：%q", view.ScopeText)
+	}
 	if view.SummaryText != "已完成 1/2 台，成功 1 台，等待客户端 1 台，失败 0 台" {
 		t.Fatalf("汇总 = %q", view.SummaryText)
 	}
@@ -210,6 +213,9 @@ func TestSourceStartsSingleDeviceRound(t *testing.T) {
 	}
 	if !strings.Contains(view.Devices[0].StatusText, "已登记，等待客户端实例 mini6 执行") {
 		t.Fatalf("等待设备文案 = %q", view.Devices[0].StatusText)
+	}
+	if view.ScopeText != "本轮只采集设备 客户端采集设备" {
+		t.Fatalf("单台轮次的采集范围说明 = %q", view.ScopeText)
 	}
 
 	// 客户端实例在轮次开始之后上交新结果：等待设备转成功，页面停止刷新。
