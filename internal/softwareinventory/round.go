@@ -85,8 +85,7 @@ type CollectionRound struct {
 	startedAt time.Time
 	plan      []roundDevicePlan
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx context.Context
 
 	mu           sync.Mutex
 	devices      []RoundDeviceStatus
@@ -136,14 +135,26 @@ func (r *CollectionRound) Snapshot() RoundSnapshot {
 	return snapshot
 }
 
-// waitingTransition 是一次快照刷新决定的一台等待设备的去向。
+// waitingOutcome 是一次快照刷新决定的一台等待设备的去向。
+type waitingOutcome int
+
+// 一台等待设备在一次快照刷新后的去向。
+const (
+	// outcomeSucceeded 本轮开始后有新成功落库，转成功并读取本次条目数。
+	outcomeSucceeded waitingOutcome = iota
+	// outcomeFailed 本轮开始后有新失败落库，转失败并带原因。
+	outcomeFailed
+	// outcomeStillWaiting 没有新结果落库，继续等待，只更新实例最近拉取
+	// 时间。
+	outcomeStillWaiting
+)
+
+// waitingTransition 记录一台等待设备在本次刷新里的去向与附带数据。
 type waitingTransition struct {
-	index    int
-	toFailed bool
-	reason   string
-	toCount  bool
-	pullAt   time.Time
-	hasPull  bool
+	index   int
+	outcome waitingOutcome
+	reason  string
+	pullAt  time.Time
 }
 
 // refreshWaitingDevices 读取存储刷新等待设备：devices 是当前设备状态的一
@@ -187,14 +198,14 @@ func (r *CollectionRound) refreshWaitingDevices(devices []RoundDeviceStatus) {
 		}
 		transition := waitingTransition{index: index}
 		switch {
-		case status.LastSuccessAt.After(r.startedAt):
-			transition.toCount = true
+		case !status.LastSuccessAt.Before(r.startedAt):
+			transition.outcome = outcomeSucceeded
 			needCounts = append(needCounts, device.DeviceName)
-		case status.LastFailureAt.After(r.startedAt):
-			transition.toFailed = true
+		case !status.LastFailureAt.Before(r.startedAt):
+			transition.outcome = outcomeFailed
 			transition.reason = status.LastFailureReason
 		default:
-			transition.hasPull = true
+			transition.outcome = outcomeStillWaiting
 			transition.pullAt = lastPullByToken[status.Collector.CacheTokenID]
 		}
 		transitions = append(transitions, transition)
@@ -204,17 +215,22 @@ func (r *CollectionRound) refreshWaitingDevices(devices []RoundDeviceStatus) {
 	r.mu.Lock()
 	for _, transition := range transitions {
 		device := &r.devices[transition.index]
-		switch {
-		case transition.toCount:
+		if device.State != RoundDeviceWaitingClient {
+			// 决策与写回之间，另一路并发刷新可能已写入更新的结论；旧结
+			// 论不覆盖新结论。
+			continue
+		}
+		switch transition.outcome {
+		case outcomeSucceeded:
 			// 条目数读取失败的设备保持等待，下一次刷新重试。
 			if count, ok := itemCounts[device.DeviceName]; ok {
 				device.State = RoundDeviceSucceeded
 				device.ItemCount = count
 			}
-		case transition.toFailed:
+		case outcomeFailed:
 			device.State = RoundDeviceFailed
 			device.Err = transition.reason
-		case transition.hasPull:
+		case outcomeStillWaiting:
 			device.CollectorLastPullAt = transition.pullAt
 		}
 	}
@@ -365,9 +381,11 @@ type RoundManager struct {
 	// OpenStore 每次调用打开存储并返回关闭函数；轮次不长期持有句柄。
 	OpenStore func() (*store.Store, func(), error)
 	// Collect 是单台本机采集函数；空时默认实现为每次 OpenStore 后用绑
-	// 定该存储的单台采集服务执行（采集期间持有、采完关）。单机 Web UI
-	// 与权威端 serve 都不长期持有 vault 句柄，这样的短开短关与每请求开
-	// 关 vault 的请求侧并存（store 的 openMu 把进程内打开串行化）。
+	// 定该存储的单台采集服务执行（每次用时打开存储、用完即关）。单机
+	// Web UI 与权威端 serve 都不长期持有 vault 句柄，这种每次用时打
+	// 开、用完即关的做法与每个网页请求各自开关 vault 的请求侧并存：
+	// 存储层内部有一把锁，把同一进程内的 vault 打开与结构检查排队执
+	// 行，两侧同时打开同一个库文件也不会互相冲突。
 	Collect SchedulerCollectFunc
 	// DeviceLocks 与每日定时采集共享的每设备采集互斥；空值时内部自建
 	// 一个。
@@ -409,7 +427,7 @@ func (m *RoundManager) Start(deviceName string, source Source) (*CollectionRound
 	if deviceName != "" {
 		if _, err := st.SoftwareDeviceOverviewForDevice(deviceName, AllDevicesVisible()); err != nil {
 			done()
-			if err == store.ErrSoftwareDeviceNotVisible {
+			if errors.Is(err, store.ErrSoftwareDeviceNotVisible) {
 				return nil, ErrDeviceNotVisible
 			}
 			return nil, err
@@ -439,10 +457,13 @@ func (m *RoundManager) Start(deviceName string, source Source) (*CollectionRound
 	if root == nil {
 		root = context.Background()
 	}
-	ctx, cancel := context.WithCancel(root)
 	round := &CollectionRound{
-		manager: m, device: deviceName, source: source, startedAt: m.now(),
-		plan: plans, ctx: ctx, cancel: cancel,
+		manager: m, device: deviceName, source: source,
+		// 存储按秒存采集结果时间，开始时刻同样截到秒；刷新时结果落库时
+		// 刻「不早于开始时刻」即算本轮结果，同一秒内送达的结果不会被
+		// 漏掉（代价是开始前同一秒落库的旧结果也会算进来，可接受）。
+		startedAt: m.now().Truncate(time.Second),
+		plan:      plans, ctx: root,
 		devices: devices, localDoneCh: make(chan struct{}),
 	}
 	// 旧轮的本机部分已结束，这里替换掉它；旧轮对象若仍被进度页持有，
