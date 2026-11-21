@@ -540,8 +540,8 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 		TS:       time.Now(),
 		ServerID: srv.ID,
 		Action:   "pin-delete",
-		Command: fmt.Sprintf("server=%s host=%s:%d fingerprint=%s source=%s via=server-delete",
-			srv.Name, srv.Host, srv.Port, PinFingerprint(old.Blob, old.Format), old.Source),
+		Command: fmt.Sprintf("server=%s host=%s fingerprint=%s source=%s via=server-delete",
+			srv.Name, EntryAuditAddr(srv), PinFingerprint(old.Blob, old.Format), old.Source),
 		Status: "ok",
 	})
 }
@@ -550,6 +550,15 @@ func deleteEntryPinWithAudit(tx *sql.Tx, srv *models.Server) error {
 // 拨号入口的最后一个候选地址。
 func EntryFallbackAddr(srv *models.Server) string {
 	return fallbackAddr(srv.Host, srv.Port)
+}
+
+// EntryAuditAddr 渲染审计行 host= 的值：照旧记录条目的兜底 SSH 地址；主
+// 机为空时写 "-"，不产生 ":22" 这样的假地址。
+func EntryAuditAddr(srv *models.Server) string {
+	if srv.Host == "" {
+		return "-"
+	}
+	return EntryFallbackAddr(srv)
 }
 
 // fallbackAddr 是条目兜底地址的唯一拼接入口，模型与快照行共用。

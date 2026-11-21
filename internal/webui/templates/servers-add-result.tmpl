@@ -10,7 +10,7 @@
 <dl class="detail-list">
 {{if .ServerAddResult.FromServerDetail}}<div><dt>走的网络</dt><dd>{{.ServerAddResult.ConnectionNetwork}}</dd></div>
 <div><dt>地址</dt><dd>{{.ServerAddResult.ConnectionAddress}}</dd></div>{{end}}
-<div><dt>连接</dt><dd>{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}</dd></div>
+<div><dt>连接</dt><dd>{{if .ServerAddResult.Detail.Host}}{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.Detail.Host}}:{{.ServerAddResult.Detail.Port}}{{else if .ServerAddResult.PreferredNetworkAddress}}{{.ServerAddResult.Detail.User}}@{{.ServerAddResult.PreferredNetworkAddress}}:{{.ServerAddResult.Detail.Port}}{{else}}{{.ServerAddResult.Detail.User}} · 端口 {{.ServerAddResult.Detail.Port}}{{end}}</dd></div>
 <div><dt>所属设备</dt><dd>{{if .ServerAddResult.DeviceName}}{{.ServerAddResult.DeviceName}}{{else}}未显示{{end}}</dd></div>
 <div><dt>profile 授权</dt><dd>{{if .ServerAddResult.ProfileNamesUnavailable}}无法确认{{else if .ServerAddResult.ProfileNames}}{{joinTags .ServerAddResult.ProfileNames}}{{else}}未授权{{end}}</dd></div>
 <div><dt>状态</dt><dd>{{if .ServerAddResult.ConnectionTest}}{{.ServerAddResult.ConnectionTest.State.StatusText}}{{else}}未测试{{end}}</dd></div>

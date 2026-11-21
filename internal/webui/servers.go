@@ -336,8 +336,11 @@ type OtherDeviceAddResultView struct {
 // ServerAddResultView 是新增成功后的结果页数据；连接测试任务提供轮询状态
 // 与保存事务携带的锚复制事实。
 type ServerAddResultView struct {
-	Detail                   *ServerDetailView
-	DeviceName               string
+	Detail     *ServerDetailView
+	DeviceName string
+	// PreferredNetworkAddress 是空主机条目的首选网络地址（本机起点）；
+	// 主机非空或没有局域网候选时为空串，「连接」行照旧或退为「用户 · 端口 N」。
+	PreferredNetworkAddress  string
 	ProfileNames             []string
 	ProfileNamesUnavailable  bool
 	ConnectionTest           *ServerConnectionTestStatus
@@ -896,6 +899,27 @@ func networkIndexesByDevice(
 		}
 	}
 	return indexes
+}
+
+// serverPreferredNetworkAddress 返回空主机条目详情视图的首选网络地址：
+// 以本机为起点读拓扑（与列表卡片、详情页页头同一起点），在设备连接候选
+// 里取第一个物理局域网或虚拟局域网地址。主机非空、拓扑不可用、找不到设
+// 备或没有候选时返回空串，调用方按退化形态显示。
+func (h *handler) serverPreferredNetworkAddress(r *http.Request, detail *ServerDetailView) string {
+	if detail == nil || detail.Host != "" || h.cfg.Topology == nil {
+		return ""
+	}
+	data, err := h.cfg.Topology.Topology(h.requestClientInstance(r), TopologyProbeOriginSelf)
+	if err != nil {
+		return ""
+	}
+	for index := range data.Devices {
+		if data.Devices[index].Name != detail.DeviceName {
+			continue
+		}
+		return preferredNetworkAddress(data.Devices[index].Candidates)
+	}
+	return ""
 }
 
 // preferredNetworkAddress 把拓扑数据里的设备连接候选转成共享函数的
@@ -1785,18 +1809,21 @@ func requestCounts(r *http.Request) completeCounts {
 }
 
 type serverCompleteView struct {
-	Detail            *ServerDetailView
-	Queue             []string
-	Position          int
-	ShowPassword      bool
-	ShowKeyPassphrase bool
-	SharedKeyServers  []string
-	NeedsReverify     bool
-	ReverifyPath      string
-	Notice            string
-	Imported          int
-	Skipped           int
-	Failed            int
+	Detail *ServerDetailView
+	// PreferredNetworkAddress 是空主机条目的首选网络地址（本机起点）；
+	// 主机非空或没有局域网候选时为空串，「连接」行照旧或退为「用户 · 端口 N」。
+	PreferredNetworkAddress string
+	Queue                   []string
+	Position                int
+	ShowPassword            bool
+	ShowKeyPassphrase       bool
+	SharedKeyServers        []string
+	NeedsReverify           bool
+	ReverifyPath            string
+	Notice                  string
+	Imported                int
+	Skipped                 int
+	Failed                  int
 }
 
 func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, queue []string, position int, notice string, submitted *ServerCompleteForm, status int) {
@@ -1823,9 +1850,10 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 	counts := requestCounts(r)
 	view := &serverCompleteView{
 		Detail: detail, Queue: queue, Position: position, Notice: notice,
-		ShowPassword:      detail.CredentialType == "",
-		ShowKeyPassphrase: containsString(detail.AttentionReasons, models.ReasonNeedsPassphrase),
-		Imported:          counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
+		PreferredNetworkAddress: h.serverPreferredNetworkAddress(r, detail),
+		ShowPassword:            detail.CredentialType == "",
+		ShowKeyPassphrase:       containsString(detail.AttentionReasons, models.ReasonNeedsPassphrase),
+		Imported:                counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
 	}
 	if view.ShowKeyPassphrase {
 		if names, err := h.cfg.ServerWriter.SharedCredentialServers(detail.ID); err == nil {

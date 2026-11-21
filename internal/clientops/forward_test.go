@@ -250,6 +250,7 @@ func TestPinForwarder_DoesNotFallbackForInvalidPresentedKey(t *testing.T) {
 func TestPinForwardTexts_SpecVerbatim(t *testing.T) {
 	const host = "192.168.1.108"
 	const port = 22
+	target := fmt.Sprintf("%s:%d", host, port)
 	specTexts := []struct {
 		name string
 		got  string
@@ -257,15 +258,15 @@ func TestPinForwardTexts_SpecVerbatim(t *testing.T) {
 	}{
 		{"401", forwardMsg401,
 			"device code rejected (invalid or revoked) — ask the owner to check cache-tokens; your local cache is NOT affected by this attempt"},
-		{"403", forwardMsg403(host, port),
+		{"403", forwardMsg403(target),
 			"the broker refused pin forwarding for 192.168.1.108:22 — the target's server entry is probably not granted to this device's bound profile; ask the owner to grant it (or rebind via cache-tokens bind) and cache pull again"},
 		{"404", forwardMsg404,
 			"the broker does not support pin forwarding (the owner must upgrade the broker to >= v0.15.0, then retry)"},
-		{"409 equal=false", forwardMsg409Diff(host, port),
+		{"409 equal=false", forwardMsg409Diff(target),
 			"the broker already has a different pin for 192.168.1.108:22 — run cache pull and retry; if it still fails, ask the owner to compare fingerprints (servers pin-hostkey)"},
-		{"plaintext", forwardMsgPlaintext(host, port),
+		{"plaintext", forwardMsgPlaintext(target),
 			"pin forwarding requires a pinned TLS server — no plaintext forwarding (set the server pin used by cache pull); the host key for 192.168.1.108:22 stays unpinned"},
-		{"main", forwardMainMessage(host, port, "SHA256:AbCd"),
+		{"main", forwardMainMessage(target, "SHA256:AbCd"),
 			"host key for 192.168.1.108:22 is unknown and cannot be pinned here (presented fingerprint: SHA256:AbCd). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint SHA256:AbCd"},
 	}
 	for _, tc := range specTexts {
@@ -283,6 +284,7 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 	fp := ssh.FingerprintSHA256(pub)
 	const host = "192.168.1.108"
 	const port = 22
+	target := fmt.Sprintf("%s:%d", host, port)
 
 	// Control-character passthrough bodies, constructed at runtime so the
 	// source stays pure ASCII: the JSON arm embeds NUL+ESC via json.Marshal
@@ -305,10 +307,10 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 	}{
 		{"201 created", http.StatusCreated, `{"fingerprint":"SHA256:abc","server_name":"板"}`, "", false},
 		{"401", http.StatusUnauthorized, "Unauthorized", forwardMsg401, false},
-		{"403", http.StatusForbidden, "forbidden", forwardMsg403(host, port), false},
+		{"403", http.StatusForbidden, "forbidden", forwardMsg403(target), false},
 		{"404 old broker", http.StatusNotFound, "404 page not found", forwardMsg404, false},
-		{"409 equal=false", http.StatusConflict, `{"error":"already pinned","equal":false}`, forwardMsg409Diff(host, port), false},
-		{"409 equal=true", http.StatusConflict, `{"error":"already pinned","equal":true}`, forwardMsg409Equal(host, port), true},
+		{"409 equal=false", http.StatusConflict, `{"error":"already pinned","equal":false}`, forwardMsg409Diff(target), false},
+		{"409 equal=true", http.StatusConflict, `{"error":"already pinned","equal":true}`, forwardMsg409Equal(target), true},
 		{"400 passthrough json", http.StatusBadRequest, `{"error":"unparseable key_blob"}`,
 			"pin forward for 192.168.1.108:22: broker returned 400 — unparseable key_blob", false},
 		{"413 passthrough plain", http.StatusRequestEntityTooLarge, "request body too large",
@@ -317,9 +319,9 @@ func TestPinForwarder_Forward_BranchTexts(t *testing.T) {
 			"pin forward for 192.168.1.108:22: broker returned 400 — bad[2m text", false},
 		{"413 passthrough control chars", http.StatusRequestEntityTooLarge, "bad" + ctrlEsc + "[2m" + crlf + "request body too large",
 			"pin forward for 192.168.1.108:22: broker returned 413 — bad[2mrequest body too large", false},
-		{"500", http.StatusInternalServerError, "boom", forwardMainMessage(host, port, fp), false},
-		{"503", http.StatusServiceUnavailable, "", forwardMainMessage(host, port, fp), false},
-		{"302 unfollowed", http.StatusFound, "", forwardMainMessage(host, port, fp), false},
+		{"500", http.StatusInternalServerError, "boom", forwardMainMessage(target, fp), false},
+		{"503", http.StatusServiceUnavailable, "", forwardMainMessage(target, fp), false},
+		{"302 unfollowed", http.StatusFound, "", forwardMainMessage(target, fp), false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -375,7 +377,7 @@ func TestPinForwarder_Forward_RedirectNotFollowed(t *testing.T) {
 	if followed {
 		t.Fatal("the 302 was followed — redirects must never be followed (Plan 37 §2.0)")
 	}
-	want := forwardMainMessage("h", 22, fp)
+	want := forwardMainMessage("h:22", fp)
 	if err == nil || err.Error() != want {
 		t.Fatalf("unfollowed redirect must land on the main message:\n got: %v\nwant: %q", err, want)
 	}
@@ -398,7 +400,7 @@ func TestPinForwarder_Forward_Unreachable_MainMessage(t *testing.T) {
 	f.client = &http.Client{Transport: alwaysFailingRoundTripper{}}
 	entry := fwdEntry("192.168.1.108", 22)
 	got := f.Forward(entry, store.EntryFallbackAddr(entry), blob)
-	want := forwardMainMessage("192.168.1.108", 22, fp)
+	want := forwardMainMessage("192.168.1.108:22", fp)
 	if got == nil || got.Error() != want {
 		t.Fatalf("unreachable broker must render the main message:\n got: %v\nwant: %q", got, want)
 	}
@@ -430,7 +432,7 @@ func TestPinForwarder_Forward_Timeout_MainMessage(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("Forward blocked for %v — the timeout must bound the handshake path", elapsed)
 	}
-	want := forwardMainMessage("192.168.1.108", 22, fp)
+	want := forwardMainMessage("192.168.1.108:22", fp)
 	if err == nil || err.Error() != want {
 		t.Fatalf("timeout must render the main message:\n got: %v\nwant: %q", err, want)
 	}
@@ -505,7 +507,7 @@ func TestPinForwarder_NoCredential_FailsClosedToMainMessage(t *testing.T) {
 	}
 	entry := fwdEntry("192.168.1.108", 22)
 	err = f.Forward(entry, store.EntryFallbackAddr(entry), blob)
-	want := forwardMainMessage("192.168.1.108", 22, fp)
+	want := forwardMainMessage("192.168.1.108:22", fp)
 	if err == nil || err.Error() != want {
 		t.Fatalf("missing cache.auth.json must fail closed with the main message:\n got: %v\nwant: %q", err, want)
 	}
@@ -523,7 +525,7 @@ func TestPinForwarder_PlaintextRefusal(t *testing.T) {
 	}
 	entry := fwdEntry("192.168.1.108", 22)
 	err = f.Forward(entry, store.EntryFallbackAddr(entry), blob)
-	want := forwardMsgPlaintext("192.168.1.108", 22)
+	want := forwardMsgPlaintext("192.168.1.108:22")
 	if err == nil || err.Error() != want {
 		t.Fatalf("plaintext refusal text mismatch:\n got: %v\nwant: %q", err, want)
 	}

@@ -28,7 +28,7 @@ func (m *Manager) ReplaceHostKeyPin(identifier, fingerprint string, force bool, 
 			Page:  "主机密钥指纹必须是 SHA256 冒号加 32 字节摘要的无填充 base64 字符串（ssh-keygen -lf 的输出形式）。",
 		}
 	}
-	hostPort := store.EntryFallbackAddr(srv)
+	hostPort := store.EntryAuditAddr(srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
 		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=fingerprint forced=%t", srv.Name, hostPort, display, force)
 		if old != nil {
@@ -67,7 +67,7 @@ func (m *Manager) ClearHostKeyPin(identifier string, src Source) (bool, error) {
 		row := store.AuditRow{
 			TS: time.Now(), ServerID: srv.ID, Action: "pin-clear",
 			Command: fmt.Sprintf("entry=%s host=%s fingerprint=%s source=%s handshake=%s",
-				srv.Name, store.EntryFallbackAddr(srv),
+				srv.Name, store.EntryAuditAddr(srv),
 				store.PinFingerprint(old.Blob, old.Format), old.Source, handshakeAddr),
 			Status: "ok",
 		}

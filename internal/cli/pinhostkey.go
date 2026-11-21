@@ -195,7 +195,7 @@ func runPinShow(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "entry=%s host=%s fingerprint=%s (key-type=%s, format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
-		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(m.Blob, m.Format),
+		srv.Name, entryHostText(s, srv), store.PinFingerprint(m.Blob, m.Format),
 		m.DisplayKeyAlgorithm(), m.Format, m.Source, dash(m.Device), dash(m.HandshakeAddr), pinTime(m.CreatedAt))
 	return nil
 }
@@ -223,7 +223,7 @@ func runPinList(cmd *cobra.Command, s *store.Store) error {
 		srv := byID[p.ServerID]
 		name, hostPort := p.ServerID, p.HandshakeAddr
 		if srv != nil {
-			name, hostPort = srv.Name, store.EntryFallbackAddr(srv)
+			name, hostPort = srv.Name, entryHostText(s, srv)
 		}
 		fmt.Fprintf(out, "entry=%s host=%s fingerprint=%s (key-type=%s, format=%s, source=%s, device=%s, handshake=%s, created=%s)\n",
 			name, hostPort, store.PinFingerprint(p.Blob, p.Format), p.DisplayKeyAlgorithm(),
@@ -238,9 +238,9 @@ func runPinManual(
 	cmd *cobra.Command, s *store.Store, srv *models.Server, handshakeAddr string,
 	blob []byte, format, fp, via, note, keyAlgorithm string, force bool,
 ) error {
-	hostPort := store.EntryFallbackAddr(srv)
+	hostPort := entryHostText(s, srv)
 	auditFor := func(old *store.PinMeta) store.AuditRow {
-		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=%s forced=%t", srv.Name, hostPort, fp, via, force)
+		command := fmt.Sprintf("entry=%s host=%s fingerprint=%s via=%s forced=%t", srv.Name, store.EntryAuditAddr(srv), fp, via, force)
 		if force && old != nil {
 			command += " was=" + store.PinFingerprint(old.Blob, old.Format)
 		}
@@ -286,7 +286,7 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 			ServerID: srv.ID,
 			Action:   "pin-clear",
 			Command: fmt.Sprintf("entry=%s host=%s fingerprint=%s source=%s handshake=%s",
-				srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr)),
+				srv.Name, store.EntryAuditAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr)),
 			Status: "ok",
 		}
 	}
@@ -299,7 +299,7 @@ func runPinClear(cmd *cobra.Command, s *store.Store, srv *models.Server) error {
 		return nil
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "unpinned %s host=%s (was fingerprint=%s, source=%s, handshake=%s)\n",
-		srv.Name, store.EntryFallbackAddr(srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr))
+		srv.Name, entryHostText(s, srv), store.PinFingerprint(old.Blob, old.Format), old.Source, dash(old.HandshakeAddr))
 	return nil
 }
 

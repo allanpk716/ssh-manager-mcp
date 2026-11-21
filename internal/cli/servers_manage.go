@@ -117,7 +117,8 @@ func serversShowCmd() *cobra.Command {
 			writeServerDetail(cmd.OutOrStdout(), serverDetailText{
 				ID: detail.Server.ID, Name: detail.Server.Name, User: detail.Server.User,
 				Host: detail.Server.Host, Port: detail.Server.Port,
-				Shell: string(detail.Server.ShellType), CredentialType: string(detail.CredentialType),
+				PreferredAddress: entryPreferredAddress(s, detail.Server),
+				Shell:            string(detail.Server.ShellType), CredentialType: string(detail.CredentialType),
 				HasKeyPassphrase: detail.HasKeyPassphrase, HasSudoPassword: detail.HasSudoPassword,
 				Description: detail.Server.Description,
 				Hardware:    detail.Server.Hardware, Services: detail.Server.Services,
@@ -152,7 +153,10 @@ type serverDetailText struct {
 	ExposeHost                                     bool
 	DeviceName                                     string
 	HasDevice                                      bool
-	AttentionReasons                               []string
+	// PreferredAddress 是空主机条目的首选网络地址（本机起点）；主机非空或
+	// 没有局域网候选时为空串，「连接：」行照旧或退为「user (port N)」。
+	PreferredAddress string
+	AttentionReasons []string
 	// Reverse 是单机与权威端的反向授权分组；客户端本地快照后续只填裁剪
 	// 后的机密项与共享存储两组，未装配时保持空指针。
 	Reverse *serverReverseDetailText
@@ -173,7 +177,14 @@ type serverReverseDetailText struct {
 // writeServerDetail 是单机与客户端共用的详情排版；字段来源不同，内容一致。
 func writeServerDetail(w io.Writer, d serverDetailText) {
 	fmt.Fprintf(w, "服务器：%s（标识符 %s）\n", d.Name, d.ID)
-	fmt.Fprintf(w, "连接：%s@%s:%d\n", d.User, d.Host, d.Port)
+	connection := fmt.Sprintf("%s@%s:%d", d.User, d.Host, d.Port)
+	if d.Host == "" {
+		connection = fmt.Sprintf("%s (port %d)", d.User, d.Port)
+		if d.PreferredAddress != "" {
+			connection = fmt.Sprintf("%s@%s:%d", d.User, d.PreferredAddress, d.Port)
+		}
+	}
+	fmt.Fprintf(w, "连接：%s\n", connection)
 	fmt.Fprintf(w, "shell 类型：%s\n", models.NormalizeShellType(d.Shell))
 	credential := "未挂凭据"
 	switch d.CredentialType {
@@ -347,7 +358,8 @@ func showSnapshotServer(cmd *cobra.Command, identifier, instance string) error {
 		}
 		writeServerDetail(cmd.OutOrStdout(), serverDetailText{
 			ID: srv.ID, Name: srv.Name, User: srv.User, Host: srv.Host, Port: srv.Port,
-			Shell: srv.ShellType, CredentialType: credType[srv.CredentialID],
+			PreferredAddress: snapshotEntryPreferredAddress(snap, instance, srv),
+			Shell:            srv.ShellType, CredentialType: credType[srv.CredentialID],
 			HasKeyPassphrase: hasPass[srv.CredentialID], HasSudoPassword: srv.SudoCredentialID != "",
 			Description: srv.Description, Hardware: srv.Hardware,
 			Services: srv.Services, Role: srv.Role, Caveats: srv.Caveats, Tags: tags,
