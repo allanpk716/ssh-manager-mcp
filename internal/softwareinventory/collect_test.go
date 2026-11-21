@@ -99,7 +99,7 @@ func TestCollectLinuxFullFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if report.DeviceName != "工作站" || report.ServerEntryName != "entry-a" || report.Sudo ||
-		report.SystemType != "ubuntu" || report.CommandSetVersion != POSIXCommandSetVersion ||
+		report.SystemType != "ubuntu" || report.CommandSetVersion != "posix-v2" ||
 		report.Incomplete {
 		t.Fatalf("采集报告 = %+v", report)
 	}
@@ -608,7 +608,7 @@ func TestQueryShowsCollectionStatus(t *testing.T) {
 	status := result.Devices[0].Collection
 	if status.NeverCollected || status.Stale || status.LastSuccessAt == nil ||
 		status.LastSuccessAt.Unix() != service.Now().Unix() ||
-		status.CommandSetVersion != POSIXCommandSetVersion || status.ServerEntry != "entry-a" {
+		status.CommandSetVersion != "posix-v2" || status.ServerEntry != "entry-a" {
 		t.Fatalf("查询里的采集状态 = %+v", status)
 	}
 }

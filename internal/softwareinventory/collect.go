@@ -169,7 +169,9 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 	if err := s.Store.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
 		Items: collection.Items, ServerID: chosen.ID, Sudo: sudo,
 		CommandSetVersion: collection.CommandSetVersion, SystemType: collection.SystemType,
-		Incomplete: incomplete,
+		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
+		UnusedImageCount: collection.UnusedImageCount,
+		Incomplete:       incomplete,
 	}, source.origin); err != nil {
 		return nil, err
 	}

@@ -153,16 +153,18 @@ func cycloneDXCategoryRank(category Category) int {
 		return 1
 	case CategoryServiceProgram:
 		return 2
-	case CategoryContainerImage:
+	case CategoryContainer:
 		return 3
-	case CategoryDriverFirmware:
+	case CategoryContainerImage:
 		return 4
-	case CategorySystemPackage:
+	case CategoryDriverFirmware:
 		return 5
-	case CategoryUnidentified:
+	case CategorySystemPackage:
 		return 6
-	default:
+	case CategoryUnidentified:
 		return 7
+	default:
+		return 8
 	}
 }
 
@@ -172,6 +174,8 @@ func cycloneDXComponentType(category Category) (string, error) {
 		return "operating-system", nil
 	case CategoryServiceProgram, CategoryUnidentified:
 		return "application", nil
+	case CategoryContainer:
+		return "container", nil
 	case CategoryContainerImage:
 		return "container", nil
 	case CategoryDriverFirmware:

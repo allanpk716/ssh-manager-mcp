@@ -18,6 +18,9 @@ type CollectionSubmission struct {
 	Sudo              bool                            `json:"sudo"`
 	CommandSetVersion string                          `json:"command_set_version"`
 	SystemType        string                          `json:"system_type"`
+	DistroID          string                          `json:"distro_id,omitempty"`
+	DistroVersionID   string                          `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int                             `json:"unused_images,omitempty"`
 	Incomplete        bool                            `json:"incomplete"`
 	Notes             []string                        `json:"notes,omitempty"`
 	Items             []models.SoftwareObservedItem   `json:"items"`
@@ -107,7 +110,9 @@ func (s *Service) CollectForSubmission(
 		DeviceID: assignment.DeviceID, DeviceName: deviceName, ServerID: chosen.ID,
 		Sudo: assignment.Sudo, CommandSetVersion: collection.CommandSetVersion,
 		SystemType: collection.SystemType, Incomplete: collection.Incomplete,
-		Notes: collection.Notes, Items: collection.Items,
+		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
+		UnusedImageCount: collection.UnusedImageCount,
+		Notes:            collection.Notes, Items: collection.Items,
 		StartedAt: startedAt, EndedAt: s.now(),
 		ItemCounts: itemCounts(collection.Items),
 	}

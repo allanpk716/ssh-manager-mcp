@@ -47,6 +47,8 @@ func seedParsedSample(t *testing.T, deviceName string, collection *ParsedCollect
 	if err := st.ReplaceSoftwareObservedItems(deviceName, store.SoftwareObservedWrite{
 		Items: collection.Items, CommandSetVersion: collection.CommandSetVersion,
 		SystemType: collection.SystemType, Incomplete: collection.Incomplete,
+		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
+		UnusedImageCount: collection.UnusedImageCount,
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

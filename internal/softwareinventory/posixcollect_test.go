@@ -54,7 +54,7 @@ func TestCollectPOSIXSystemsThroughSQLite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.SystemType != test.system || report.CommandSetVersion != POSIXCommandSetVersion ||
+		if report.SystemType != test.system || report.CommandSetVersion != "posix-v2" ||
 			report.Incomplete != test.incomplete || recorded.command != expectedCommand {
 			t.Fatalf("%s 采集报告或命令不正确：report=%+v", test.device, report)
 		}
@@ -70,7 +70,7 @@ func TestCollectPOSIXSystemsThroughSQLite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status.SystemType != test.system || status.CommandSetVersion != POSIXCommandSetVersion ||
+		if status.SystemType != test.system || status.CommandSetVersion != "posix-v2" ||
 			status.LastIncomplete != test.incomplete || status.LastSuccessAt != service.Now() {
 			t.Fatalf("%s 的采集状态 = %+v", test.device, status)
 		}

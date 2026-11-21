@@ -273,6 +273,9 @@ func buildLinuxContainerItems(images, containers parsedSection) []models.Softwar
 }
 
 func containerRefMatchesImage(imageRef, repository, tag, digest string) bool {
+	if digest != "" && imageRef == digest {
+		return true
+	}
 	if imageRef == repository {
 		return true
 	}

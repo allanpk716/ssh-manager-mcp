@@ -20,6 +20,8 @@ type SnapshotSoftwareObservedItem struct {
 	ContainerTag     string `json:"container_tag,omitempty"`
 	ContainerDigest  string `json:"container_digest,omitempty"`
 	ContainerRunning bool   `json:"container_running,omitempty"`
+	ContainerName    string `json:"container_name,omitempty"`
+	ImagePullability string `json:"image_pullability,omitempty"`
 	ExecutablePath   string `json:"executable_path,omitempty"`
 	ProcessName      string `json:"process_name,omitempty"`
 	ProcessID        int    `json:"process_id,omitempty"`
@@ -50,6 +52,9 @@ type SnapshotSoftwareCollectionStatus struct {
 	LastIncomplete    bool   `json:"last_incomplete,omitempty"`
 	CommandSetVersion string `json:"command_set_version,omitempty"`
 	SystemType        string `json:"system_type,omitempty"`
+	DistroID          string `json:"distro_id,omitempty"`
+	DistroVersionID   string `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int    `json:"unused_images,omitempty"`
 	PendingImmediate  bool   `json:"pending_immediate,omitempty"`
 }
 
@@ -87,7 +92,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 	items := make([]SnapshotSoftwareObservedItem, 0)
 	itemRows, err := s.db.Query(`
 		SELECT id,device_id,stable_key,category,name,version,package_url,belongs_to,
-		       architecture,container_tag,container_digest,container_running,executable_path,
+		       architecture,container_tag,container_digest,container_running,
+		       container_name,image_pullability,executable_path,
 		       process_name,process_id,collected_at
 		FROM software_observed_items ORDER BY id`)
 	if err != nil {
@@ -98,7 +104,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 		if err := itemRows.Scan(
 			&row.ID, &row.DeviceID, &row.StableKey, &row.Category, &row.Name, &row.Version,
 			&row.PackageURL, &row.BelongsTo, &row.Architecture, &row.ContainerTag,
-			&row.ContainerDigest, &row.ContainerRunning, &row.ExecutablePath,
+			&row.ContainerDigest, &row.ContainerRunning,
+			&row.ContainerName, &row.ImagePullability, &row.ExecutablePath,
 			&row.ProcessName, &row.ProcessID, &row.CollectedAt,
 		); err != nil {
 			itemRows.Close()
@@ -144,7 +151,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 	statusRows, err := s.db.Query(`
 		SELECT device_id,collector,COALESCE(preferred_server_id,''),COALESCE(last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
-		       command_set_version,system_type,pending_immediate
+		       command_set_version,system_type,distro_id,distro_version_id,unused_images,
+		       pending_immediate
 		FROM software_collection_status ORDER BY device_id`)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
@@ -154,7 +162,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 		if err := statusRows.Scan(
 			&row.DeviceID, &row.Collector, &row.PreferredServerID, &row.LastServerID,
 			&row.LastSuccessAt, &row.LastFailureAt, &row.LastFailureReason, &row.LastIncomplete,
-			&row.CommandSetVersion, &row.SystemType, &row.PendingImmediate,
+			&row.CommandSetVersion, &row.SystemType,
+			&row.DistroID, &row.DistroVersionID, &row.UnusedImageCount, &row.PendingImmediate,
 		); err != nil {
 			statusRows.Close()
 			return nil, nil, nil, nil, nil, err
@@ -227,12 +236,14 @@ func importSoftwareCollectionBackupTx(tx *sql.Tx, snap *Snapshot) error {
 		if _, err := tx.Exec(`
 			INSERT INTO software_observed_items(
 				id,device_id,stable_key,category,name,name_lower,version,package_url,belongs_to,
-				architecture,container_tag,container_digest,container_running,executable_path,
+				architecture,container_tag,container_digest,container_running,
+				container_name,image_pullability,executable_path,
 				process_name,process_id,collected_at
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			row.ID, row.DeviceID, row.StableKey, row.Category, row.Name,
 			strings.ToLower(row.Name), row.Version, row.PackageURL, row.BelongsTo,
 			row.Architecture, row.ContainerTag, row.ContainerDigest, row.ContainerRunning,
+			row.ContainerName, row.ImagePullability,
 			row.ExecutablePath, row.ProcessName, row.ProcessID, row.CollectedAt,
 		); err != nil {
 			return fmt.Errorf("insert software observed item %s: %w", row.ID, err)
@@ -253,11 +264,12 @@ func importSoftwareCollectionBackupTx(tx *sql.Tx, snap *Snapshot) error {
 			INSERT INTO software_collection_status(
 				device_id,collector,preferred_server_id,last_server_id,last_success_at,
 				last_failure_at,last_failure_reason,last_incomplete,command_set_version,
-				system_type,pending_immediate
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+				system_type,distro_id,distro_version_id,unused_images,pending_immediate
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			row.DeviceID, row.Collector, row.PreferredServerID, row.LastServerID,
 			row.LastSuccessAt, row.LastFailureAt, row.LastFailureReason, row.LastIncomplete,
-			row.CommandSetVersion, row.SystemType, row.PendingImmediate,
+			row.CommandSetVersion, row.SystemType,
+			row.DistroID, row.DistroVersionID, row.UnusedImageCount, row.PendingImmediate,
 		); err != nil {
 			return fmt.Errorf("insert software collection status %s: %w", row.DeviceID, err)
 		}

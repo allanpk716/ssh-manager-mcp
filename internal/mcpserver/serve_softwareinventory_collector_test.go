@@ -146,6 +146,7 @@ func submissionBody(t *testing.T, fx *softwareInventoryFixture, gpu *models.Serv
 	blob, err := json.Marshal(map[string]any{
 		"device_id": device.ID, "device_name": device.Name, "server_id": gpu.ID,
 		"sudo": true, "command_set_version": "posix-v2", "system_type": "ubuntu",
+		"distro_id": "ubuntu", "distro_version_id": "22.04", "unused_images": 2,
 		"items": []models.SoftwareObservedItem{item}, "started_at": time.Now(), "ended_at": time.Now(),
 	})
 	if err != nil {
@@ -251,6 +252,10 @@ func TestSoftwareInventorySubmissionEndpointLandsResult(t *testing.T) {
 	if err != nil || collected.Collector.CacheTokenID != fx.laptopID ||
 		collected.PendingImmediate || collected.LastSuccessAt.IsZero() {
 		t.Fatalf("上交后的采集状态 = %+v err=%v", collected, err)
+	}
+	if collected.DistroID != "ubuntu" || collected.DistroVersionID != "22.04" ||
+		collected.UnusedImageCount != 2 {
+		t.Fatalf("上交后的第 3 版设备级字段 = %+v", collected)
 	}
 }
 

@@ -238,3 +238,55 @@ func TestFullServersForDevice(t *testing.T) {
 		t.Fatal("设备不存在应返回错误")
 	}
 }
+
+// TestSoftwareObservedContainerItemsUseContainerNameInStableKey 钉住同一
+// 镜像启动多个容器时的存储口径：容器名参与稳定键，两条实测条目不互相挤
+// 掉，容器字段与设备级第 3 版字段也能写读一致。
+func TestSoftwareObservedContainerItemsUseContainerNameInStableKey(t *testing.T) {
+	st := newCollectTestStore(t)
+	server := addCollectServer(t, st, "容器工作站", "容器入口")
+	items := []models.SoftwareObservedItem{
+		{
+			Category: models.SoftwareCategoryContainer, Name: "nginx", Version: "1.25.3",
+			ContainerName: "gateway", ContainerTag: "1.25.3",
+			ContainerDigest:  "sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa",
+			ContainerRunning: true, ImagePullability: models.SoftwareImagePullabilityPublic,
+			BelongsTo: "docker",
+		},
+		{
+			Category: models.SoftwareCategoryContainer, Name: "nginx", Version: "1.25.3",
+			ContainerName: "mirror", ContainerTag: "1.25.3",
+			ContainerDigest:  "sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa",
+			ContainerRunning: false, ImagePullability: models.SoftwareImagePullabilityPublic,
+			BelongsTo: "docker",
+		},
+	}
+	if err := st.ReplaceSoftwareObservedItems("容器工作站", SoftwareObservedWrite{
+		Items: items, ServerID: server.ID, CommandSetVersion: "posix-v3",
+		SystemType: "ubuntu", DistroID: "ubuntu", DistroVersionID: "22.04",
+		UnusedImageCount: 2,
+	}, CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	stored, err := st.SoftwareObservedItemsForDevice("容器工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 || stored[0].StableKey == stored[1].StableKey {
+		t.Fatalf("同一镜像的不同容器应有不同稳定键：%+v", stored)
+	}
+	for _, item := range stored {
+		if item.Category != models.SoftwareCategoryContainer || item.Name != "nginx" ||
+			item.ContainerName == "" || item.ImagePullability != models.SoftwareImagePullabilityPublic {
+			t.Fatalf("容器条目字段没有完整读回：%+v", item)
+		}
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("容器工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.DistroID != "ubuntu" || status.DistroVersionID != "22.04" || status.UnusedImageCount != 2 {
+		t.Fatalf("采集状态缺少第 3 版设备级字段：%+v", status)
+	}
+}

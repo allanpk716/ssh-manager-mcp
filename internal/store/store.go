@@ -559,7 +559,173 @@ func migrate(db *sql.DB) error {
 	if err := migrateNetworkMembershipRegistrationOrder(db); err != nil {
 		return err
 	}
+	// 票 #353：软件清单第 3 版补充设备级采集字段，并让实测条目表接受
+	// 「容器」类别。状态表的三列可以原地补充；条目表的外键子表会引用
+	// 它，类别约束变化必须固定连接并重建表。
+	if err := addColumnIfMissing(db, "software_collection_status", "distro_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "software_collection_status", "distro_version_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := addColumnIfMissing(db, "software_collection_status", "unused_images", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := migrateSoftwareObservedItemsContainerCategory(db); err != nil {
+		return err
+	}
+	if err := migrateSoftwareDeclarationsContainerCategory(db); err != nil {
+		return err
+	}
 	return nil
+}
+
+// migrateSoftwareObservedItemsContainerCategory 把旧版实测条目表重建为可
+// 保存「容器」类别的结构。重建期间关闭外部键并固定一个数据库连接，避免
+// 删除旧表时级联删除监听端口子表。
+func migrateSoftwareObservedItemsContainerCategory(db *sql.DB) error {
+	var definition string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='software_observed_items'`,
+	).Scan(&definition)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(definition, `'container'`) {
+		return nil
+	}
+
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	statements := []string{
+		`CREATE TABLE software_observed_items_new (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  stable_key TEXT NOT NULL,
+  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container','container_image','driver_firmware','system_package','unidentified_process')),
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL,
+  version TEXT NOT NULL DEFAULT '',
+  package_url TEXT NOT NULL DEFAULT '',
+  belongs_to TEXT NOT NULL DEFAULT '',
+  architecture TEXT NOT NULL DEFAULT '',
+  container_tag TEXT NOT NULL DEFAULT '',
+  container_digest TEXT NOT NULL DEFAULT '',
+  container_running INTEGER NOT NULL DEFAULT 0,
+  container_name TEXT NOT NULL DEFAULT '',
+  image_pullability TEXT NOT NULL DEFAULT '',
+  executable_path TEXT NOT NULL DEFAULT '',
+  process_name TEXT NOT NULL DEFAULT '',
+  process_id INTEGER NOT NULL DEFAULT 0,
+  collected_at INTEGER NOT NULL,
+  UNIQUE(device_id, stable_key)
+)`,
+		`INSERT INTO software_observed_items_new (
+  id,device_id,stable_key,category,name,name_lower,version,package_url,belongs_to,
+  architecture,container_tag,container_digest,container_running,container_name,
+  image_pullability,executable_path,process_name,process_id,collected_at
+) SELECT id,device_id,stable_key,category,name,name_lower,version,package_url,
+  belongs_to,architecture,container_tag,container_digest,container_running,'','',
+  executable_path,process_name,process_id,collected_at FROM software_observed_items`,
+		`DROP TABLE software_observed_items`,
+		`ALTER TABLE software_observed_items_new RENAME TO software_observed_items`,
+		`CREATE INDEX IF NOT EXISTS software_observed_items_device_category
+  ON software_observed_items(device_id, category, name_lower, version)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild software observed items: %w", err)
+		}
+	}
+	return tx.Commit()
+}
+
+// migrateSoftwareDeclarationsContainerCategory 把旧版声明表重建为可保存
+// 「容器」类别的结构。声明端口子表引用声明表，重建时同样固定连接并关闭
+// 外部键，避免子表被级联删除。
+func migrateSoftwareDeclarationsContainerCategory(db *sql.DB) error {
+	var definition string
+	err := db.QueryRow(
+		`SELECT sql FROM sqlite_master WHERE type='table' AND name='software_declarations'`,
+	).Scan(&definition)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(definition, `'container'`) {
+		return nil
+	}
+
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer func() { _, _ = conn.ExecContext(ctx, `PRAGMA foreign_keys=ON`) }()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	statements := []string{
+		`CREATE TABLE software_declarations_new (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container','container_image','driver_firmware','system_package','unidentified_process')),
+  name TEXT NOT NULL,
+  name_lower TEXT NOT NULL,
+  version TEXT NOT NULL,
+  package_url TEXT NOT NULL DEFAULT '',
+  cpe TEXT NOT NULL DEFAULT '',
+  belongs_to TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
+  claimed_observed_key TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','draft')),
+  confirmed_at INTEGER NOT NULL,
+  created_source TEXT NOT NULL DEFAULT '',
+  last_source TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+)`,
+		`INSERT INTO software_declarations_new (
+  id,device_id,category,name,name_lower,version,package_url,cpe,belongs_to,note,
+  claimed_observed_key,status,confirmed_at,created_source,last_source,created_at,updated_at
+) SELECT id,device_id,category,name,name_lower,version,package_url,cpe,belongs_to,note,
+  claimed_observed_key,status,confirmed_at,created_source,last_source,created_at,updated_at
+  FROM software_declarations`,
+		`DROP TABLE software_declarations`,
+		`ALTER TABLE software_declarations_new RENAME TO software_declarations`,
+		`CREATE INDEX IF NOT EXISTS software_declarations_device_category_name
+  ON software_declarations(device_id, category, name_lower, version)`,
+	}
+	for _, statement := range statements {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("rebuild software declarations: %w", err)
+		}
+	}
+	return tx.Commit()
 }
 
 // ensureServerShellTypeColumn 补齐服务器条目标注的 shell 类型列。它必须排

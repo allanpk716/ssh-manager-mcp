@@ -11,8 +11,7 @@ type DisplayCategory int
 
 // 展示类别的固定顺序，即设备页的分组顺序：重点清单在前（操作系统与内
 // 核、监听程序、容器、驱动与固件），系统包最后并默认折叠。「容器」分组
-// 代号是给容器类别条目留的位；本票时点数据模型里只有容器镜像类别，同样
-// 映射进这个分组。
+// 同时承载第 3 版的容器条目与第 2 版结果里的容器镜像条目。
 const (
 	DisplayCategoryOperatingSystemKernel DisplayCategory = iota
 	DisplayCategoryListeningProgram
@@ -52,15 +51,15 @@ func IsKernelItem(item QueryItem) bool {
 
 // ItemDisplayCategory 把一条查询结果映射为页面与 CSV 共用的展示类别：
 // 操作系统条目与内核条目合并展示；服务程序、未识别进程与带监听端口的
-// 系统包都是「监听程序」（监听端口的程序）；容器镜像归入「容器」；其余
-// 系统包单独分组。
+// 系统包都是「监听程序」（监听端口的程序）；容器与容器镜像归入「容器」；
+// 其余系统包单独分组。
 func ItemDisplayCategory(item QueryItem) DisplayCategory {
 	switch {
 	case item.Category == CategoryOperatingSystem || IsKernelItem(item):
 		return DisplayCategoryOperatingSystemKernel
 	case item.Category == CategoryServiceProgram || item.Category == CategoryUnidentified:
 		return DisplayCategoryListeningProgram
-	case item.Category == CategoryContainerImage:
+	case item.Category == CategoryContainer || item.Category == CategoryContainerImage:
 		return DisplayCategoryContainer
 	case item.Category == CategoryDriverFirmware:
 		return DisplayCategoryDriverFirmware
