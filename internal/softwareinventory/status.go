@@ -60,6 +60,7 @@ func collectionStatusCore(stored models.SoftwareCollectionStatus, now time.Time)
 		Incomplete: stored.LastIncomplete, CommandSetVersion: stored.CommandSetVersion,
 		DistroID: stored.DistroID, DistroVersionID: stored.DistroVersionID,
 		UnusedImageCount: stored.UnusedImageCount,
+		PendingUpdates:   stored.PendingUpdates,
 		PendingImmediate: stored.PendingImmediate,
 	}
 	if stored.LastSuccessAt.Unix() <= 0 {

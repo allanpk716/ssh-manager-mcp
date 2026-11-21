@@ -308,3 +308,39 @@ func TestQueryPOSIXV3ContainerItemsThroughStore(t *testing.T) {
 		t.Fatalf("查询结果应带未使用镜像数量 2：%+v", device.Collection)
 	}
 }
+
+// TestQueryPOSIXV3PendingUpdatesThroughStore 钉住待装更新落库与查询：
+// apt 样例读回安全来源数量与明细；没有包管理器的设备保持未知空指针。
+func TestQueryPOSIXV3PendingUpdatesThroughStore(t *testing.T) {
+	manager := seedPOSIXSample(t, "容器工作站", "ubuntu2204-v3-containers.txt")
+	result, err := manager.Query(QueryOptions{
+		Device: "容器工作站", Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := findQueryDevice(result, "容器工作站")
+	if device == nil {
+		t.Fatal("样例设备不在查询结果里")
+	}
+	pending := device.Collection.PendingUpdates
+	if pending == nil || pending.SecurityCount != 2 || len(pending.Items) != 3 ||
+		!pending.CacheUpdatedAt.Equal(time.Unix(1795136400, 0).UTC()) {
+		t.Fatalf("查询结果应带 apt 待装更新数量、明细与缓存时间：%+v", pending)
+	}
+
+	manager = seedPOSIXSample(t, "嵌入式板", "vendor-linux-v3-no-package-manager.txt")
+	result, err = manager.Query(QueryOptions{
+		Device: "嵌入式板", Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	device = findQueryDevice(result, "嵌入式板")
+	if device == nil {
+		t.Fatal("嵌入式板不在查询结果里")
+	}
+	if device.Collection.PendingUpdates != nil {
+		t.Fatalf("没有包管理器时待装更新应保持未知：%+v", device.Collection.PendingUpdates)
+	}
+}

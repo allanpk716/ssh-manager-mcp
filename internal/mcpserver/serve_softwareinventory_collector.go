@@ -191,6 +191,7 @@ func (r *ServeRunner) handleSoftwareInventoryResults(w http.ResponseWriter, req 
 		SystemType: in.SystemType, Incomplete: in.Incomplete,
 		DistroID: in.DistroID, DistroVersionID: in.DistroVersionID,
 		UnusedImageCount: in.UnusedImageCount,
+		PendingUpdates:   in.PendingUpdates,
 	}, store.ForwardedWriteSource(ct.ID)); err != nil {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: software-inventory result landing %s: %v\n", device.Name, err)
 		http.Error(w, "collection result landing failed", http.StatusInternalServerError)

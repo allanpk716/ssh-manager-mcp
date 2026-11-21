@@ -68,6 +68,9 @@ func TestCollectForSubmissionCarriesPOSIXV3Fields(t *testing.T) {
 		submission.DistroVersionID != "22.04" || submission.UnusedImageCount != 2 {
 		t.Fatalf("客户端待上交的第 3 版设备级字段 = %+v", submission)
 	}
+	if submission.PendingUpdates == nil || submission.PendingUpdates.SecurityCount != 2 {
+		t.Fatalf("客户端待上交的待装安全更新 = %+v", submission.PendingUpdates)
+	}
 	gateway := findObservedItem(
 		t, submission.Items, models.SoftwareCategoryContainer, "nginx")
 	if gateway.ContainerName != "gateway" ||

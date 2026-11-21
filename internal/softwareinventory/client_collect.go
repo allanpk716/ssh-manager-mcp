@@ -21,6 +21,7 @@ type CollectionSubmission struct {
 	DistroID          string                          `json:"distro_id,omitempty"`
 	DistroVersionID   string                          `json:"distro_version_id,omitempty"`
 	UnusedImageCount  int                             `json:"unused_images,omitempty"`
+	PendingUpdates    *models.SoftwarePendingUpdates  `json:"pending_updates,omitempty"`
 	Incomplete        bool                            `json:"incomplete"`
 	Notes             []string                        `json:"notes,omitempty"`
 	Items             []models.SoftwareObservedItem   `json:"items"`
@@ -112,6 +113,7 @@ func (s *Service) CollectForSubmission(
 		SystemType: collection.SystemType, Incomplete: collection.Incomplete,
 		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
 		UnusedImageCount: collection.UnusedImageCount,
+		PendingUpdates:   collection.PendingUpdates,
 		Notes:            collection.Notes, Items: collection.Items,
 		StartedAt: startedAt, EndedAt: s.now(),
 		ItemCounts: itemCounts(collection.Items),

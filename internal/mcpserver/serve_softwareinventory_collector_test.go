@@ -147,6 +147,14 @@ func submissionBody(t *testing.T, fx *softwareInventoryFixture, gpu *models.Serv
 		"device_id": device.ID, "device_name": device.Name, "server_id": gpu.ID,
 		"sudo": true, "command_set_version": "posix-v2", "system_type": "ubuntu",
 		"distro_id": "ubuntu", "distro_version_id": "22.04", "unused_images": 2,
+		"pending_updates": map[string]any{
+			"security_count":   1,
+			"cache_updated_at": time.Unix(1795136400, 0).UTC(),
+			"items": []models.SoftwarePendingUpdate{{
+				Name: "openssl", CurrentVersion: "3.0.2-0ubuntu1.15",
+				AvailableVersion: "3.0.2-0ubuntu1.18", FromSecurityRepo: true,
+			}},
+		},
 		"items": []models.SoftwareObservedItem{item}, "started_at": time.Now(), "ended_at": time.Now(),
 	})
 	if err != nil {
@@ -256,6 +264,12 @@ func TestSoftwareInventorySubmissionEndpointLandsResult(t *testing.T) {
 	if collected.DistroID != "ubuntu" || collected.DistroVersionID != "22.04" ||
 		collected.UnusedImageCount != 2 {
 		t.Fatalf("上交后的第 3 版设备级字段 = %+v", collected)
+	}
+	pending := collected.PendingUpdates
+	if pending == nil || pending.SecurityCount != 1 || len(pending.Items) != 1 ||
+		pending.Items[0].Name != "openssl" || !pending.Items[0].FromSecurityRepo ||
+		!pending.CacheUpdatedAt.Equal(time.Unix(1795136400, 0).UTC()) {
+		t.Fatalf("上交后的待装更新 = %+v", pending)
 	}
 }
 

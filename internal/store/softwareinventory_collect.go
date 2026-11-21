@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -63,6 +64,7 @@ CREATE TABLE IF NOT EXISTS software_collection_status (
   distro_id TEXT NOT NULL DEFAULT '',
   distro_version_id TEXT NOT NULL DEFAULT '',
   unused_images INTEGER NOT NULL DEFAULT 0,
+  pending_updates TEXT NOT NULL DEFAULT '',
   pending_immediate INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS software_collection_settings (
@@ -84,6 +86,7 @@ type SoftwareObservedWrite struct {
 	DistroID          string
 	DistroVersionID   string
 	UnusedImageCount  int
+	PendingUpdates    *models.SoftwarePendingUpdates
 	Incomplete        bool
 }
 
@@ -247,6 +250,7 @@ func (s *Store) ReplaceSoftwareObservedItems(
 		CommandSetVersion: write.CommandSetVersion, SystemType: write.SystemType,
 		DistroID: write.DistroID, DistroVersionID: write.DistroVersionID,
 		UnusedImageCount: write.UnusedImageCount,
+		PendingUpdates:   write.PendingUpdates,
 		Incomplete:       write.Incomplete, SuccessAt: at,
 	}, softwareCollectionFailure{}); err != nil {
 		return err
@@ -326,18 +330,21 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		       COALESCE(status.preferred_server_id,''),COALESCE(status.last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
 		       command_set_version,system_type,distro_id,distro_version_id,unused_images,
+		       COALESCE(pending_updates,''),
 		       pending_immediate
 		FROM software_collection_status status
 		LEFT JOIN cache_tokens token ON token.id=status.collector
 		WHERE status.device_id=?`, device.ID)
 	var lastServerID string
 	var successAt, failureAt int64
+	var pendingUpdatesText string
 	if err := row.Scan(
 		&status.Collector.CacheTokenID, &status.CollectorName, &status.CollectorRevoked,
 		&status.PreferredServerID, &lastServerID,
 		&successAt, &failureAt, &status.LastFailureReason, &status.LastIncomplete,
 		&status.CommandSetVersion, &status.SystemType,
 		&status.DistroID, &status.DistroVersionID, &status.UnusedImageCount,
+		&pendingUpdatesText,
 		&status.PendingImmediate,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -346,6 +353,7 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		return nil, err
 	}
 	status.LastSuccessAt, status.LastFailureAt = time.Unix(successAt, 0), time.Unix(failureAt, 0)
+	status.PendingUpdates = softwarePendingUpdatesFromStorage(pendingUpdatesText)
 	if lastServerID != "" {
 		if server, err := s.GetServer(lastServerID); err == nil {
 			status.LastServerID, status.LastServerName = server.ID, server.Name
@@ -399,6 +407,7 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 		       COALESCE(status.distro_id,''),
 		       COALESCE(status.distro_version_id,''),
 		       COALESCE(status.unused_images,0),
+		       COALESCE(status.pending_updates,''),
 		       COALESCE(status.pending_immediate,0)
 		FROM devices device
 		LEFT JOIN software_collection_status status ON status.device_id=device.id
@@ -420,17 +429,19 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 		var status models.SoftwareCollectionStatus
 		var lastServerID string
 		var successAt, failureAt int64
+		var pendingUpdatesText string
 		if err := rows.Scan(
 			&status.DeviceID, &status.DeviceName, &status.Managed, &status.Collector,
 			&status.CollectorName, &status.CollectorRevoked,
 			&status.PreferredServerID, &lastServerID, &successAt, &failureAt,
 			&status.LastFailureReason, &status.LastIncomplete, &status.CommandSetVersion,
 			&status.SystemType, &status.DistroID, &status.DistroVersionID,
-			&status.UnusedImageCount, &status.PendingImmediate,
+			&status.UnusedImageCount, &pendingUpdatesText, &status.PendingImmediate,
 		); err != nil {
 			return nil, err
 		}
 		status.LastSuccessAt, status.LastFailureAt = time.Unix(successAt, 0), time.Unix(failureAt, 0)
+		status.PendingUpdates = softwarePendingUpdatesFromStorage(pendingUpdatesText)
 		out = append(out, status)
 		lastServerIDs = append(lastServerIDs, lastServerID)
 	}
@@ -470,6 +481,7 @@ type softwareCollectionSuccess struct {
 	DistroID          string
 	DistroVersionID   string
 	UnusedImageCount  int
+	PendingUpdates    *models.SoftwarePendingUpdates
 	Incomplete        bool
 	SuccessAt         time.Time
 }
@@ -490,11 +502,16 @@ func writeSoftwareCollectionStatusTx(
 	failure softwareCollectionFailure,
 ) error {
 	if success != nil {
-		_, err := tx.Exec(`
+		pendingUpdatesText, err := softwarePendingUpdatesText(success.PendingUpdates)
+		if err != nil {
+			return err
+		}
+		_, execErr := tx.Exec(`
 			INSERT INTO software_collection_status(
 				device_id,collector,last_server_id,last_success_at,last_incomplete,
-				command_set_version,system_type,distro_id,distro_version_id,unused_images
-			) VALUES(?,?,?,?,?,?,?,?,?,?)
+				command_set_version,system_type,distro_id,distro_version_id,unused_images,
+				pending_updates
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(device_id) DO UPDATE SET
 				last_server_id=excluded.last_server_id,
 				last_success_at=excluded.last_success_at,
@@ -504,12 +521,14 @@ func writeSoftwareCollectionStatusTx(
 				distro_id=excluded.distro_id,
 				distro_version_id=excluded.distro_version_id,
 				unused_images=excluded.unused_images,
+				pending_updates=excluded.pending_updates,
 				pending_immediate=0`,
 			deviceID, collector.CacheTokenID, lastServerID, success.SuccessAt.Unix(),
 			success.Incomplete, success.CommandSetVersion, success.SystemType,
 			success.DistroID, success.DistroVersionID, success.UnusedImageCount,
+			pendingUpdatesText,
 		)
-		return err
+		return execErr
 	}
 	_, err := tx.Exec(`
 		INSERT INTO software_collection_status(
@@ -522,6 +541,30 @@ func writeSoftwareCollectionStatusTx(
 		deviceID, collector.CacheTokenID, failure.At.Unix(), failure.Reason,
 	)
 	return err
+}
+
+func softwarePendingUpdatesText(
+	pendingUpdates *models.SoftwarePendingUpdates,
+) (string, error) {
+	if pendingUpdates == nil {
+		return "", nil
+	}
+	blob, err := json.Marshal(pendingUpdates)
+	if err != nil {
+		return "", fmt.Errorf("序列化待装更新失败: %w", err)
+	}
+	return string(blob), nil
+}
+
+func softwarePendingUpdatesFromStorage(text string) *models.SoftwarePendingUpdates {
+	if text == "" {
+		return nil
+	}
+	var pendingUpdates models.SoftwarePendingUpdates
+	if err := json.Unmarshal([]byte(text), &pendingUpdates); err != nil {
+		return nil
+	}
+	return &pendingUpdates
 }
 
 func softwareObservedStableKey(item *models.SoftwareObservedItem) string {
