@@ -90,4 +90,12 @@ product_name	21D8CTO1WW
 SSHMGR-INVENTORY STATUS firmware 0
 SSHMGR-INVENTORY SECTION gpu-driver
 SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY SECTION pending-updates-apt
+openssl/jammy-security 3.0.2-0ubuntu1.18 [upgradable from: 3.0.2-0ubuntu1.15]
+libssl3/jammy-security 3.0.2-0ubuntu1.18 [upgradable from: 3.0.2-0ubuntu1.15]
+curl/jammy-updates 7.81.0-1ubuntu1.5 [upgradable from: 7.81.0-1ubuntu1.4]
+cache-time	1795136400
+SSHMGR-INVENTORY STATUS pending-updates-apt 0
+SSHMGR-INVENTORY SECTION pending-updates-dnf
+SSHMGR-INVENTORY ABSENT pending-updates-dnf
 SSHMGR-INVENTORY END

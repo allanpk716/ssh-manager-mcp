@@ -1,14 +1,16 @@
 package softwareinventory
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
 
 // 本文件钉住 POSIX 固定命令集第 3 版的解析口径：以容器为单位生成容器
-// 条目、未使用镜像只计数、发行版编号随结果上交；第 2 版样例仍按原规则
-// 解析（回归钉住）。
+// 条目、未使用镜像只计数、发行版编号与待装更新随结果上交；第 2 版样例
+// 仍按原规则解析（回归钉住）。
 
 // TestParsePOSIXV3ContainerFixture 覆盖第 3 版样例的主路径：运行中与已停
 // 止容器、公开镜像与内网私有镜像、判断不了能否拉取的镜像站、未使用旧镜
@@ -153,6 +155,100 @@ func TestParsePOSIXV2FixtureStillParsesWithV3Parser(t *testing.T) {
 	}
 	if collection.DistroID != "" || collection.DistroVersionID != "" || collection.UnusedImageCount != 0 {
 		t.Fatalf("第 2 版结果不应带第 3 版的设备级字段：%+v", collection)
+	}
+	if collection.PendingUpdates != nil {
+		t.Fatalf("第 2 版结果不应带待装更新：%+v", collection.PendingUpdates)
+	}
+}
+
+// TestParsePOSIXV3PendingUpdatesFromAptFixture 覆盖 apt 本地缓存路径：
+// 全部可升级明细保留，安全仓库条目标记出来，当前版本从方括号提示里还原。
+func TestParsePOSIXV3PendingUpdatesFromAptFixture(t *testing.T) {
+	collection, err := parsePOSIXInventoryOutput(
+		posixFixtureOutput(t, "ubuntu2204-v3-containers.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := collection.PendingUpdates
+	if pending == nil {
+		t.Fatalf("apt 缓存可读时应带待装更新：%+v", collection)
+	}
+	if pending.SecurityCount != 2 || len(pending.Items) != 3 {
+		t.Fatalf("待装更新安全来源数量 = %d、明细 = %d 条，应为 2、3：%+v",
+			pending.SecurityCount, len(pending.Items), pending)
+	}
+	wantTime := time.Unix(1795136400, 0).UTC()
+	if !pending.CacheUpdatedAt.Equal(wantTime) {
+		t.Fatalf("apt 缓存时间 = %v，应为 %v", pending.CacheUpdatedAt, wantTime)
+	}
+	openssl := pending.Items[0]
+	if openssl.Name != "openssl" || openssl.CurrentVersion != "3.0.2-0ubuntu1.15" ||
+		openssl.AvailableVersion != "3.0.2-0ubuntu1.18" || !openssl.FromSecurityRepo {
+		t.Fatalf("openssl 待装更新字段不全：%+v", openssl)
+	}
+	curl := pending.Items[2]
+	if curl.Name != "curl" || curl.CurrentVersion != "7.81.0-1ubuntu1.4" ||
+		curl.AvailableVersion != "7.81.0-1ubuntu1.5" || curl.FromSecurityRepo {
+		t.Fatalf("curl 应保留为普通更新明细：%+v", curl)
+	}
+}
+
+// TestParsePOSIXV3PendingUpdatesFromDnfFixture 覆盖 dnf/yum 本地缓存路
+// 径：只保留安全更新，提示行跳过，版本纪元原样保留。
+func TestParsePOSIXV3PendingUpdatesFromDnfFixture(t *testing.T) {
+	collection, err := parsePOSIXInventoryOutput(
+		posixFixtureOutput(t, "rocky9-v3-dnf-security.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.SystemType != "linux" || collection.Incomplete {
+		t.Fatalf("Rocky 样例应完整解析为 Linux：%+v", collection)
+	}
+	pending := collection.PendingUpdates
+	if pending == nil {
+		t.Fatalf("dnf 缓存可读时应带待装更新：%+v", collection)
+	}
+	if pending.SecurityCount != 3 || len(pending.Items) != 3 {
+		t.Fatalf("待装更新安全来源数量 = %d、明细 = %d 条，应为 3、3：%+v",
+			pending.SecurityCount, len(pending.Items), pending)
+	}
+	wantTime := time.Unix(1795050000, 0).UTC()
+	if !pending.CacheUpdatedAt.Equal(wantTime) {
+		t.Fatalf("dnf 缓存时间 = %v，应为 %v", pending.CacheUpdatedAt, wantTime)
+	}
+	kernel := pending.Items[1]
+	if kernel.Name != "kernel" || kernel.CurrentVersion != "" ||
+		kernel.AvailableVersion != "5.14.0-427.42.1.el9_4" || !kernel.FromSecurityRepo {
+		t.Fatalf("kernel 待装更新字段不全：%+v", kernel)
+	}
+	if pending.Items[2].Name != "NetworkManager" ||
+		pending.Items[2].AvailableVersion != "1:1.46.0-13.el9_4" {
+		t.Fatalf("版本纪元应原样保留：%+v", pending.Items[2])
+	}
+}
+
+// TestParsePOSIXV3PendingUpdatesUnknownWithoutPackageManager 钉住未知语
+// 义：没有 apt 与 dnf/yum 时待装更新为空指针；#353 时代的旧第 3 版输出
+// 缺少这两节也不算不完整。
+func TestParsePOSIXV3PendingUpdatesUnknownWithoutPackageManager(t *testing.T) {
+	output := posixFixtureOutput(t, "vendor-linux-v3-no-package-manager.txt")
+	collection, err := parsePOSIXInventoryOutput(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.PendingUpdates != nil || collection.Incomplete {
+		t.Fatalf("没有包管理器时应为未知且完整：%+v", collection)
+	}
+	legacyOutput := strings.ReplaceAll(
+		strings.ReplaceAll(output,
+			"SSHMGR-INVENTORY SECTION pending-updates-apt\nSSHMGR-INVENTORY ABSENT pending-updates-apt\n", ""),
+		"SSHMGR-INVENTORY SECTION pending-updates-dnf\nSSHMGR-INVENTORY ABSENT pending-updates-dnf\n", "")
+	legacy, err := parsePOSIXInventoryOutput(legacyOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.PendingUpdates != nil || legacy.Incomplete {
+		t.Fatalf("旧第 3 版输出缺少待装更新节时应为未知且完整：%+v", legacy)
 	}
 }
 

@@ -1,0 +1,64 @@
+SSHMGR-INVENTORY BEGIN posix-v3
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=5.14.0-427.13.1.el9_4.x86_64
+machine=x86_64
+file=/etc/os-release
+NAME="Rocky Linux"
+VERSION="9.4 (Blue Onyx)"
+ID="rocky"
+ID_LIKE="rhel centos fedora"
+VERSION_ID="9.4"
+VERSION_CODENAME="Blue Onyx"
+PRETTY_NAME="Rocky Linux 9.4 (Blue Onyx)"
+ANSI_COLOR="0;32"
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+SSHMGR-INVENTORY ABSENT packages
+SSHMGR-INVENTORY SECTION listen
+tcp LISTEN 0      128          0.0.0.0:22          0.0.0.0:* users:(("sshd",pid=680,fd=3))
+SSHMGR-INVENTORY STATUS listen 0
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+680	/usr/sbin/sshd
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+SSHMGR-INVENTORY ABSENT exe-owner
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
+SSHMGR-INVENTORY SECTION container-images
+SSHMGR-INVENTORY ABSENT container-images
+SSHMGR-INVENTORY SECTION containers-v3
+SSHMGR-INVENTORY ABSENT containers-v3
+SSHMGR-INVENTORY SECTION container-image-refs
+SSHMGR-INVENTORY ABSENT container-image-refs
+SSHMGR-INVENTORY SECTION container-image-labels
+SSHMGR-INVENTORY ABSENT container-image-labels
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	LENOVO
+bios_version	R2ET94WW (1.50)
+bios_date	07/15/2024
+board_vendor	LENOVO
+board_name	20JVS2W700
+sys_vendor	LENOVO
+product_name	20JVS2W700
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY SECTION pending-updates-apt
+SSHMGR-INVENTORY ABSENT pending-updates-apt
+SSHMGR-INVENTORY SECTION pending-updates-dnf
+Last metadata expiration check: 1:23:45 ago on Fri 20 Nov 2026 01:00:00.
+openssl-libs.x86_64    3.0.7-27.el9_4    baseos
+kernel.x86_64    5.14.0-427.42.1.el9_4    baseos
+NetworkManager.x86_64    1:1.46.0-13.el9_4    baseos
+cache-time	1795050000
+SSHMGR-INVENTORY STATUS pending-updates-dnf 0
+SSHMGR-INVENTORY END

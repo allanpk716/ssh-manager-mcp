@@ -31,6 +31,7 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 	for _, section := range []string{
 		"os", "listen-netstat", "listen-lsof", "apps", "brew", "synology-packages",
 		"containers-v3", "container-image-refs", "container-image-labels",
+		"pending-updates-apt", "pending-updates-dnf",
 	} {
 		if !strings.Contains(command, `echo "$M SECTION `+section+`"`) {
 			t.Fatalf("固定命令集缺少 %s 节", section)
@@ -39,9 +40,21 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 	if strings.Contains(command, "Win32_Product") {
 		t.Fatal("固定命令集不应包含有副作用的 Win32_Product 查询")
 	}
-	for _, forbiddenCommand := range []string{"docker exec", "apt update", "apt-get update"} {
+	for _, forbiddenCommand := range []string{
+		"docker exec", "apt update", "apt-get update", "dnf makecache", "yum makecache",
+		"apt upgrade", "apt-get upgrade", "dnf upgrade", "dnf install", "yum install",
+		"apt install", "apt-get install",
+	} {
 		if strings.Contains(command, forbiddenCommand) {
 			t.Fatalf("固定命令集不应包含有副作用的命令 %q", forbiddenCommand)
+		}
+	}
+	if !strings.Contains(command, "apt list --upgradable") {
+		t.Fatal("固定命令集应只读 apt 本地缓存中的可升级列表")
+	}
+	for _, line := range strings.Split(command, "\n") {
+		if strings.Contains(line, "check-update") && !strings.Contains(line, " -C ") {
+			t.Fatalf("dnf/yum 检查待装更新时必须只用本地缓存：%s", line)
 		}
 	}
 }

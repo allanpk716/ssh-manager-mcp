@@ -4,6 +4,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"time"
 
 	"ssh-manager-mcp/internal/models"
 )
@@ -120,6 +121,98 @@ func buildPOSIXV3ContainerItems(
 		items = append(items, item)
 	}
 	return items, unusedImageCount
+}
+
+// buildPOSIXV3PendingUpdates 从第 3 版的待装更新节构建设备级结果。apt
+// 与 dnf/yum 的缓存都有效时优先使用 apt；任一可用来源都必须是完整节，
+// 否则保持空指针，让调用方把数量显示为未知。
+func buildPOSIXV3PendingUpdates(apt, dnf parsedSection) *models.SoftwarePendingUpdates {
+	if apt.outcome == sectionComplete {
+		return buildPOSIXV3AptPendingUpdates(apt)
+	}
+	if dnf.outcome == sectionComplete {
+		return buildPOSIXV3DnfPendingUpdates(dnf)
+	}
+	return nil
+}
+
+func buildPOSIXV3AptPendingUpdates(section parsedSection) *models.SoftwarePendingUpdates {
+	items := make([]models.SoftwarePendingUpdate, 0, len(section.lines))
+	securityCount := 0
+	var cacheUpdatedAt time.Time
+	for _, line := range section.lines {
+		if key, value, present := strings.Cut(line, "\t"); present && key == "cache-time" {
+			cacheUpdatedAt = unixSecondsTime(value)
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		name, suite, present := strings.Cut(fields[0], "/")
+		if !present {
+			continue
+		}
+		suite, _, _ = strings.Cut(suite, ",")
+		fromSecurityRepo := strings.Contains(suite, "-security")
+		if fromSecurityRepo {
+			securityCount++
+		}
+		items = append(items, models.SoftwarePendingUpdate{
+			Name: name, CurrentVersion: aptCurrentVersion(line),
+			AvailableVersion: fields[1], FromSecurityRepo: fromSecurityRepo,
+		})
+	}
+	return &models.SoftwarePendingUpdates{
+		SecurityCount: securityCount, CacheUpdatedAt: cacheUpdatedAt, Items: items,
+	}
+}
+
+// aptCurrentVersion 从 apt 的方括号提示里取当前版本。apt 只保证这是一段
+// 提示文本，因此按最后一个半角或全角冒号切分，取右侧文本。
+func aptCurrentVersion(line string) string {
+	start := strings.LastIndex(line, "[")
+	end := strings.LastIndex(line, "]")
+	if start < 0 || end <= start {
+		return ""
+	}
+	hint := line[start+1 : end]
+	colon := strings.LastIndexAny(hint, ":：")
+	if colon < 0 {
+		return ""
+	}
+	return strings.TrimSpace(hint[colon+1:])
+}
+
+func buildPOSIXV3DnfPendingUpdates(section parsedSection) *models.SoftwarePendingUpdates {
+	items := make([]models.SoftwarePendingUpdate, 0, len(section.lines))
+	var cacheUpdatedAt time.Time
+	for _, line := range section.lines {
+		if key, value, present := strings.Cut(line, "\t"); present && key == "cache-time" {
+			cacheUpdatedAt = unixSecondsTime(value)
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) < 3 || !strings.Contains(fields[0], ".") {
+			continue
+		}
+		architectureSeparator := strings.LastIndex(fields[0], ".")
+		items = append(items, models.SoftwarePendingUpdate{
+			Name: fields[0][:architectureSeparator], AvailableVersion: fields[1],
+			FromSecurityRepo: true,
+		})
+	}
+	return &models.SoftwarePendingUpdates{
+		SecurityCount: len(items), CacheUpdatedAt: cacheUpdatedAt, Items: items,
+	}
+}
+
+func unixSecondsTime(value string) time.Time {
+	seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0).UTC()
 }
 
 func appendPOSIXContainerItems(

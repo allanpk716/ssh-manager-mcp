@@ -74,6 +74,25 @@ type SoftwareObservedItem struct {
 	CollectedAt      time.Time                `json:"collected_at"`
 }
 
+// SoftwarePendingUpdate 是包管理器本地缓存中已知、尚未安装的一条升级。
+type SoftwarePendingUpdate struct {
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	AvailableVersion string `json:"available_version,omitempty"`
+	// FromSecurityRepo 表示这条升级来自安全仓库（apt 的套件名）或安全
+	// 公告（dnf/yum 的安全更新筛选）。
+	FromSecurityRepo bool `json:"from_security_repo,omitempty"`
+}
+
+// SoftwarePendingUpdates 是一台设备的待装更新集合：全部可升级明细安
+// 全来源单独标出，附包管理器本地缓存的更新时间。SecurityCount 是安全
+// 来源条数，构造时与 Items 保持一致。
+type SoftwarePendingUpdates struct {
+	SecurityCount  int                     `json:"security_count"`
+	CacheUpdatedAt time.Time               `json:"cache_updated_at,omitempty"`
+	Items          []SoftwarePendingUpdate `json:"items"`
+}
+
 // SoftwareCollectionStatus 是一台设备的采集状态。发行版编号、发行版版本
 // 编号与未被容器使用的镜像数量来自最近一次成功采集；清单是否过期不在
 // 这里存储，读取时按「当前时间减上次成功时间超过 7 天」计算。
@@ -96,7 +115,10 @@ type SoftwareCollectionStatus struct {
 	DistroID          string    `json:"distro_id,omitempty"`
 	DistroVersionID   string    `json:"distro_version_id,omitempty"`
 	UnusedImageCount  int       `json:"unused_images,omitempty"`
-	PendingImmediate  bool      `json:"pending_immediate"`
+	// PendingUpdates 是最近一次成功采集到的待装更新；没有包管理器或缓存
+	// 不可读时为 nil（数量未知）。
+	PendingUpdates   *SoftwarePendingUpdates `json:"pending_updates,omitempty"`
+	PendingImmediate bool                    `json:"pending_immediate"`
 }
 
 // SoftwareCollectionAssignment 是权威端下发给一个客户端实例的采集分派。
