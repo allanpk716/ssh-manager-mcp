@@ -126,7 +126,7 @@
 {{else}}
 <dt>名称</dt><dd>{{.Name}}</dd>
 {{end}}
-<dt>精确版本</dt><dd>{{if .Version}}{{.Version}}{{else}}-{{end}}</dd>
+<dt>精确版本</dt><dd>{{if .Version}}{{.Version}}{{else}}<span class="missing-version-badge">缺版本</span>{{end}}</dd>
 <dt>采集时间</dt><dd>{{formatOptionalTime .CollectedAt}}</dd>
 <dt>监听端口与暴露级别</dt><dd>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
 {{if .BelongsTo}}<dt>所属</dt><dd>{{.BelongsTo}}</dd>{{end}}

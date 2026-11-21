@@ -553,7 +553,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 			},
 			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "未识别进程", Name: "unknown-gateway",
-				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123, MissingVersion: true,
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
 					Address: "127.0.0.1", Port: 8443, Protocol: "tcp", ExposureLabel: "仅本机",
@@ -591,6 +591,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		"NVIDIA 显卡驱动", "550.120",
 		"系统包（2 条，默认折叠）", "curl", "openssh-client",
 		"未识别", "gateway", "/opt/gateway/gateway", "8123", "127.0.0.1:8443/tcp", "仅本机",
+		`<span class="missing-version-badge">缺版本</span>`,
 		"版本变化", "8.8.0-1", "8.9.1-1ubuntu2",
 		"立即采集",
 		`id="software-inventory-advanced"`, "高级采集设置", "权威端", "笔记本客户端",
