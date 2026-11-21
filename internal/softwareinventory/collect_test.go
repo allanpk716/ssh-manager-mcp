@@ -247,6 +247,53 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 	}
 }
 
+// TestCollectWindowsV2FullFixture 覆盖第 2 版命令集的一次成功采集：发送
+// 的是第 2 版命令，报告与采集状态记录 windows-v2，落库后查询得到操作系
+// 统四段版本号。
+func TestCollectWindowsV2FullFixture(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDeviceWithShell(t, st, "工作站", models.ShellPowerShell, "powershell-entry")
+	var recorded recordedExec
+	service.RemoteExec = replayCollectExec(
+		windowsFixtureOutput(t, "win10-powershell-full-v2-derived.txt"), &recorded, nil,
+	)
+
+	report, err := service.Collect(context.Background(), CollectRequest{
+		Source: CLISource(), DeviceName: "工作站", ServerEntry: "powershell-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedCommand, err := BuildInventoryCommand(models.ShellPowerShell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SystemType != "windows" || report.CommandSetVersion != "windows-v2" ||
+		report.Incomplete || recorded.command != expectedCommand {
+		t.Fatalf("第 2 版采集报告或命令 = report=%+v command=%s", report, recorded.command)
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.SystemType != "windows" || status.CommandSetVersion != "windows-v2" ||
+		status.LastIncomplete || status.LastServerName != "powershell-entry" {
+		t.Fatalf("第 2 版采集状态 = %+v", status)
+	}
+	manager := New(st)
+	manager.Now = service.Now
+	result, err := manager.Query(QueryOptions{Device: "工作站", Visibility: AllDevicesVisible()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatingSystem := findItemByNameAndCategory(
+		t, result.Devices[0].Items, CategoryOperatingSystem, "Windows 10 Pro",
+	)
+	if operatingSystem.Version != "10.0.19045.6456" {
+		t.Fatalf("落库后查询的操作系统条目版本 = %q，应为四段版本号", operatingSystem.Version)
+	}
+}
+
 // TestCollectWindowsNoProcessNamesFixture 覆盖权限不足的 Windows 输出：看
 // 不到进程名的监听端口落成未识别进程，采集本身仍算成功。
 func TestCollectWindowsNoProcessNamesFixture(t *testing.T) {
