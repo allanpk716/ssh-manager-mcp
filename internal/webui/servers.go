@@ -1435,7 +1435,7 @@ func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *htt
 		return
 	}
 	http.Redirect(
-		w, r, serverDetailPath(detail.ID)+"?saved=accounts"+serverDetailCardAnchor(serverDetailEditAccounts),
+		w, r, serverDetailPath(detail.ID)+"?notice=saved-accounts"+serverDetailCardAnchor(serverDetailEditAccounts),
 		http.StatusSeeOther,
 	)
 }
@@ -1465,7 +1465,7 @@ func (h *handler) renderAccountNotesError(
 // redirectServerDetailSaved 保存成功后回到统一详情页并定位对应卡片。
 func (h *handler) redirectServerDetailSaved(w http.ResponseWriter, r *http.Request, id, scope string) {
 	http.Redirect(
-		w, r, serverDetailPath(id)+"?saved="+scope+serverDetailCardAnchor(scope), http.StatusSeeOther,
+		w, r, serverDetailPath(id)+"?notice=saved-"+scope+serverDetailCardAnchor(scope), http.StatusSeeOther,
 	)
 }
 

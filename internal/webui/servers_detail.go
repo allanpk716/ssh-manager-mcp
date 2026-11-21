@@ -22,26 +22,58 @@ const (
 	serverDetailEditAccounts    = "accounts"
 )
 
+// serverDetailDrawer 描述一个编辑分区弹层的标题与说明。
+type serverDetailDrawer struct {
+	Title   string
+	Caption string
+}
+
+// serverDetailDrawers 是「分区值 → 弹层标题、说明」表；连接分区兼作旧表单
+// 与未知分区值的默认回落。
+var serverDetailDrawers = map[string]serverDetailDrawer{
+	serverDetailEditConnection: {
+		Title: "编辑连接", Caption: "只修改这个条目自己的登录信息。",
+	},
+	serverDetailEditLocation: {
+		Title: "编辑地点", Caption: "地点登记在机器上，同一台机器的全部服务器条目共用。",
+	},
+	serverDetailEditAddress: {
+		Title: "编辑地址", Caption: "地址登记在机器上，同一台机器的全部服务器条目共用。",
+	},
+	serverDetailEditDescription: {
+		Title: "编辑说明", Caption: "这些内容只写给人看，用于补充这台服务器的背景。",
+	},
+	serverDetailEditAccounts: {
+		Title: "编辑其他账号说明", Caption: "只编辑显示用的说明；账号的登录信息在各自详情页修改。",
+	},
+}
+
+// serverDetailDrawerFor 返回分区值对应的弹层标题与说明；不在集合里的分区
+// 值按连接分区处理。
+func serverDetailDrawerFor(scope string) serverDetailDrawer {
+	if drawer, ok := serverDetailDrawers[scope]; ok {
+		return drawer
+	}
+	return serverDetailDrawers[serverDetailEditConnection]
+}
+
 // serverDetailEditScopeFromQuery 返回要打开的编辑弹层；空串表示不打开。
 func serverDetailEditScopeFromQuery(r *http.Request) string {
-	switch r.URL.Query().Get("edit") {
-	case serverDetailEditConnection, serverDetailEditLocation, serverDetailEditAddress,
-		serverDetailEditDescription, serverDetailEditAccounts:
-		return r.URL.Query().Get("edit")
-	default:
-		return ""
+	scope := r.URL.Query().Get("edit")
+	if _, ok := serverDetailDrawers[scope]; ok {
+		return scope
 	}
+	return ""
 }
 
 // serverDetailEditScopeFromForm 返回表单声明的编辑分区；旧表单没有这个
 // 字段时按连接分区处理，保持既有提交不失效。
 func serverDetailEditScopeFromForm(r *http.Request) string {
-	switch r.PostFormValue("edit_scope") {
-	case serverDetailEditDescription, serverDetailEditAccounts:
-		return r.PostFormValue("edit_scope")
-	default:
-		return serverDetailEditConnection
+	scope := r.PostFormValue("edit_scope")
+	if _, ok := serverDetailDrawers[scope]; ok {
+		return scope
 	}
+	return serverDetailEditConnection
 }
 
 // serverDetailPath 返回统一详情页地址；anchor 非空时追加对应卡片锚点。
@@ -166,34 +198,12 @@ type serverDetailMoveDraft struct {
 
 // DrawerTitle 返回当前编辑弹层的标题。
 func (v serverDetailPageView) DrawerTitle() string {
-	switch v.EditDrawer {
-	case serverDetailEditLocation:
-		return "编辑地点"
-	case serverDetailEditAddress:
-		return "编辑地址"
-	case serverDetailEditDescription:
-		return "编辑说明"
-	case serverDetailEditAccounts:
-		return "编辑其他账号说明"
-	default:
-		return "编辑连接"
-	}
+	return serverDetailDrawerFor(v.EditDrawer).Title
 }
 
 // DrawerCaption 返回当前编辑弹层的说明文字。
 func (v serverDetailPageView) DrawerCaption() string {
-	switch v.EditDrawer {
-	case serverDetailEditLocation:
-		return "地点登记在机器上，同一台机器的全部服务器条目共用。"
-	case serverDetailEditAddress:
-		return "地址登记在机器上，同一台机器的全部服务器条目共用。"
-	case serverDetailEditDescription:
-		return "这些内容只写给人看，用于补充这台服务器的背景。"
-	case serverDetailEditAccounts:
-		return "只编辑显示用的说明；账号的登录信息在各自详情页修改。"
-	default:
-		return "只修改这个条目自己的登录信息。"
-	}
+	return serverDetailDrawerFor(v.EditDrawer).Caption
 }
 
 // handleServerDetail 渲染统一详情页。一列卡片的数据全部组装；编辑弹层由
@@ -217,22 +227,7 @@ func (h *handler) handleServerDetail(w http.ResponseWriter, r *http.Request, id 
 	if taskID := strings.TrimSpace(r.URL.Query().Get("task")); taskID != "" {
 		detail.ConnectionTest = h.serverConnectionTaskView(detail, taskID)
 	}
-	noticeKind := ""
-	if serverDetailSavedNoticeKind("saved-"+r.URL.Query().Get("saved")) != "" {
-		noticeKind = "success"
-	}
-	noticeParam := r.URL.Query().Get("notice")
-	if noticeParam == "" {
-		noticeParam = "saved-" + r.URL.Query().Get("saved")
-	}
-	notice := serverDetailNoticeText(noticeParam)
-	if noticeParam == "server-moved" {
-		notice = serverDetailMoveNoticeText(detail.DeviceName, r.URL.Query().Get("anchor-copy"))
-		noticeKind = "success"
-		if notice == "" {
-			noticeKind = ""
-		}
-	}
+	notice, noticeKind := serverDetailNotice(r, detail.DeviceName)
 	switch r.URL.Query().Get("hostkey") {
 	case "updated":
 		notice, noticeKind = "已覆盖主机密钥锚。", "success"
@@ -333,41 +328,39 @@ func serverDetailLegacyRedirect(id string, query url.Values) (string, bool) {
 	return target, true
 }
 
-// serverDetailNoticeText 把详情页动作的查询参数提示码换成文案。
-func serverDetailNoticeText(kind string) string {
-	switch kind {
-	case "location-saved":
-		return "已保存机器地点。"
-	case "saved-address":
-		return "已保存地址。"
-	case "server-moved":
-		return "已改挂到另一台机器。"
-	case "saved-connection":
-		return "已保存连接信息。"
-	case "saved-description":
-		return "已保存说明。"
-	case "saved-accounts":
-		return "已保存账号说明。"
-	default:
-		return ""
-	}
+// serverDetailNoticeView 是详情页一个提示码的文案与样式。
+type serverDetailNoticeView struct {
+	Text string
+	Kind string
 }
 
-// serverDetailSavedNoticeKind 把保存成功的提示码换成分区值；空串表示不是
-// 保存成功提示。
-func serverDetailSavedNoticeKind(kind string) string {
-	switch kind {
-	case "saved-connection":
-		return serverDetailEditConnection
-	case "saved-description":
-		return serverDetailEditDescription
-	case "saved-accounts":
-		return serverDetailEditAccounts
-	case "saved-address":
-		return serverDetailEditAddress
-	default:
-		return ""
+// serverDetailNotices 是提示码到文案与样式的表；改挂提示的文案要带当前
+// 机器名与指纹结论，表里只放兜底文案。
+var serverDetailNotices = map[string]serverDetailNoticeView{
+	"saved-connection":  {Text: "已保存连接信息。", Kind: "success"},
+	"saved-description": {Text: "已保存说明。", Kind: "success"},
+	"saved-accounts":    {Text: "已保存账号说明。", Kind: "success"},
+	"saved-address":     {Text: "已保存地址。", Kind: "success"},
+	"location-saved":    {Text: "已保存机器地点。", Kind: "success"},
+	"server-moved":      {Text: "已改挂到另一台机器。", Kind: "success"},
+}
+
+// serverDetailNotice 按查询参数提示码取出文案与样式；改挂提示换成带机器名
+// 与指纹结论的完整文案，未知指纹结论不显示提示。旧 saved 参数不再读取。
+func serverDetailNotice(r *http.Request, device string) (string, string) {
+	code := r.URL.Query().Get("notice")
+	entry, ok := serverDetailNotices[code]
+	if !ok {
+		return "", ""
 	}
+	if code == "server-moved" {
+		text := serverDetailMoveNoticeText(device, r.URL.Query().Get("anchor-copy"))
+		if text == "" {
+			return "", ""
+		}
+		return text, entry.Kind
+	}
+	return entry.Text, entry.Kind
 }
 
 // serverDetailPage 组装一列卡片的附加数据。拓扑读取失败会让整页失败；软
@@ -742,7 +735,7 @@ func (h *handler) handleServerDetailAddressList(w http.ResponseWriter, r *http.R
 		return
 	}
 	http.Redirect(
-		w, r, serverDetailPath(detail.ID)+"?saved=address"+serverDetailCardAnchor(serverDetailEditAddress),
+		w, r, serverDetailPath(detail.ID)+"?notice=saved-address"+serverDetailCardAnchor(serverDetailEditAddress),
 		http.StatusSeeOther,
 	)
 }

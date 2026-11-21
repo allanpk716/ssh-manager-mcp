@@ -1,11 +1,96 @@
 package store
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/models"
 )
+
+// TestReplaceDeviceAddressListValidationCodes 逐条锁住地址列表五种校验错误
+// 的错误码与错误文字；入口层按错误码映射字段归属与界面文案。
+func TestReplaceDeviceAddressListValidationCodes(t *testing.T) {
+	st := newTestStore(t)
+	if _, err := st.AddSite("机房", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AddNetwork(models.Network{
+		Name: "机房局域网", Type: models.NetworkPhysical, SiteName: "机房",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	device, err := st.AddDevice("工作站", "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	added, err := st.AddServer(&models.Server{
+		Name: "web", Host: "203.0.113.10", Port: 22, User: "owner", DeviceID: device.ID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name        string
+		request     ReplaceDeviceAddressListRequest
+		wantCode    string
+		wantMessage string
+	}{
+		{
+			name:        "其他地址含空白",
+			request:     ReplaceDeviceAddressListRequest{ServerID: added, OtherAddress: "203.0.113 10"},
+			wantCode:    TopologyCodeOtherAddressWhitespace,
+			wantMessage: "地址不能包含空白字符",
+		},
+		{
+			name: "成员行不完整",
+			request: ReplaceDeviceAddressListRequest{ServerID: added, Memberships: []NetworkMembershipWrite{
+				{Network: "机房局域网", Address: ""},
+			}},
+			wantCode:    TopologyCodeMembershipIncomplete,
+			wantMessage: "每行网络地址必须同时选择网络并填写地址",
+		},
+		{
+			name: "成员地址含空白",
+			request: ReplaceDeviceAddressListRequest{ServerID: added, Memberships: []NetworkMembershipWrite{
+				{Network: "机房局域网", Address: "10.0.0 8"},
+			}},
+			wantCode:    TopologyCodeMembershipAddressWhitespace,
+			wantMessage: "地址不能包含空白字符",
+		},
+		{
+			name: "网络重复",
+			request: ReplaceDeviceAddressListRequest{ServerID: added, Memberships: []NetworkMembershipWrite{
+				{Network: "机房局域网", Address: "10.0.0.8"},
+				{Network: "机房局域网", Address: "10.0.0.9"},
+			}},
+			wantCode:    TopologyCodeDuplicateNetwork,
+			wantMessage: "同一台机器在同一个网络里只能登记一个地址",
+		},
+		{
+			name:        "没有任何地址",
+			request:     ReplaceDeviceAddressListRequest{ServerID: added},
+			wantCode:    TopologyCodeAddressRequired,
+			wantMessage: "至少填写一个地址",
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := st.ReplaceDeviceAddressList(testCase.request)
+			var topologyErr *TopologyValidationError
+			if !errors.As(err, &topologyErr) {
+				t.Fatalf("校验失败应返回拓扑校验错误，实际：%v", err)
+			}
+			if topologyErr.Code != testCase.wantCode {
+				t.Fatalf("错误码 = %q，应为 %q（%s）", topologyErr.Code, testCase.wantCode, topologyErr.Message)
+			}
+			if topologyErr.Message != testCase.wantMessage {
+				t.Fatalf("错误文字 = %q，应为 %q", topologyErr.Message, testCase.wantMessage)
+			}
+		})
+	}
+}
 
 func TestReplaceDeviceAddressListMovesOtherAddressToNetwork(t *testing.T) {
 	st := newTestStore(t)
