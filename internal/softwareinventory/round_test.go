@@ -15,14 +15,18 @@ import (
 )
 
 // newRoundFixture 打开一个真实 SQLite 临时库，按给定设备名各挂一个服务
-// 器条目并设为受管，时钟固定在 now。采集函数由各测试注入。
+// 器条目并设为受管，时钟固定在 now。轮次管理器每次 OpenStore 都重新打开
+// 并在关闭函数里真正关闭（与单机 Web UI 的短开短关同形态，关库后用库的
+// 错误会在测试里暴露）；返回的存储句柄仅供测试铺垫与断言使用。采集函数
+// 由各测试注入。
 func newRoundFixture(t *testing.T, now time.Time, deviceNames ...string) (*RoundManager, *store.Store) {
 	t.Helper()
 	key, err := store.GenerateMasterKey()
 	if err != nil {
 		t.Fatal(err)
 	}
-	st, err := store.Open(t.TempDir()+"/vault.db", key)
+	vaultPath := t.TempDir() + "/vault.db"
+	st, err := store.Open(vaultPath, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,7 +36,11 @@ func newRoundFixture(t *testing.T, now time.Time, deviceNames ...string) (*Round
 		addCollectDevice(t, st, name, "entry-"+name)
 	}
 	manager := NewRoundManager(func() (*store.Store, func(), error) {
-		return st, func() {}, nil
+		opened, err := store.Open(vaultPath, key)
+		if err != nil {
+			return nil, nil, err
+		}
+		return opened, func() { _ = opened.Close() }, nil
 	})
 	manager.Now = func() time.Time { return now }
 	return manager, st

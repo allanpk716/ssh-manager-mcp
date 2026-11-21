@@ -162,7 +162,6 @@ func (r *CollectionRound) refreshWaitingDevices(devices []RoundDeviceStatus) {
 		return
 	}
 	tokens, tokenErr := st.ListCacheTokens()
-	done()
 	if tokenErr != nil {
 		// 实例最近拉取时间拿不到只影响展示，不算刷新失败。
 		r.manager.logf("读取设备码列表失败，本次刷新不带实例最近拉取时间：%v", tokenErr)
@@ -201,6 +200,7 @@ func (r *CollectionRound) refreshWaitingDevices(devices []RoundDeviceStatus) {
 		transitions = append(transitions, transition)
 	}
 	itemCounts := r.itemCountsFor(st, needCounts)
+	done()
 	r.mu.Lock()
 	for _, transition := range transitions {
 		device := &r.devices[transition.index]
