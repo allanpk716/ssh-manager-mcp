@@ -38,10 +38,11 @@ func newRoundFixture(t *testing.T, now time.Time, deviceNames ...string) (*Round
 	return manager, st
 }
 
-// waitRoundLocalDone 轮询等待一轮的本机部分执行结束。
+// waitRoundLocalDone 轮询等待一轮的本机部分执行结束。时限给得宽裕，
+//避免高负载机器（例如竞态检测下的并行测试）误报。
 func waitRoundLocalDone(t *testing.T, round *CollectionRound) RoundSnapshot {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		snapshot := round.Snapshot()
 		if snapshot.LocalDone {

@@ -18,7 +18,7 @@ func waitRoundView(
 	done func(view *webui.SoftwareInventoryRoundView) bool,
 ) *webui.SoftwareInventoryRoundView {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(5 * time.Second)
 	for {
 		view, err := source.SoftwareInventoryRound()
 		if err != nil {
