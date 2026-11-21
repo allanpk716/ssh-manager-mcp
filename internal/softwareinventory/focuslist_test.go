@@ -1,8 +1,10 @@
 package softwareinventory
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/store"
@@ -132,5 +134,104 @@ func TestQueryDefaultReturnsFocusListFromUbuntuSample(t *testing.T) {
 	complete := querySampleDevice(t, manager, "样例工作站", QueryOptions{IncludeSystemPackages: true})
 	if countItemsByName(complete)["libc6"] != 1 {
 		t.Fatalf("包含系统包的完整查询应出现 libc6 恰好一次：%+v", complete)
+	}
+}
+
+// portText 把一个监听端口渲染成断言用的紧凑文本。
+func portText(port ListeningPort) string {
+	return fmt.Sprintf("%s:%d/%s", port.Address, port.Port, port.Protocol)
+}
+
+// assertPortOrder 校验一组监听端口与期望的「地址:端口/协议」序列一致。
+func assertPortOrder(t *testing.T, ports []ListeningPort, wanted []string) {
+	t.Helper()
+	got := make([]string, 0, len(ports))
+	for _, port := range ports {
+		got = append(got, portText(port))
+	}
+	if strings.Join(got, "|") != strings.Join(wanted, "|") {
+		t.Fatalf("监听端口顺序 = %v，想要 %v", got, wanted)
+	}
+}
+
+// TestQueryMergesUnidentifiedProcessPortsFromWindowsSample 钉住未识别进程
+// 的合并口径：同一程序（可执行文件路径或进程名）的多个端口合成一行，端
+// 口按暴露级别从高到低排序；服务程序与纯系统包的取舍不变。
+func TestQueryMergesUnidentifiedProcessPortsFromWindowsSample(t *testing.T) {
+	manager := seedWindowsSample(t, "样例工作站", "win10-powershell-full.txt")
+
+	items := querySampleDevice(t, manager, "样例工作站", QueryOptions{})
+	counts := countItemsByName(items)
+	if counts["DeepSeek Harness"] != 1 {
+		t.Fatalf("DeepSeek Harness 的两个端口应合并为一行：%+v", items)
+	}
+	deepSeek := findItemByNameAndCategory(t, items, CategoryUnidentified, "DeepSeek Harness")
+	if len(deepSeek.ListeningPorts) != 2 {
+		t.Fatalf("DeepSeek Harness 合并后应有 2 个监听端口：%+v", deepSeek.ListeningPorts)
+	}
+	// 3081 监听所有地址，应排在仅本机监听的 3080 前面。
+	assertPortOrder(t, deepSeek.ListeningPorts, []string{"0.0.0.0:3081/tcp", "127.0.0.1:3080/tcp"})
+
+	if counts["dasHost"] != 1 {
+		t.Fatalf("dasHost 的三个端口应合并为一行：%+v", items)
+	}
+	dasHost := findItemByNameAndCategory(t, items, CategoryUnidentified, "dasHost")
+	assertPortOrder(t, dasHost.ListeningPorts, []string{
+		":::3702/udp", "0.0.0.0:59154/udp", ":::59155/udp",
+	})
+
+	if counts["System"] != 1 {
+		t.Fatalf("System 的五组端口应合并为一行：%+v", items)
+	}
+	system := findItemByNameAndCategory(t, items, CategoryUnidentified, "System")
+	if len(system.ListeningPorts) != 20 {
+		t.Fatalf("System 合并后应有 20 个监听端口（5 组端口号）：%+v", system.ListeningPorts)
+	}
+	// 445 与 5357 监听所有地址排在前面，137、138、139 监听特定地址排在
+	// 后面；同组内按地址排序。
+	assertPortOrder(t, system.ListeningPorts[:2], []string{":::445/tcp", ":::5357/tcp"})
+	assertPortOrder(t, system.ListeningPorts[2:8], []string{
+		"172.27.32.1:137/udp", "172.28.0.1:137/udp", "198.51.100.102:137/udp",
+		"198.51.179.1:137/udp", "198.51.240.1:137/udp", "203.0.113.120:137/udp",
+	})
+
+	if findItemByNameAndCategory(t, items, CategoryServiceProgram, "RpcSs").Name != "RpcSs" {
+		t.Fatalf("服务程序 RpcSs 应保留在默认查询里：%+v", items)
+	}
+	if countItemsByName(items)["Bitwarden"] != 0 {
+		t.Fatalf("默认查询不应返回没有监听端口的系统包 Bitwarden：%+v", items)
+	}
+
+	complete := querySampleDevice(t, manager, "样例工作站", QueryOptions{IncludeSystemPackages: true})
+	if countItemsByName(complete)["Bitwarden"] != 1 {
+		t.Fatalf("完整查询应包含没有监听端口的系统包 Bitwarden：%+v", complete)
+	}
+	if countItemsByName(complete)["Netbird"] != 1 {
+		t.Fatalf("完整查询应包含带监听端口的系统包 Netbird：%+v", complete)
+	}
+	netbird := findItemByNameAndCategory(t, complete, CategorySystemPackage, "Netbird")
+	if len(netbird.ListeningPorts) != 3 {
+		t.Fatalf("Netbird 应带 3 个监听端口：%+v", netbird.ListeningPorts)
+	}
+}
+
+// TestQuerySortsListeningPortsByExposureFromUbuntuSample 钉住端口排序与
+// 不误合并的边界：监听所有地址的端口排在仅本机监听的端口前；单端口程
+// 序与不满足合并条件（可执行文件路径与进程名都空）的条目保持原样。
+func TestQuerySortsListeningPortsByExposureFromUbuntuSample(t *testing.T) {
+	manager := seedPOSIXSample(t, "样例工作站", "ubuntu2404-full.txt")
+
+	items := querySampleDevice(t, manager, "样例工作站", QueryOptions{})
+	dockerCE := findItemByNameAndCategory(t, items, CategorySystemPackage, "docker-ce")
+	assertPortOrder(t, dockerCE.ListeningPorts, []string{
+		"0.0.0.0:20508/tcp", "127.0.0.1:18000/tcp", "127.0.0.1:18001/tcp",
+	})
+	litellm := findItemByNameAndCategory(t, items, CategoryUnidentified, "litellm")
+	if len(litellm.ListeningPorts) != 1 || litellm.ListeningPorts[0].Port != 4000 {
+		t.Fatalf("litellm 单端口条目应保持不变：%+v", litellm)
+	}
+	unidentified := findItemByNameAndCategory(t, items, CategoryUnidentified, "未识别进程")
+	if len(unidentified.ListeningPorts) != 2 {
+		t.Fatalf("可执行文件路径与进程名都空的条目不应合并拆散：%+v", unidentified)
 	}
 }
