@@ -225,6 +225,55 @@ func TestHandlerAccountNotesDetectsConcurrentChange(t *testing.T) {
 	}
 }
 
+// TestHandlerAccountNotesSavesAllInOneTransaction 用真实 vault 证明同机账号
+// 说明经单事务入口整批保存：两台说明都落库，页面跳转成功；写入由存储层一
+// 个事务完成（票 #369）。
+func TestHandlerAccountNotesSavesAllInOneTransaction(t *testing.T) {
+	_, st, h := newIntegrationHandler(t)
+	if _, err := st.AddDevice("工作站", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	primary, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "web", Host: "192.0.2.10", Port: 22, User: "root",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sibling, err := st.AddServerWithCredentialsToDevice(&models.Server{
+		Name: "backup", Host: "192.0.2.10", Port: 22, User: "backup", Description: "旧说明",
+	}, nil, nil, "工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	drawer := h.do(http.MethodGet, "/ui/servers/"+primary.ServerID+"?edit=accounts", nil)
+	drawerBody := integrationBody(t, drawer)
+	revision := regexp.MustCompile(`name="account_revision_` + sibling.ServerID + `" value="(\d+)"`).
+		FindStringSubmatch(drawerBody)
+	if len(revision) != 2 {
+		t.Fatalf("账号说明编辑层应携带兄弟条目修订号：\n%s", drawerBody)
+	}
+
+	response := h.do(http.MethodPost, "/ui/servers/"+primary.ServerID+"/edit", url.Values{
+		"csrf_token": {integrationFormCSRF(t, h, "/ui/servers/"+primary.ServerID+"?edit=accounts")},
+		"edit_scope": {"accounts"}, "server_id": {primary.ServerID},
+		"account_note_" + sibling.ServerID:     {"夜里跑备份"},
+		"account_revision_" + sibling.ServerID: {revision[1]},
+	})
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/servers/"+primary.ServerID+"?saved=accounts#server-card-accounts" {
+		t.Fatalf("整批保存应跳转成功，状态码=%d 跳转=%q：\n%s",
+			response.StatusCode, response.Header.Get("Location"), integrationBody(t, response))
+	}
+	saved, err := st.GetServer(sibling.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Description != "夜里跑备份" {
+		t.Fatalf("兄弟条目说明应写入，实际 = %q", saved.Description)
+	}
+}
+
 // TestHandlerImportGrantsProfileByID 用真实 vault 覆盖 Web UI 导入：候选页提
 // 交的是 profile 标识符，执行后这批服务器真的授予该 profile。
 func TestHandlerImportGrantsProfileByID(t *testing.T) {

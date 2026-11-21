@@ -438,6 +438,14 @@ type ServerEditConflictView struct {
 	Current *ServerDetailView
 }
 
+// ServerAccountNoteEdit 是同机账号说明保存里的一台条目：Note 是显示说明的
+// 最终值，Revision 是表单打开时那台条目的修订号。
+type ServerAccountNoteEdit struct {
+	ServerID string
+	Note     string
+	Revision int64
+}
+
 // ServerDeletePreviewView 是删除影响清单。
 type ServerDeletePreviewView struct {
 	ServerID           string
@@ -553,6 +561,9 @@ type ServerWriter interface {
 	FinishServerAdd(form ServerAddFinishForm, source ServerWriteSource) error
 	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
+	// EditAccountNotes 在一个事务内保存多台同机账号的显示说明；任一台修订
+	// 号不符整批回滚，冲突时返回那台条目的最新页面数据。
+	EditAccountNotes(edits []ServerAccountNoteEdit, source ServerWriteSource) (*ServerEditConflictView, error)
 	// EditServerAddresses 用一份最终清单同时保存网络成员与其他地址。
 	EditServerAddresses(id string, form ServerAddressListForm, source ServerWriteSource) (*ServerAddressListResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
@@ -1347,16 +1358,12 @@ func (h *handler) handleServerDescriptionEditPost(w http.ResponseWriter, r *http
 	h.redirectServerDetailSaved(w, r, result.Detail.ID, serverDetailEditDescription)
 }
 
-// handleServerAccountNotesEditPost 处理同机账号说明弹层：先校验全部发生
-// 变化账号的修订号，全部匹配后才逐条写入说明；登录信息不在这一层提交。
+// handleServerAccountNotesEditPost 处理同机账号说明弹层：只过滤出同一台
+// 机器上有变化的账号并校验修订号，然后在一个事务内整批写入说明；登录信
+// 息不在这一层提交。
 func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
 	drafts := map[string]string{}
-	type accountNoteEdit struct {
-		id       string
-		note     string
-		revision int64
-	}
-	edits := make([]accountNoteEdit, 0, len(r.PostForm))
+	edits := make([]ServerAccountNoteEdit, 0, len(r.PostForm))
 	for key, values := range r.PostForm {
 		if !strings.HasPrefix(key, "account_note_") || len(values) == 0 {
 			continue
@@ -1387,21 +1394,17 @@ func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *htt
 			h.renderAccountNotesError(w, r, detail, nil, &ServerEditConflictView{Current: sibling}, drafts)
 			return
 		}
-		edits = append(edits, accountNoteEdit{id: accountID, note: note, revision: revision})
+		edits = append(edits, ServerAccountNoteEdit{ServerID: accountID, Note: note, Revision: revision})
 	}
-	sort.Slice(edits, func(left, right int) bool { return edits[left].id < edits[right].id })
-	for _, edit := range edits {
-		_, conflict, err := h.cfg.ServerWriter.EditServer(edit.id, ServerEditForm{
-			Description: &edit.note, ExpectedRevision: edit.revision,
-		}, ServerWriteSource{RemoteAddress: remoteIP(r)})
-		if conflict != nil {
-			h.renderAccountNotesError(w, r, detail, nil, conflict, drafts)
-			return
-		}
-		if err != nil {
-			h.renderAccountNotesError(w, r, detail, err, nil, drafts)
-			return
-		}
+	sort.Slice(edits, func(left, right int) bool { return edits[left].ServerID < edits[right].ServerID })
+	conflict, err := h.cfg.ServerWriter.EditAccountNotes(edits, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		h.renderAccountNotesError(w, r, detail, err, nil, drafts)
+		return
+	}
+	if conflict != nil {
+		h.renderAccountNotesError(w, r, detail, nil, conflict, drafts)
+		return
 	}
 	http.Redirect(
 		w, r, serverDetailPath(detail.ID)+"?saved=accounts"+serverDetailCardAnchor(serverDetailEditAccounts),

@@ -318,12 +318,11 @@ func TestServerDetailAccountsCardAndNoteEditor(t *testing.T) {
 	if location := response.Header.Get("Location"); location != "/ui/servers/srv-fine?saved=accounts#server-card-accounts" {
 		t.Fatalf("账号说明保存跳转到 %q", location)
 	}
-	if len(writer.editIDs) != 1 || writer.editIDs[0] != "srv-other" {
-		t.Fatalf("账号说明应写入同机账号条目，实际 = %v", writer.editIDs)
+	if len(writer.noteEdits) != 1 || writer.noteEdits[0].ServerID != "srv-other" {
+		t.Fatalf("账号说明应整批写入同机账号条目，实际 = %v", writer.noteEdits)
 	}
-	if len(writer.edits) != 1 || writer.edits[0].Description == nil ||
-		*writer.edits[0].Description != "夜里跑备份任务" || writer.edits[0].User != nil {
-		t.Fatalf("账号说明写入字段 = %#v，应只写显示说明", writer.edits)
+	if writer.noteEdits[0].Note != "夜里跑备份任务" || writer.noteEdits[0].Revision != 7 {
+		t.Fatalf("账号说明写入内容 = %#v，应只写显示说明与修订号", writer.noteEdits[0])
 	}
 
 	clientHandler, clientCookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -386,8 +385,8 @@ func TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite(t *testing.T) {
 			if !strings.Contains(body, "每晚备份任务使用") {
 				t.Fatalf("失败后应显示存储中的原说明：\n%s", body)
 			}
-			if len(writer.editIDs) != 0 {
-				t.Fatalf("修订号无效时不应写入任何账号说明，实际 = %v", writer.editIDs)
+			if len(writer.noteEdits) != 0 {
+				t.Fatalf("修订号无效时不应写入任何账号说明，实际 = %v", writer.noteEdits)
 			}
 		})
 	}
@@ -397,7 +396,7 @@ func TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite(t *testing.T) {
 // 返回修订号冲突时重新渲染账号说明弹层，而不是跳转成保存成功。
 func TestServerDetailAccountNotesWriteConflictDoesNotShowSuccess(t *testing.T) {
 	store := newServerDetailTestStore()
-	writer := &stubServerWriter{conflict: &ServerEditConflictView{
+	writer := &stubServerWriter{noteConflict: &ServerEditConflictView{
 		Current: &ServerDetailView{ID: "srv-other", Name: "other-account", Revision: 8},
 	}}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
