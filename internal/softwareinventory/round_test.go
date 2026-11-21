@@ -436,6 +436,177 @@ func TestRoundManagerStopsWhenManagerContextEnds(t *testing.T) {
 	}
 }
 
+// TestRoundManagerSingleDeviceRoundCollectsOnlyThatDevice 覆盖设备页单台立
+// 即采集：一轮只包含这一台设备，其他设备不被采集；指定不存在的设备返回
+// ErrDeviceNotVisible。
+func TestRoundManagerSingleDeviceRoundCollectsOnlyThatDevice(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, _ := newRoundFixture(t, now, "工作站", "备份机")
+	var mu sync.Mutex
+	collected := map[string]int{}
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		mu.Lock()
+		collected[request.DeviceName]++
+		mu.Unlock()
+		return &CollectionReport{DeviceName: request.DeviceName, ItemCounts: map[models.SoftwareCategory]int{
+			CategoryServiceProgram: 2,
+		}}, nil
+	}
+
+	round, err := manager.Start("工作站", WebUISource("198.51.100.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitRoundLocalDone(t, round)
+	if snapshot.Device != "工作站" || len(snapshot.Devices) != 1 || snapshot.Devices[0].DeviceName != "工作站" {
+		t.Fatalf("单台轮次应只包含工作站：%+v", snapshot)
+	}
+	device := snapshot.Devices[0]
+	if device.State != RoundDeviceSucceeded || device.ItemCount != 2 {
+		t.Fatalf("工作站应成功并带条目数 2：%+v", device)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(collected) != 1 || collected["工作站"] != 1 {
+		t.Fatalf("只应采集工作站一次，实际 %v", collected)
+	}
+
+	if _, err := manager.Start("不存在的设备", WebUISource("198.51.100.9")); !errors.Is(err, ErrDeviceNotVisible) {
+		t.Fatalf("不存在的设备应返回 ErrDeviceNotVisible，得到 %v", err)
+	}
+}
+
+// TestRoundManagerSingleDeviceStartReusesRunningRound 验证单台与全部采集共用
+// 单轮互斥，两个方向都测：任一轮次的本机部分未结束时，再发起（无论范围）
+// 都返回当前轮，不新建。
+func TestRoundManagerSingleDeviceStartReusesRunningRound(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, _ := newRoundFixture(t, now, "工作站", "备份机")
+	manager.Concurrency = 2
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		started <- struct{}{}
+		<-release
+		return &CollectionReport{DeviceName: request.DeviceName}, nil
+	}
+
+	// 全部轮次进行中：单台发起应返回同一轮。
+	all, err := manager.Start("", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	<-started
+	single, err := manager.Start("备份机", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if single != all {
+		t.Fatal("全部轮次进行中，单台发起应返回当前轮")
+	}
+	close(release)
+	waitRoundLocalDone(t, all)
+
+	// 单台轮次进行中：全部发起也应返回同一轮。
+	inSingle := make(chan struct{})
+	releaseSingle := make(chan struct{})
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		close(inSingle)
+		<-releaseSingle
+		return &CollectionReport{DeviceName: request.DeviceName}, nil
+	}
+	only, err := manager.Start("工作站", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-inSingle
+	again, err := manager.Start("", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again != only {
+		t.Fatal("单台轮次进行中，全部发起应返回当前轮")
+	}
+	close(releaseSingle)
+	waitRoundLocalDone(t, only)
+}
+
+// TestRoundManagerSingleDeviceClientRound 验证单台轮次里客户端执行者设备
+// 登记请求进入等待（带实例名与最近拉取时间），结果落库后转成功。
+func TestRoundManagerSingleDeviceClientRound(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, st := newRoundFixture(t, now, "客户端采集设备", "工作站")
+	pullAt := now.Add(-2 * time.Hour)
+	profileID, err := st.AddProfile("采集执行客户端")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := st.FullServersForDevice("客户端采集设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{servers[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	tokenID, _, err := st.AddCacheToken("mini6", profileID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.TouchCacheTokenPull(tokenID, pullAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector("客户端采集设备", "mini6", "", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		return &CollectionReport{DeviceName: request.DeviceName}, nil
+	}
+
+	round, err := manager.Start("客户端采集设备", WebUISource("198.51.100.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitRoundLocalDone(t, round)
+	if len(snapshot.Devices) != 1 || snapshot.WaitingClient != 1 {
+		t.Fatalf("单台轮次应只有一台等待客户端：%+v", snapshot)
+	}
+	device := snapshot.Devices[0]
+	if device.DeviceName != "客户端采集设备" || device.State != RoundDeviceWaitingClient ||
+		device.CollectorName != "mini6" || !device.CollectorLastPullAt.Equal(pullAt) {
+		t.Fatalf("等待设备应带实例名与最近拉取时间：%+v", device)
+	}
+	if !snapshot.NeedsRefresh() {
+		t.Fatal("等待客户端实例的轮次应继续刷新")
+	}
+	if status, err := st.SoftwareCollectionStatusForDevice("客户端采集设备"); err != nil || !status.PendingImmediate {
+		t.Fatalf("等待设备应登记立即采集请求：%+v %v", status, err)
+	}
+
+	// 客户端实例在轮次开始之后上交新结果：等待设备转成功并停止刷新。
+	arrivedAt := now.Add(time.Minute)
+	st.NowFn = func() time.Time { return arrivedAt }
+	if err := st.ReplaceSoftwareObservedItems("客户端采集设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+			{Category: CategoryServiceProgram, Name: "redis", Version: "7.2"},
+		},
+		ServerID: servers[0].ID, CommandSetVersion: POSIXCommandSetVersion, SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	after := round.Snapshot()
+	if after.WaitingClient != 0 || after.Succeeded != 1 {
+		t.Fatalf("结果落库后等待设备应转成功：%+v", after)
+	}
+	if after.Devices[0].ItemCount != 2 {
+		t.Fatalf("等待转成功应带新结果条目数：%+v", after.Devices[0])
+	}
+	if after.NeedsRefresh() {
+		t.Fatal("结果送达后不应再刷新")
+	}
+}
+
 // TestRoundManagerSharesDeviceLocksWithScheduler 验证轮次与每日定时采集共
 // 享每设备互斥，不并发重复采集同一台设备。
 func TestRoundManagerSharesDeviceLocksWithScheduler(t *testing.T) {
