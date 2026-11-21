@@ -350,6 +350,130 @@ func TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters(t *testing.T) 
 	}
 }
 
+// TestQuerySoftwareInventoryAuthorityFaceReturnsCycloneDX 钉住
+// CycloneDX 工具输出面：format=cyclonedx 强制查询完整数据，每台设备一份
+// 可直接写入 JSON 文件的软件物料清单，机密版本值仍被遮蔽。
+func TestQuerySoftwareInventoryAuthorityFaceReturnsCycloneDX(t *testing.T) {
+	st, profileID := softwareInventoryFaceFixture(t)
+	secretValue := "openssl-secret-version"
+	if err := st.AddSecret(
+		"SOFTWARE_VERSION_TOKEN", "软件版本里的机密项", []byte(secretValue), store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ReplaceSoftwareObservedItems("可见设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{
+				Category: softwareinventory.CategoryOperatingSystem,
+				Name:     "Ubuntu", Version: "22.04",
+			},
+			{
+				Category: softwareinventory.CategorySystemPackage, Name: "openssl",
+				Version: secretValue, PackageURL: "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.18?arch=amd64",
+			},
+			{
+				Category: softwareinventory.CategoryContainer, Name: "nginx",
+				ContainerDigest:  "sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0",
+				ContainerRunning: true, ImagePullability: models.SoftwareImagePullabilityPublic,
+				PackageURL: "pkg:docker/nginx@sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0?tag=1.25.3",
+			},
+		},
+		CommandSetVersion: "posix-v3", SystemType: "ubuntu",
+		DistroID: "ubuntu", DistroVersionID: "22.04",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	srv, tunnels, tasks, err := newLocalVaultServer(st, profileID, "project")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
+	session := softwareInventorySession(t, srv)
+
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{"format": "cyclonedx"})
+	if isError {
+		t.Fatalf("CycloneDX 查询报错：%s", text)
+	}
+	var output QuerySoftwareInventoryOutput
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
+	}
+	if len(output.CycloneDX) != 1 || output.CycloneDX[0].Device != "可见设备" {
+		t.Fatalf("CycloneDX 设备输出 = %+v", output.CycloneDX)
+	}
+	if len(output.Devices) != 0 {
+		t.Fatalf("format=cyclonedx 时 devices 应为空数组：%+v", output.Devices)
+	}
+
+	bom := decodeCycloneDXTextForSoftwareInventoryTest(t, output.CycloneDX[0].CycloneDX)
+	if bom["bomFormat"] != "CycloneDX" {
+		t.Fatalf("CycloneDX 文档头 = %+v", bom)
+	}
+	metadata := softwareInventoryNestedMapForTest(t, bom["metadata"], "metadata")
+	mainComponent := softwareInventoryNestedMapForTest(t, metadata["component"], "metadata.component")
+	if mainComponent["name"] != "Ubuntu" || mainComponent["version"] != "22.04" {
+		t.Fatalf("操作系统主组件 = %+v", mainComponent)
+	}
+	device := softwareInventoryNestedMapForTest(
+		t, softwareInventoryAnySliceForTest(t, bom["components"], "顶层组件")[0], "设备组件",
+	)
+	components := softwareInventoryAnySliceForTest(t, device["components"], "设备内软件组件")
+	var opensslPurl, nginxPurl any
+	var nginxHashes []any
+	for _, raw := range components {
+		component := softwareInventoryNestedMapForTest(t, raw, "软件组件")
+		switch component["name"] {
+		case "openssl":
+			opensslPurl = component["purl"]
+		case "nginx":
+			nginxPurl = component["purl"]
+			nginxHashes = softwareInventoryAnySliceForTest(t, component["hashes"], "nginx 镜像摘要")
+		}
+	}
+	if opensslPurl != "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.18?arch=amd64&distro=ubuntu-22.04" {
+		t.Fatalf("openssl 的软件包统一地址 = %v", opensslPurl)
+	}
+	if got, ok := nginxPurl.(string); !ok || !strings.HasPrefix(got, "pkg:oci/") {
+		t.Fatalf("nginx 容器的软件包统一地址 = %v", nginxPurl)
+	}
+	if len(nginxHashes) == 0 {
+		t.Fatalf("nginx 容器组件缺少镜像摘要：%+v", components)
+	}
+	if strings.Contains(text, secretValue) {
+		t.Fatalf("CycloneDX 输出里的机密值必须被遮蔽：%s", text)
+	}
+	if len(output.Masked) != 1 || output.Masked[0] != "SOFTWARE_VERSION_TOKEN" {
+		t.Fatalf("遮蔽名单 = %#v", output.Masked)
+	}
+}
+
+func decodeCycloneDXTextForSoftwareInventoryTest(t *testing.T, document string) map[string]any {
+	t.Helper()
+	var value map[string]any
+	if err := json.Unmarshal([]byte(document), &value); err != nil {
+		t.Fatalf("CycloneDX 输出不是合法 JSON：%v\n%s", err, document)
+	}
+	return value
+}
+
+func softwareInventoryNestedMapForTest(t *testing.T, value any, context string) map[string]any {
+	t.Helper()
+	object, ok := value.(map[string]any)
+	if !ok {
+		t.Fatalf("%s 不是对象：%T", context, value)
+	}
+	return object
+}
+
+func softwareInventoryAnySliceForTest(t *testing.T, value any, context string) []any {
+	t.Helper()
+	items, ok := value.([]any)
+	if !ok {
+		t.Fatalf("%s 不是数组：%T", context, value)
+	}
+	return items
+}
+
 // TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices 钉住
 // 统一查询的缺口修复：没有任何声明的实测条目也必须能被 MCP 工具查到。
 func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testing.T) {
@@ -500,6 +624,39 @@ func TestQuerySoftwareInventoryCacheFaceSurfacesQuerierError(t *testing.T) {
 	}
 }
 
+// TestQuerySoftwareInventoryCycloneDXForcesFullData 钉住 CycloneDX 的完整
+// 数据口径：format=cyclonedx 即使不传 include_system_packages，查询能力也
+// 必须收到真值。
+func TestQuerySoftwareInventoryCycloneDXForcesFullData(t *testing.T) {
+	querier := &fakeSoftwareInventoryQuerier{
+		result: softwareinventory.QueryResult{
+			ProfileName: "inventory-profile",
+			Devices: []softwareinventory.QueryDeviceResult{{
+				DeviceID: "device-1", DeviceName: "权威端设备",
+				Items: []softwareinventory.QueryItem{{
+					DeviceID: "device-1", Category: softwareinventory.CategoryOperatingSystem,
+					Name: "Ubuntu", Version: "24.04", Source: softwareinventory.SourceObserved,
+				}},
+			}},
+		},
+	}
+	session := softwareInventoryFaceSessionWithQuerier(t, querier)
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{"format": "cyclonedx"})
+	if isError {
+		t.Fatalf("CycloneDX 查询报错：%s", text)
+	}
+	if !querier.got.IncludeSystemPackages {
+		t.Fatalf("format=cyclonedx 应强制包含系统包：%+v", querier.got)
+	}
+	var output QuerySoftwareInventoryOutput
+	if err := json.Unmarshal([]byte(text), &output); err != nil {
+		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
+	}
+	if len(output.CycloneDX) != 1 || output.CycloneDX[0].Device != "权威端设备" {
+		t.Fatalf("CycloneDX 设备输出 = %+v", output.CycloneDX)
+	}
+}
+
 // TestQuerySoftwareInventoryToolExplainsFocusList 钉住工具说明的重点清单
 // 口径：默认不返回没有监听端口的系统包，带监听端口的系统包作为监听程
 // 序出现，include_system_packages=true 才返回完整系统包列表。
@@ -523,6 +680,9 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 		"the result is the focus list",
 		"system packages without listening ports are omitted",
 		"packages with listening ports appear as listening programs",
+		"cyclonedx",
+		"Trivy",
+		"Grype",
 	} {
 		if !strings.Contains(tool.Description, wanted) {
 			t.Fatalf("工具说明缺少 %q：%s", wanted, tool.Description)
@@ -541,6 +701,12 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 	if err := json.Unmarshal(schemaBlob, &schema); err != nil {
 		t.Fatal(err)
 	}
+	formatDescription := schema.Properties["format"].Description
+	if !strings.Contains(formatDescription, "cyclonedx") ||
+		!strings.Contains(formatDescription, "CycloneDX 1.6") {
+		t.Fatalf("format 参数说明缺少 CycloneDX 用途：%s", formatDescription)
+	}
+
 	description := schema.Properties["include_system_packages"].Description
 	for _, wanted := range []string{"focus list", "listening programs", "full package list"} {
 		if !strings.Contains(description, wanted) {

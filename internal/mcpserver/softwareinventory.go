@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"ssh-manager-mcp/internal/buildinfo"
 	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/sshbroker"
 	"ssh-manager-mcp/internal/store"
@@ -20,7 +22,7 @@ import (
 // 数全部可选；可见设备范围不在这里传，由查询执行方决定：本地查询按本
 // 面 profile 计算，在线查询由权威端按设备码绑定的 profile 计算。
 type QuerySoftwareInventoryInput struct {
-	Format                string `json:"format,omitempty" jsonschema:"output format: json (structured device list; default) or csv (flat inventory table text; the CSV is UTF-8 with a byte order mark and CRLF line endings)"`
+	Format                string `json:"format,omitempty" jsonschema:"output format: json (structured device list; default), csv (flat inventory table text; the CSV is UTF-8 with a byte order mark and CRLF line endings), or cyclonedx (one CycloneDX 1.6 software bill of materials document per device, containing complete data including system packages, distribution-qualified package URLs, an operating-system main component, and container components with image digests; ready for vulnerability scanners such as Trivy or Grype)"`
 	Device                string `json:"device,omitempty" jsonschema:"device name filter; omit for all visible devices"`
 	Name                  string `json:"name,omitempty" jsonschema:"case-insensitive substring match on the software name; omit for all names"`
 	ExactVersion          string `json:"exact_version,omitempty" jsonschema:"exact case-sensitive version string after trimming surrounding whitespace; omit for any version"`
@@ -42,8 +44,15 @@ type SoftwareInventoryQuerier interface {
 // 输出的统一遮蔽字段（见 masking.go 的测试约束）。
 type QuerySoftwareInventoryOutput struct {
 	MaskedOutput
-	Devices []softwareinventory.QueryDeviceResult `json:"devices" jsonschema:"matching devices, each with its software items, listening ports and exposure levels, source, collection time, and collection status; empty when format=csv"`
-	CSV     string                                `json:"csv,omitempty" jsonschema:"flat inventory table text; one row per software item; only present for format=csv"`
+	Devices   []softwareinventory.QueryDeviceResult `json:"devices" jsonschema:"matching devices, each with its software items, listening ports and exposure levels, source, collection time, and collection status; empty when format=csv"`
+	CSV       string                                `json:"csv,omitempty" jsonschema:"flat inventory table text; one row per software item; only present for format=csv"`
+	CycloneDX []CycloneDXDeviceBOM                  `json:"cyclonedx,omitempty" jsonschema:"one CycloneDX 1.6 software bill of materials document per device, including system packages; only present for format=cyclonedx"`
+}
+
+// CycloneDXDeviceBOM 是一台设备的完整 CycloneDX 文档文本。
+type CycloneDXDeviceBOM struct {
+	Device    string `json:"device"`
+	CycloneDX string `json:"cyclonedx"`
 }
 
 // errSoftwareInventoryNotWired 是客户端面未注入在线查询能力时的固定错误
@@ -74,7 +83,7 @@ func (q localSoftwareInventoryQuerier) QuerySoftwareInventory(
 	if err != nil {
 		return softwareinventory.QueryResult{}, fmt.Errorf("读取 profile 授权失败: %w", err)
 	}
-	return softwareinventory.New(st).Query(softwareinventory.QueryOptions{
+	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
 		Device:                in.Device,
 		Name:                  in.Name,
 		ExactVersion:          in.ExactVersion,
@@ -85,6 +94,15 @@ func (q localSoftwareInventoryQuerier) QuerySoftwareInventory(
 		IncludeSystemPackages: in.IncludeSystemPackages,
 		Visibility:            softwareinventory.DevicesVisibleThroughServers(granted...),
 	})
+	if err != nil {
+		return softwareinventory.QueryResult{}, err
+	}
+	if profile, profileErr := st.GetProfile(q.profileID); profileErr == nil && profile != nil && profile.Name != "" {
+		result.ProfileName = profile.Name
+	} else {
+		result.ProfileName = q.profileID
+	}
+	return result, nil
 }
 
 // registerSoftwareInventoryTool 注册 query_software_inventory。inventory 为
@@ -104,20 +122,24 @@ func registerSoftwareInventoryTool(
 	addTrackedTool(srv, busy, storeFn, hkFn,
 		&mcp.Tool{
 			Name:        BrokerTools[17], // "query_software_inventory"（票 #185）
-			Description: "Query the observed software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All eight filters are optional: device (name), name (case-insensitive substring), exact_version (verbatim equality), site (including descendant sites), network (registered physical or virtual network name), minimum_exposure (observed listening ports use only local_machine, specific_address, and all_addresses; local_area_network, virtual_local_area_network, and public_network remain accepted for compatibility but do not match observed items), category, include_system_packages (default false — the result is the focus list of items with an attack surface: system packages without listening ports are omitted, packages with listening ports appear as listening programs, and name or exact_version implies true; set true to return the full package list). format optionally returns the same filtered result as flat CSV table text (one row per software item, UTF-8 with byte order mark, CRLF line endings) instead of the structured device list. Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
+			Description: "Query the observed software inventory (devices' installed software with precise versions, listening ports with exposure levels, source, collection time, and each device's collection status including whether its inventory is stale). All eight filters are optional: device (name), name (case-insensitive substring), exact_version (verbatim equality), site (including descendant sites), network (registered physical or virtual network name), minimum_exposure (observed listening ports use only local_machine, specific_address, and all_addresses; local_area_network, virtual_local_area_network, and public_network remain accepted for compatibility but do not match observed items), category, include_system_packages (default false — the result is the focus list of items with an attack surface: system packages without listening ports are omitted, packages with listening ports appear as listening programs, and name or exact_version implies true; set true to return the full package list). format optionally returns the same filtered result as flat CSV table text (one row per software item, UTF-8 with byte order mark, CRLF line endings), or format=cyclonedx returns one CycloneDX 1.6 software bill of materials document per device with complete data (including system packages, distribution-qualified package URLs, an operating-system main component, and container components with image digests) that can be given directly to Trivy, Grype, and other vulnerability scanners. Visibility follows YOUR profile: only managed devices with at least one server entry you may use; unmanaged devices never appear. On a cache client this tool queries the authority online — if the authority is unreachable it fails with a fixed error and never falls back to local data.",
 		},
 		func(_ context.Context, _ *mcp.CallToolRequest, in QuerySoftwareInventoryInput) (*mcp.CallToolResult, QuerySoftwareInventoryOutput, error) {
-			if format := in.Format; format != "" && format != "json" && format != "csv" {
+			if format := in.Format; format != "" && format != "json" && format != "csv" && format != "cyclonedx" {
 				return &mcp.CallToolResult{
 						IsError: true,
 						Content: []mcp.Content{&mcp.TextContent{
-							Text: "format 参数只支持 json 或 csv",
+							Text: "format 参数只支持 json、csv 或 cyclonedx",
 						}},
 					}, QuerySoftwareInventoryOutput{
 						Devices: []softwareinventory.QueryDeviceResult{},
 					}, nil
 			}
-			result, err := inventory.QuerySoftwareInventory(in)
+			query := in
+			if in.Format == "cyclonedx" {
+				query.IncludeSystemPackages = true
+			}
+			result, err := inventory.QuerySoftwareInventory(query)
 			if err != nil {
 				// 空数组而不是 nil：工具输出的 JSON 结构里 devices 恒为数组。
 				return &mcp.CallToolResult{
@@ -137,6 +159,31 @@ func registerSoftwareInventoryTool(
 				}
 				return nil, QuerySoftwareInventoryOutput{
 					Devices: []softwareinventory.QueryDeviceResult{}, CSV: string(blob),
+				}, nil
+			}
+			if in.Format == "cyclonedx" {
+				documents, err := softwareinventory.MarshalCycloneDXPerDevice(result, softwareinventory.CycloneDXExportOptions{
+					GeneratedAt:       time.Now().UTC(),
+					SSHManagerVersion: buildinfo.Version,
+					ProfileName:       result.ProfileName,
+				})
+				if err != nil {
+					return &mcp.CallToolResult{
+							IsError: true,
+							Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+						}, QuerySoftwareInventoryOutput{
+							Devices: []softwareinventory.QueryDeviceResult{},
+						}, nil
+				}
+				documentsByDevice := make([]CycloneDXDeviceBOM, 0, len(documents))
+				for _, document := range documents {
+					documentsByDevice = append(documentsByDevice, CycloneDXDeviceBOM{
+						Device: document.DeviceName, CycloneDX: string(document.Document),
+					})
+				}
+				return nil, QuerySoftwareInventoryOutput{
+					Devices:   []softwareinventory.QueryDeviceResult{},
+					CycloneDX: documentsByDevice,
 				}, nil
 			}
 			return nil, QuerySoftwareInventoryOutput{Devices: result.Devices}, nil
