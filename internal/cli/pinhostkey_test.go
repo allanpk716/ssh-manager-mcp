@@ -492,7 +492,7 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	lineA2 := "192.0.2.50 " + other.Type() + " " + base64.StdEncoding.EncodeToString(other.Marshal())
 	errText := runCliErr(t, "servers", "pin-hostkey", "alpha", "--from-keyscan",
 		keyscanFile(t, lineA, lineA2))
-	for _, want := range []string{"2 different keys match 192.0.2.50", "forwarded automatically", "--fingerprint", "--force"} {
+	for _, want := range []string{"2 different keys match the entry's candidate addresses", "forwarded automatically", "--fingerprint", "--force"} {
 		if !strings.Contains(errText, want) {
 			t.Fatalf("multi-key refusal missing %q:\n%s", want, errText)
 		}
@@ -511,10 +511,10 @@ func TestPinHostkey_Keyscan(t *testing.T) {
 	}
 
 	errText = runCliErr(t, "servers", "pin-hostkey", "alpha", "--from-keyscan", keyscanFile(t, lineBare))
-	if !strings.Contains(errText, "no known_hosts line matches 192.0.2.50") ||
+	if !strings.Contains(errText, "no known_hosts line") ||
 		!strings.Contains(errText, "forms found: [192.0.2.60]") ||
-		!strings.Contains(errText, "expected form: 192.0.2.50") {
-		t.Fatalf("no-match error must list file forms vs expected form:\n%s", errText)
+		!strings.Contains(errText, "expected forms: [192.0.2.50]") {
+		t.Fatalf("no-match error must list file forms vs expected forms:\n%s", errText)
 	}
 
 	_, mkDup := withCliStoreEnv(t)

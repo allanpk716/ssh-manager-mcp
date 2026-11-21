@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -131,7 +133,14 @@ Forms:
 				if err != nil {
 					return err
 				}
-				m, err := readKeyscan(keyscan, srv.Host, srv.Port)
+				candidates, err := s.EntryCandidateAddresses(srv)
+				if err != nil {
+					return err
+				}
+				if len(candidates) == 0 {
+					return fmt.Errorf("cannot pin %s from keyscan: the entry has no candidate addresses (its host is empty and its device has no network member addresses) — set a host or record the device's network member addresses first", srv.Name)
+				}
+				m, err := readKeyscan(keyscan, candidates)
 				if err != nil {
 					return err
 				}
@@ -139,7 +148,7 @@ Forms:
 				if m.skipHashed > 0 || m.skipMarker > 0 {
 					note = fmt.Sprintf("skipped %d hashed-hostname (|1|) and %d marker (@) lines\n", m.skipHashed, m.skipMarker)
 				}
-				return runPinManual(cmd, s, srv, store.EntryFallbackAddr(srv), m.blob,
+				return runPinManual(cmd, s, srv, m.addr, m.blob,
 					store.PinFormatBlob, m.fp, "keyscan", note, "", force)
 			default:
 				srv, err := pinResolve(s, args[0])
@@ -318,20 +327,54 @@ func knownHostsForm(host string, port int) string {
 	return fmt.Sprintf("[%s]:%d", host, port)
 }
 
+// candidateForm pairs one complete candidate address with the way OpenSSH
+// known_hosts spells it.
+type candidateForm struct {
+	form string // the known_hosts pattern element
+	addr string // the complete candidate address, recorded as handshake address on match
+}
+
+// knownHostsForms derives every candidate address's known_hosts spelling in
+// candidate order, dropping duplicate spellings (the first candidate wins).
+func knownHostsForms(candidates []string) ([]candidateForm, error) {
+	out := make([]candidateForm, 0, len(candidates))
+	seen := map[string]bool{}
+	for _, address := range candidates {
+		host, portText, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, fmt.Errorf("candidate address %q is not a complete host:port address", address)
+		}
+		port, err := strconv.Atoi(portText)
+		if err != nil {
+			return nil, fmt.Errorf("candidate address %q has a non-numeric port", address)
+		}
+		form := knownHostsForm(host, port)
+		if seen[form] {
+			continue
+		}
+		seen[form] = true
+		out = append(out, candidateForm{form: form, addr: address})
+	}
+	return out, nil
+}
+
 // keyscanMatch is readKeyscan's outcome bundle.
 type keyscanMatch struct {
 	blob       []byte   // the matched key's SSH wire bytes
 	fp         string   // its SHA256 fingerprint
+	addr       string   // the matched candidate address (the handshake record)
 	skipHashed int      // |1|-hashed-hostname lines (unsupported, never mis-matched)
 	skipMarker int      // @cert-authority/@revoked marker lines (ditto)
 	seenForms  []string // distinct pattern elements in matchable lines (no-match diagnostics)
 }
 
-// readKeyscan reads <file|-> and resolves the ONE distinct key matching the
-// entry's known_hosts rendering. Pattern elements are comma-split and compared
-// by literal equality to the expected form; hashed and marker lines are skipped
-// and counted; zero matches and multiple DISTINCT matches are both refusals.
-func readKeyscan(path, host string, port int) (*keyscanMatch, error) {
+// readKeyscan reads <file|-> and resolves the ONE distinct key matching any of
+// the entry's candidate addresses: each candidate's known_hosts spelling is
+// compared to pattern elements by literal equality, and the handshake address
+// records the FIRST candidate (in candidate order) whose spelling matched the
+// winning key. Hashed and marker lines are skipped and counted; zero matches
+// and multiple DISTINCT matches are both refusals.
+func readKeyscan(path string, candidates []string) (*keyscanMatch, error) {
 	var r io.Reader
 	if path == "-" {
 		r = os.Stdin
@@ -343,9 +386,21 @@ func readKeyscan(path, host string, port int) (*keyscanMatch, error) {
 		defer f.Close()
 		r = f
 	}
-	expected := knownHostsForm(host, port)
+	expected, err := knownHostsForms(candidates)
+	if err != nil {
+		return nil, err
+	}
+	formIndex := make(map[string]int, len(expected))
+	for i, fc := range expected {
+		formIndex[fc.form] = i
+	}
 	m := &keyscanMatch{}
-	var matched []ssh.PublicKey // distinct, in file order
+	type keyHit struct {
+		key  ssh.PublicKey
+		addr string // the lowest-order candidate whose form matched this key so far
+		best int    // that candidate's index
+	}
+	var matched []keyHit // distinct keys, in file order
 	seenForm := map[string]bool{}
 
 	sc := bufio.NewScanner(r)
@@ -378,18 +433,23 @@ func readKeyscan(path, host string, port int) (*keyscanMatch, error) {
 				seenForm[el] = true
 				m.seenForms = append(m.seenForms, el)
 			}
-			if el != expected {
+			index, ok := formIndex[el]
+			if !ok {
 				continue
 			}
-			dup := false
-			for _, mk := range matched {
-				if bytes.Equal(mk.Marshal(), key.Marshal()) {
-					dup = true
+			hit := -1
+			for j := range matched {
+				if bytes.Equal(matched[j].key.Marshal(), key.Marshal()) {
+					hit = j
 					break
 				}
 			}
-			if !dup {
-				matched = append(matched, key)
+			switch {
+			case hit < 0:
+				matched = append(matched, keyHit{key: key, addr: expected[index].addr, best: index})
+			case index < matched[hit].best:
+				matched[hit].best = index
+				matched[hit].addr = expected[index].addr
 			}
 		}
 	}
@@ -399,18 +459,23 @@ func readKeyscan(path, host string, port int) (*keyscanMatch, error) {
 
 	switch len(matched) {
 	case 0:
-		return nil, fmt.Errorf("no known_hosts line matches %s in %s — forms found: [%s]; expected form: %s (bare host for port 22, [host]:port otherwise)",
-			expected, path, strings.Join(m.seenForms, ", "), expected)
+		tried := make([]string, 0, len(expected))
+		for _, fc := range expected {
+			tried = append(tried, fc.form)
+		}
+		return nil, fmt.Errorf("no known_hosts line in %s matches the entry's candidate addresses — forms found: [%s]; expected forms: [%s] (bare host for port 22, [host]:port otherwise)",
+			path, strings.Join(m.seenForms, ", "), strings.Join(tried, ", "))
 	case 1:
-		m.blob = matched[0].Marshal()
-		m.fp = ssh.FingerprintSHA256(matched[0])
+		m.blob = matched[0].key.Marshal()
+		m.fp = ssh.FingerprintSHA256(matched[0].key)
+		m.addr = matched[0].addr
 		return m, nil
 	default:
 		fps := make([]string, 0, len(matched))
 		for _, k := range matched {
-			fps = append(fps, ssh.FingerprintSHA256(k))
+			fps = append(fps, ssh.FingerprintSHA256(k.key))
 		}
-		return nil, fmt.Errorf("%d different keys match %s in %s (%s) — ssh-keyscan emits one line per algorithm and the entry keeps ONE pin, so guessing the algorithm bets on which key the server presents next. Self-heal: make a first connection from a machine that can reach the target (the pin is then forwarded automatically), or pick ONE algorithm from the scan output and pass it via --fingerprint; if that connection reports presented != pinned fingerprints (both are named in the error), --force replaces the pin",
-			len(matched), expected, path, strings.Join(fps, ", "))
+		return nil, fmt.Errorf("%d different keys match the entry's candidate addresses in %s (%s) — ssh-keyscan emits one line per algorithm and the entry keeps ONE pin, so guessing the algorithm bets on which key the server presents next. Self-heal: make a first connection from a machine that can reach the target (the pin is then forwarded automatically), or pick ONE algorithm from the scan output and pass it via --fingerprint; if that connection reports presented != pinned fingerprints (both are named in the error), --force replaces the pin",
+			len(matched), path, strings.Join(fps, ", "))
 	}
 }
