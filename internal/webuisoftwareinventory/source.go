@@ -500,6 +500,7 @@ func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInv
 		LastFailureReason: status.LastFailureReason, Incomplete: status.Incomplete,
 		NeverCollected: status.NeverCollected, Stale: status.Stale,
 		PendingImmediate: status.PendingImmediate,
+		UnusedImageCount: status.UnusedImageCount,
 	}
 }
 
@@ -550,6 +551,10 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 		})
 	}
 	displayCategory := softwareinventory.ItemDisplayCategory(item)
+	imagePullabilityLabel := ""
+	if item.ImagePullability != "" {
+		imagePullabilityLabel = item.ImagePullability.Label()
+	}
 	return webui.SoftwareInventoryItem{
 		CategoryCode: displayCategory.Code(), CategoryLabel: item.CategoryLabel,
 		SearchCategoryLabel: displayCategory.Label(),
@@ -557,6 +562,7 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 		PackageURL: item.PackageURL, CPE: item.CPE, Source: item.Source,
 		CollectedAt: item.CollectedAt, ConfirmedAt: item.ConfirmedAt,
 		ListeningPorts: ports, BelongsTo: item.BelongsTo, Note: item.Note,
+		ContainerName: item.ContainerName, ImagePullabilityLabel: imagePullabilityLabel,
 		ContainerTag: item.ContainerTag, ContainerDigest: item.ContainerDigest,
 		ContainerRunning: item.ContainerRunning,
 		ProcessName:      item.ProcessName, ExecutablePath: item.ExecutablePath,

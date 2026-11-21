@@ -510,6 +510,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 			LastFailureAt:     &failedAt,
 			LastFailureReason: "连接超时",
 			Stale:             true,
+			UnusedImageCount:  2,
 		},
 		Summary: SoftwareInventoryDeviceSummary{
 			Name: "工作站", SystemName: "Ubuntu", SystemVersion: "24.04.1 LTS",
@@ -535,11 +536,24 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					Address: "0.0.0.0", Port: 80, Protocol: "tcp", ExposureLabel: "监听所有地址",
 				}},
 			}}},
-			{CategoryLabel: "容器", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "容器镜像", Name: "postgres", Version: "16.4",
-				Source: "实测", CollectedAt: &collectedAt, BelongsTo: "Docker",
-				ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef", ContainerRunning: true,
-			}}},
+			{CategoryLabel: "容器", Items: []SoftwareInventoryItem{
+				{
+					CategoryLabel: "容器", Name: "nginx", Version: "1.25.3",
+					Source: "实测", CollectedAt: &collectedAt,
+					ContainerName: "gateway", ContainerTag: "1.25.3",
+					ContainerDigest: "sha256:abcdef", ContainerRunning: true,
+					ImagePullabilityLabel: "可公开拉取",
+					ListeningPorts: []SoftwareInventoryPort{{
+						Address: "0.0.0.0", Port: 8080, Protocol: "tcp", ExposureLabel: "监听所有地址",
+					}},
+				},
+				{
+					CategoryLabel: "容器", Name: "本地构建镜像",
+					Source: "实测", CollectedAt: &collectedAt,
+					ContainerName: "trainer-old", ContainerRunning: false,
+					MissingVersion: true,
+				},
+			}},
 			{CategoryLabel: "驱动与固件", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "驱动与固件", Name: "NVIDIA 显卡驱动", Version: "550.120",
 				Source: "实测", CollectedAt: &collectedAt,
@@ -585,9 +599,11 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		"<h1>工作站 · 软件清单</h1>",
 		"系统与内核", "Ubuntu 24.04.1 LTS；Linux 内核 6.8.0-49-generic",
 		"重点软件", "全部软件", "未识别进程",
+		"未使用镜像",
 		"采集时间", "2026-11-01 10:30:00", "采集失败", "清单过期", "连接超时",
 		"0.0.0.0:80/tcp", "监听所有地址",
-		"postgres", "16.4", "Docker", "16-alpine", "sha256:abcdef", "运行中",
+		"nginx", "1.25.3", "sha256:abcdef", "容器名", "gateway", "运行中",
+		"镜像能否从公开仓库拉取", "可公开拉取", "0.0.0.0:8080/tcp", "已停止", "trainer-old",
 		"NVIDIA 显卡驱动", "550.120",
 		"系统包（2 条，默认折叠）", "curl", "openssh-client",
 		"未识别", "gateway", "/opt/gateway/gateway", "8123", "127.0.0.1:8443/tcp", "仅本机",
