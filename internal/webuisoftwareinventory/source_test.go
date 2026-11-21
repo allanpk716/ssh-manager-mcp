@@ -324,7 +324,7 @@ func readExportCSV(t *testing.T, blob []byte) [][]string {
 		t.Fatalf("导出必须能用标准 CSV 解析器读回：%v\n%q", err, blob)
 	}
 	if len(rows) == 0 || strings.Join(rows[0], "|") !=
-		"设备|软件名|版本|缺版本|类别|监听端口|暴露级别|采集时间" {
+		"设备|软件名|版本|缺版本|类别|监听端口|暴露级别|采集时间|待装安全更新" {
 		t.Fatalf("导出表头 = %#v", rows)
 	}
 	return rows
@@ -499,6 +499,49 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		var missing *webui.SoftwareInventoryDeviceNotFoundError
 		if !errors.As(err, &missing) {
 			t.Fatalf("不存在的设备应返回页面层可识别的错误：%v", err)
+		}
+	}
+}
+
+// TestStatusViewBuildsPendingSecurityUpdatesLabel 覆盖设备页摘要的待装
+// 安全更新显示口径：数量与缓存时间、Linux 未知、Windows 与 macOS 不采集。
+func TestStatusViewBuildsPendingSecurityUpdatesLabel(t *testing.T) {
+	cacheUpdatedAt := time.Date(2026, 11, 20, 9, 0, 0, 0, time.Local)
+	known := statusView(softwareinventory.CollectionStatusView{
+		CollectionStatus: softwareinventory.CollectionStatus{
+			SystemType: "linux",
+			PendingUpdates: &models.SoftwarePendingUpdates{
+				SecurityCount: 2, CacheUpdatedAt: cacheUpdatedAt,
+				Items: []models.SoftwarePendingUpdate{{Name: "openssl", FromSecurityRepo: true}},
+			},
+		},
+	})
+	if known.PendingSecurityUpdatesLabel != "2 个（缓存于 2026-11-20 09:00）" {
+		t.Fatalf("已知待装安全更新显示 = %q", known.PendingSecurityUpdatesLabel)
+	}
+
+	withoutCacheTime := statusView(softwareinventory.CollectionStatusView{
+		CollectionStatus: softwareinventory.CollectionStatus{
+			SystemType:     "linux",
+			PendingUpdates: &models.SoftwarePendingUpdates{SecurityCount: 0},
+		},
+	})
+	if withoutCacheTime.PendingSecurityUpdatesLabel != "0 个" {
+		t.Fatalf("缓存时间缺失时的待装安全更新显示 = %q", withoutCacheTime.PendingSecurityUpdatesLabel)
+	}
+
+	unknownLinux := statusView(softwareinventory.CollectionStatusView{
+		CollectionStatus: softwareinventory.CollectionStatus{SystemType: "linux"},
+	})
+	if unknownLinux.PendingSecurityUpdatesLabel != "未知" {
+		t.Fatalf("Linux 未知待装安全更新显示 = %q", unknownLinux.PendingSecurityUpdatesLabel)
+	}
+	for _, systemType := range []string{"windows", "darwin"} {
+		view := statusView(softwareinventory.CollectionStatusView{
+			CollectionStatus: softwareinventory.CollectionStatus{SystemType: systemType},
+		})
+		if view.PendingSecurityUpdatesLabel != "" {
+			t.Fatalf("%s 不应显示待装安全更新：%q", systemType, view.PendingSecurityUpdatesLabel)
 		}
 	}
 }

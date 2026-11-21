@@ -15,6 +15,7 @@
 <dt>全部软件</dt><dd>{{.SoftwareInventoryDevice.Summary.AllSoftwareCount}}</dd>
 <dt>未识别进程</dt><dd>{{.SoftwareInventoryDevice.Summary.UnidentifiedProcessCount}}</dd>
 {{if .SoftwareInventoryDevice.Status.UnusedImageCount}}<dt>未使用镜像</dt><dd>{{.SoftwareInventoryDevice.Status.UnusedImageCount}}</dd>{{end}}
+{{if .SoftwareInventoryDevice.Status.PendingSecurityUpdatesLabel}}<dt>待装安全更新</dt><dd>{{.SoftwareInventoryDevice.Status.PendingSecurityUpdatesLabel}}</dd>{{end}}
 <dt>采集时间</dt><dd>{{formatOptionalTime .SoftwareInventoryDevice.Status.LastSuccessAt}}</dd>
 {{if .SoftwareInventoryDevice.Status.LastFailureReason}}<dt>上次失败原因</dt><dd>{{.SoftwareInventoryDevice.Status.LastFailureReason}}</dd>{{end}}
 </dl>

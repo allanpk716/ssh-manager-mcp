@@ -23,6 +23,7 @@ type CollectionStatus struct {
 	LastFailureReason string     `json:"last_failure_reason,omitempty"`
 	Incomplete        bool       `json:"incomplete,omitempty"`
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
+	SystemType        string     `json:"system_type,omitempty"`
 	DistroID          string     `json:"distro_id,omitempty"`
 	DistroVersionID   string     `json:"distro_version_id,omitempty"`
 	UnusedImageCount  int        `json:"unused_images,omitempty"`

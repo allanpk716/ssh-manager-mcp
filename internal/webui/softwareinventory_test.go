@@ -506,11 +506,12 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		Status: SoftwareInventoryStatus{
 			Managed: true, Collector: "", CollectorLabel: "权威端",
 			PreferredServerEntry: "web-1", ServerEntry: "web-1",
-			LastSuccessAt:     &collectedAt,
-			LastFailureAt:     &failedAt,
-			LastFailureReason: "连接超时",
-			Stale:             true,
-			UnusedImageCount:  2,
+			LastSuccessAt:               &collectedAt,
+			LastFailureAt:               &failedAt,
+			LastFailureReason:           "连接超时",
+			Stale:                       true,
+			UnusedImageCount:            2,
+			PendingSecurityUpdatesLabel: "2 个（缓存于 2026-11-20 09:00）",
 		},
 		Summary: SoftwareInventoryDeviceSummary{
 			Name: "工作站", SystemName: "Ubuntu", SystemVersion: "24.04.1 LTS",
@@ -600,6 +601,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		"系统与内核", "Ubuntu 24.04.1 LTS；Linux 内核 6.8.0-49-generic",
 		"重点软件", "全部软件", "未识别进程",
 		"未使用镜像",
+		"待装安全更新", "2 个（缓存于 2026-11-20 09:00）",
 		"采集时间", "2026-11-01 10:30:00", "采集失败", "清单过期", "连接超时",
 		"0.0.0.0:80/tcp", "监听所有地址",
 		"nginx", "1.25.3", "sha256:abcdef", "容器名", "gateway", "运行中",
@@ -637,6 +639,27 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("设备清单页不应出现 %q：\n%s", forbidden, body)
 		}
+	}
+}
+
+// TestSoftwareInventoryDevicePageShowsUnknownPendingSecurityUpdates 钉住
+// 未知口径：Linux 缓存不可读或没有包管理器时显示「未知」，不能显示 0。
+func TestSoftwareInventoryDevicePageShowsUnknownPendingSecurityUpdates(t *testing.T) {
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+		Name:   "嵌入式板",
+		Status: SoftwareInventoryStatus{PendingSecurityUpdatesLabel: "未知"},
+	}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+
+	response := doGetWithCookie(
+		t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("嵌入式板"),
+	)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("设备清单页状态码 = %d，应为 200：\n%s", response.StatusCode, body)
+	}
+	if !strings.Contains(body, "待装安全更新") || !strings.Contains(body, "未知") {
+		t.Fatalf("设备清单页应显示待装安全更新未知：\n%s", body)
 	}
 }
 
