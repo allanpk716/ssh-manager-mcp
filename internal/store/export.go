@@ -407,6 +407,11 @@ func deriveLegacyHostKeys(servers []SnapshotServer, entryPins []SnapshotEntryHos
 	}
 	groups := make(map[string][]SnapshotEntryHostKey)
 	for _, sv := range servers {
+		if sv.Host == "" {
+			// 空主机条目推导不出旧客户端能匹配的「Host:端口」，跳过它
+			// 不生成假锚行（条目锚仍在 EntryHostKeys 里）。
+			continue
+		}
 		p, ok := byServer[sv.ID]
 		if !ok {
 			continue

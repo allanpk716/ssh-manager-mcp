@@ -3,7 +3,7 @@
 <h1>补全 {{.ServerComplete.Detail.Name}}（第 {{addOne .ServerComplete.Position}} / {{len .ServerComplete.Queue}} 台）</h1>
 {{if .ServerComplete.Notice}}<div class="operation-refusal"><p>{{.ServerComplete.Notice}}</p></div>{{end}}
 <dl class="detail-list">
-<dt>连接</dt><dd>{{.ServerComplete.Detail.User}}@{{.ServerComplete.Detail.Host}}:{{.ServerComplete.Detail.Port}}</dd>
+<dt>连接</dt><dd>{{if .ServerComplete.Detail.Host}}{{.ServerComplete.Detail.User}}@{{.ServerComplete.Detail.Host}}:{{.ServerComplete.Detail.Port}}{{else if .ServerComplete.PreferredNetworkAddress}}{{.ServerComplete.Detail.User}}@{{.ServerComplete.PreferredNetworkAddress}}:{{.ServerComplete.Detail.Port}}{{else}}{{.ServerComplete.Detail.User}} · 端口 {{.ServerComplete.Detail.Port}}{{end}}</dd>
 <dt>注意原因</dt><dd>{{if .ServerComplete.Detail.AttentionReasons}}{{joinReasons .ServerComplete.Detail.AttentionReasons}}{{else}}无{{end}}</dd>
 </dl>
 <form method="post" action="/ui/servers/complete" class="server-form">

@@ -492,9 +492,10 @@ func (h *handler) handleServerAddResult(w http.ResponseWriter, r *http.Request) 
 	}
 	view := &ServerAddResultView{
 		Detail: detail, DeviceName: detail.DeviceName,
-		ConnectionTestPollPath: r.URL.RequestURI(),
-		ReturnTo:               normalizeAddReturnPath(r.URL.Query().Get("return_to")),
-		FromServerDetail:       r.URL.Query().Get("source") == "detail",
+		PreferredNetworkAddress: h.serverPreferredNetworkAddress(r, detail),
+		ConnectionTestPollPath:  r.URL.RequestURI(),
+		ReturnTo:                normalizeAddReturnPath(r.URL.Query().Get("return_to")),
+		FromServerDetail:        r.URL.Query().Get("source") == "detail",
 	}
 	if h.cfg.Access == nil {
 		view.ProfileNamesUnavailable = true

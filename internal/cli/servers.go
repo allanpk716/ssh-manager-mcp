@@ -309,8 +309,8 @@ func serversListCmd() *cobra.Command {
 				}
 				// 命令策略(ticket #14):shell 类型是连接信息的一员,owner 在
 				// ls 里能看到标注(存储层已归一,空值不会到这里)。
-				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s@%s:%d [shell=%s] [%s] (%s) [%s] · %s\n",
-					srv.Name, srv.ID, srv.User, srv.Host, srv.Port,
+				fmt.Fprintf(cmd.OutOrStdout(), "%-16s %-20s %s [shell=%s] [%s] (%s) [%s] · %s\n",
+					srv.Name, srv.ID, entryConnectionText(s, srv),
 					string(models.NormalizeShellType(string(srv.ShellType))), sudo, role, attention, truncate(srv.Caveats))
 			}
 			return nil
