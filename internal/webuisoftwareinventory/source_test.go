@@ -135,7 +135,8 @@ func TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.NowFn = nil
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	devices, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
 	if err != nil {
@@ -286,7 +287,8 @@ func TestSourceExportsCSVFromUnifiedQuery(t *testing.T) {
 		Category: softwareinventory.CategoryServiceProgram,
 		Name:     "nginx", Version: "1.24.0",
 	})
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	blob, err := source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
 		Name: "nginx", ExactVersion: "1.25.3", Site: "公司", Network: "总部物理局域网",
@@ -393,7 +395,8 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.NowFn = func() time.Time { return collectedAt.Add(time.Hour) }
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
@@ -509,7 +512,8 @@ func TestSourceBuildsTodosFromDomainResult(t *testing.T) {
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	todos, err := source.SoftwareInventoryTodos()
 	if err != nil {
@@ -551,7 +555,8 @@ func TestSourceDeviceAdvancedSettingsAndSudo(t *testing.T) {
 	if _, _, err := st.AddCacheToken("laptop-client", profileID); err != nil {
 		t.Fatal(err)
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {

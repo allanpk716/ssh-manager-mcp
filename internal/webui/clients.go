@@ -14,12 +14,18 @@ const (
 	clientPairingPath = "/ui/clients/pairing"
 )
 
-// LastPullText 返回最后同步时间；从未同步过时明确显示「从未同步」。
-func (s ClientSummary) LastPullText() string {
-	if s.LastPullAt.IsZero() {
+// LastPullText 返回设备码最近拉取时间的展示文字；从未同步过时明确显示
+// 「从未同步」。客户端实例页与采集轮次进度页共用这一口径。
+func LastPullText(lastPullAt time.Time) string {
+	if lastPullAt.IsZero() {
 		return "从未同步"
 	}
-	return s.LastPullAt.Format("2006-01-02 15:04:05")
+	return lastPullAt.Format("2006-01-02 15:04:05")
+}
+
+// LastPullText 返回最后同步时间；从未同步过时明确显示「从未同步」。
+func (s ClientSummary) LastPullText() string {
+	return LastPullText(s.LastPullAt)
 }
 
 // SourceText 区分经配对入网与 owner 手动签发的客户端实例。

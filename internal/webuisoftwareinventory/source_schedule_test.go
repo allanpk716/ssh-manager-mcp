@@ -41,7 +41,8 @@ func TestSourceSavesDailyTimeAndStartsClientCollectionRound(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	if err := source.SetSoftwareInventoryDailyTime(
 		"02:30", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
@@ -72,7 +73,7 @@ func TestSourceSavesDailyTimeAndStartsClientCollectionRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
-		return !view.Running && strings.Contains(view.SummaryText, "等待客户端 2 台")
+		return !view.Running && strings.Contains(view.SummaryText, "等待客户端实例 2 台")
 	})
 	if view.StatusText != "本机采集已完成，等待客户端实例回传结果" {
 		t.Fatalf("整轮状态 = %q", view.StatusText)

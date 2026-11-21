@@ -67,7 +67,7 @@ func roundViewForTest() *SoftwareInventoryRoundView {
 		Running:     true,
 		Refreshing:  true,
 		StatusText:  "采集进行中",
-		SummaryText: "已完成 0/3 台，成功 0 台，等待客户端 1 台，失败 0 台",
+		SummaryText: "已完成 0/3 台，成功 0 台，等待客户端实例 1 台，失败 0 台",
 		Devices: []SoftwareInventoryRoundDeviceView{
 			{DeviceName: "工作站", StatusText: "采集中"},
 			{DeviceName: "备份机", StatusText: "排队中"},
@@ -95,7 +95,7 @@ func TestSoftwareInventoryRoundPageRendersRunningRound(t *testing.T) {
 		!strings.Contains(body, `hx-trigger="every 2s"`) {
 		t.Fatalf("进行中的进度页应带每 2 秒自动刷新：\n%s", body)
 	}
-	if !strings.Contains(body, "采集进行中：已完成 0/3 台，成功 0 台，等待客户端 1 台，失败 0 台") {
+	if !strings.Contains(body, "采集进行中：已完成 0/3 台，成功 0 台，等待客户端实例 1 台，失败 0 台") {
 		t.Fatalf("进度页应显示状态与汇总：\n%s", body)
 	}
 	for _, wanted := range []string{
@@ -116,7 +116,7 @@ func TestSoftwareInventoryRoundPageRendersFinishedRound(t *testing.T) {
 	view.Running = false
 	view.Refreshing = false
 	view.StatusText = "采集已完成"
-	view.SummaryText = "已完成 2/2 台，成功 1 台，等待客户端 0 台，失败 1 台"
+	view.SummaryText = "已完成 2/2 台，成功 1 台，等待客户端实例 0 台，失败 1 台"
 	view.Devices = []SoftwareInventoryRoundDeviceView{
 		{DeviceName: "工作站", StatusText: "成功，共 8 条"},
 		{DeviceName: "备份机", StatusText: "失败，连接超时，端口不通"},
@@ -133,7 +133,7 @@ func TestSoftwareInventoryRoundPageRendersFinishedRound(t *testing.T) {
 		t.Fatalf("结束后的进度页不应再自动刷新：\n%s", body)
 	}
 	for _, wanted := range []string{
-		"采集已完成：已完成 2/2 台，成功 1 台，等待客户端 0 台，失败 1 台",
+		"采集已完成：已完成 2/2 台，成功 1 台，等待客户端实例 0 台，失败 1 台",
 		"<h3>工作站</h3>", "成功，共 8 条",
 		"<h3>备份机</h3>", "失败，连接超时，端口不通",
 	} {
@@ -148,7 +148,7 @@ func TestSoftwareInventoryRoundPageRendersFinishedRound(t *testing.T) {
 func TestSoftwareInventoryRoundPageShowsSingleDeviceScope(t *testing.T) {
 	view := roundViewForTest()
 	view.ScopeText = "本轮只采集设备 工作站"
-	view.SummaryText = "已完成 0/1 台，成功 0 台，等待客户端 0 台，失败 0 台"
+	view.SummaryText = "已完成 0/1 台，成功 0 台，等待客户端实例 0 台，失败 0 台"
 	view.Devices = []SoftwareInventoryRoundDeviceView{
 		{DeviceName: "工作站", StatusText: "采集中"},
 	}
@@ -156,7 +156,7 @@ func TestSoftwareInventoryRoundPageShowsSingleDeviceScope(t *testing.T) {
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 
 	body := readResponseBody(t, doGetWithCookie(t, handler, cookie, "/ui/software-inventory/round"))
-	if !strings.Contains(body, "本轮只采集设备 工作站 · 采集进行中：已完成 0/1 台，成功 0 台，等待客户端 0 台，失败 0 台") {
+	if !strings.Contains(body, "本轮只采集设备 工作站 · 采集进行中：已完成 0/1 台，成功 0 台，等待客户端实例 0 台，失败 0 台") {
 		t.Fatalf("单台轮次进度页应在状态前标注采集范围：\n%s", body)
 	}
 }
@@ -201,7 +201,7 @@ func TestSoftwareInventoryHomeShowsRoundEntry(t *testing.T) {
 			Refreshing:  true,
 			StatusText:  "采集进行中",
 			ScopeText:   "本轮只采集设备 工作站",
-			SummaryText: "已完成 1/3 台，成功 1 台，等待客户端 0 台，失败 0 台",
+			SummaryText: "已完成 1/3 台，成功 1 台，等待客户端实例 0 台，失败 0 台",
 		},
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, running)
@@ -209,7 +209,7 @@ func TestSoftwareInventoryHomeShowsRoundEntry(t *testing.T) {
 	for _, wanted := range []string{
 		`href="/ui/software-inventory/round"`, ">采集进行中</a>",
 		"2026-11-21 16:50:05", "本轮只采集设备 工作站",
-		"已完成 1/3 台，成功 1 台，等待客户端 0 台，失败 0 台",
+		"已完成 1/3 台，成功 1 台，等待客户端实例 0 台，失败 0 台",
 	} {
 		if !strings.Contains(body, wanted) {
 			t.Fatalf("首页进行中入口缺少 %q：\n%s", wanted, body)
@@ -218,7 +218,7 @@ func TestSoftwareInventoryHomeShowsRoundEntry(t *testing.T) {
 
 	latest := &stubSoftwareInventorySource{
 		devices:   running.devices,
-		roundView: &SoftwareInventoryRoundView{StartedAt: time.Date(2026, 11, 21, 16, 50, 5, 0, time.Local), SummaryText: "已完成 3/3 台，成功 3 台，等待客户端 0 台，失败 0 台"},
+		roundView: &SoftwareInventoryRoundView{StartedAt: time.Date(2026, 11, 21, 16, 50, 5, 0, time.Local), SummaryText: "已完成 3/3 台，成功 3 台，等待客户端实例 0 台，失败 0 台"},
 	}
 	handler, cookie = newSoftwareInventoryHandler(t, RoleStandalone, latest)
 	body = readResponseBody(t, doGetWithCookie(t, handler, cookie, "/ui/software-inventory/"))

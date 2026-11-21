@@ -39,19 +39,19 @@ func (s openerSource) SoftwareInventoryRound() (*webui.SoftwareInventoryRoundVie
 func roundView(snapshot softwareinventory.RoundSnapshot) *webui.SoftwareInventoryRoundView {
 	view := &webui.SoftwareInventoryRoundView{
 		StartedAt:  snapshot.StartedAt,
-		Running:    snapshot.Running(),
+		Running:    !snapshot.LocalDone,
 		Refreshing: snapshot.NeedsRefresh(),
 	}
 	if snapshot.Device != "" {
 		view.ScopeText = "本轮只采集设备 " + snapshot.Device
 	}
 	view.SummaryText = fmt.Sprintf(
-		"已完成 %d/%d 台，成功 %d 台，等待客户端 %d 台，失败 %d 台",
+		"已完成 %d/%d 台，成功 %d 台，等待客户端实例 %d 台，失败 %d 台",
 		snapshot.Succeeded+snapshot.Failed, len(snapshot.Devices),
 		snapshot.Succeeded, snapshot.WaitingClient, snapshot.Failed,
 	)
 	switch {
-	case snapshot.Running():
+	case !snapshot.LocalDone:
 		view.StatusText = "采集进行中"
 	case snapshot.WaitingClient > 0:
 		view.StatusText = "本机采集已完成，等待客户端实例回传结果"
@@ -88,7 +88,7 @@ func roundDeviceStatusText(device softwareinventory.RoundDeviceStatus) string {
 			text.WriteString("实例从未同步")
 		} else {
 			text.WriteString("实例最近在线 ")
-			text.WriteString(device.CollectorLastPullAt.Format("2006-01-02 15:04:05"))
+			text.WriteString(webui.LastPullText(device.CollectorLastPullAt))
 		}
 		return text.String()
 	default:

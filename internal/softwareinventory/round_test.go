@@ -243,7 +243,6 @@ func TestRoundManagerDeviceFailureDoesNotAffectOthers(t *testing.T) {
 func TestRoundManagerClientDeviceWaitsThenSucceeds(t *testing.T) {
 	now := time.Unix(1770000000, 0)
 	manager, st := newRoundFixture(t, now, "工作站", "客户端采集设备")
-	pullAt := now.Add(-2 * time.Hour)
 	profileID, err := st.AddProfile("采集执行客户端")
 	if err != nil {
 		t.Fatal(err)
@@ -259,9 +258,11 @@ func TestRoundManagerClientDeviceWaitsThenSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.TouchCacheTokenPull(tokenID, pullAt); err != nil {
+	touchBefore := time.Now()
+	if err := st.TouchCacheToken(tokenID, ""); err != nil {
 		t.Fatal(err)
 	}
+	touchAfter := time.Now()
 	if err := st.SetSoftwareCollectionCollector("客户端采集设备", "mini6", "", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +289,9 @@ func TestRoundManagerClientDeviceWaitsThenSucceeds(t *testing.T) {
 	if waiting.State != RoundDeviceWaitingClient {
 		t.Fatalf("客户端执行者设备应等待：%+v", waiting)
 	}
-	if waiting.CollectorName != "mini6" || !waiting.CollectorLastPullAt.Equal(pullAt) {
+	if waiting.CollectorName != "mini6" ||
+		waiting.CollectorLastPullAt.Before(touchBefore.Truncate(time.Second)) ||
+		waiting.CollectorLastPullAt.After(touchAfter) {
 		t.Fatalf("等待设备应带实例名与最近拉取时间：%+v", waiting)
 	}
 	if !snapshot.NeedsRefresh() {
@@ -537,7 +540,6 @@ func TestRoundManagerSingleDeviceStartReusesRunningRound(t *testing.T) {
 func TestRoundManagerSingleDeviceClientRound(t *testing.T) {
 	now := time.Unix(1770000000, 0)
 	manager, st := newRoundFixture(t, now, "客户端采集设备", "工作站")
-	pullAt := now.Add(-2 * time.Hour)
 	profileID, err := st.AddProfile("采集执行客户端")
 	if err != nil {
 		t.Fatal(err)
@@ -553,9 +555,11 @@ func TestRoundManagerSingleDeviceClientRound(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := st.TouchCacheTokenPull(tokenID, pullAt); err != nil {
+	touchBefore := time.Now()
+	if err := st.TouchCacheToken(tokenID, ""); err != nil {
 		t.Fatal(err)
 	}
+	touchAfter := time.Now()
 	if err := st.SetSoftwareCollectionCollector("客户端采集设备", "mini6", "", store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +577,9 @@ func TestRoundManagerSingleDeviceClientRound(t *testing.T) {
 	}
 	device := snapshot.Devices[0]
 	if device.DeviceName != "客户端采集设备" || device.State != RoundDeviceWaitingClient ||
-		device.CollectorName != "mini6" || !device.CollectorLastPullAt.Equal(pullAt) {
+		device.CollectorName != "mini6" ||
+		device.CollectorLastPullAt.Before(touchBefore.Truncate(time.Second)) ||
+		device.CollectorLastPullAt.After(touchAfter) {
 		t.Fatalf("等待设备应带实例名与最近拉取时间：%+v", device)
 	}
 	if !snapshot.NeedsRefresh() {

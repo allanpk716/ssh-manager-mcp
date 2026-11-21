@@ -17,12 +17,6 @@ type openerSource struct {
 	rounds *softwareinventory.RoundManager
 }
 
-// FromOpener 每次页面读取或写操作重新打开存储，避免 Web UI 长期持有存储
-// 句柄；内部自建一个采集轮次管理器。
-func FromOpener(open func() (*store.Store, func(), error)) webui.SoftwareInventorySource {
-	return openerSource{open: open, rounds: softwareinventory.NewRoundManager(open)}
-}
-
 // FromOpenerWithRoundManager 用给定的采集轮次管理器构造软件清单来源：
 // serve 与单机 Web UI 把构造好的管理器（绑定进程上下文与共享的每设备采
 // 集互斥）交给这里，Web UI 的「立即采集」（全部设备或单台）由此发起后

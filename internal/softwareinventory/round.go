@@ -61,9 +61,6 @@ type RoundSnapshot struct {
 	Devices       []RoundDeviceStatus
 }
 
-// Running 表示本机执行的设备是否仍在采集中。
-func (s RoundSnapshot) Running() bool { return !s.LocalDone }
-
 // NeedsRefresh 表示进度页是否还需要继续刷新：本机部分未结束，或仍有等
 // 待客户端实例结果的设备。
 func (s RoundSnapshot) NeedsRefresh() bool { return !s.LocalDone || s.WaitingClient > 0 }

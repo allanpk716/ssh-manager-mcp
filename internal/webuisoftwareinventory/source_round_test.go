@@ -99,7 +99,7 @@ func TestSourceStartsRoundAndBuildsRoundView(t *testing.T) {
 	if view.ScopeText != "" {
 		t.Fatalf("全部轮次不应有采集范围说明：%q", view.ScopeText)
 	}
-	if view.SummaryText != "已完成 1/2 台，成功 1 台，等待客户端 1 台，失败 0 台" {
+	if view.SummaryText != "已完成 1/2 台，成功 1 台，等待客户端实例 1 台，失败 0 台" {
 		t.Fatalf("汇总 = %q", view.SummaryText)
 	}
 	statusByText := map[string]string{}
@@ -134,7 +134,7 @@ func TestSourceStartsRoundAndBuildsRoundView(t *testing.T) {
 	if view.StatusText != "采集已完成" {
 		t.Fatalf("全部设备出结果后状态 = %q", view.StatusText)
 	}
-	if view.SummaryText != "已完成 2/2 台，成功 2 台，等待客户端 0 台，失败 0 台" {
+	if view.SummaryText != "已完成 2/2 台，成功 2 台，等待客户端实例 0 台，失败 0 台" {
 		t.Fatalf("完成后的汇总 = %q", view.SummaryText)
 	}
 	statusByText = map[string]string{}
@@ -208,7 +208,7 @@ func TestSourceStartsSingleDeviceRound(t *testing.T) {
 	if !view.Refreshing {
 		t.Fatalf("仍有等待设备的轮次应继续刷新：%+v", view)
 	}
-	if view.SummaryText != "已完成 0/1 台，成功 0 台，等待客户端 1 台，失败 0 台" {
+	if view.SummaryText != "已完成 0/1 台，成功 0 台，等待客户端实例 1 台，失败 0 台" {
 		t.Fatalf("汇总 = %q", view.SummaryText)
 	}
 	if !strings.Contains(view.Devices[0].StatusText, "已登记，等待客户端实例 mini6 执行") {
@@ -236,7 +236,7 @@ func TestSourceStartsSingleDeviceRound(t *testing.T) {
 	if view.StatusText != "采集已完成" {
 		t.Fatalf("结果送达后的整轮状态 = %q", view.StatusText)
 	}
-	if view.SummaryText != "已完成 1/1 台，成功 1 台，等待客户端 0 台，失败 0 台" {
+	if view.SummaryText != "已完成 1/1 台，成功 1 台，等待客户端实例 0 台，失败 0 台" {
 		t.Fatalf("完成后的汇总 = %q", view.SummaryText)
 	}
 	if view.Devices[0].StatusText != "成功，共 1 条" {

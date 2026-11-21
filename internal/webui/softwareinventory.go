@@ -196,8 +196,8 @@ type SoftwareInventoryRoundView struct {
 	// Refreshing 表示进度页需要定时刷新：仍在采集或仍有等待客户端实例
 	// 结果的设备；模板据此输出自动刷新属性。
 	Refreshing bool
-	// SummaryText 是顶部汇总，例如「已完成 12/17 台，成功 11 台，等待客
-	// 户端 1 台，失败 1 台」。
+	// SummaryText 是顶部汇总，例如「已完成 12/17 台，成功 11 台，等待
+	// 客户端实例 1 台，失败 1 台」。
 	SummaryText string
 	// StatusText 是整轮状态：「采集进行中」/「本机采集已完成，等待客户
 	// 端实例回传结果」/「采集已完成」。
