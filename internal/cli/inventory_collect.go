@@ -28,7 +28,7 @@ func inventoryCollectCmd() *cobra.Command {
 		Use:   "collect --device 设备 [--entry 服务器条目] [--json]",
 		Short: "立即采集一台设备的软件清单",
 		Long: `在权威端或单机上立即执行固定命令集采集。posix-v3 覆盖 Linux、
-macOS、群晖与 iStoreOS；windows-v1 覆盖 Windows。命令集随 sshmgr 发布并
+macOS、群晖与 iStoreOS；windows-v2 覆盖 Windows。命令集随 sshmgr 发布并
 带版本号，不拼接任何来自 vault 或用户的自由文本，也不经过命令策略判
 定。设备有多个服务器条目时可指定采集用条目；未指定
 时优先用打开 sudo 采集开关的条目，否则用名字排序第一个。`,

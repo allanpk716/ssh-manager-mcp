@@ -19,7 +19,7 @@ func TestBuildWindowsInventoryCommandPowerShell(t *testing.T) {
 	requiredTexts := []string{
 		"[Console]::OutputEncoding=[Text.Encoding]::UTF8",
 		"$ProgressPreference='SilentlyContinue'",
-		`"$M BEGIN windows-v1"`,
+		`"$M BEGIN windows-v2"`,
 		`"$M END"`,
 	}
 	for _, section := range []string{
@@ -35,16 +35,26 @@ func TestBuildWindowsInventoryCommandPowerShell(t *testing.T) {
 	}
 }
 
-// TestBuildWindowsInventoryCommandExcludesWin32_Product 直接断言两种
-// Windows 条目的生成结果都不包含会触发安装包修复的 Win32_Product 查询。
-func TestBuildWindowsInventoryCommandExcludesWin32Product(t *testing.T) {
+// TestBuildWindowsInventoryCommandExcludesSystemWrites 直接断言两种 Windows
+// 条目的生成结果都不包含会写系统或触发安装包修复的调用：Win32_Product 查
+// 询会触发 Windows 安装器的自修复，其余是注册表写入、文件写入或进程启动
+// 类命令。匹配不区分大小写，与 PowerShell 的语义一致。
+func TestBuildWindowsInventoryCommandExcludesSystemWrites(t *testing.T) {
+	bannedCalls := []string{
+		"Win32_Product", "msiexec", "reg add", "reg delete",
+		"Remove-Item", "New-Item", "Set-ItemProperty", "Start-Process",
+		"Invoke-Expression", "Set-Content", "Add-Content",
+	}
 	for _, shell := range []models.ShellType{models.ShellPowerShell, models.ShellWindowsCmd} {
 		command, err := BuildInventoryCommand(shell)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(command, "Win32_Product") {
-			t.Fatalf("shell 类型 %s 的固定命令集不得使用 Win32_Product：\n%s", shell, command)
+		for _, banned := range bannedCalls {
+			if strings.Contains(strings.ToLower(command), strings.ToLower(banned)) {
+				t.Fatalf("shell 类型 %s 的固定命令集不得包含会写系统的调用 %q：\n%s",
+					shell, banned, command)
+			}
 		}
 	}
 }
