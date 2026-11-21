@@ -214,8 +214,8 @@ func TestForwardingHostKeys_BranchWiringThroughTOFU(t *testing.T) {
 		if err == nil {
 			t.Fatal("409 equal=false must fail the handshake")
 		}
-		if err.Error() != forwardMsg409Diff("192.168.1.108", 22) {
-			t.Fatalf("surfaced text must be the branch text verbatim (no prefix):\n got: %q\nwant: %q", err.Error(), forwardMsg409Diff("192.168.1.108", 22))
+		if err.Error() != forwardMsg409Diff("192.168.1.108:22") {
+			t.Fatalf("surfaced text must be the branch text verbatim (no prefix):\n got: %q\nwant: %q", err.Error(), forwardMsg409Diff("192.168.1.108:22"))
 		}
 		var pe *sshbroker.PresentedHostKeyError
 		if !errors.As(err, &pe) {

@@ -51,26 +51,26 @@ var ErrPinForwardEqual = errors.New("pin-forward conflict: the broker already ho
 // explicitly instead of letting the user fear for their cache.
 const forwardMsg401 = "device code rejected (invalid or revoked) — ask the owner to check cache-tokens; your local cache is NOT affected by this attempt"
 
-func forwardMsg403(host string, port int) string {
-	return fmt.Sprintf("the broker refused pin forwarding for %s:%d — the target's server entry is probably not granted to this device's bound profile; ask the owner to grant it (or rebind via cache-tokens bind) and cache pull again", host, port)
+func forwardMsg403(target string) string {
+	return fmt.Sprintf("the broker refused pin forwarding for %s — the target's server entry is probably not granted to this device's bound profile; ask the owner to grant it (or rebind via cache-tokens bind) and cache pull again", target)
 }
 
 // forwardMsg404: an old broker has no /pin-hostkey route (http.NotFound) —
 // both the out-of-band command and the endpoint need the owner's upgrade.
 const forwardMsg404 = "the broker does not support pin forwarding (the owner must upgrade the broker to >= v0.15.0, then retry)"
 
-func forwardMsg409Diff(host string, port int) string {
-	return fmt.Sprintf("the broker already has a different pin for %s:%d — run cache pull and retry; if it still fails, ask the owner to compare fingerprints (servers pin-hostkey)", host, port)
+func forwardMsg409Diff(target string) string {
+	return fmt.Sprintf("the broker already has a different pin for %s — run cache pull and retry; if it still fails, ask the owner to compare fingerprints (servers pin-hostkey)", target)
 }
 
-func forwardMsg409Equal(host string, port int) string {
-	return fmt.Sprintf("the broker already holds an equal pin for %s:%d — the forwarded key matches the anchor; applying locally", host, port)
+func forwardMsg409Equal(target string) string {
+	return fmt.Sprintf("the broker already holds an equal pin for %s — the forwarded key matches the anchor; applying locally", target)
 }
 
 // forwardMsgPlaintext: forwarding is a security-sensitive change channel, so
 // unlike the pull path there is NO --allow-plaintext escape (§2.1).
-func forwardMsgPlaintext(host string, port int) string {
-	return fmt.Sprintf("pin forwarding requires a pinned TLS server — no plaintext forwarding (set the server pin used by cache pull); the host key for %s:%d stays unpinned", host, port)
+func forwardMsgPlaintext(target string) string {
+	return fmt.Sprintf("pin forwarding requires a pinned TLS server — no plaintext forwarding (set the server pin used by cache pull); the host key for %s stays unpinned", target)
 }
 
 // forwardMainMessage renders the §4 fail-closed text — the ONE presentation
@@ -81,8 +81,8 @@ func forwardMsgPlaintext(host string, port int) string {
 // verbatim and adds NO literal prefix (the rev1 "SHA256:SHA256:" rendering bug
 // is closed by construction here). <name> stays a literal placeholder — the
 // owner resolves the entry by host:port, and the client cannot know it.
-func forwardMainMessage(host string, port int, fingerprint string) string {
-	return fmt.Sprintf("host key for %s:%d is unknown and cannot be pinned here (presented fingerprint: %s). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint %s", host, port, fingerprint, fingerprint)
+func forwardMainMessage(target string, fingerprint string) string {
+	return fmt.Sprintf("host key for %s is unknown and cannot be pinned here (presented fingerprint: %s). Retry while the broker is reachable — the pin is then forwarded and audited automatically — or ask the owner to run: sshmgr servers pin-hostkey <name> --fingerprint %s", target, fingerprint, fingerprint)
 }
 
 // forwardError is a branch-mapped failure. Error() IS the verbatim §2.1/§4
@@ -201,12 +201,20 @@ func NewPinForwarder(cred CacheCred) (*PinForwarder, error) {
 // forwardTimeout — it sits on the SSH handshake critical path.
 func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	host, port := srv.Host, srv.Port
+	// The anchor-forward failure message names the address actually used for
+	// this handshake (ticket #367): a server entry with an empty host no
+	// longer reports a bogus address like ":22"; when the handshake address
+	// is missing, the entry's fallback address is used instead.
+	target := handshakeAddr
+	if target == "" {
+		target = fmt.Sprintf("%s:%d", host, port)
+	}
 	fp := presentedFingerprint(marshaledKey)
 	if !f.capable {
 		if f.noCred {
-			return &forwardError{text: forwardMainMessage(host, port, fp)}
+			return &forwardError{text: forwardMainMessage(target, fp)}
 		}
-		return &forwardError{text: forwardMsgPlaintext(host, port)}
+		return &forwardError{text: forwardMsgPlaintext(target)}
 	}
 	body, err := json.Marshal(pinForwardRequest{
 		ServerID:      srv.ID,
@@ -214,13 +222,13 @@ func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshal
 		KeyBlob:       base64.StdEncoding.EncodeToString(marshaledKey),
 	})
 	if err != nil {
-		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+		return &forwardError{text: forwardMainMessage(target, fp), err: err}
 	}
 	res, err := f.postPinForward(body)
 	if err != nil {
 		// Unreachable broker or the 10s cap tripped: §4 main message. The cause
 		// rides Unwrap for diagnostics; the text stays exactly the contract.
-		return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+		return &forwardError{text: forwardMainMessage(target, fp), err: err}
 	}
 	defer res.Body.Close()
 	errorText := ""
@@ -240,11 +248,11 @@ func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshal
 			KeyBlob: base64.StdEncoding.EncodeToString(marshaledKey),
 		})
 		if err != nil {
-			return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+			return &forwardError{text: forwardMainMessage(target, fp), err: err}
 		}
 		legacyRes, err := f.postPinForward(legacyBody)
 		if err != nil {
-			return &forwardError{text: forwardMainMessage(host, port, fp), err: err}
+			return &forwardError{text: forwardMainMessage(target, fp), err: err}
 		}
 		defer legacyRes.Body.Close()
 		legacyErrorText := ""
@@ -256,10 +264,10 @@ func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshal
 		if legacyRes.StatusCode == http.StatusOK {
 			return nil
 		}
-		return f.forwardResponse(legacyRes, host, port, fp, legacyErrorText)
+		return f.forwardResponse(legacyRes, target, fp, legacyErrorText)
 	}
 
-	return f.forwardResponse(res, host, port, fp, errorText)
+	return f.forwardResponse(res, target, fp, errorText)
 }
 
 // legacyPinForwardRetryIsEligible keeps the old-format retry narrow: it fires
@@ -288,7 +296,7 @@ func (f *PinForwarder) postPinForward(body []byte) (*http.Response, error) {
 }
 
 // forwardResponse maps one authority response to the forward branch table.
-func (f *PinForwarder) forwardResponse(res *http.Response, host string, port int, fp, errorText string) error {
+func (f *PinForwarder) forwardResponse(res *http.Response, target string, fp, errorText string) error {
 	switch {
 	case res.StatusCode == http.StatusCreated:
 		// 201: the broker landed the anchor (audited server-side); the caller
@@ -300,7 +308,7 @@ func (f *PinForwarder) forwardResponse(res *http.Response, host string, port int
 		// destroy the local cache. Not even QuarantineCacheFor is referenced.
 		return &forwardError{text: forwardMsg401}
 	case res.StatusCode == http.StatusForbidden:
-		return &forwardError{text: forwardMsg403(host, port)}
+		return &forwardError{text: forwardMsg403(target)}
 	case res.StatusCode == http.StatusNotFound:
 		return &forwardError{text: forwardMsg404}
 	case res.StatusCode == http.StatusConflict:
@@ -308,19 +316,19 @@ func (f *PinForwarder) forwardResponse(res *http.Response, host string, port int
 		if json.NewDecoder(io.LimitReader(res.Body, forwardBodyCap)).Decode(&cr) != nil || !cr.Equal {
 			// Fail closed: an unparsable 409 counts as "different pin" — the
 			// pull-and-retry path resolves it either way.
-			return &forwardError{text: forwardMsg409Diff(host, port)}
+			return &forwardError{text: forwardMsg409Diff(target)}
 		}
-		return &forwardError{text: forwardMsg409Equal(host, port), err: ErrPinForwardEqual}
+		return &forwardError{text: forwardMsg409Equal(target), err: ErrPinForwardEqual}
 	case res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusRequestEntityTooLarge:
 		// 400/413: the client sent something the broker cannot parse — a defect
 		// state, so the server's own text is passed through with the target
 		// attached (§2.1).
-		return &forwardError{text: fmt.Sprintf("pin forward for %s:%d: broker returned %d — %s",
-			host, port, res.StatusCode, errorText)}
+		return &forwardError{text: fmt.Sprintf("pin forward for %s: broker returned %d — %s",
+			target, res.StatusCode, errorText)}
 	default:
 		// 5xx and everything unmapped (3xx surfacing via ErrUseLastResponse,
 		// 405, ...) is fail-closed: the pin could not be forwarded.
-		return &forwardError{text: forwardMainMessage(host, port, fp),
+		return &forwardError{text: forwardMainMessage(target, fp),
 			err: fmt.Errorf("broker returned %d", res.StatusCode)}
 	}
 }

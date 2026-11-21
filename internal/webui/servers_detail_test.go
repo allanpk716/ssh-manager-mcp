@@ -315,15 +315,14 @@ func TestServerDetailAccountsCardAndNoteEditor(t *testing.T) {
 	if response.StatusCode != http.StatusSeeOther {
 		t.Fatalf("账号说明保存状态码 = %d，应为 303", response.StatusCode)
 	}
-	if location := response.Header.Get("Location"); location != "/ui/servers/srv-fine?saved=accounts#server-card-accounts" {
+	if location := response.Header.Get("Location"); location != "/ui/servers/srv-fine?notice=saved-accounts#server-card-accounts" {
 		t.Fatalf("账号说明保存跳转到 %q", location)
 	}
-	if len(writer.editIDs) != 1 || writer.editIDs[0] != "srv-other" {
-		t.Fatalf("账号说明应写入同机账号条目，实际 = %v", writer.editIDs)
+	if len(writer.noteEdits) != 1 || writer.noteEdits[0].ServerID != "srv-other" {
+		t.Fatalf("账号说明应整批写入同机账号条目，实际 = %v", writer.noteEdits)
 	}
-	if len(writer.edits) != 1 || writer.edits[0].Description == nil ||
-		*writer.edits[0].Description != "夜里跑备份任务" || writer.edits[0].User != nil {
-		t.Fatalf("账号说明写入字段 = %#v，应只写显示说明", writer.edits)
+	if writer.noteEdits[0].Note != "夜里跑备份任务" || writer.noteEdits[0].Revision != 7 {
+		t.Fatalf("账号说明写入内容 = %#v，应只写显示说明与修订号", writer.noteEdits[0])
 	}
 
 	clientHandler, clientCookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -386,8 +385,8 @@ func TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite(t *testing.T) {
 			if !strings.Contains(body, "每晚备份任务使用") {
 				t.Fatalf("失败后应显示存储中的原说明：\n%s", body)
 			}
-			if len(writer.editIDs) != 0 {
-				t.Fatalf("修订号无效时不应写入任何账号说明，实际 = %v", writer.editIDs)
+			if len(writer.noteEdits) != 0 {
+				t.Fatalf("修订号无效时不应写入任何账号说明，实际 = %v", writer.noteEdits)
 			}
 		})
 	}
@@ -397,7 +396,7 @@ func TestServerDetailAccountNotesRejectsBadRevisionsBeforeWrite(t *testing.T) {
 // 返回修订号冲突时重新渲染账号说明弹层，而不是跳转成保存成功。
 func TestServerDetailAccountNotesWriteConflictDoesNotShowSuccess(t *testing.T) {
 	store := newServerDetailTestStore()
-	writer := &stubServerWriter{conflict: &ServerEditConflictView{
+	writer := &stubServerWriter{noteConflict: &ServerEditConflictView{
 		Current: &ServerDetailView{ID: "srv-other", Name: "other-account", Revision: 8},
 	}}
 	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
@@ -638,6 +637,51 @@ func TestServerDetailAddressRangeSuggestionsClientReadOnly(t *testing.T) {
 	}
 }
 
+// TestServerDetailSavedNoticesUseNoticeParam 校验详情页各分区保存成功提示统
+// 一走 notice 参数且都是成功样式；地点保存不再回落成错误样式，旧 saved 参
+// 数直接忽略。
+func TestServerDetailSavedNoticesUseNoticeParam(t *testing.T) {
+	handler, cookie := newServerDetailTestHandler(t, serverDetailHandlerOptions{
+		servers: newServerDetailTestStore(), writer: &stubServerWriter{},
+		topology:       &stubTopologySource{data: serverDetailTopologyFixture()},
+		topologyWriter: &stubTopologyWriter{},
+	})
+
+	cases := []struct {
+		notice string
+		text   string
+	}{
+		{"saved-connection", "已保存连接信息。"},
+		{"saved-description", "已保存说明。"},
+		{"saved-accounts", "已保存账号说明。"},
+		{"saved-address", "已保存地址。"},
+		{"location-saved", "已保存机器地点。"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.notice, func(t *testing.T) {
+			body := serversGet(t, handler, cookie, "/ui/servers/srv-fine?notice="+testCase.notice)
+			want := `<div class="notice notice-success"><p>` + testCase.text + `</p></div>`
+			if !strings.Contains(body, want) {
+				t.Fatalf("提示码 %s 应显示成功样式提示 %q：\n%s", testCase.notice, want, body)
+			}
+		})
+	}
+
+	legacy := serversGet(t, handler, cookie, "/ui/servers/srv-fine?saved=connection")
+	if strings.Contains(legacy, "已保存连接信息") || strings.Contains(legacy, `notice-success`) {
+		t.Fatalf("旧 saved 参数应直接忽略，不显示提示：\n%s", legacy)
+	}
+
+	response := serversPost(t, handler, cookie, "/ui/servers/srv-fine/edit", url.Values{
+		"edit_scope": {"description"}, "server_id": {"srv-fine"},
+		"description": {"新说明"},
+	})
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/servers/srv-fine?notice=saved-description#server-card-description" {
+		t.Fatalf("说明保存状态码=%d 跳转=%s", response.StatusCode, response.Header.Get("Location"))
+	}
+}
+
 // TestServerDetailAddressListWrite 校验整份地址表单走服务器写入口，并把
 // 其他地址行转换成清空语义。
 func TestServerDetailAddressListWrite(t *testing.T) {
@@ -654,7 +698,7 @@ func TestServerDetailAddressListWrite(t *testing.T) {
 		"address":         {"192.0.2.10", "100.64.0.10"},
 	})
 	if response.StatusCode != http.StatusSeeOther ||
-		response.Header.Get("Location") != "/ui/servers/srv-fine?saved=address#server-card-address" {
+		response.Header.Get("Location") != "/ui/servers/srv-fine?notice=saved-address#server-card-address" {
 		t.Fatalf("地址保存状态码=%d 跳转=%s", response.StatusCode, response.Header.Get("Location"))
 	}
 	if len(writer.addressEdits) != 1 {
