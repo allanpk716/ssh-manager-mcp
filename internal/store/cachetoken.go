@@ -295,6 +295,24 @@ func (s *Store) TouchCacheToken(id, clientVersion string) error {
 	return nil
 }
 
+// TouchCacheTokenPull 把一台设备码的最近拉取时间记为指定时刻，不改客户
+// 端版本。生产路径都走 TouchCacheToken 记录当前时刻；采集轮次测试需要把
+// 拉取时间固定在过去某个时刻，用它构造客户端实例的最近在线时间。
+// 设备码不存在时返回错误。
+func (s *Store) TouchCacheTokenPull(id string, at time.Time) error {
+	if s.readOnly {
+		return ErrReadOnly
+	}
+	res, err := s.db.Exec(`UPDATE cache_tokens SET last_pull_at=?, updated_at=? WHERE id=?`, at.Unix(), now(), id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("cache token id %q not found", id)
+	}
+	return nil
+}
+
 // RevokedCacheTokenNameByPrefix reports the name of the most-recently-updated
 // REVOKED cache token whose token_prefix matches (Plan 34 rev4 §1: the /snapshot
 // 401 reason is observability-only — prefix collisions can mislabel unknown as
