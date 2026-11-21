@@ -201,8 +201,10 @@ func NewPinForwarder(cred CacheCred) (*PinForwarder, error) {
 // forwardTimeout — it sits on the SSH handshake critical path.
 func (f *PinForwarder) Forward(srv *models.Server, handshakeAddr string, marshaledKey []byte) error {
 	host, port := srv.Host, srv.Port
-	// 锚定转发的失败文案写本次真正握手的地址（票 #367）：空主机条目不再
-	// 报「:22」这样的假地址；握手地址缺失时退回条目兜底地址。
+	// The anchor-forward failure message names the address actually used for
+	// this handshake (ticket #367): a server entry with an empty host no
+	// longer reports a bogus address like ":22"; when the handshake address
+	// is missing, the entry's fallback address is used instead.
 	target := handshakeAddr
 	if target == "" {
 		target = fmt.Sprintf("%s:%d", host, port)

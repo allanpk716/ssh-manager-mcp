@@ -552,8 +552,8 @@ func EntryFallbackAddr(srv *models.Server) string {
 	return fallbackAddr(srv.Host, srv.Port)
 }
 
-// EntryAuditAddr 渲染审计行 host= 的值：照旧记录条目的兜底 SSH 地址；主
-// 机为空时写 "-"，不产生 ":22" 这样的假地址。
+// EntryAuditAddr 渲染审计行 host= 的值：照旧记录条目的其他地址；主机
+// 为空时写 "-"，不产生 ":22" 这样的假地址。
 func EntryAuditAddr(srv *models.Server) string {
 	if srv.Host == "" {
 		return "-"
