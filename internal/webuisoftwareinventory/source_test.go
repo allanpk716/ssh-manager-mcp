@@ -2,8 +2,6 @@ package webuisoftwareinventory
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"encoding/csv"
 	"errors"
 	"path/filepath"
@@ -486,67 +484,6 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		if !errors.As(err, &missing) {
 			t.Fatalf("不存在的设备应返回页面层可识别的错误：%v", err)
 		}
-	}
-}
-
-// TestSourceRequestsCollectionForClientCollector 验证客户端实例作为采集
-// 执行者时，立即采集只登记请求并写 Web UI 来源审计。
-func TestSourceRequestsCollectionForClientCollector(t *testing.T) {
-	st, path := newTestStore(t)
-	addTestDevice(t, st, "工作站")
-	firstAt := time.Unix(1770000000, 0)
-	st.NowFn = func() time.Time { return firstAt }
-	server, err := st.GetServerByName("工作站-ssh")
-	if err != nil || server == nil {
-		t.Fatalf("取服务器条目失败：%v %+v", err, server)
-	}
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
-		Items: []models.SoftwareObservedItem{{
-			Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "22.04.5",
-		}}, ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
-	}, store.CLISource()); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := raw.Exec(
-		`UPDATE software_collection_status SET collector='laptop-client' WHERE device_id=?`, server.DeviceID,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-
-	result, err := source.RequestSoftwareInventoryCollection(
-		context.Background(), "工作站",
-		webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Requested {
-		t.Fatalf("客户端采集执行者应只登记请求：%+v", result)
-	}
-	statuses, err := softwareinventory.New(st).CollectionStatuses(softwareinventory.AllDevicesVisible(), "工作站")
-	if err != nil || len(statuses) != 1 {
-		t.Fatalf("读取采集状态失败：%v %+v", err, statuses)
-	}
-	if !statuses[0].PendingImmediate || statuses[0].Collector != "laptop-client" {
-		t.Fatalf("立即采集请求应保持客户端采集执行者并置为待执行：%+v", statuses[0])
-	}
-	auditRows, err := st.QueryAudit(store.AuditFilter{
-		Actions: []string{"software-collect-request"}, Source: store.AuditSourceWebUI,
-		SourceIP: "198.51.100.9", Limit: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(auditRows) != 1 {
-		t.Fatalf("立即采集请求应写一条 Web UI 来源审计：%+v", auditRows)
 	}
 }
 

@@ -33,8 +33,9 @@ func TestSoftwareInventoryCollectAllStartsRoundAndRedirects(t *testing.T) {
 		t.Fatalf("立即全部采集应跳到进度页，状态码=%d Location=%s",
 			response.StatusCode, response.Header.Get("Location"))
 	}
-	if !source.startRoundCalled || source.startRoundAddress != "198.51.100.9" {
-		t.Fatalf("立即全部采集应交给来源接口发起轮次：%+v", source)
+	if !source.startRoundCalled || source.startRoundDevice != "" ||
+		source.startRoundAddress != "198.51.100.9" {
+		t.Fatalf("立即全部采集应交给来源接口发起全部轮次：%+v", source)
 	}
 }
 

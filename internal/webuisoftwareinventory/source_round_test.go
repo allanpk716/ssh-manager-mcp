@@ -2,6 +2,7 @@ package webuisoftwareinventory
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,7 +83,7 @@ func TestSourceStartsRoundAndBuildsRoundView(t *testing.T) {
 	}
 
 	if err := source.StartSoftwareInventoryCollectionRound(
-		webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+		"", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -139,5 +140,129 @@ func TestSourceStartsRoundAndBuildsRoundView(t *testing.T) {
 	}
 	if statusByText["客户端采集设备"] != "成功，共 1 条" {
 		t.Fatalf("等待转成功文案 = %q", statusByText["客户端采集设备"])
+	}
+}
+
+// TestSourceStartsSingleDeviceRound 覆盖适配层的单台轮次接线：发起后只含
+// 这一台设备，客户端实例执行者登记等待；有轮次进行中时再发起复用当前轮
+// 不新建；等待设备结果落库后转成功并停止刷新。
+func TestSourceStartsSingleDeviceRound(t *testing.T) {
+	st, _ := newTestStore(t)
+	addTestDevice(t, st, "工作站")
+	addTestDevice(t, st, "客户端采集设备")
+	servers, err := st.FullServersForDevice("客户端采集设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	profileID, err := st.AddProfile("采集执行客户端")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{servers[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("mini6", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector(
+		"客户端采集设备", "mini6", "", store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+	// 工作站采集中先卡住不动，供后面验证进行中轮次的复用。
+	inWorkstation := make(chan struct{})
+	releaseWorkstation := make(chan struct{})
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	rounds := softwareinventory.NewRoundManager(open)
+	rounds.Collect = func(_ context.Context, request softwareinventory.CollectRequest) (*softwareinventory.CollectionReport, error) {
+		if request.DeviceName == "工作站" {
+			close(inWorkstation)
+			<-releaseWorkstation
+		}
+		return &softwareinventory.CollectionReport{
+			DeviceName: request.DeviceName,
+			ItemCounts: map[models.SoftwareCategory]int{
+				softwareinventory.CategoryServiceProgram: 3,
+			},
+		}, nil
+	}
+	source := FromOpenerWithRoundManager(open, rounds)
+
+	if err := source.StartSoftwareInventoryCollectionRound(
+		"客户端采集设备", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	view := waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
+		return !view.Running
+	})
+	if len(view.Devices) != 1 || view.Devices[0].DeviceName != "客户端采集设备" {
+		t.Fatalf("单台轮次应只包含客户端采集设备：%+v", view.Devices)
+	}
+	if view.StatusText != "本机采集已完成，等待客户端实例回传结果" {
+		t.Fatalf("整轮状态 = %q", view.StatusText)
+	}
+	if !view.Refreshing {
+		t.Fatalf("仍有等待设备的轮次应继续刷新：%+v", view)
+	}
+	if view.SummaryText != "已完成 0/1 台，成功 0 台，等待客户端 1 台，失败 0 台" {
+		t.Fatalf("汇总 = %q", view.SummaryText)
+	}
+	if !strings.Contains(view.Devices[0].StatusText, "已登记，等待客户端实例 mini6 执行") {
+		t.Fatalf("等待设备文案 = %q", view.Devices[0].StatusText)
+	}
+
+	// 客户端实例在轮次开始之后上交新结果：等待设备转成功，页面停止刷新。
+	arrivedAt := time.Now().Add(time.Minute)
+	st.NowFn = func() time.Time { return arrivedAt }
+	if err := st.ReplaceSoftwareObservedItems("客户端采集设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: softwareinventory.CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+		},
+		ServerID:          servers[0].ID,
+		CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	view = waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
+		return !view.Refreshing
+	})
+	if view.StatusText != "采集已完成" {
+		t.Fatalf("结果送达后的整轮状态 = %q", view.StatusText)
+	}
+	if view.SummaryText != "已完成 1/1 台，成功 1 台，等待客户端 0 台，失败 0 台" {
+		t.Fatalf("完成后的汇总 = %q", view.SummaryText)
+	}
+	if view.Devices[0].StatusText != "成功，共 1 条" {
+		t.Fatalf("等待转成功文案 = %q", view.Devices[0].StatusText)
+	}
+
+	// 互斥复用：有轮次进行中（本机部分未结束）时再发起，无论范围都复用当
+	// 前轮，不新建（等待客户端结果的轮次不算进行中，不拦新轮次）。
+	if err := source.StartSoftwareInventoryCollectionRound(
+		"工作站", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	<-inWorkstation
+	if err := source.StartSoftwareInventoryCollectionRound(
+		"客户端采集设备", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	reused, err := source.SoftwareInventoryRound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reused.Devices) != 1 || reused.Devices[0].DeviceName != "工作站" {
+		t.Fatalf("进行中轮次存在时再发起应复用它，进度仍只有工作站：%+v", reused.Devices)
+	}
+	close(releaseWorkstation)
+	final := waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
+		return !view.Refreshing
+	})
+	if final.StatusText != "采集已完成" || len(final.Devices) != 1 ||
+		final.Devices[0].DeviceName != "工作站" || final.Devices[0].StatusText != "成功，共 3 条" {
+		t.Fatalf("工作站单台轮次应成功结束：%+v", final)
 	}
 }
