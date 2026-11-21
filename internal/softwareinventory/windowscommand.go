@@ -10,28 +10,33 @@ import (
 )
 
 // WindowsCommandSetVersion 是当前 Windows 固定命令集的版本号。
-const WindowsCommandSetVersion = "windows-v1"
+const WindowsCommandSetVersion = "windows-v2"
 
-// windowsV1Sections 是 Windows 命令集按顺序输出的全部节名。
-var windowsV1Sections = []string{
+// windowsCommandSetV1Version 是第 1 版 Windows 固定命令集的版本号。解析
+// 侧按它识别旧输出：升级后第 1 版结果仍能读取展示，直到被新结果替换。
+const windowsCommandSetV1Version = "windows-v1"
+
+// windowsCommandSections 是 Windows 命令集按顺序输出的全部节名。第 1、
+// 2 版只改节内格式与键名，节名相同，两个版本共用这张表。
+var windowsCommandSections = []string{
 	"os", "installed", "listen-tcp", "listen-udp",
 	"processes", "services", "firmware", "gpu-driver",
 }
 
-// windowsCommandSetV1 是随二进制发布的 Windows 固定命令集原文
+// windowsCommandSetV2 是随二进制发布的 Windows 固定命令集原文
 // （PowerShell 5.1 可用）。与 Linux 命令集一样，它不拼接任何来自凭据存
 // 储或调用方的自由文本。
 //
-//go:embed windows-v1.ps1
-var windowsCommandSetV1 string
+//go:embed windows-v2.ps1
+var windowsCommandSetV2 string
 
 // buildWindowsInventoryCommand 按 Windows 服务器条目的 shell 类型返回固
 // 定采集命令。
 func buildWindowsInventoryCommand(shell models.ShellType) string {
 	if models.NormalizeShellType(string(shell)) == models.ShellWindowsCmd {
-		return encodeWindowsPowerShellCommand(windowsCommandSetV1)
+		return encodeWindowsPowerShellCommand(windowsCommandSetV2)
 	}
-	return windowsCommandSetV1
+	return windowsCommandSetV2
 }
 
 // encodeWindowsPowerShellCommand 把 PowerShell 脚本按 UTF-16LE 小端编码

@@ -37,7 +37,9 @@ func TestParseWindowsFullFixtures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if collection.CommandSetVersion != WindowsCommandSetVersion ||
+			// 夹具是第 1 版输出；钉住字面量，保证第 1 版样例仍按第 1
+			// 版解析。
+			if collection.CommandSetVersion != "windows-v1" ||
 				collection.SystemType != "windows" || collection.Incomplete {
 				t.Fatalf("解析结论 = 版本 %q、系统 %q、不完整 %v、说明 %v",
 					collection.CommandSetVersion, collection.SystemType,

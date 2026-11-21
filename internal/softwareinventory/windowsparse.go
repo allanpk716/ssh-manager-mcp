@@ -18,7 +18,7 @@ func parseWindowsInventoryOutput(output string) (*ParsedCollection, error) {
 		return nil, err
 	}
 	collection := &ParsedCollection{CommandSetVersion: version}
-	for _, name := range windowsV1Sections {
+	for _, name := range windowsCommandSections {
 		section, present := sections[name]
 		if !present {
 			collection.Incomplete = true

@@ -223,7 +223,8 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.SystemType != "windows" || report.CommandSetVersion != WindowsCommandSetVersion ||
+		// 夹具是第 1 版输出，报告版本钉住第 1 版；命令按当前命令集生成。
+		if report.SystemType != "windows" || report.CommandSetVersion != "windows-v1" ||
 			report.Incomplete || recorded.shell != test.shell || recorded.command != expectedCommand {
 			t.Fatalf("shell %s 的采集报告或命令包装不正确：report=%+v shell=%s command=%s",
 				test.shell, report, recorded.shell, recorded.command)
@@ -239,7 +240,7 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status.SystemType != "windows" || status.CommandSetVersion != WindowsCommandSetVersion ||
+		if status.SystemType != "windows" || status.CommandSetVersion != "windows-v1" ||
 			status.LastIncomplete || status.LastServerName != test.serverEntry {
 			t.Fatalf("shell %s 的采集状态 = %+v", test.shell, status)
 		}
@@ -327,7 +328,7 @@ func TestCollectWindowsTruncatedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !status.LastIncomplete || status.LastSuccessAt.IsZero() ||
-		status.CommandSetVersion != WindowsCommandSetVersion {
+		status.CommandSetVersion != "windows-v1" {
 		t.Fatalf("截断输出的采集状态 = %+v", status)
 	}
 }
