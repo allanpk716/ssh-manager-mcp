@@ -14,13 +14,13 @@ const InventoryMarker = "SSHMGR-INVENTORY"
 
 // POSIXCommandSetVersion 是所有 POSIX 系统共用的固定命令集版本号。每次
 // 采集结果记录所用版本，命令集升级后前后结果仍可比较。
-const POSIXCommandSetVersion = "posix-v2"
+const POSIXCommandSetVersion = "posix-v3"
 
-// posixCommandSetV2 是随二进制发布的 POSIX 固定命令集原文。它只由固定
+// posixCommandSet 是随二进制发布的 POSIX 固定命令集原文。它只由固定
 // 模板组成，不拼接任何来自机密库或用户的自由文本。
 //
-//go:embed posix-v2.sh
-var posixCommandSetV2 string
+//go:embed posix-v3.sh
+var posixCommandSet string
 
 // BuildInventoryCommand 按服务器条目的 shell 类型生成固定采集命令。命令
 // 集随二进制发布并带版本号；当前实现 POSIX 与 Windows，其他系统的命令
@@ -31,7 +31,7 @@ func BuildInventoryCommand(shell models.ShellType) (string, error) {
 		// SSH exec 请求会先交给目标账户的登录 shell。这里显式进入
 		// /bin/sh，避免 zsh、fish 等登录 shell 的专属语法改变固定脚本行
 		// 为；安全引用保证脚本仍是一个完整参数，不引入命令注入。
-		return "/bin/sh -c " + sshbroker.POSIXShellQuote(posixCommandSetV2), nil
+		return "/bin/sh -c " + sshbroker.POSIXShellQuote(posixCommandSet), nil
 	case models.ShellPowerShell, models.ShellWindowsCmd:
 		return buildWindowsInventoryCommand(shell), nil
 	default:

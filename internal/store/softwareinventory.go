@@ -17,7 +17,7 @@ const softwareInventorySchema = `
 CREATE TABLE IF NOT EXISTS software_declarations (
   id TEXT PRIMARY KEY,
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
-  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container_image','driver_firmware','system_package','unidentified_process')),
+  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container','container_image','driver_firmware','system_package','unidentified_process')),
   name TEXT NOT NULL,
   name_lower TEXT NOT NULL,
   version TEXT NOT NULL,
@@ -500,10 +500,11 @@ func softwareDeclarationsWhereTx(tx *sql.Tx, where string, args ...any) ([]Softw
 		ORDER BY CASE declaration.category
 			WHEN 'operating_system' THEN 1
 			WHEN 'service_program' THEN 2
-			WHEN 'container_image' THEN 3
-			WHEN 'driver_firmware' THEN 4
-			WHEN 'system_package' THEN 5
-			WHEN 'unidentified_process' THEN 6 END,
+			WHEN 'container' THEN 3
+			WHEN 'container_image' THEN 4
+			WHEN 'driver_firmware' THEN 5
+			WHEN 'system_package' THEN 6
+			WHEN 'unidentified_process' THEN 7 END,
 			declaration.name,declaration.version,declaration.id`, args...)
 	if err != nil {
 		return nil, err

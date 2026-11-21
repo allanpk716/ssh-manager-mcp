@@ -13,23 +13,24 @@ import (
 )
 
 // TestBuildPOSIXInventoryCommandIsFixedTemplate 覆盖所有 POSIX 服务器条目
-// 共用的固定命令集：版本号是 posix-v2，并按协议输出新增的系统识别、
-// netstat、lsof、macOS 应用与 Homebrew、群晖套件节。
+// 共用的固定命令集：版本号是 posix-v3，并按协议输出系统识别、netstat、
+// lsof、macOS 应用、Homebrew、群晖套件与第 3 版容器节。
 func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 	command, err := BuildInventoryCommand(models.ShellPOSIX)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(command, `echo "$M BEGIN posix-v2"`) {
-		t.Fatalf("固定命令集版本应为 posix-v2，命令开头：\n%s", firstLines(command, 3))
+	if !strings.Contains(command, `echo "$M BEGIN posix-v3"`) {
+		t.Fatalf("固定命令集版本应为 posix-v3，命令开头：\n%s", firstLines(command, 3))
 	}
-	want := "/bin/sh -c " + sshbroker.POSIXShellQuote(posixCommandSetV2)
+	want := "/bin/sh -c " + sshbroker.POSIXShellQuote(posixCommandSet)
 	if command != want {
 		t.Fatalf("POSIX 固定命令集必须由 /bin/sh 执行：\n得到前缀 %q\n期待前缀 %q",
 			firstLines(command, 1), firstLines(want, 1))
 	}
 	for _, section := range []string{
 		"os", "listen-netstat", "listen-lsof", "apps", "brew", "synology-packages",
+		"containers-v3", "container-image-refs", "container-image-labels",
 	} {
 		if !strings.Contains(command, `echo "$M SECTION `+section+`"`) {
 			t.Fatalf("固定命令集缺少 %s 节", section)
@@ -37,6 +38,11 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 	}
 	if strings.Contains(command, "Win32_Product") {
 		t.Fatal("固定命令集不应包含有副作用的 Win32_Product 查询")
+	}
+	for _, forbiddenCommand := range []string{"docker exec", "apt update", "apt-get update"} {
+		if strings.Contains(command, forbiddenCommand) {
+			t.Fatalf("固定命令集不应包含有副作用的命令 %q", forbiddenCommand)
+		}
 	}
 }
 
@@ -85,7 +91,7 @@ func TestPOSIXInventoryAppsSectionSurvivesEmptyUtilitiesInZsh(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	appsSection := scriptSection(t, posixCommandSetV2,
+	appsSection := scriptSection(t, posixCommandSet,
 		`echo "$M SECTION apps"`, `echo "$M SECTION brew"`)
 	appsSection = strings.ReplaceAll(appsSection, "/Applications", applications)
 	script := "M=SSHMGR-INVENTORY\n" + appsSection

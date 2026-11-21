@@ -23,6 +23,9 @@ type CollectionStatus struct {
 	LastFailureReason string     `json:"last_failure_reason,omitempty"`
 	Incomplete        bool       `json:"incomplete,omitempty"`
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
+	DistroID          string     `json:"distro_id,omitempty"`
+	DistroVersionID   string     `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int        `json:"unused_images,omitempty"`
 	NeverCollected    bool       `json:"never_collected"`
 	Stale             bool       `json:"stale"`
 	PendingImmediate  bool       `json:"pending_immediate"`
@@ -60,13 +63,15 @@ type QueryItem struct {
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
 	ConfirmedAt    *time.Time      `json:"confirmed_at,omitempty"`
 	// ObservedStableKey 供声明认领实测使用；只有声明来源的条目为空。
-	ObservedStableKey string `json:"observed_stable_key,omitempty"`
-	DeclaredVersion   string `json:"declared_version,omitempty"`
-	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
-	Mismatch          bool   `json:"mismatch,omitempty"`
-	ContainerTag      string `json:"container_tag,omitempty"`
-	ContainerDigest   string `json:"container_digest,omitempty"`
-	ContainerRunning  bool   `json:"container_running,omitempty"`
+	ObservedStableKey string           `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string           `json:"declared_version,omitempty"`
+	VersionMismatch   bool             `json:"version_mismatch,omitempty"`
+	Mismatch          bool             `json:"mismatch,omitempty"`
+	ContainerTag      string           `json:"container_tag,omitempty"`
+	ContainerDigest   string           `json:"container_digest,omitempty"`
+	ContainerRunning  bool             `json:"container_running,omitempty"`
+	ContainerName     string           `json:"container_name,omitempty"`
+	ImagePullability  ImagePullability `json:"image_pullability,omitempty"`
 	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目从实测
 	// 采集结果带出的进程可得信息；其余类别的条目为空。
 	ProcessName    string `json:"process_name,omitempty"`
@@ -156,7 +161,8 @@ func queryItemFromObserved(deviceID string, row models.SoftwareObservedItem) Que
 		ListeningPorts: ports, BelongsTo: row.BelongsTo, Source: SourceObserved,
 		CollectedAt: &collectedAt, ObservedStableKey: row.StableKey,
 		ContainerTag: row.ContainerTag, ContainerDigest: row.ContainerDigest,
-		ContainerRunning: row.ContainerRunning,
+		ContainerRunning: row.ContainerRunning, ContainerName: row.ContainerName,
+		ImagePullability: row.ImagePullability,
 		ProcessName:      row.ProcessName, ExecutablePath: row.ExecutablePath,
 		ProcessID: row.ProcessID,
 	}
@@ -193,7 +199,8 @@ func combineObservedAndDeclared(bundle queryBundle) []QueryItem {
 			DeclaredVersion: declaration.Version,
 			VersionMismatch: declaration.Version != observed.Version && observed.Version != "",
 			ContainerTag:    observed.ContainerTag, ContainerDigest: observed.ContainerDigest,
-			ContainerRunning: observed.ContainerRunning,
+			ContainerRunning: observed.ContainerRunning, ContainerName: observed.ContainerName,
+			ImagePullability: observed.ImagePullability,
 		}
 		confirmedAt := declaration.ConfirmedAt
 		item.ConfirmedAt = &confirmedAt
@@ -329,16 +336,18 @@ func categoryRank(category Category) int {
 		return 1
 	case CategoryServiceProgram:
 		return 2
-	case CategoryContainerImage:
+	case CategoryContainer:
 		return 3
-	case CategoryDriverFirmware:
+	case CategoryContainerImage:
 		return 4
-	case CategorySystemPackage:
+	case CategoryDriverFirmware:
 		return 5
-	case CategoryUnidentified:
+	case CategorySystemPackage:
 		return 6
-	default:
+	case CategoryUnidentified:
 		return 7
+	default:
+		return 8
 	}
 }
 
@@ -358,7 +367,7 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	options.Network = strings.TrimSpace(options.Network)
 	if options.Category != "" {
 		switch options.Category {
-		case CategoryOperatingSystem, CategoryServiceProgram, CategoryContainerImage,
+		case CategoryOperatingSystem, CategoryServiceProgram, CategoryContainer, CategoryContainerImage,
 			CategoryDriverFirmware, CategorySystemPackage, CategoryUnidentified:
 		default:
 			return QueryResult{}, fmt.Errorf("软件类别代号不合法：%q", options.Category)

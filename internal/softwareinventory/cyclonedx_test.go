@@ -41,6 +41,18 @@ func anySlice(t *testing.T, value any, context string) []any {
 	return items
 }
 
+// TestCycloneDXContainerCategoryGetsComponentType 钉住容器条目的最小映
+// 射，避免默认重点清单导出时因新类别失败。
+func TestCycloneDXContainerCategoryGetsComponentType(t *testing.T) {
+	componentType, err := cycloneDXComponentType(CategoryContainer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if componentType != "container" {
+		t.Fatalf("容器条目的 CycloneDX 组件类型 = %q", componentType)
+	}
+}
+
 func TestCycloneDXExportDocumentStructure(t *testing.T) {
 	generatedAt := time.Date(2026, 11, 9, 12, 30, 5, 0, time.UTC)
 	document, err := MarshalCycloneDX(QueryResult{Devices: []QueryDeviceResult{{

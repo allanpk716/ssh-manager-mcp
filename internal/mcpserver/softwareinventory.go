@@ -27,7 +27,7 @@ type QuerySoftwareInventoryInput struct {
 	Site                  string `json:"site,omitempty" jsonschema:"site path filter including descendant sites; omit for all sites"`
 	Network               string `json:"network,omitempty" jsonschema:"registered network name filter; the network may be physical or virtual; omit for all networks"`
 	MinimumExposure       string `json:"minimum_exposure,omitempty" jsonschema:"minimum exposure level of any listening port; observed items use only local_machine | specific_address | all_addresses; local_area_network | virtual_local_area_network | public_network are accepted for compatibility but do not match observed items; omit for any"`
-	Category              string `json:"category,omitempty" jsonschema:"category filter: operating_system | service_program | container_image | driver_firmware | system_package | unidentified_process; omit for any"`
+	Category              string `json:"category,omitempty" jsonschema:"category filter: operating_system | service_program | container | container_image | driver_firmware | system_package | unidentified_process; omit for any"`
 	IncludeSystemPackages bool   `json:"include_system_packages,omitempty" jsonschema:"include system packages without listening ports; by default the result is the focus list, where system packages without listening ports are omitted and packages with listening ports appear as listening programs (name or exact_version implies true; set true for the full package list)"`
 }
 

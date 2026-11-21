@@ -30,7 +30,7 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 	}
 	if submission.DeviceName != "工作站" || submission.DeviceID != "device-id" ||
 		submission.ServerID != servers["甲入口"].ID || submission.Sudo ||
-		submission.CommandSetVersion != POSIXCommandSetVersion ||
+		submission.CommandSetVersion != "posix-v2" ||
 		submission.SystemType != "ubuntu" || submission.Failed ||
 		len(submission.Items) <= 1041 {
 		t.Fatalf("客户端待上交结果 = %+v", submission)
@@ -44,6 +44,35 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 	if status, err := st.SoftwareCollectionStatusForDevice("工作站"); err != nil ||
 		!status.LastSuccessAt.IsZero() || status.Collector.IsClient() {
 		t.Fatalf("客户端本地不应保存采集状态：%+v err=%v", status, err)
+	}
+}
+
+// TestCollectForSubmissionCarriesPOSIXV3Fields 钉住客户端实例上交第 3 版
+// 结果时的设备级字段与容器条目字段。
+func TestCollectForSubmissionCarriesPOSIXV3Fields(t *testing.T) {
+	service, st := newCollectService(t)
+	servers := addCollectDevice(t, st, "容器工作站", "容器入口")
+	assignment := models.SoftwareCollectionAssignment{
+		DeviceName: "容器工作站", DeviceID: "device-id", ServerID: servers["容器入口"].ID,
+		ServerName: "容器入口",
+	}
+	service.RemoteExec = replayCollectExec(
+		posixFixtureOutput(t, "ubuntu2204-v3-containers.txt"), &recordedExec{}, nil,
+	)
+
+	submission, _, err := service.CollectForSubmission(context.Background(), assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.CommandSetVersion != "posix-v3" || submission.DistroID != "ubuntu" ||
+		submission.DistroVersionID != "22.04" || submission.UnusedImageCount != 2 {
+		t.Fatalf("客户端待上交的第 3 版设备级字段 = %+v", submission)
+	}
+	gateway := findObservedItem(
+		t, submission.Items, models.SoftwareCategoryContainer, "nginx")
+	if gateway.ContainerName != "gateway" ||
+		gateway.ImagePullability != models.SoftwareImagePullabilityPublic {
+		t.Fatalf("客户端待上交的容器条目 = %+v", gateway)
 	}
 }
 

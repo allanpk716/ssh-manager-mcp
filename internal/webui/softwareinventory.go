@@ -37,9 +37,15 @@ type SoftwareInventoryItem struct {
 	BelongsTo           string
 	Note                string
 	Architecture        string
-	ContainerTag        string
-	ContainerDigest     string
-	ContainerRunning    bool
+	// ContainerName 是容器条目里的容器名；容器镜像条目与旧版采集结
+	// 果没有这个值，模板按空值隐藏。
+	ContainerName string
+	// ImagePullabilityLabel 是镜像能否从公开仓库拉取的中文显示名；
+	// 采集结果没有判定时代号为空，这里也保持空字符串。
+	ImagePullabilityLabel string
+	ContainerTag          string
+	ContainerDigest       string
+	ContainerRunning      bool
 	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目的进
 	// 程可得信息；采集时看不到的字段为空。
 	ProcessName    string
@@ -76,6 +82,9 @@ type SoftwareInventoryStatus struct {
 	NeverCollected       bool
 	Stale                bool
 	PendingImmediate     bool
+	// UnusedImageCount 是设备上不再被任何容器使用的镜像数量；第 2 版
+	// 采集结果没有这个值，数量为零时不显示。
+	UnusedImageCount int
 }
 
 // SoftwareInventoryChange 是一条变化历史。

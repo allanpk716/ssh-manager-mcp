@@ -136,7 +136,7 @@ func TestSoftwareInventoryForwarderCollectSoftwareInventory(t *testing.T) {
 			gotMethod, gotPath, gotAuth, gotBody)
 	}
 	if output.DeviceName != "工作站" || output.Requested || output.Report == nil ||
-		output.Report.CommandSetVersion != softwareinventory.POSIXCommandSetVersion {
+		output.Report.CommandSetVersion != "posix-v2" {
 		t.Fatalf("立即采集输出 = %+v report=%+v", output, *output.Report)
 	}
 }

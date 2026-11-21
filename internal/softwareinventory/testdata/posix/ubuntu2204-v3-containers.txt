@@ -1,0 +1,93 @@
+SSHMGR-INVENTORY BEGIN posix-v3
+SSHMGR-INVENTORY SECTION os
+kernel-name=Linux
+kernel=5.15.0-125-generic
+machine=x86_64
+file=/etc/os-release
+PRETTY_NAME="Ubuntu 22.04.5 LTS"
+NAME="Ubuntu"
+VERSION_ID="22.04"
+VERSION="22.04.5 LTS (Jammy Jellyfish)"
+VERSION_CODENAME=jammy
+ID=ubuntu
+ID_LIKE=debian
+HOME_URL="https://www.ubuntu.com/"
+SUPPORT_URL="https://help.ubuntu.com/"
+BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+UBUNTU_CODENAME=jammy
+LOGO=ubuntu-logo
+SSHMGR-INVENTORY STATUS os 0
+SSHMGR-INVENTORY SECTION packages
+libc6	2.35-0ubuntu3.8	amd64	ii
+nginx	1.18.0-0ubuntu1.6	amd64	ii
+openssh-server	1:8.9p1-3ubuntu0.10	amd64	ii
+SSHMGR-INVENTORY STATUS packages 0
+SSHMGR-INVENTORY SECTION listen
+tcp LISTEN 0      511          0.0.0.0:80     0.0.0.0:* users:(("nginx",pid=812,fd=6))
+tcp LISTEN 0      511             [::]:80        [::]:* users:(("nginx",pid=812,fd=7))
+tcp LISTEN 0      128          0.0.0.0:22     0.0.0.0:* users:(("sshd",pid=900,fd=3))
+tcp LISTEN 0      128          0.0.0.0:9100   0.0.0.0:* users:(("widget-server",pid=4242,fd=3))
+SSHMGR-INVENTORY STATUS listen 0
+SSHMGR-INVENTORY SECTION listen-netstat
+SSHMGR-INVENTORY ABSENT listen-netstat
+SSHMGR-INVENTORY SECTION listen-lsof
+SSHMGR-INVENTORY ABSENT listen-lsof
+SSHMGR-INVENTORY SECTION exe
+812	/usr/sbin/nginx
+900	/usr/sbin/sshd
+4242	/opt/custom/bin/widget-server
+SSHMGR-INVENTORY STATUS exe 0
+SSHMGR-INVENTORY SECTION exe-owner
+/usr/sbin/nginx	nginx
+/usr/sbin/sshd	openssh-server
+/opt/custom/bin/widget-server
+SSHMGR-INVENTORY STATUS exe-owner 0
+SSHMGR-INVENTORY SECTION apps
+SSHMGR-INVENTORY ABSENT apps
+SSHMGR-INVENTORY SECTION brew
+SSHMGR-INVENTORY ABSENT brew
+SSHMGR-INVENTORY SECTION synology-packages
+SSHMGR-INVENTORY ABSENT synology-packages
+SSHMGR-INVENTORY SECTION container-images
+nginx	1.25.3	sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0	sha256:a1110af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0
+ghcr.io/berriai/litellm	main-stable	sha256:9c2f1e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70	sha256:b2221e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70
+ghcr.nju.edu.cn/berriai/litellm	main-stable	sha256:0aa2f4b19b4a7a9a8a7a6a5a4a3a2a1a0a1b2c3d4e5f6a7b8c9d0e1f2a3b4000	sha256:c333f4b19b4a7a9a8a7a6a5a4a3a2a1a0a1b2c3d4e5f6a7b8c9d0e1f2a3b4000
+10.0.0.47:40070/ml-train	cats-dogs-v1	sha256:5d7e90ca1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d600000	sha256:d44490ca1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d600000
+10.0.0.47:40070/ml-train	cats-dogs-v0.9	<none>	sha256:e55501db2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e700000
+nginx	1.24.0	sha256:8a9b12cd3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9000	sha256:f66612cd3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9000
+<none>	<none>	<none>	sha256:077723de4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f900000
+SSHMGR-INVENTORY STATUS container-images 0
+SSHMGR-INVENTORY SECTION containers-v3
+1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b	nginx:1.25.3	gateway	0.0.0.0:8080->80/tcp	running
+2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c	ghcr.io/berriai/litellm:main-stable	litellm	4000/tcp	running
+3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c40	ghcr.nju.edu.cn/berriai/litellm:main-stable	litellm-mirror		running
+4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d00	10.0.0.47:40070/ml-train:cats-dogs-v1	trainer	127.0.0.1:6006->6006/tcp	running
+5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e00	10.0.0.47:40070/ml-train:cats-dogs-v0.9	trainer-old		exited
+SSHMGR-INVENTORY STATUS containers-v3 0
+SSHMGR-INVENTORY SECTION container-image-refs
+sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b	sha256:a1110af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0
+sha256:2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c	sha256:b2221e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70
+sha256:3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c40	sha256:c333f4b19b4a7a9a8a7a6a5a4a3a2a1a0a1b2c3d4e5f6a7b8c9d0e1f2a3b4000
+sha256:4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d00	sha256:d44490ca1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d600000
+sha256:5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e00	sha256:e55501db2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e700000
+SSHMGR-INVENTORY STATUS container-image-refs 0
+SSHMGR-INVENTORY SECTION container-image-labels
+sha256:a1110af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0	1.25.3
+sha256:b2221e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70	v1.74.0
+sha256:c333f4b19b4a7a9a8a7a6a5a4a3a2a1a0a1b2c3d4e5f6a7b8c9d0e1f2a3b4000	v1.74.0
+sha256:d44490ca1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d600000	
+sha256:e55501db2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e700000	0.9.0
+SSHMGR-INVENTORY STATUS container-image-labels 0
+SSHMGR-INVENTORY SECTION firmware
+bios_vendor	Lenovo
+bios_version	R2ET94WW (1.50)
+bios_date	07/15/2024
+board_vendor	Lenovo
+board_name	21D8CTO1WW
+sys_vendor	LENOVO
+product_name	21D8CTO1WW
+SSHMGR-INVENTORY STATUS firmware 0
+SSHMGR-INVENTORY SECTION gpu-driver
+SSHMGR-INVENTORY ABSENT gpu-driver
+SSHMGR-INVENTORY END

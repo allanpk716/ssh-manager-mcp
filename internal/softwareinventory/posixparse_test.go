@@ -148,14 +148,15 @@ func TestParsePOSIXSystemIdentification(t *testing.T) {
 	tests := []struct {
 		fixture    string
 		system     string
+		version    string
 		incomplete bool
 	}{
-		{fixture: "ubuntu2404-full.txt", system: "ubuntu"},
-		{fixture: "macos-full.txt", system: "darwin"},
-		{fixture: "dsm7-full.txt", system: "synology-dsm"},
-		{fixture: "istoreos-full.txt", system: "istoreos"},
+		{fixture: "ubuntu2404-full.txt", system: "ubuntu", version: "posix-v2"},
+		{fixture: "macos-full.txt", system: "darwin", version: "posix-v2"},
+		{fixture: "dsm7-full.txt", system: "synology-dsm", version: "posix-v2"},
+		{fixture: "istoreos-full.txt", system: "istoreos", version: "posix-v2"},
 		// 手写夹具，待替换为真实输出。
-		{fixture: "arm-board-handwritten.txt", system: "linux"},
+		{fixture: "arm-board-handwritten.txt", system: "linux", version: "posix-v2"},
 	}
 	for _, test := range tests {
 		collection, err := parsePOSIXInventoryOutput(posixFixtureOutput(t, test.fixture))
@@ -165,8 +166,9 @@ func TestParsePOSIXSystemIdentification(t *testing.T) {
 		if collection.SystemType != test.system {
 			t.Fatalf("%s 系统识别结果 = %q，应为 %q", test.fixture, collection.SystemType, test.system)
 		}
-		if collection.CommandSetVersion != POSIXCommandSetVersion {
-			t.Fatalf("%s 命令集版本 = %q", test.fixture, collection.CommandSetVersion)
+		if collection.CommandSetVersion != test.version {
+			t.Fatalf("%s 命令集版本 = %q，应为 %q",
+				test.fixture, collection.CommandSetVersion, test.version)
 		}
 		if collection.Incomplete {
 			t.Fatalf("%s 完整输出不应标为不完整：%v", test.fixture, collection.Notes)

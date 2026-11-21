@@ -252,15 +252,17 @@ func softwareExposureRank(exposure models.SoftwareExposure) int {
 func softwareObservedItemsForDeviceTx(q dbtx, deviceID string) ([]models.SoftwareObservedItem, error) {
 	rows, err := q.Query(`
 		SELECT id,category,name,version,package_url,belongs_to,architecture,container_tag,
-		       container_digest,container_running,executable_path,process_name,process_id,stable_key,collected_at
+		       container_digest,container_running,container_name,image_pullability,
+		       executable_path,process_name,process_id,stable_key,collected_at
 		FROM software_observed_items WHERE device_id=?
 		ORDER BY CASE category
 			WHEN 'operating_system' THEN 1
 			WHEN 'service_program' THEN 2
-			WHEN 'container_image' THEN 3
-			WHEN 'driver_firmware' THEN 4
-			WHEN 'system_package' THEN 5
-			WHEN 'unidentified_process' THEN 6 END,
+			WHEN 'container' THEN 3
+			WHEN 'container_image' THEN 4
+			WHEN 'driver_firmware' THEN 5
+			WHEN 'system_package' THEN 6
+			WHEN 'unidentified_process' THEN 7 END,
 			name,version,stable_key`, deviceID)
 	if err != nil {
 		return nil, err
@@ -275,7 +277,8 @@ func softwareObservedItemsForDeviceTx(q dbtx, deviceID string) ([]models.Softwar
 		if err := rows.Scan(
 			&id, &item.Category, &item.Name, &item.Version, &item.PackageURL,
 			&item.BelongsTo, &item.Architecture, &item.ContainerTag,
-			&item.ContainerDigest, &item.ContainerRunning, &item.ExecutablePath,
+			&item.ContainerDigest, &item.ContainerRunning,
+			&item.ContainerName, &item.ImagePullability, &item.ExecutablePath,
 			&item.ProcessName, &item.ProcessID, &item.StableKey, &collectedAt,
 		); err != nil {
 			return nil, err

@@ -16,7 +16,7 @@ var posixV2Sections = []string{
 	"containers", "firmware", "gpu-driver",
 }
 
-// parsePOSIXInventoryOutput 解析 posix-v2 固定命令集输出。输出没有开头
+// parsePOSIXInventoryOutput 解析 POSIX 固定命令集输出。输出没有开头
 // 标记时返回错误；节缺失、节内命令失败或输出截断时保留已解析条目并标为
 // 不完整。
 func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
@@ -26,7 +26,7 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 	}
 	collection := &ParsedCollection{CommandSetVersion: version}
 	osInfo := parsePOSIXOSSection(sectionOrEmpty(sections, "os").lines)
-	for _, name := range requiredPOSIXSections(osInfo.systemType) {
+	for _, name := range requiredPOSIXSections(osInfo.systemType, version) {
 		section, present := sections[name]
 		if !present {
 			collection.Incomplete = true
@@ -43,6 +43,10 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 		collection.Notes = append(collection.Notes, "缺少结尾标记")
 	}
 	collection.SystemType = osInfo.systemType
+	if version == POSIXCommandSetVersion {
+		collection.DistroID = osInfo.osRelease["ID"]
+		collection.DistroVersionID = osInfo.osRelease["VERSION_ID"]
+	}
 	if collection.SystemType == "" {
 		collection.Incomplete = true
 		collection.Notes = append(collection.Notes, "系统识别结果为空")
@@ -58,9 +62,7 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 			sectionOrEmpty(sections, "listen"), sectionOrEmpty(sections, "exe"),
 			sectionOrEmpty(sections, "exe-owner"),
 			packageItemIndex(collection.Items))...)
-		collection.Items = append(collection.Items, buildLinuxContainerItems(
-			sectionOrEmpty(sections, "container-images"),
-			sectionOrEmpty(sections, "containers"))...)
+		appendPOSIXContainerItems(collection, sections, version)
 		collection.Items = append(collection.Items,
 			buildLinuxFirmwareItems(sectionOrEmpty(sections, "firmware"))...)
 		collection.Items = append(collection.Items,
@@ -70,18 +72,14 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 			buildDarwinApplicationItems(sectionOrEmpty(sections, "apps"))...)
 		collection.Items = append(collection.Items,
 			buildDarwinBrewItems(sectionOrEmpty(sections, "brew"))...)
-		collection.Items = append(collection.Items, buildLinuxContainerItems(
-			sectionOrEmpty(sections, "container-images"),
-			sectionOrEmpty(sections, "containers"))...)
+		appendPOSIXContainerItems(collection, sections, version)
 		collection.Items = append(collection.Items, buildDarwinListeningItems(
 			sectionOrEmpty(sections, "listen-lsof"), sectionOrEmpty(sections, "exe"),
 			collection.Items)...)
 	case "synology-dsm":
 		collection.Items = append(collection.Items,
 			buildSynologyPackageItems(sectionOrEmpty(sections, "synology-packages"))...)
-		collection.Items = append(collection.Items, buildLinuxContainerItems(
-			sectionOrEmpty(sections, "container-images"),
-			sectionOrEmpty(sections, "containers"))...)
+		appendPOSIXContainerItems(collection, sections, version)
 		collection.Items = append(collection.Items,
 			buildLinuxFirmwareItems(sectionOrEmpty(sections, "firmware"))...)
 		collection.Items = append(collection.Items, buildNetstatListeningItems(
@@ -97,16 +95,39 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 			sectionOrEmpty(sections, "listen"), sectionOrEmpty(sections, "exe"),
 			sectionOrEmpty(sections, "exe-owner"),
 			packageItemIndex(collection.Items))...)
-		collection.Items = append(collection.Items, buildLinuxContainerItems(
-			sectionOrEmpty(sections, "container-images"),
-			sectionOrEmpty(sections, "containers"))...)
+		appendPOSIXContainerItems(collection, sections, version)
 	}
 	return collection, nil
 }
 
 // requiredPOSIXSections 返回一种系统实际采集时必须完整得到的节。基础采
 // 集系统忽略其余节，因此那些节的失败不影响完整标记。
-func requiredPOSIXSections(systemType string) []string {
+func requiredPOSIXSections(systemType, commandSetVersion string) []string {
+	if commandSetVersion == POSIXCommandSetVersion {
+		switch systemType {
+		case "ubuntu", "debian":
+			return []string{
+				"os", "packages", "listen", "exe", "exe-owner", "container-images",
+				"containers-v3", "container-image-refs", "container-image-labels",
+				"firmware", "gpu-driver",
+			}
+		case "darwin":
+			return []string{
+				"os", "listen-lsof", "exe", "apps", "brew", "container-images",
+				"containers-v3", "container-image-refs", "container-image-labels",
+			}
+		case "synology-dsm":
+			return []string{
+				"os", "listen-netstat", "exe", "synology-packages", "container-images",
+				"containers-v3", "container-image-refs", "container-image-labels",
+				"firmware",
+			}
+		case "istoreos", "openwrt", "linux":
+			return []string{"os", "listen-netstat"}
+		default:
+			return posixV3Sections
+		}
+	}
 	switch systemType {
 	case "ubuntu", "debian":
 		return []string{

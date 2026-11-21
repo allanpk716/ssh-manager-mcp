@@ -115,6 +115,8 @@ func (s *Store) SoftwareCollectionStatusesForCollector(collector models.Collecto
 		       COALESCE(status.last_success_at,0),COALESCE(status.last_failure_at,0),
 		       COALESCE(status.last_failure_reason,''),COALESCE(status.last_incomplete,0),
 		       COALESCE(status.command_set_version,''),COALESCE(status.system_type,''),
+		       COALESCE(status.distro_id,''),COALESCE(status.distro_version_id,''),
+		       COALESCE(status.unused_images,0),
 		       COALESCE(status.pending_immediate,0)
 		FROM devices
 		LEFT JOIN software_collection_status status ON status.device_id=devices.id
@@ -136,7 +138,9 @@ func (s *Store) SoftwareCollectionStatusesForCollector(collector models.Collecto
 			&status.CollectorName, &status.CollectorRevoked,
 			&status.PreferredServerID, &status.LastServerID, &status.LastServerName,
 			&successAt, &failureAt, &status.LastFailureReason, &status.LastIncomplete,
-			&status.CommandSetVersion, &status.SystemType, &status.PendingImmediate,
+			&status.CommandSetVersion, &status.SystemType,
+			&status.DistroID, &status.DistroVersionID, &status.UnusedImageCount,
+			&status.PendingImmediate,
 		); err != nil {
 			return nil, err
 		}

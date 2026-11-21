@@ -11,14 +11,19 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// ParsedCollection 是一份固定命令集输出的解析结果。某一节缺失、非零退
-// 出码或输出被截断只影响该节：已解析出的条目保留，整体记为不完整。
+// ParsedCollection 是一份固定命令集输出的解析结果。发行版编号、发行版
+// 版本编号与未被容器使用的镜像数量只在第 3 版输出里填写；某一节缺失、
+// 非零退出码或输出被截断只影响该节：已解析出的条目保留，整体记为不完
+// 整。
 type ParsedCollection struct {
 	CommandSetVersion string
 	SystemType        string
 	Incomplete        bool
 	Notes             []string
 	Items             []models.SoftwareObservedItem
+	DistroID          string
+	DistroVersionID   string
+	UnusedImageCount  int
 }
 
 // sectionOutcome 描述一节输出在协议层的状态。

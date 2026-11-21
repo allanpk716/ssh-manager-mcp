@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS software_observed_items (
   id TEXT PRIMARY KEY,
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   stable_key TEXT NOT NULL,
-  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container_image','driver_firmware','system_package','unidentified_process')),
+  category TEXT NOT NULL CHECK(category IN ('operating_system','service_program','container','container_image','driver_firmware','system_package','unidentified_process')),
   name TEXT NOT NULL,
   name_lower TEXT NOT NULL,
   version TEXT NOT NULL DEFAULT '',
@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS software_observed_items (
   container_tag TEXT NOT NULL DEFAULT '',
   container_digest TEXT NOT NULL DEFAULT '',
   container_running INTEGER NOT NULL DEFAULT 0,
+  container_name TEXT NOT NULL DEFAULT '',
+  image_pullability TEXT NOT NULL DEFAULT '',
   executable_path TEXT NOT NULL DEFAULT '',
   process_name TEXT NOT NULL DEFAULT '',
   process_id INTEGER NOT NULL DEFAULT 0,
@@ -58,6 +60,9 @@ CREATE TABLE IF NOT EXISTS software_collection_status (
   last_incomplete INTEGER NOT NULL DEFAULT 0,
   command_set_version TEXT NOT NULL DEFAULT '',
   system_type TEXT NOT NULL DEFAULT '',
+  distro_id TEXT NOT NULL DEFAULT '',
+  distro_version_id TEXT NOT NULL DEFAULT '',
+  unused_images INTEGER NOT NULL DEFAULT 0,
   pending_immediate INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS software_collection_settings (
@@ -76,6 +81,9 @@ type SoftwareObservedWrite struct {
 	Sudo              bool
 	CommandSetVersion string
 	SystemType        string
+	DistroID          string
+	DistroVersionID   string
+	UnusedImageCount  int
 	Incomplete        bool
 }
 
@@ -203,12 +211,13 @@ func (s *Store) ReplaceSoftwareObservedItems(
 		if _, err := tx.Exec(`
 			INSERT INTO software_observed_items(
 				id,device_id,stable_key,category,name,name_lower,version,package_url,belongs_to,
-				architecture,container_tag,container_digest,container_running,executable_path,
-				process_name,process_id,collected_at
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				architecture,container_tag,container_digest,container_running,
+				container_name,image_pullability,executable_path,process_name,process_id,collected_at
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			itemID, device.ID, item.StableKey, item.Category, item.Name, strings.ToLower(item.Name),
 			item.Version, item.PackageURL, item.BelongsTo, item.Architecture,
 			item.ContainerTag, item.ContainerDigest, item.ContainerRunning,
+			item.ContainerName, item.ImagePullability,
 			item.ExecutablePath, item.ProcessName, item.ProcessID, item.CollectedAt.Unix(),
 		); err != nil {
 			return err
@@ -236,7 +245,9 @@ func (s *Store) ReplaceSoftwareObservedItems(
 	}
 	if err := writeSoftwareCollectionStatusTx(tx, device.ID, write.ServerID, write.Collector, &softwareCollectionSuccess{
 		CommandSetVersion: write.CommandSetVersion, SystemType: write.SystemType,
-		Incomplete: write.Incomplete, SuccessAt: at,
+		DistroID: write.DistroID, DistroVersionID: write.DistroVersionID,
+		UnusedImageCount: write.UnusedImageCount,
+		Incomplete:       write.Incomplete, SuccessAt: at,
 	}, softwareCollectionFailure{}); err != nil {
 		return err
 	}
@@ -314,7 +325,8 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		              WHERE revoked.id=status.collector AND revoked.status='revoked'),
 		       COALESCE(status.preferred_server_id,''),COALESCE(status.last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
-		       command_set_version,system_type,pending_immediate
+		       command_set_version,system_type,distro_id,distro_version_id,unused_images,
+		       pending_immediate
 		FROM software_collection_status status
 		LEFT JOIN cache_tokens token ON token.id=status.collector
 		WHERE status.device_id=?`, device.ID)
@@ -324,7 +336,9 @@ func (s *Store) SoftwareCollectionStatusForDevice(deviceName string) (*models.So
 		&status.Collector.CacheTokenID, &status.CollectorName, &status.CollectorRevoked,
 		&status.PreferredServerID, &lastServerID,
 		&successAt, &failureAt, &status.LastFailureReason, &status.LastIncomplete,
-		&status.CommandSetVersion, &status.SystemType, &status.PendingImmediate,
+		&status.CommandSetVersion, &status.SystemType,
+		&status.DistroID, &status.DistroVersionID, &status.UnusedImageCount,
+		&status.PendingImmediate,
 	); err != nil {
 		if err == sql.ErrNoRows {
 			return status, nil
@@ -382,6 +396,9 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 		       COALESCE(status.last_incomplete,0),
 		       COALESCE(status.command_set_version,''),
 		       COALESCE(status.system_type,''),
+		       COALESCE(status.distro_id,''),
+		       COALESCE(status.distro_version_id,''),
+		       COALESCE(status.unused_images,0),
 		       COALESCE(status.pending_immediate,0)
 		FROM devices device
 		LEFT JOIN software_collection_status status ON status.device_id=device.id
@@ -408,7 +425,8 @@ func (s *Store) SoftwareCollectionStatuses(deviceName string) ([]models.Software
 			&status.CollectorName, &status.CollectorRevoked,
 			&status.PreferredServerID, &lastServerID, &successAt, &failureAt,
 			&status.LastFailureReason, &status.LastIncomplete, &status.CommandSetVersion,
-			&status.SystemType, &status.PendingImmediate,
+			&status.SystemType, &status.DistroID, &status.DistroVersionID,
+			&status.UnusedImageCount, &status.PendingImmediate,
 		); err != nil {
 			return nil, err
 		}
@@ -449,6 +467,9 @@ func (s *Store) SoftwareObservedItemsForDevice(deviceName string) ([]models.Soft
 type softwareCollectionSuccess struct {
 	CommandSetVersion string
 	SystemType        string
+	DistroID          string
+	DistroVersionID   string
+	UnusedImageCount  int
 	Incomplete        bool
 	SuccessAt         time.Time
 }
@@ -472,17 +493,21 @@ func writeSoftwareCollectionStatusTx(
 		_, err := tx.Exec(`
 			INSERT INTO software_collection_status(
 				device_id,collector,last_server_id,last_success_at,last_incomplete,
-				command_set_version,system_type
-			) VALUES(?,?,?,?,?,?,?)
+				command_set_version,system_type,distro_id,distro_version_id,unused_images
+			) VALUES(?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(device_id) DO UPDATE SET
 				last_server_id=excluded.last_server_id,
 				last_success_at=excluded.last_success_at,
 				last_incomplete=excluded.last_incomplete,
 				command_set_version=excluded.command_set_version,
 				system_type=excluded.system_type,
+				distro_id=excluded.distro_id,
+				distro_version_id=excluded.distro_version_id,
+				unused_images=excluded.unused_images,
 				pending_immediate=0`,
 			deviceID, collector.CacheTokenID, lastServerID, success.SuccessAt.Unix(),
 			success.Incomplete, success.CommandSetVersion, success.SystemType,
+			success.DistroID, success.DistroVersionID, success.UnusedImageCount,
 		)
 		return err
 	}
@@ -511,6 +536,9 @@ func softwareObservedStableKey(item *models.SoftwareObservedItem) string {
 	}
 	if item.Category == models.SoftwareCategoryContainerImage {
 		key += "\x1f" + item.ContainerTag + "\x1f" + item.ContainerDigest
+	}
+	if item.Category == models.SoftwareCategoryContainer {
+		key += "\x1f" + item.ContainerName
 	}
 	return key
 }
