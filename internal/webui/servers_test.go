@@ -749,7 +749,7 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 		"credential_action": {"password"}, "password": {"authority-secret"},
 	}, cookie)
 	if after.StatusCode != http.StatusSeeOther ||
-		after.Header.Get("Location") != "/ui/servers/srv-fine?saved=connection#server-card-connection" {
+		after.Header.Get("Location") != "/ui/servers/srv-fine?notice=saved-connection#server-card-connection" {
 		t.Fatalf("验证后的凭据提交应通过，状态码=%d 跳转=%s", after.StatusCode, after.Header.Get("Location"))
 	}
 	if len(writer.edits) != 1 || writer.edits[0].PasswordValue() != "authority-secret" {

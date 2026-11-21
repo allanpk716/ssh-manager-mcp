@@ -261,7 +261,7 @@ func TestHandlerAccountNotesSavesAllInOneTransaction(t *testing.T) {
 		"account_revision_" + sibling.ServerID: {revision[1]},
 	})
 	if response.StatusCode != http.StatusSeeOther ||
-		response.Header.Get("Location") != "/ui/servers/"+primary.ServerID+"?saved=accounts#server-card-accounts" {
+		response.Header.Get("Location") != "/ui/servers/"+primary.ServerID+"?notice=saved-accounts#server-card-accounts" {
 		t.Fatalf("整批保存应跳转成功，状态码=%d 跳转=%q：\n%s",
 			response.StatusCode, response.Header.Get("Location"), integrationBody(t, response))
 	}
@@ -765,7 +765,7 @@ func TestHandlerEditCombinesPassphraseWithFields(t *testing.T) {
 	})
 	integrationBody(t, resp)
 	if resp.StatusCode != http.StatusSeeOther ||
-		resp.Header.Get("Location") != "/ui/servers/"+id+"?saved=connection#server-card-connection" {
+		resp.Header.Get("Location") != "/ui/servers/"+id+"?notice=saved-connection#server-card-connection" {
 		t.Fatalf("组合提交应成功，状态码=%d 跳转=%s", resp.StatusCode, resp.Header.Get("Location"))
 	}
 	srv, _ := st.GetServer(id)
