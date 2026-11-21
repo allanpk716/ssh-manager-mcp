@@ -29,6 +29,12 @@ type cycloneDXComponent struct {
 	CPE        string               `json:"cpe,omitempty"`
 	Components []cycloneDXComponent `json:"components,omitempty"`
 	Properties []cycloneDXProperty  `json:"properties,omitempty"`
+	Hashes     []cycloneDXHash      `json:"hashes,omitempty"`
+}
+
+type cycloneDXHash struct {
+	Alg     string `json:"alg"`
+	Content string `json:"content"`
 }
 
 type cycloneDXTools struct {
@@ -39,6 +45,7 @@ type cycloneDXMetadata struct {
 	Timestamp  string              `json:"timestamp"`
 	Tools      cycloneDXTools      `json:"tools"`
 	Properties []cycloneDXProperty `json:"properties"`
+	Component  *cycloneDXComponent `json:"component,omitempty"`
 }
 
 type cycloneDXDocument struct {
@@ -48,6 +55,12 @@ type cycloneDXDocument struct {
 	Version     int                  `json:"version"`
 	Metadata    cycloneDXMetadata    `json:"metadata"`
 	Components  []cycloneDXComponent `json:"components"`
+}
+
+// CycloneDXDeviceDocument 是一台设备独立的一份 CycloneDX 文档。
+type CycloneDXDeviceDocument struct {
+	DeviceName string
+	Document   []byte
 }
 
 // MarshalCycloneDX 把统一查询结果序列化成 CycloneDX 1.6 JSON。
@@ -95,6 +108,28 @@ func MarshalCycloneDX(result QueryResult, options CycloneDXExportOptions) ([]byt
 			}
 			return items[i].ID < items[j].ID
 		})
+		if len(devices) == 1 {
+			for _, item := range items {
+				if item.Category != CategoryOperatingSystem {
+					continue
+				}
+				mainComponent := cycloneDXComponent{
+					Type: "operating-system", Name: item.Name, Version: item.Version,
+				}
+				if device.Collection.DistroID != "" {
+					mainComponent.Properties = append(mainComponent.Properties, cycloneDXProperty{
+						Name: "sshmgr:distro-id", Value: device.Collection.DistroID,
+					})
+				}
+				if device.Collection.DistroVersionID != "" {
+					mainComponent.Properties = append(mainComponent.Properties, cycloneDXProperty{
+						Name: "sshmgr:distro-version-id", Value: device.Collection.DistroVersionID,
+					})
+				}
+				document.Metadata.Component = &mainComponent
+				break
+			}
+		}
 		deviceComponent := cycloneDXComponent{
 			Type: "device", BOMRef: device.DeviceID, Name: device.DeviceName,
 			Components: make([]cycloneDXComponent, 0, len(items)),
@@ -115,6 +150,25 @@ func MarshalCycloneDX(result QueryResult, options CycloneDXExportOptions) ([]byt
 				Properties: []cycloneDXProperty{
 					{Name: "sshmgr:source", Value: item.Source},
 				},
+			}
+			component.PackageURL = cycloneDXPackageURL(item, device.Collection)
+			if (item.Category == CategoryContainer || item.Category == CategoryContainerImage) &&
+				strings.HasPrefix(item.ContainerDigest, "sha256:") {
+				component.Hashes = append(component.Hashes, cycloneDXHash{
+					Alg:     "SHA-256",
+					Content: strings.TrimPrefix(item.ContainerDigest, "sha256:"),
+				})
+			}
+			if item.Category == CategoryContainer {
+				component.Properties = append(component.Properties, cycloneDXProperty{
+					Name: "sshmgr:container-running", Value: booleanText(item.ContainerRunning),
+				})
+			}
+			if (item.Category == CategoryContainer || item.Category == CategoryContainerImage) &&
+				item.ImagePullability != "" {
+				component.Properties = append(component.Properties, cycloneDXProperty{
+					Name: "sshmgr:image-pullability", Value: string(item.ImagePullability),
+				})
 			}
 			if item.Category == CategoryUnidentified {
 				component.Properties = append(component.Properties, cycloneDXProperty{
@@ -145,6 +199,54 @@ func MarshalCycloneDX(result QueryResult, options CycloneDXExportOptions) ([]byt
 		return nil, err
 	}
 	return append(documentBytes, '\n'), nil
+}
+
+// MarshalCycloneDXPerDevice 为每台设备生成一份独立的 CycloneDX 文档，
+// 顺序按设备名与设备编号稳定排序。
+func MarshalCycloneDXPerDevice(
+	result QueryResult, options CycloneDXExportOptions,
+) ([]CycloneDXDeviceDocument, error) {
+	devices := append([]QueryDeviceResult(nil), result.Devices...)
+	sort.SliceStable(devices, func(i, j int) bool {
+		if devices[i].DeviceName != devices[j].DeviceName {
+			return devices[i].DeviceName < devices[j].DeviceName
+		}
+		return devices[i].DeviceID < devices[j].DeviceID
+	})
+	documents := make([]CycloneDXDeviceDocument, 0, len(devices))
+	for _, device := range devices {
+		document, err := MarshalCycloneDX(QueryResult{
+			ProfileName: result.ProfileName, Devices: []QueryDeviceResult{device},
+		}, options)
+		if err != nil {
+			return nil, err
+		}
+		documents = append(documents, CycloneDXDeviceDocument{
+			DeviceName: device.DeviceName, Document: document,
+		})
+	}
+	return documents, nil
+}
+
+func cycloneDXPackageURL(item QueryItem, collection CollectionStatus) string {
+	packageURL := item.PackageURL
+	if packageURL == "" {
+		return packageURL
+	}
+	if item.Category == CategorySystemPackage &&
+		collection.DistroID != "" && collection.DistroVersionID != "" &&
+		!strings.Contains(packageURL, "distro=") {
+		separator := "?"
+		if strings.Contains(packageURL, "?") {
+			separator = "&"
+		}
+		packageURL += separator + "distro=" + collection.DistroID + "-" + collection.DistroVersionID
+	}
+	if (item.Category == CategoryContainer || item.Category == CategoryContainerImage) &&
+		strings.HasPrefix(packageURL, "pkg:docker/") {
+		packageURL = strings.Replace(packageURL, "pkg:docker/", "pkg:oci/", 1)
+	}
+	return packageURL
 }
 
 func cycloneDXCategoryRank(category Category) int {
