@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/store"
@@ -27,12 +26,33 @@ type EditAddressesResult struct {
 	Warning     string
 }
 
-// EditAddresses 保存整份地址列表。校验错误使用页面可显示文案；修订号冲突
-// 使用服务器编辑的现有冲突类型。审计与数据写入由存储层同事务完成。
+// editAddressFieldErrors 把存储层地址校验错误码换成字段归属与双界面文
+// 案；错误码为空的拓扑校验错误不走这张表，仍按错误文字处理。
+var editAddressFieldErrors = map[string]FieldError{
+	store.TopologyCodeOtherAddressWhitespace: {
+		Field: "host", CLI: "host contains whitespace", Page: "地址不能包含空白字符。",
+	},
+	store.TopologyCodeMembershipIncomplete: {
+		Field: "memberships", CLI: "network membership requires network and address",
+		Page: "每行网络地址必须同时选择网络并填写地址。",
+	},
+	store.TopologyCodeMembershipAddressWhitespace: {
+		Field: "memberships", CLI: "network membership address contains whitespace",
+		Page: "地址不能包含空白字符。",
+	},
+	store.TopologyCodeDuplicateNetwork: {
+		Field: "memberships", CLI: "duplicate network in request",
+		Page: "同一台机器在同一个网络里只能登记一个地址。",
+	},
+	store.TopologyCodeAddressRequired: {
+		Field: "host", CLI: "at least one address is required", Page: "至少填写一个地址。",
+	},
+}
+
+// EditAddresses 保存整份地址列表。清单校验由存储层同事务入口完成，带错误
+// 码的校验错误在这里换成页面可显示文案；修订号冲突使用服务器编辑的现有冲
+// 突类型。审计与数据写入由存储层同事务完成。
 func (m *Manager) EditAddresses(req EditAddressesRequest, src Source) (*EditAddressesResult, error) {
-	if err := validateEditAddresses(req); err != nil {
-		return nil, err
-	}
 	srv, err := m.st.ResolveServer(req.Identifier)
 	if err != nil {
 		return nil, err
@@ -61,6 +81,9 @@ func (m *Manager) EditAddresses(req EditAddressesRequest, src Source) (*EditAddr
 		}
 		var topologyErr *store.TopologyValidationError
 		if errors.As(err, &topologyErr) {
+			if field, ok := editAddressFieldErrors[topologyErr.Code]; ok {
+				return nil, &field
+			}
 			page := topologyErr.Message
 			if !strings.HasSuffix(page, "。") {
 				page += "。"
@@ -72,49 +95,4 @@ func (m *Manager) EditAddresses(req EditAddressesRequest, src Source) (*EditAddr
 	return &EditAddressesResult{
 		Server: result.Server, Memberships: result.Memberships, Warning: result.Warning,
 	}, nil
-}
-
-func validateEditAddresses(req EditAddressesRequest) error {
-	otherAddress := strings.TrimSpace(req.OtherAddress)
-	if otherAddress != "" && containsAddressSpace(otherAddress) {
-		return &FieldError{
-			Field: "host", CLI: "host contains whitespace",
-			Page: "地址不能包含空白字符。",
-		}
-	}
-	seen := make(map[string]struct{}, len(req.Memberships))
-	for _, membership := range req.Memberships {
-		network := strings.TrimSpace(membership.Network)
-		address := strings.TrimSpace(membership.Address)
-		if network == "" || address == "" {
-			return &FieldError{
-				Field: "memberships", CLI: "network membership requires network and address",
-				Page: "每行网络地址必须同时选择网络并填写地址。",
-			}
-		}
-		if containsAddressSpace(address) {
-			return &FieldError{
-				Field: "memberships", CLI: "network membership address contains whitespace",
-				Page: "地址不能包含空白字符。",
-			}
-		}
-		if _, duplicate := seen[network]; duplicate {
-			return &FieldError{
-				Field: "memberships", CLI: "duplicate network in request",
-				Page: "同一台机器在同一个网络里只能登记一个地址。",
-			}
-		}
-		seen[network] = struct{}{}
-	}
-	if otherAddress == "" && len(req.Memberships) == 0 {
-		return &FieldError{
-			Field: "host", CLI: "at least one address is required",
-			Page: "至少填写一个地址。",
-		}
-	}
-	return nil
-}
-
-func containsAddressSpace(value string) bool {
-	return strings.ContainsFunc(value, unicode.IsSpace)
 }

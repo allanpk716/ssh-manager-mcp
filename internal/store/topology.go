@@ -20,9 +20,11 @@ var (
 )
 
 // TopologyValidationError 表示调用方传入的拓扑内容不合法；错误文字可直接
-// 展示给 owner。
+// 展示给 owner。Code 是可选的错误码，只有带固定语义的校验（如地址列表的
+// 五种情况）会填；为空表示没有错误码，调用方按错误文字处理。
 type TopologyValidationError struct {
 	Message string
+	Code    string
 }
 
 func (e *TopologyValidationError) Error() string { return e.Message }
