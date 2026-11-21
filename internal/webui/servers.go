@@ -36,15 +36,20 @@ const ServerAddressNetworkOther = "other"
 // 同机账号数；字段名由模板逐项展示。
 type ServerCard struct {
 	ServerListEntry
-	SiteID           string
-	SitePath         string
-	NetworkIDs       []string
-	NetworkNames     []string
-	SameMachineCount int
-	ClientCount      int
-	SecretCount      int
-	SharedStoreCount int
-	SearchText       string
+	SiteID       string
+	SitePath     string
+	NetworkIDs   []string
+	NetworkNames []string
+	// NetworkAddresses 是设备全部网络成员地址，供列表搜索与展示复用。
+	NetworkAddresses []string
+	// PreferredNetworkAddress 是条目主机为空时卡片显示的首选网络地址，来
+	// 自设备连接候选。
+	PreferredNetworkAddress string
+	SameMachineCount        int
+	ClientCount             int
+	SecretCount             int
+	SharedStoreCount        int
+	SearchText              string
 }
 
 // ServerListFilterView 是服务器列表搜索与筛选的当前值与可选项。
@@ -670,7 +675,7 @@ func (h *handler) serverListViews(
 	var topology *TopologyData
 	if h.cfg.Topology != nil {
 		var err error
-		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), "")
+		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), TopologyProbeOriginSelf)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -697,6 +702,10 @@ func (h *handler) serverListViews(
 			card.SiteID, card.SitePath = device.SiteID, device.LocationPath
 			card.NetworkIDs = indexes.networkIndexes.idsByDevice[device.ID]
 			card.NetworkNames = indexes.networkIndexes.namesByDevice[device.ID]
+			card.NetworkAddresses = indexes.networkIndexes.addressesByDevice[device.ID]
+			if row.Host == "" {
+				card.PreferredNetworkAddress = preferredNetworkAddress(device.Candidates)
+			}
 			card.SameMachineCount = len(device.Servers)
 		}
 		for _, profileID := range profileIDsByServer[row.ID] {
@@ -704,7 +713,8 @@ func (h *handler) serverListViews(
 		}
 		card.SearchText = strings.ToLower(strings.Join([]string{
 			row.Name, row.User, row.Host, strconv.Itoa(row.Port), card.SitePath,
-			strings.Join(card.NetworkNames, " "), strings.Join(row.AttentionReasons, " "),
+			strings.Join(card.NetworkNames, " "), strings.Join(card.NetworkAddresses, " "),
+			strings.Join(row.AttentionReasons, " "),
 		}, " "))
 		allCards = append(allCards, card)
 	}
@@ -723,8 +733,9 @@ func (h *handler) serverListViews(
 }
 
 type serverListNetworkIndexes struct {
-	idsByDevice   map[string][]string
-	namesByDevice map[string][]string
+	idsByDevice       map[string][]string
+	namesByDevice     map[string][]string
+	addressesByDevice map[string][]string
 }
 
 type serverListTopologyOptions struct {
@@ -873,14 +884,31 @@ func networkIndexesByDevice(
 ) serverListNetworkIndexes {
 	indexes := serverListNetworkIndexes{
 		idsByDevice: map[string][]string{}, namesByDevice: map[string][]string{},
+		addressesByDevice: map[string][]string{},
 	}
 	for _, membership := range memberships {
+		// 成员地址属于设备：即使网络行缺失，地址也要能被列表搜索命中。
+		indexes.addressesByDevice[membership.DeviceID] = append(
+			indexes.addressesByDevice[membership.DeviceID], membership.Address)
 		if network, ok := networks[membership.NetworkID]; ok {
 			indexes.idsByDevice[membership.DeviceID] = append(indexes.idsByDevice[membership.DeviceID], network.ID)
 			indexes.namesByDevice[membership.DeviceID] = append(indexes.namesByDevice[membership.DeviceID], network.Name)
 		}
 	}
 	return indexes
+}
+
+// preferredNetworkAddress 把拓扑数据里的设备连接候选转成共享函数的
+// 输入，取第一个物理局域网或虚拟局域网地址；列表卡片与详情页页头共
+// 用，保证同一个条目在两处算出同一个结果。
+func preferredNetworkAddress(candidates []TopologyCandidate) string {
+	converted := make([]models.NetworkAddressCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		converted = append(converted, models.NetworkAddressCandidate{
+			Address: candidate.Address, Source: models.DialAddressSource(candidate.Source),
+		})
+	}
+	return models.PreferredNetworkAddress(converted)
 }
 
 func serverListNetworkNote(network TopologyNetwork) string {

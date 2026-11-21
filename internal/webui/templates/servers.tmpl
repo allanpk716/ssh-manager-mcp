@@ -64,7 +64,7 @@
 <div class="server-card-heading">
 <div class="server-card-title">
 <h2><a href="/ui/servers/{{.ID}}">{{.Name}}</a></h2>
-<p class="server-address">{{.User}}@{{.Host}}:{{.Port}}</p>
+<p class="server-address">{{if .Host}}{{.User}}@{{.Host}}:{{.Port}}{{else if .PreferredNetworkAddress}}{{.User}}@{{.PreferredNetworkAddress}}:{{.Port}}{{else}}{{.User}} · 端口 {{.Port}}{{end}}</p>
 </div>
 {{if $.Caps.CanWrite}}<label class="server-select-control" title="选择 {{.Name}}"><input type="checkbox" value="{{.ID}}" aria-label="选择 {{.Name}}"></label>{{end}}
 </div>

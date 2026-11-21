@@ -334,3 +334,160 @@ func exchangeStartupTokenForCookie(t *testing.T, handler http.Handler, startup S
 	}
 	return cookies[0]
 }
+
+// serverListPreferredAddressTopologyData 构造空主机条目与首选网络地址场
+// 景用的拓扑数据：一台带物理与虚拟局域网候选的工作站、一台只有成员地址
+// 没有候选的裸机。
+func serverListPreferredAddressTopologyData() *TopologyData {
+	return &TopologyData{
+		Networks: []TopologyNetwork{
+			{ID: "net-lan", Name: "家B局域网", Type: "physical"},
+			{ID: "net-vpn", Name: "家B虚拟网", Type: "virtual"},
+		},
+		Devices: []TopologyDevice{
+			{
+				ID: "device-lan", Name: "工作站B",
+				Servers: []TopologyDeviceServer{{ID: "srv-empty"}, {ID: "srv-full"}},
+				Candidates: []TopologyCandidate{
+					{Address: "192.0.2.50", Source: "physical"},
+					{Address: "100.64.0.50", Source: "virtual"},
+				},
+			},
+			{
+				ID: "device-bare", Name: "裸机B",
+				Servers: []TopologyDeviceServer{{ID: "srv-bare-host"}},
+			},
+		},
+		Memberships: []TopologyMembership{
+			{DeviceID: "device-lan", NetworkID: "net-lan", Address: "192.0.2.50"},
+			{DeviceID: "device-lan", NetworkID: "net-vpn", Address: "100.64.0.50"},
+			{DeviceID: "device-bare", NetworkID: "net-lan", Address: "10.9.9.9"},
+		},
+	}
+}
+
+// newServerListPreferredAddressStore 构造空主机与无候选场景用的服务器列
+// 表数据；标识符与地址独立成套，避免与既有测试桩串扰。
+func newServerListPreferredAddressStore() *stubServerStore {
+	store := newStubServerStore()
+	store.rows = append(store.rows, []ServerListEntry{
+		{ID: "srv-empty", Name: "empty", User: "root", Host: "", Port: 22},
+		{ID: "srv-full", Name: "full", User: "owner", Host: "203.0.113.9", Port: 22},
+		{ID: "srv-bare-host", Name: "bare-host", User: "backup", Host: "", Port: 22022},
+	}...)
+	store.details["srv-empty"] = &ServerDetailView{
+		ID: "srv-empty", Name: "empty", User: "root", Host: "", Port: 22,
+		Shell: "posix", DeviceName: "工作站B", HasDevice: true,
+	}
+	return store
+}
+
+// TestServerListCardsShowPreferredNetworkAddressForEmptyHost 校验列表卡片
+// 地址行：条目主机为空时显示设备连接候选里的首选网络地址，没有候选时退化
+// 为用户与端口，主机非空的条目显示不变。
+func TestServerListCardsShowPreferredNetworkAddressForEmptyHost(t *testing.T) {
+	store := newServerListPreferredAddressStore()
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: &stubTopologySource{data: serverListPreferredAddressTopologyData()},
+		Access:   &stubAccessStore{}, VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+	page := serversGet(t, handler, cookie, "/ui/servers/")
+	for _, want := range []string{
+		"root@192.0.2.50:22",
+		"backup · 端口 22022",
+		"owner@203.0.113.9:22",
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("服务器列表地址行缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "@:") {
+		t.Fatalf("主机为空的条目不得显示空主机地址 root@:22：\n%s", page)
+	}
+}
+
+// TestServerListSearchMatchesMembershipAddresses 校验列表搜索收录设备全
+// 部网络成员地址：候选地址与不在候选里的成员地址都能命中对应条目，命中后
+// 无候选条目的地址行仍退化为用户与端口。
+func TestServerListSearchMatchesMembershipAddresses(t *testing.T) {
+	store := newServerListPreferredAddressStore()
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: &stubTopologySource{data: serverListPreferredAddressTopologyData()},
+		Access:   &stubAccessStore{}, VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+	for _, query := range []string{"192.0.2.50", "100.64.0.50"} {
+		filtered := serversGet(t, handler, cookie, "/ui/servers/?"+url.Values{"query": {query}}.Encode())
+		if !strings.Contains(filtered, `value="srv-empty"`) {
+			t.Fatalf("按成员地址 %s 搜索应命中空主机条目 srv-empty：\n%s", query, filtered)
+		}
+	}
+	bare := serversGet(t, handler, cookie, "/ui/servers/?"+url.Values{"query": {"10.9.9.9"}}.Encode())
+	if !strings.Contains(bare, `value="srv-bare-host"`) {
+		t.Fatalf("按成员地址 10.9.9.9 搜索应命中裸机条目 srv-bare-host：\n%s", bare)
+	}
+	if !strings.Contains(bare, "backup · 端口 22022") {
+		t.Fatalf("搜索命中的无候选条目地址行仍应退化为用户与端口：\n%s", bare)
+	}
+}
+
+// TestServerListCardAndDetailHeaderSharePreferredNetworkAddress 校验列表卡
+// 片与详情页页头对同一个空主机条目算出同一个首选网络地址，且两处读取拓扑
+// 都以本机设备为起点。
+func TestServerListCardAndDetailHeaderSharePreferredNetworkAddress(t *testing.T) {
+	store := newServerListPreferredAddressStore()
+	source := &stubTopologySource{data: serverListPreferredAddressTopologyData()}
+	handler, startup, err := New(Config{
+		Role: RoleStandalone, Servers: store, ServerWriter: &stubServerWriter{},
+		Topology: source, Access: &stubAccessStore{},
+		VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+	list := serversGet(t, handler, cookie, "/ui/servers/")
+	if !strings.Contains(list, "root@192.0.2.50:22") {
+		t.Fatalf("列表卡片应显示首选网络地址：\n%s", list)
+	}
+	detail := serversGet(t, handler, cookie, "/ui/servers/srv-empty")
+	if !strings.Contains(detail, "root@192.0.2.50:22") {
+		t.Fatalf("详情页页头应显示与列表卡片相同的首选网络地址：\n%s", detail)
+	}
+	if source.from != TopologyProbeOriginSelf {
+		t.Fatalf("列表与详情页读取拓扑应都以本机设备为起点，实际 %q", source.from)
+	}
+}
+
+// TestServerListClientRoleShowsPreferredNetworkAddress 校验客户端只读的服
+// 务器列表同样显示首选网络地址，不出现空主机地址。
+func TestServerListClientRoleShowsPreferredNetworkAddress(t *testing.T) {
+	store := newServerListPreferredAddressStore()
+	handler, startup, err := New(Config{
+		Role: RoleClient, Servers: store,
+		Topology: &stubTopologySource{data: serverListPreferredAddressTopologyData()},
+		Access:   &stubAccessStore{}, VersionHint: func() string { return "" }, Port: 18080,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cookie := exchangeStartupTokenForCookie(t, handler, startup)
+	page := serversGet(t, handler, cookie, "/ui/servers/")
+	for _, want := range []string{"root@192.0.2.50:22", "backup · 端口 22022"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("客户端列表地址行缺少 %q：\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "@:") {
+		t.Fatalf("客户端列表主机为空的条目不得显示空主机地址：\n%s", page)
+	}
+}

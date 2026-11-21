@@ -99,8 +99,9 @@ type serverDetailTopologyView struct {
 	HasDevice    bool
 	DeviceName   string
 	LocationPath string
-	// PreferredNetworkAddress 来自设备连接候选；只取物理或虚拟局域网候选，
-	// 不把兜底主机当成网络成员地址。
+	// PreferredNetworkAddress 来自设备连接候选；列表卡片与详情页页头共用
+	// 同一选取规则，只取物理或虚拟局域网候选，不把兜底主机当成网络成员地
+	// 址。
 	PreferredNetworkAddress string
 	Addresses               []serverDetailAddressRow
 	AvailableNetworks       []serverDetailDeviceOption
@@ -148,8 +149,9 @@ type serverDetailPageView struct {
 	ProfileRows   []serverDetailProfileRow
 	ShareRows     []ServerDetailSharedStorageChoice
 	Topology      *serverDetailTopologyView
-	// PreferredNetworkAddress 是其他地址为空时页头显示的网络成员地址，来
-	// 自连接候选里的第一个物理或虚拟局域网地址。
+	// PreferredNetworkAddress 是条目主机为空时页头显示的网络成员地址；列
+	// 表卡片与详情页页头共用同一选取规则，取连接候选里的第一个物理或虚拟
+	// 局域网地址。
 	PreferredNetworkAddress string
 	Software                *serverDetailSoftwareView
 	Move                    *serverDetailMoveDraft
@@ -438,13 +440,7 @@ func (h *handler) serverDetailTopologyView(
 	if device == nil {
 		return view
 	}
-	for _, candidate := range device.Candidates {
-		source := models.DialAddressSource(candidate.Source)
-		if source == models.DialAddressSourcePhysical || source == models.DialAddressSourceVirtual {
-			view.PreferredNetworkAddress = candidate.Address
-			break
-		}
-	}
+	view.PreferredNetworkAddress = preferredNetworkAddress(device.Candidates)
 	view.LocationPath = device.LocationPath
 	suggestionNetworks := make([]networkrange.Network, 0, len(data.Networks))
 	for _, network := range data.Networks {
