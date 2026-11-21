@@ -235,3 +235,25 @@ func TestQuerySortsListeningPortsByExposureFromUbuntuSample(t *testing.T) {
 		t.Fatalf("可执行文件路径与进程名都空的条目不应合并拆散：%+v", unidentified)
 	}
 }
+
+// TestQueryMarksMissingVersionFromUbuntuSample 钉住缺版本标志：版本为空的
+// 条目带标志，有版本的条目不带。
+func TestQueryMarksMissingVersionFromUbuntuSample(t *testing.T) {
+	manager := seedPOSIXSample(t, "样例工作站", "ubuntu2404-full.txt")
+
+	items := querySampleDevice(t, manager, "样例工作站", QueryOptions{})
+	for _, name := range []string{"litellm", "python", "未识别进程"} {
+		item := findItemByNameAndCategory(t, items, CategoryUnidentified, name)
+		if !item.MissingVersion {
+			t.Fatalf("版本为空的条目 %s 应带缺版本标志：%+v", name, item)
+		}
+	}
+	nginx := findItemByNameAndCategory(t, items, CategorySystemPackage, "nginx")
+	dockerCE := findItemByNameAndCategory(t, items, CategorySystemPackage, "docker-ce")
+	ubuntu := findItemByNameAndCategory(t, items, CategoryOperatingSystem, "Ubuntu")
+	for _, item := range []QueryItem{nginx, dockerCE, ubuntu} {
+		if item.MissingVersion {
+			t.Fatalf("有版本的条目 %s 不应带缺版本标志：%+v", item.Name, item)
+		}
+	}
+}

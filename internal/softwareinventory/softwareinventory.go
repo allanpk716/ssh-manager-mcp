@@ -112,6 +112,8 @@ type Item struct {
 	ContainerTag      string     `json:"container_tag,omitempty"`
 	ContainerDigest   string     `json:"container_digest,omitempty"`
 	ContainerRunning  bool       `json:"container_running,omitempty"`
+	// MissingVersion 表示这条条目拿不到版本号，需要人工或外部程序补查。
+	MissingVersion bool `json:"missing_version,omitempty"`
 }
 
 // ItemGroup 是按设备查看时的一个类别分组。系统包默认只返回数量；加参数
@@ -254,5 +256,6 @@ func queryItemAsItem(row QueryItem) Item {
 		DeclaredVersion: row.DeclaredVersion, Mismatch: row.Mismatch,
 		ConfirmedAt: row.ConfirmedAt, ContainerTag: row.ContainerTag,
 		ContainerDigest: row.ContainerDigest, ContainerRunning: row.ContainerRunning,
+		MissingVersion: row.MissingVersion,
 	}
 }

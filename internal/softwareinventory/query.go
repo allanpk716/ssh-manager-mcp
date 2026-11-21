@@ -72,6 +72,8 @@ type QueryItem struct {
 	ProcessName    string `json:"process_name,omitempty"`
 	ExecutablePath string `json:"executable_path,omitempty"`
 	ProcessID      int    `json:"process_id,omitempty"`
+	// MissingVersion 表示这条条目拿不到版本号，需要人工或外部程序补查。
+	MissingVersion bool `json:"missing_version,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -432,6 +434,7 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		}
 		items = mergeUnidentifiedProcessItems(items)
 		for i := range items {
+			items[i].MissingVersion = items[i].Version == ""
 			sortListeningPorts(items[i].ListeningPorts)
 		}
 		sort.Slice(items, func(i, j int) bool {
