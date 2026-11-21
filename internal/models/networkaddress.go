@@ -9,8 +9,8 @@ type NetworkAddressCandidate struct {
 
 // PreferredNetworkAddress 返回候选列表里第一个来自物理局域网或虚拟局域
 // 网的成员地址；没有这样的候选时返回空串。列表必须保持候选规划的连接优
-// 先级排序（物理局域网、虚拟局域网在前，服务器条目兜底主机在后）；兜底主
-// 机不会被选为首选网络地址。
+// 先级排序（物理局域网、虚拟局域网在前，服务器条目的其他地址在后）；
+// 其他地址不会被选为首选网络地址。
 func PreferredNetworkAddress(candidates []NetworkAddressCandidate) string {
 	for _, candidate := range candidates {
 		if candidate.Source != DialAddressSourcePhysical && candidate.Source != DialAddressSourceVirtual {

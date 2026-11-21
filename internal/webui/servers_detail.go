@@ -132,7 +132,7 @@ type serverDetailTopologyView struct {
 	DeviceName   string
 	LocationPath string
 	// PreferredNetworkAddress 来自设备连接候选；列表卡片与详情页页头共用
-	// 同一选取规则，只取物理或虚拟局域网候选，不把兜底主机当成网络成员地
+	// 同一选取规则，只取物理或虚拟局域网候选，不把其他地址当成网络成员地
 	// 址。
 	PreferredNetworkAddress string
 	Addresses               []serverDetailAddressRow
