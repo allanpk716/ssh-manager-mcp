@@ -380,7 +380,10 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			if options.ExactVersion != "" && item.Version != options.ExactVersion {
 				continue
 			}
-			if item.Category == CategorySystemPackage && !options.IncludeSystemPackages {
+			// 重点清单口径：默认只排除没有监听端口的系统包；带监听端口
+			// 的系统包是「监听端口的程序」，保留。
+			if item.Category == CategorySystemPackage && len(item.ListeningPorts) == 0 &&
+				!options.IncludeSystemPackages {
 				continue
 			}
 			if options.MinimumExposure != "" &&
