@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"ssh-manager-mcp/internal/roles"
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
+	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/updater"
 	"ssh-manager-mcp/internal/webui"
@@ -113,15 +115,21 @@ func standaloneUISecretWriter() webui.SecretWriter {
 }
 
 // standaloneUISoftwareInventoryStore 给单机 Web UI 提供软件清单页面与立
-// 即采集入口。每次读取重新打开本机 vault，结束后关闭。
-func standaloneUISoftwareInventoryStore() webui.SoftwareInventorySource {
-	return webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
+// 即采集入口。读取与写操作每次重新打开本机 vault，结束后关闭；后台采集
+// 轮次也不长期持有 vault 句柄——每台设备采集期间开、采完关，等待客户端
+// 实例设备的结果刷新同样短开短关，与每请求开关 vault 的请求侧并存
+// （store 的 openMu 把进程内打开串行化）。轮次随 ui 进程的上下文退出。
+func standaloneUISoftwareInventoryStore(ctx context.Context) webui.SoftwareInventorySource {
+	open := func() (*store.Store, func(), error) {
 		st, err := openUnlockedStore()
 		if err != nil {
 			return nil, nil, err
 		}
 		return st, func() { _ = st.Close() }, nil
-	})
+	}
+	rounds := softwareinventory.NewRoundManager(open)
+	rounds.Context = ctx
+	return webuisoftwareinventory.FromOpenerWithRoundManager(open, rounds)
 }
 
 func openSecretManager() (*secretmanage.Manager, func(), error) {

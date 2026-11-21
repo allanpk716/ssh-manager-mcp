@@ -14,13 +14,24 @@ import (
 )
 
 type openerSource struct {
-	open func() (*store.Store, func(), error)
+	open   func() (*store.Store, func(), error)
+	rounds *softwareinventory.RoundManager
 }
 
 // FromOpener 每次页面读取或写操作重新打开存储，避免 Web UI 长期持有存储
-// 句柄。
+// 句柄；内部自建一个采集轮次管理器。
 func FromOpener(open func() (*store.Store, func(), error)) webui.SoftwareInventorySource {
-	return openerSource{open: open}
+	return openerSource{open: open, rounds: softwareinventory.NewRoundManager(open)}
+}
+
+// FromOpenerWithRoundManager 用给定的采集轮次管理器构造软件清单来源：
+// serve 与单机 Web UI 把构造好的管理器（绑定进程上下文与共享的每设备采
+// 集互斥）交给这里，「立即全部采集」由此发起后台采集轮次。
+func FromOpenerWithRoundManager(
+	open func() (*store.Store, func(), error),
+	rounds *softwareinventory.RoundManager,
+) webui.SoftwareInventorySource {
+	return openerSource{open: open, rounds: rounds}
 }
 
 func (s openerSource) SoftwareInventoryDevices(
@@ -443,40 +454,6 @@ func (s openerSource) SetSoftwareInventoryDailyTime(
 		return err
 	}
 	return nil
-}
-
-func (s openerSource) RequestSoftwareInventoryCollectionAll(
-	ctx context.Context, source webui.SoftwareInventoryWriteSource,
-) (webui.SoftwareInventoryCollectionRoundResult, error) {
-	st, done, err := s.open()
-	if err != nil {
-		return webui.SoftwareInventoryCollectionRoundResult{}, err
-	}
-	defer done()
-	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
-	report, err := softwareinventory.New(st).CollectAllForScope(
-		ctx, softwareinventory.AllDevicesVisible(),
-		&softwareinventory.Service{Store: st},
-		domainSource,
-	)
-	if report == nil {
-		return webui.SoftwareInventoryCollectionRoundResult{}, err
-	}
-	result := webui.SoftwareInventoryCollectionRoundResult{
-		Succeeded: report.Succeeded, Requested: report.Requested, Failed: report.Failed,
-		Interrupted: report.Interrupted,
-		Devices:     make([]webui.SoftwareInventoryCollectionDeviceResult, 0, len(report.Devices)),
-	}
-	for _, device := range report.Devices {
-		result.Devices = append(result.Devices, webui.SoftwareInventoryCollectionDeviceResult{
-			DeviceName: device.DeviceName, Requested: device.Requested,
-			CollectorName: device.CollectorName, Err: device.Err,
-		})
-	}
-	if err != nil {
-		return result, err
-	}
-	return result, nil
 }
 
 func deviceError(deviceName string, err error) error {

@@ -69,17 +69,18 @@ type stubSoftwareInventorySource struct {
 	searchQuery        string
 	searchFilter       SoftwareInventoryFilter
 	collectResult      SoftwareInventoryCollectionResult
-	collectAllResult   SoftwareInventoryCollectionRoundResult
-	collectAllErr      error
 	collectErr         error
 	collectDevice      string
 	collectAddress     string
 	collectCalled      bool
+	startRoundCalled   bool
+	startRoundAddress  string
+	startRoundErr      error
+	roundView          *SoftwareInventoryRoundView
+	roundErr           error
 	dailyTimeValue     string
 	dailyTimeAddress   string
 	dailyTimeSetCalled bool
-	collectAllAddress  string
-	collectAllCalled   bool
 	todos              SoftwareInventoryTodos
 	collectorForm      SoftwareInventoryCollectorForm
 	collectorErr       error
@@ -150,12 +151,16 @@ func (s *stubSoftwareInventorySource) SetSoftwareInventoryDailyTime(
 	return nil
 }
 
-func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollectionAll(
-	_ context.Context, source SoftwareInventoryWriteSource,
-) (SoftwareInventoryCollectionRoundResult, error) {
-	s.collectAllCalled = true
-	s.collectAllAddress = source.RemoteAddress
-	return s.collectAllResult, s.collectAllErr
+func (s *stubSoftwareInventorySource) StartSoftwareInventoryCollectionRound(
+	source SoftwareInventoryWriteSource,
+) error {
+	s.startRoundCalled = true
+	s.startRoundAddress = source.RemoteAddress
+	return s.startRoundErr
+}
+
+func (s *stubSoftwareInventorySource) SoftwareInventoryRound() (*SoftwareInventoryRoundView, error) {
+	return s.roundView, s.roundErr
 }
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryTodos() (SoftwareInventoryTodos, error) {

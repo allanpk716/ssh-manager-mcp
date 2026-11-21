@@ -1,28 +1,20 @@
 package webui
 
 import (
-	"context"
 	"net/http"
 	"net/url"
 	"strings"
 	"testing"
 )
 
-// TestSoftwareInventoryScheduleAndCollectAllForms 覆盖首页的全局每天采集
-// 时间表单与「立即全部采集」报告。
-func TestSoftwareInventoryScheduleAndCollectAllForms(t *testing.T) {
+// TestSoftwareInventoryScheduleFormSavesDailyTime 覆盖首页的全局每天采集时
+// 间表单。「立即全部采集」改为后台采集轮次，重定向与进度页断言在
+// softwareinventory_round_test.go 里。
+func TestSoftwareInventoryScheduleFormSavesDailyTime(t *testing.T) {
 	source := &stubSoftwareInventorySource{
 		devices: []SoftwareInventoryDeviceSummary{{
 			Name: "工作站", StatusLabels: []string{"正常"},
 		}},
-		collectAllResult: SoftwareInventoryCollectionRoundResult{
-			Succeeded: 1, Requested: 1, Failed: 1,
-			Devices: []SoftwareInventoryCollectionDeviceResult{
-				{DeviceName: "工作站"},
-				{DeviceName: "备份机", Requested: true, CollectorName: "mini6"},
-				{DeviceName: "失败设备", Err: "连接超时，端口不通"},
-			},
-		},
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	home := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/")
@@ -50,65 +42,5 @@ func TestSoftwareInventoryScheduleAndCollectAllForms(t *testing.T) {
 	savedBody := readResponseBody(t, savedPage)
 	if !strings.Contains(savedBody, "每天采集时间已保存。") || !strings.Contains(savedBody, `value="02:30"`) {
 		t.Fatalf("保存后首页应显示提示与新时间：\n%s", savedBody)
-	}
-
-	response = postSoftwareInventoryForm(t, handler, cookie, "/ui/software-inventory/collect-all",
-		url.Values{"csrf_token": {csrf}},
-	)
-	if response.StatusCode != http.StatusSeeOther ||
-		response.Header.Get("Location") != "/ui/software-inventory/?collect_all=done" {
-		t.Fatalf("立即全部采集应跳回首页，状态码=%d Location=%s",
-			response.StatusCode, response.Header.Get("Location"))
-	}
-	if !source.collectAllCalled || source.collectAllAddress != "198.51.100.9" {
-		t.Fatalf("立即全部采集应交给来源接口：%+v", source)
-	}
-	reportPage := doGetWithCookie(t, handler, cookie, response.Header.Get("Location"))
-	reportBody := readResponseBody(t, reportPage)
-	for _, wanted := range []string{
-		"立即全部采集完成：成功 1 台，等待客户端实例 1 台，失败 1 台。",
-		"工作站：采集成功", "备份机：已登记，等待客户端实例 mini6 执行",
-		"失败设备：失败，连接超时，端口不通",
-	} {
-		if !strings.Contains(reportBody, wanted) {
-			t.Fatalf("立即全部采集报告缺少 %q：\n%s", wanted, reportBody)
-		}
-	}
-}
-
-// TestSoftwareInventoryCollectAllShowsInterruptedReport 验证「立即全部采
-// 集」被取消且已有部分报告时，页面仍展示报告而不是整页失败。
-func TestSoftwareInventoryCollectAllShowsInterruptedReport(t *testing.T) {
-	source := &stubSoftwareInventorySource{
-		devices: []SoftwareInventoryDeviceSummary{{
-			Name: "工作站", StatusLabels: []string{"正常"},
-		}},
-		collectAllResult: SoftwareInventoryCollectionRoundResult{
-			Interrupted: true, Succeeded: 1,
-			Devices: []SoftwareInventoryCollectionDeviceResult{{DeviceName: "工作站"}},
-		},
-		collectAllErr: context.Canceled,
-	}
-	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
-	home := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/")
-	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, home))
-
-	response := postSoftwareInventoryForm(t, handler, cookie, "/ui/software-inventory/collect-all",
-		url.Values{"csrf_token": {csrf}},
-	)
-	if response.StatusCode != http.StatusSeeOther ||
-		response.Header.Get("Location") != "/ui/software-inventory/?collect_all=done" {
-		t.Fatalf("中断但有部分报告时应跳回首页，状态码=%d Location=%s",
-			response.StatusCode, response.Header.Get("Location"))
-	}
-	reportBody := readResponseBody(t, doGetWithCookie(t, handler, cookie, response.Header.Get("Location")))
-	for _, wanted := range []string{
-		"立即全部采集被中断：已处理部分设备；成功 1 台，等待客户端实例 0 台，失败 0 台。",
-		"仍有设备未处理，需要时请重新发起立即全部采集。",
-		"工作站：采集成功",
-	} {
-		if !strings.Contains(reportBody, wanted) {
-			t.Fatalf("中断报告缺少 %q：\n%s", wanted, reportBody)
-		}
 	}
 }

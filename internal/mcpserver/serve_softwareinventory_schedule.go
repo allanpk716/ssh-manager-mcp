@@ -14,6 +14,8 @@ import (
 // 的函数等待调度服务随上下文退出。测试替换这个变量验证启动与收尾接线。
 var startSoftwareCollectionScheduler = func(ctx context.Context, st *store.Store) func() {
 	scheduler := softwareinventory.NewScheduler(st)
+	// 与 Web UI 的立即采集轮次共享每设备互斥，避免同一台设备被并发重复采集。
+	scheduler.DeviceLocks = softwareCollectionDeviceLocks
 	scheduler.Logf = func(format string, arguments ...any) {
 		fmt.Fprintf(os.Stderr, "sshmgr serve: 软件清单采集调度："+format+"\n", arguments...)
 	}
