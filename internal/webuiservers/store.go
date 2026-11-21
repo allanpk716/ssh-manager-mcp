@@ -449,6 +449,18 @@ func (w writerAdapter) EditServerAddresses(
 	return result, conflict, err
 }
 
+func (w writerAdapter) EditAccountNotes(
+	edits []webui.ServerAccountNoteEdit, source webui.ServerWriteSource,
+) (*webui.ServerEditConflictView, error) {
+	var conflict *webui.ServerEditConflictView
+	err := withManager(w.open, func(manager *servermanage.Manager) error {
+		var editErr error
+		conflict, editErr = EditAccountNotesView(manager, edits, source)
+		return editErr
+	})
+	return conflict, err
+}
+
 // EditServerAddressesView 保存整份地址列表并换成页面数据；修订号冲突以冲
 // 突视图返回，校验失败换成页面表单错误。
 func EditServerAddressesView(
@@ -490,6 +502,31 @@ func EditServerAddressesView(
 		return nil, nil, err
 	}
 	return &webui.ServerAddressListResultView{Detail: detail, Warning: result.Warning}, nil, nil
+}
+
+// EditAccountNotesView 在一个事务里保存多台同机账号的显示说明；任一台修订
+// 号不符整批回滚，冲突换成那台条目的最新页面数据。
+func EditAccountNotesView(
+	manager *servermanage.Manager, edits []webui.ServerAccountNoteEdit, source webui.ServerWriteSource,
+) (*webui.ServerEditConflictView, error) {
+	request := make([]servermanage.AccountNoteEdit, 0, len(edits))
+	for _, edit := range edits {
+		request = append(request, servermanage.AccountNoteEdit{
+			ServerID: edit.ServerID, Note: edit.Note, Revision: edit.Revision,
+		})
+	}
+	if err := manager.EditAccountNotes(request, servermanage.WebUISource(source.RemoteAddress)); err != nil {
+		var conflict *servermanage.RevisionConflict
+		if errors.As(err, &conflict) {
+			current, viewErr := DetailView(manager, conflict.Current.ID)
+			if viewErr != nil {
+				return nil, viewErr
+			}
+			return &webui.ServerEditConflictView{Current: current}, nil
+		}
+		return nil, err
+	}
+	return nil, nil
 }
 
 // EditServer 执行一次编辑并把结果换成页面数据；修订号冲突以冲突视图返回。

@@ -42,12 +42,18 @@ func MetadataFieldList() []string {
 	return out
 }
 
-// ErrStaleRevision is UpdateForwardedMetadata's CAS refusal: the row's
+// ErrStaleRevision is the CAS refusal of a revision-checked write: the row's
 // revision no longer matches the caller's expectation (someone — owner or
 // another device — wrote in between). Current carries the row's actual
 // revision so the serve handler can compose the one-hop-retry 409 body.
+// ServerID and ServerName are set only by EditServerNotes (the multi-entry
+// batch): they name WHICH entry lost the race, since one batch touches many.
+// Error() text deliberately ignores them — the serve route's 409 body shape
+// is frozen.
 type ErrStaleRevision struct {
-	Current int64
+	Current    int64
+	ServerID   string
+	ServerName string
 }
 
 func (e *ErrStaleRevision) Error() string {

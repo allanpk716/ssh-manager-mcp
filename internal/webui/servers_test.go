@@ -205,6 +205,9 @@ type stubServerWriter struct {
 	otherAdds      []OtherDeviceAddForm
 	edits          []ServerEditForm
 	editIDs        []string
+	noteEdits      []ServerAccountNoteEdit
+	noteConflict   *ServerEditConflictView
+	noteErr        error
 	addressEdits   []stubServerAddressEdit
 	deletes        []string
 	importRuns     []stubImportRun
@@ -285,6 +288,19 @@ func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source Ser
 		return nil, w.conflict, nil
 	}
 	return &ServerEditResultView{Detail: &ServerDetailView{ID: id, Name: form.NameValue()}}, nil, nil
+}
+
+func (w *stubServerWriter) EditAccountNotes(
+	edits []ServerAccountNoteEdit, source ServerWriteSource,
+) (*ServerEditConflictView, error) {
+	w.noteEdits = append(w.noteEdits, edits...)
+	if w.noteErr != nil {
+		return nil, w.noteErr
+	}
+	if w.noteConflict != nil {
+		return w.noteConflict, nil
+	}
+	return nil, nil
 }
 
 func (w *stubServerWriter) EditServerAddresses(
