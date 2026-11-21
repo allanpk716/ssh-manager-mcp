@@ -72,6 +72,8 @@ type QueryItem struct {
 	ProcessName    string `json:"process_name,omitempty"`
 	ExecutablePath string `json:"executable_path,omitempty"`
 	ProcessID      int    `json:"process_id,omitempty"`
+	// MissingVersion 表示这条条目拿不到版本号，需要人工或外部程序补查。
+	MissingVersion bool `json:"missing_version,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -247,6 +249,80 @@ func combinedPorts(observed, declared []ListeningPort) []ListeningPort {
 	return out
 }
 
+// unidentifiedProcessKey 返回一条未识别进程条目的程序合并键：可执行文件
+// 路径非空按路径，否则进程名非空按小写进程名；两者都空返回空串（不合
+// 并）。非未识别进程类别恒返回空串。
+func unidentifiedProcessKey(item QueryItem) string {
+	if item.Category != CategoryUnidentified {
+		return ""
+	}
+	if item.ExecutablePath != "" {
+		return "exe:" + item.ExecutablePath
+	}
+	if item.ProcessName != "" {
+		return "name:" + strings.ToLower(item.ProcessName)
+	}
+	return ""
+}
+
+// mergeUnidentifiedProcessItems 在查询输出层把同一程序的未识别进程条目
+// 合并为一行：合并行的名称、进程可得信息、采集时间与稳定键取首条，监听
+// 端口按出现顺序拼接并去掉地址、端口、协议都相同的重复项。依据是领域词
+// 「未识别进程」：每个程序合并为一行，多个端口合并列出。
+func mergeUnidentifiedProcessItems(items []QueryItem) []QueryItem {
+	out := make([]QueryItem, 0, len(items))
+	position := make(map[string]int, len(items))
+	for _, item := range items {
+		key := unidentifiedProcessKey(item)
+		if key == "" {
+			out = append(out, item)
+			continue
+		}
+		at, merged := position[key]
+		if !merged {
+			position[key] = len(out)
+			out = append(out, item)
+			continue
+		}
+		out[at].ListeningPorts = appendUniquePorts(out[at].ListeningPorts, item.ListeningPorts)
+	}
+	return out
+}
+
+// appendUniquePorts 把一组监听端口拼到基础列表末尾；地址、端口与协议都
+// 相同才算重复，不再次拼接。
+func appendUniquePorts(base, extra []ListeningPort) []ListeningPort {
+	for _, port := range extra {
+		duplicate := false
+		for _, existing := range base {
+			if existing.Address == port.Address && existing.Port == port.Port &&
+				existing.Protocol == port.Protocol {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			base = append(base, port)
+		}
+	}
+	return base
+}
+
+// sortListeningPorts 按暴露级别从高到低、端口号升序、地址排序一组监听
+// 端口，让攻击面大的端口排在前面；仅本机监听的端口自然排到最后。
+func sortListeningPorts(ports []ListeningPort) {
+	sort.SliceStable(ports, func(i, j int) bool {
+		left, right := exposureRank(ports[i].Exposure), exposureRank(ports[j].Exposure)
+		if left != right {
+			return left > right
+		}
+		if ports[i].Port != ports[j].Port {
+			return ports[i].Port < ports[j].Port
+		}
+		return ports[i].Address < ports[j].Address
+	})
+}
+
 func categoryRank(category Category) int {
 	switch category {
 	case CategoryOperatingSystem:
@@ -356,6 +432,11 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		for _, observed := range bundle.Observed {
 			items = append(items, queryItemFromObserved(bundle.DeviceID, observed))
 		}
+		items = mergeUnidentifiedProcessItems(items)
+		for i := range items {
+			items[i].MissingVersion = items[i].Version == ""
+			sortListeningPorts(items[i].ListeningPorts)
+		}
 		sort.Slice(items, func(i, j int) bool {
 			if items[i].Category != items[j].Category {
 				return categoryRank(items[i].Category) < categoryRank(items[j].Category)
@@ -380,7 +461,10 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			if options.ExactVersion != "" && item.Version != options.ExactVersion {
 				continue
 			}
-			if item.Category == CategorySystemPackage && !options.IncludeSystemPackages {
+			// 重点清单口径：默认只排除没有监听端口的系统包；带监听端口
+			// 的系统包是「监听端口的程序」，保留。
+			if item.Category == CategorySystemPackage && len(item.ListeningPorts) == 0 &&
+				!options.IncludeSystemPackages {
 				continue
 			}
 			if options.MinimumExposure != "" &&

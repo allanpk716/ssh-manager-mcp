@@ -311,8 +311,8 @@ func readSoftwareInventoryExportCSV(t *testing.T, response *http.Response) [][]s
 
 func TestSoftwareInventoryExportUsesCurrentFilters(t *testing.T) {
 	source := &stubSoftwareInventorySource{exportCSV: []byte(
-		"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
-			"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n")}
+		"\uFEFF设备,软件名,版本,缺版本,类别,监听端口,暴露级别,采集时间\r\n" +
+			"工作站,nginx,1.25.3,,监听程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n")}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	response := doGetWithCookie(t, handler, cookie,
 		"/ui/software-inventory/export?query=nginx&exact_version=1.25.3&site=%E5%85%AC%E5%8F%B8&network=%E6%80%BB%E9%83%A8%E7%89%A9%E7%90%86%E5%B1%80%E5%9F%9F%E7%BD%91")
@@ -343,8 +343,8 @@ func TestSoftwareInventoryExportSingleDevice(t *testing.T) {
 	source := &stubSoftwareInventorySource{
 		device: &SoftwareInventoryDevice{Name: "工作站"},
 		exportCSV: []byte(
-			"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
-				"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n"),
+			"\uFEFF设备,软件名,版本,缺版本,类别,监听端口,暴露级别,采集时间\r\n" +
+				"工作站,nginx,1.25.3,,监听程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n"),
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	devicePage := doGetWithCookie(t, handler, cookie,
@@ -528,14 +528,14 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					Source: "实测", CollectedAt: &collectedAt,
 				},
 			}},
-			{CategoryLabel: "服务程序", Items: []SoftwareInventoryItem{{
+			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "服务程序", Name: "nginx", Version: "1.24.0",
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
 					Address: "0.0.0.0", Port: 80, Protocol: "tcp", ExposureLabel: "监听所有地址",
 				}},
 			}}},
-			{CategoryLabel: "容器镜像", Items: []SoftwareInventoryItem{{
+			{CategoryLabel: "容器", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "容器镜像", Name: "postgres", Version: "16.4",
 				Source: "实测", CollectedAt: &collectedAt, BelongsTo: "Docker",
 				ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef", ContainerRunning: true,
@@ -551,9 +551,9 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					{CategoryLabel: "系统包", Name: "openssh-client", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt},
 				},
 			},
-			{CategoryLabel: "未识别进程", Items: []SoftwareInventoryItem{{
+			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "未识别进程", Name: "unknown-gateway",
-				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123, MissingVersion: true,
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
 					Address: "127.0.0.1", Port: 8443, Protocol: "tcp", ExposureLabel: "仅本机",
@@ -591,6 +591,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		"NVIDIA 显卡驱动", "550.120",
 		"系统包（2 条，默认折叠）", "curl", "openssh-client",
 		"未识别", "gateway", "/opt/gateway/gateway", "8123", "127.0.0.1:8443/tcp", "仅本机",
+		`<span class="missing-version-badge">缺版本</span>`,
 		"版本变化", "8.8.0-1", "8.9.1-1ubuntu2",
 		"立即采集",
 		`id="software-inventory-advanced"`, "高级采集设置", "权威端", "笔记本客户端",
@@ -602,7 +603,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 	}
 	previous := -1
 	for _, label := range []string{
-		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+		"操作系统与内核", "监听程序", "容器", "驱动与固件", "系统包",
 	} {
 		position := strings.Index(body, "<h2>"+label)
 		if position < 0 || position < previous {

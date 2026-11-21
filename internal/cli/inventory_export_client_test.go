@@ -54,7 +54,7 @@ func TestInventoryClientExportsCSVOnline(t *testing.T) {
 		t.Fatalf("客户端导出不是合法 CSV：%v\n%s", err, output)
 	}
 	if len(rows) != 2 || rows[1][0] != "gpu-设备" || rows[1][1] != "nginx" ||
-		rows[1][2] != "1.25.3" || rows[1][4] != "0.0.0.0:80/tcp" {
+		rows[1][2] != "1.25.3" || rows[1][5] != "0.0.0.0:80/tcp" {
 		t.Fatalf("客户端按条件导出的 CSV 行 = %#v", rows)
 	}
 }

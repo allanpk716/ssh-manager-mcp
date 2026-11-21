@@ -340,7 +340,7 @@ func TestQuerySoftwareInventoryAuthorityFaceReturnsCSVWithFilters(t *testing.T) 
 	}
 	if len(rows) != 2 || rows[1][0] != "可见设备" || rows[1][1] != "nginx" ||
 		rows[1][2] != "{{sshmgr-secret:SOFTWARE_VERSION_TOKEN}}" ||
-		rows[1][5] != "监听所有地址" {
+		rows[1][6] != "监听所有地址" {
 		t.Fatalf("筛选后的 CSV 行 = %#v", rows)
 	}
 
@@ -358,8 +358,12 @@ func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testi
 		Category: softwareinventory.CategoryServiceProgram,
 		Name:     "observed-only", Version: "2.0",
 	}
+	missingVersion := models.SoftwareObservedItem{
+		Category: softwareinventory.CategoryServiceProgram,
+		Name:     "observed-no-version",
+	}
 	if err := st.ReplaceSoftwareObservedItems("可见设备", store.SoftwareObservedWrite{
-		Items:             []models.SoftwareObservedItem{observed},
+		Items:             []models.SoftwareObservedItem{observed, missingVersion},
 		CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
@@ -370,7 +374,7 @@ func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testi
 	}
 	t.Cleanup(func() { tunnels.CloseAll(); tasks.CloseAll() })
 	session := softwareInventorySession(t, srv)
-	text, isError := callSoftwareInventoryTool(t, session, map[string]any{"name": "observed-only"})
+	text, isError := callSoftwareInventoryTool(t, session, map[string]any{"name": "observed"})
 	if isError {
 		t.Fatalf("查询只有实测的设备报错：%s", text)
 	}
@@ -378,9 +382,14 @@ func TestQuerySoftwareInventoryAuthorityFaceIncludesObservedOnlyDevices(t *testi
 	if err := json.Unmarshal([]byte(text), &result); err != nil {
 		t.Fatalf("解析工具输出失败：%v\n%s", err, text)
 	}
-	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 1 ||
+	if len(result.Devices) != 1 || len(result.Devices[0].Items) != 2 ||
 		result.Devices[0].Items[0].Source != softwareinventory.SourceObserved {
 		t.Fatalf("只有实测的设备应出现在 MCP 查询里：%+v", result.Devices)
+	}
+	// 输出 json 每条带缺版本标志：版本为空的条目为 true。名字排序里
+	// observed-no-version 在 observed-only 前。
+	if !result.Devices[0].Items[0].MissingVersion || result.Devices[0].Items[1].MissingVersion {
+		t.Fatalf("缺版本标志应随查询条目输出：%+v", result.Devices[0].Items)
 	}
 }
 
@@ -488,5 +497,54 @@ func TestQuerySoftwareInventoryCacheFaceSurfacesQuerierError(t *testing.T) {
 	text, isError := callSoftwareInventoryTool(t, session, map[string]any{})
 	if !isError || text != "权威端不可达" {
 		t.Fatalf("错误应原样透出：%q %v", text, isError)
+	}
+}
+
+// TestQuerySoftwareInventoryToolExplainsFocusList 钉住工具说明的重点清单
+// 口径：默认不返回没有监听端口的系统包，带监听端口的系统包作为监听程
+// 序出现，include_system_packages=true 才返回完整系统包列表。
+func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
+	session := softwareInventoryFaceSessionWithQuerier(t, &fakeSoftwareInventoryQuerier{})
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tool *mcp.Tool
+	for i := range tools.Tools {
+		if tools.Tools[i].Name == "query_software_inventory" {
+			tool = tools.Tools[i]
+			break
+		}
+	}
+	if tool == nil {
+		t.Fatal("工具清单缺少 query_software_inventory")
+	}
+	for _, wanted := range []string{
+		"the result is the focus list",
+		"system packages without listening ports are omitted",
+		"packages with listening ports appear as listening programs",
+	} {
+		if !strings.Contains(tool.Description, wanted) {
+			t.Fatalf("工具说明缺少 %q：%s", wanted, tool.Description)
+		}
+	}
+
+	schemaBlob, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(schemaBlob, &schema); err != nil {
+		t.Fatal(err)
+	}
+	description := schema.Properties["include_system_packages"].Description
+	for _, wanted := range []string{"focus list", "listening programs", "full package list"} {
+		if !strings.Contains(description, wanted) {
+			t.Fatalf("include_system_packages 参数说明缺少 %q：%s", wanted, description)
+		}
 	}
 }
