@@ -613,6 +613,220 @@ func TestRoundManagerSingleDeviceClientRound(t *testing.T) {
 	}
 }
 
+// TestRoundSnapshotRefreshDoesNotOverwriteNewerConclusion 复现两路快照并发
+// 刷新的竞态：先读到失败结论的一路若后写回，不能把另一路已写入的成功改回
+// 失败。做法是让第一路刷新的存储关闭函数阻塞（此时它已完成全部读库、尚
+// 未写回），期间落成功结果并让第二路刷新先写回成功，再放行第一路；写回
+// 前逐台检查设备仍是等待状态，旧失败结论因此被拦下。
+func TestRoundSnapshotRefreshDoesNotOverwriteNewerConclusion(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, st := newRoundFixture(t, now, "客户端采集设备")
+	profileID, err := st.AddProfile("采集执行客户端")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := st.FullServersForDevice("客户端采集设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{servers[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("mini6", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector("客户端采集设备", "mini6", "", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		return &CollectionReport{DeviceName: request.DeviceName}, nil
+	}
+
+	round, err := manager.Start("", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRoundLocalDone(t, round)
+
+	// 包装管理器的打开存储函数：包装后的第一次打开（即第一路刷新）返回的
+	// 关闭函数先宣告「读库已完成」，再阻塞等待放行；关闭函数在全部读库之
+	// 后、写回之前被调用，所以阻塞期间第一路已读到结论、尚未写回。之后的
+	// 打开不再包装。
+	innerOpen := manager.OpenStore
+	firstReadDone := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var firstOpenOnly sync.Once
+	manager.OpenStore = func() (*store.Store, func(), error) {
+		opened, closeOpened, openErr := innerOpen()
+		if openErr != nil {
+			return nil, nil, openErr
+		}
+		blockOnClose := false
+		firstOpenOnly.Do(func() { blockOnClose = true })
+		if !blockOnClose {
+			return opened, closeOpened, nil
+		}
+		return opened, func() {
+			close(firstReadDone)
+			<-releaseFirst
+			closeOpened()
+		}, nil
+	}
+
+	// 第一路刷新启动前先落失败结论：第一路读库会读到它并决定转失败。
+	st.NowFn = func() time.Time { return now.Add(time.Minute) }
+	if err := st.RecordSoftwareCollectionFailure(
+		"客户端采集设备", "客户端实例连接设备失败：端口不通", servers[0].ID, false, store.CLISource(),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// 锁内拷贝一份当前设备状态（等待客户端实例）；刷新不修改传入的切
+	// 片，两路刷新共用这份拷贝。
+	round.mu.Lock()
+	devices := append([]RoundDeviceStatus(nil), round.devices...)
+	round.mu.Unlock()
+
+	firstFinished := make(chan struct{})
+	go func() {
+		defer close(firstFinished)
+		round.refreshWaitingDevices(devices)
+	}()
+	// 等到第一路已读到失败结论、卡在写回前。
+	<-firstReadDone
+
+	// 落更晚的成功结论，再让第二路刷新先写回：它读库见成功，把设备写回
+	// 成功并带本次条目数。
+	st.NowFn = func() time.Time { return now.Add(2 * time.Minute) }
+	if err := st.ReplaceSoftwareObservedItems("客户端采集设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+			{Category: CategorySystemPackage, Name: "openssl", Version: "3.0.2"},
+		},
+		ServerID: servers[0].ID, CommandSetVersion: POSIXCommandSetVersion, SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	round.refreshWaitingDevices(devices)
+	secondSnapshot := round.Snapshot()
+	if secondSnapshot.Succeeded != 1 || secondSnapshot.Failed != 0 {
+		t.Fatalf("第二路写回成功后整轮统计 = %+v", secondSnapshot)
+	}
+	for _, device := range secondSnapshot.Devices {
+		if device.DeviceName == "客户端采集设备" &&
+			(device.State != RoundDeviceSucceeded || device.ItemCount != 2) {
+			t.Fatalf("第二路写回后设备应成功并带 2 条：%+v", device)
+		}
+	}
+
+	// 放行第一路并等它结束：它读到的是旧失败结论，写回时设备已不是等待
+	// 状态，守卫应拦下旧结论，不覆盖新成功。
+	close(releaseFirst)
+	<-firstFinished
+
+	final := round.Snapshot()
+	if final.Succeeded != 1 || final.Failed != 0 {
+		t.Fatalf("旧失败结论不应覆盖新成功，整轮统计 = %+v", final)
+	}
+	for _, device := range final.Devices {
+		if device.DeviceName == "客户端采集设备" &&
+			(device.State != RoundDeviceSucceeded || device.ItemCount != 2 || device.Err != "") {
+			t.Fatalf("第一路写回后设备应仍为成功且无失败原因：%+v", device)
+		}
+	}
+}
+
+// TestRoundClientResultInSameSecondStillCounts 验证客户端实例结果在本轮开
+// 始的同一秒内落库时也算本轮结果：存储按秒存采集结果时间，轮次开始时刻
+// 同样截到秒，刷新按「结果落库时刻不早于开始时刻」比较，同一秒内送达的
+// 结果不会因毫秒差被漏掉。
+func TestRoundClientResultInSameSecondStillCounts(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, st := newRoundFixture(t, now, "客户端采集设备")
+	profileID, err := st.AddProfile("采集执行客户端")
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers, err := st.FullServersForDevice("客户端采集设备")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.GrantServers(profileID, []string{servers[0].ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := st.AddCacheToken("mini6", profileID); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSoftwareCollectionCollector("客户端采集设备", "mini6", "", store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		return &CollectionReport{DeviceName: request.DeviceName}, nil
+	}
+
+	round, err := manager.Start("", CLISource())
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitRoundLocalDone(t, round)
+
+	// 结果在本轮开始的同一秒内、更晚的毫秒时刻落库：存储按秒存，落库时
+	// 刻与开始时刻同为一秒。
+	st.NowFn = func() time.Time { return now.Add(500 * time.Millisecond) }
+	if err := st.ReplaceSoftwareObservedItems("客户端采集设备", store.SoftwareObservedWrite{
+		Items: []models.SoftwareObservedItem{
+			{Category: CategoryServiceProgram, Name: "nginx", Version: "1.25.3"},
+			{Category: CategorySystemPackage, Name: "openssl", Version: "3.0.2"},
+		},
+		ServerID: servers[0].ID, CommandSetVersion: POSIXCommandSetVersion, SystemType: "ubuntu",
+	}, store.CLISource()); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := round.Snapshot()
+	if snapshot.WaitingClient != 0 || snapshot.Succeeded != 1 {
+		t.Fatalf("同一秒内落库的结果也应算本轮结果，整轮统计 = %+v", snapshot)
+	}
+	for _, device := range snapshot.Devices {
+		if device.DeviceName == "客户端采集设备" &&
+			(device.State != RoundDeviceSucceeded || device.ItemCount != 2) {
+			t.Fatalf("等待设备应转成功并带 2 条：%+v", device)
+		}
+	}
+}
+
+// TestRoundManagerIgnoresCancelledRequestContext 验证发起轮次的网页请求被
+// 取消（浏览器提交后立刻断开）不影响轮次：Start 不接收请求上下文，轮次用
+// 管理器的根上下文执行到结束。
+func TestRoundManagerIgnoresCancelledRequestContext(t *testing.T) {
+	now := time.Unix(1770000000, 0)
+	manager, _ := newRoundFixture(t, now, "工作站")
+	rootCtx, stopRoot := context.WithCancel(context.Background())
+	defer stopRoot()
+	manager.Context = rootCtx
+	manager.Collect = func(_ context.Context, request CollectRequest) (*CollectionReport, error) {
+		return &CollectionReport{DeviceName: request.DeviceName, ItemCounts: map[models.SoftwareCategory]int{
+			CategoryServiceProgram: 2,
+		}}, nil
+	}
+
+	// 模拟网页请求在提交后立刻断开：请求上下文已取消；轮次发起不使用它。
+	requestCtx, disconnect := context.WithCancel(context.Background())
+	disconnect()
+	if requestCtx.Err() == nil {
+		t.Fatal("前置条件：请求上下文应已取消")
+	}
+
+	round, err := manager.Start("", WebUISource("198.51.100.9"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := waitRoundLocalDone(t, round)
+	if snapshot.Succeeded != 1 || snapshot.Failed != 0 {
+		t.Fatalf("请求上下文已取消，轮次应照样完成，整轮统计 = %+v", snapshot)
+	}
+}
+
 // TestRoundManagerSharesDeviceLocksWithScheduler 验证轮次与每日定时采集共
 // 享每设备互斥，不并发重复采集同一台设备。
 func TestRoundManagerSharesDeviceLocksWithScheduler(t *testing.T) {

@@ -1,8 +1,10 @@
 package webui
 
 import (
+	"context"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
@@ -58,6 +60,49 @@ func TestSoftwareInventoryCollectAllFailureShowsError(t *testing.T) {
 	body := readResponseBody(t, response)
 	if !strings.Contains(body, "立即全部采集失败") {
 		t.Fatalf("失败页面应说明立即全部采集失败：\n%s", body)
+	}
+}
+
+// TestSoftwareInventoryCollectAllWithCancelledRequestContext 验证提交「立即
+// 全部采集」的请求到达时上下文已被取消（浏览器提交后立刻断开），处理函数
+// 照样完成发起并跳转进度页：发起的采集轮次使用进程自己的上下文，不随请求
+// 取消。
+func TestSoftwareInventoryCollectAllWithCancelledRequestContext(t *testing.T) {
+	source := &stubSoftwareInventorySource{
+		devices: []SoftwareInventoryDeviceSummary{{
+			Name: "工作站", StatusLabels: []string{"正常"},
+		}},
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	home := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/")
+	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, home))
+
+	// 手工构造请求（现成的表单提交辅助函数没有注入请求上下文的入口），
+	// 把已取消的上下文挂到请求上，模拟提交后立刻断开的浏览器。
+	request := httptest.NewRequest(http.MethodPost, "/ui/software-inventory/collect-all",
+		strings.NewReader(url.Values{"csrf_token": {csrf}}.Encode()))
+	request.Host = "127.0.0.1:18080"
+	request.RemoteAddr = "198.51.100.9:45678"
+	request.AddCookie(cookie)
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("Origin", "http://127.0.0.1:18080")
+	requestCtx, disconnect := context.WithCancel(request.Context())
+	request = request.WithContext(requestCtx)
+	disconnect()
+	if request.Context().Err() == nil {
+		t.Fatal("前置条件：请求上下文应已取消")
+	}
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	response := recorder.Result()
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/software-inventory/round" {
+		t.Fatalf("请求上下文已取消时也应照常发起并跳转进度页，状态码=%d Location=%s",
+			response.StatusCode, response.Header.Get("Location"))
+	}
+	if !source.startRoundCalled {
+		t.Fatal("请求上下文已取消时也应发起采集轮次")
 	}
 }
 

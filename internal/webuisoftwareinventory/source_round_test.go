@@ -2,6 +2,8 @@ package webuisoftwareinventory
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -270,5 +272,46 @@ func TestSourceStartsSingleDeviceRound(t *testing.T) {
 	if final.StatusText != "采集已完成" || len(final.Devices) != 1 ||
 		final.Devices[0].DeviceName != "工作站" || final.Devices[0].StatusText != "成功，共 3 条" {
 		t.Fatalf("工作站单台轮次应成功结束：%+v", final)
+	}
+}
+
+// TestSourceRoundSurvivesCancelledRequestContext 验证带已取消的网页请求上
+// 下文提交「立即全部采集」后，轮次照样在后台跑完：适配层发起轮次的接口不
+// 接收请求上下文，轮次使用进程自己的根上下文执行。
+func TestSourceRoundSurvivesCancelledRequestContext(t *testing.T) {
+	st, _ := newTestStore(t)
+	addTestDevice(t, st, "工作站")
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	rounds := softwareinventory.NewRoundManager(open)
+	rounds.Collect = func(_ context.Context, request softwareinventory.CollectRequest) (*softwareinventory.CollectionReport, error) {
+		return &softwareinventory.CollectionReport{
+			DeviceName: request.DeviceName,
+			ItemCounts: map[models.SoftwareCategory]int{
+				softwareinventory.CategoryServiceProgram: 3,
+			},
+		}, nil
+	}
+	source := FromOpenerWithRoundManager(open, rounds)
+
+	// 模拟发起「立即全部采集」的网页请求在提交后立刻断开：请求上下文已取
+	// 消；适配层发起轮次的接口不接收它，轮次无从随请求取消。
+	request := httptest.NewRequest(http.MethodPost, "/ui/software-inventory/collect-all", nil)
+	requestCtx, disconnect := context.WithCancel(request.Context())
+	request = request.WithContext(requestCtx)
+	disconnect()
+	if request.Context().Err() == nil {
+		t.Fatal("前置条件：请求上下文应已取消")
+	}
+
+	if err := source.StartSoftwareInventoryCollectionRound(
+		"", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	); err != nil {
+		t.Fatal(err)
+	}
+	view := waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
+		return view.StatusText == "采集已完成"
+	})
+	if view.SummaryText != "已完成 1/1 台，成功 1 台，等待客户端实例 0 台，失败 0 台" {
+		t.Fatalf("轮次应在请求上下文取消后照样完成，汇总 = %q", view.SummaryText)
 	}
 }
