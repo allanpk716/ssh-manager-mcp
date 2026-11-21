@@ -427,7 +427,7 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		labels = append(labels, group.CategoryLabel)
 	}
 	wantedLabels := []string{
-		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+		"操作系统与内核", "监听程序", "容器", "驱动与固件", "系统包",
 	}
 	if strings.Join(labels, "|") != strings.Join(wantedLabels, "|") {
 		t.Fatalf("设备页面分组顺序不符：%v", labels)
@@ -452,10 +452,24 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		device.Groups[4].Items[0].CategoryCode != softwareinventory.DisplayCategorySystemPackage.Code() {
 		t.Fatalf("系统包分组与条目应带稳定类别代号：%+v", device.Groups[4])
 	}
-	process := device.Groups[5].Items[0]
+	// 监听程序分组：服务程序与未识别进程同组，仅本机监听的程序排在没
+	// 有监听端口的服务程序前面（按最高暴露级别降序）。
+	listening := device.Groups[1]
+	if listening.CategoryCode != softwareinventory.DisplayCategoryListeningProgram.Code() ||
+		len(listening.Items) != 2 ||
+		listening.Items[0].Name != "unknown-gateway" || listening.Items[1].Name != "nginx" {
+		t.Fatalf("监听程序分组的条目与顺序不符：%+v", listening)
+	}
+	process := listening.Items[0]
 	if process.ProcessName != "gateway" || process.ExecutablePath != "/opt/gateway/gateway" ||
 		process.ProcessID != 8123 || process.ListeningPorts[0].ExposureLabel != "仅本机" {
 		t.Fatalf("未识别进程条目应保留进程可得信息：%+v", process)
+	}
+	if process.SearchCategoryLabel != "监听程序" || listening.Items[1].SearchCategoryLabel != "监听程序" {
+		t.Fatalf("监听程序分组的条目应带监听程序展示类别：%+v", listening)
+	}
+	if !process.MissingVersion || listening.Items[1].MissingVersion {
+		t.Fatalf("缺版本标志应随条目进入页面数据：%+v", listening)
 	}
 	if len(device.Advanced.ClientInstances) != 1 ||
 		device.Advanced.ClientInstances[0].Name != "laptop-client" ||

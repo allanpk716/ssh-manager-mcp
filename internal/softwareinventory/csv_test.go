@@ -62,7 +62,7 @@ func TestMarshalCSVProducesFlatSoftwareTable(t *testing.T) {
 		t.Fatalf("表头 = %v，想要 %v", rows[0], wantHeader)
 	}
 	wantFirst := []string{
-		"gpu工作站", "nginx,网页服务\n含引号\"特\"", "1.25.3", "", "服务程序",
+		"gpu工作站", "nginx,网页服务\n含引号\"特\"", "1.25.3", "", "监听程序",
 		"0.0.0.0:80/tcp;192.0.2.10:8443/tcp", "监听所有地址;监听特定地址",
 		"2026-11-01T08:00:00Z",
 	}

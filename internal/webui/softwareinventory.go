@@ -45,6 +45,8 @@ type SoftwareInventoryItem struct {
 	ProcessName    string
 	ExecutablePath string
 	ProcessID      int
+	// MissingVersion 表示这条条目拿不到版本号，页面要显示缺版本标记。
+	MissingVersion bool
 }
 
 // SoftwareInventoryGroup 是设备清单页的一个类别分组。系统包默认只带数
