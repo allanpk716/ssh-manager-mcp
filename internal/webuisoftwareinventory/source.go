@@ -4,7 +4,6 @@ package webuisoftwareinventory
 
 import (
 	"cmp"
-	"context"
 	"errors"
 
 	"ssh-manager-mcp/internal/models"
@@ -14,13 +13,19 @@ import (
 )
 
 type openerSource struct {
-	open func() (*store.Store, func(), error)
+	open   func() (*store.Store, func(), error)
+	rounds *softwareinventory.RoundManager
 }
 
-// FromOpener 每次页面读取或写操作重新打开存储，避免 Web UI 长期持有存储
-// 句柄。
-func FromOpener(open func() (*store.Store, func(), error)) webui.SoftwareInventorySource {
-	return openerSource{open: open}
+// FromOpenerWithRoundManager 用给定的采集轮次管理器构造软件清单来源：
+// serve 与单机 Web UI 把构造好的管理器（绑定进程上下文与共享的每设备采
+// 集互斥）交给这里，Web UI 的「立即采集」（全部设备或单台）由此发起后
+// 台采集轮次。
+func FromOpenerWithRoundManager(
+	open func() (*store.Store, func(), error),
+	rounds *softwareinventory.RoundManager,
+) webui.SoftwareInventorySource {
+	return openerSource{open: open, rounds: rounds}
 }
 
 func (s openerSource) SoftwareInventoryDevices(
@@ -392,31 +397,6 @@ func todoViews(todos softwareinventory.TodoResult) webui.SoftwareInventoryTodos 
 	return out
 }
 
-func (s openerSource) RequestSoftwareInventoryCollection(
-	ctx context.Context,
-	deviceName string,
-	source webui.SoftwareInventoryWriteSource,
-) (webui.SoftwareInventoryCollectionResult, error) {
-	st, done, err := s.open()
-	if err != nil {
-		return webui.SoftwareInventoryCollectionResult{}, err
-	}
-	defer done()
-	manager := softwareinventory.New(st)
-	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
-	outcome, err := manager.CollectForScope(
-		ctx, deviceName, softwareinventory.AllDevicesVisible(),
-		&softwareinventory.Service{Store: st}, domainSource,
-	)
-	if err != nil {
-		return webui.SoftwareInventoryCollectionResult{}, deviceError(deviceName, err)
-	}
-	if outcome.Requested {
-		return webui.SoftwareInventoryCollectionResult{Requested: true}, nil
-	}
-	return webui.SoftwareInventoryCollectionResult{}, nil
-}
-
 func (s openerSource) SoftwareInventoryDailyTime() (string, error) {
 	st, done, err := s.open()
 	if err != nil {
@@ -443,40 +423,6 @@ func (s openerSource) SetSoftwareInventoryDailyTime(
 		return err
 	}
 	return nil
-}
-
-func (s openerSource) RequestSoftwareInventoryCollectionAll(
-	ctx context.Context, source webui.SoftwareInventoryWriteSource,
-) (webui.SoftwareInventoryCollectionRoundResult, error) {
-	st, done, err := s.open()
-	if err != nil {
-		return webui.SoftwareInventoryCollectionRoundResult{}, err
-	}
-	defer done()
-	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
-	report, err := softwareinventory.New(st).CollectAllForScope(
-		ctx, softwareinventory.AllDevicesVisible(),
-		&softwareinventory.Service{Store: st},
-		domainSource,
-	)
-	if report == nil {
-		return webui.SoftwareInventoryCollectionRoundResult{}, err
-	}
-	result := webui.SoftwareInventoryCollectionRoundResult{
-		Succeeded: report.Succeeded, Requested: report.Requested, Failed: report.Failed,
-		Interrupted: report.Interrupted,
-		Devices:     make([]webui.SoftwareInventoryCollectionDeviceResult, 0, len(report.Devices)),
-	}
-	for _, device := range report.Devices {
-		result.Devices = append(result.Devices, webui.SoftwareInventoryCollectionDeviceResult{
-			DeviceName: device.DeviceName, Requested: device.Requested,
-			CollectorName: device.CollectorName, Err: device.Err,
-		})
-	}
-	if err != nil {
-		return result, err
-	}
-	return result, nil
 }
 
 func deviceError(deviceName string, err error) error {

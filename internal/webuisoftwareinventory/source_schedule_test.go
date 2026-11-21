@@ -1,8 +1,7 @@
 package webuisoftwareinventory
 
 import (
-	"context"
-	"errors"
+	"strings"
 	"testing"
 
 	"ssh-manager-mcp/internal/softwareinventory"
@@ -10,9 +9,10 @@ import (
 	"ssh-manager-mcp/internal/webui"
 )
 
-// TestSourceSavesDailyTimeAndRequestsAllClientCollections 验证软件清单适
-// 配层保存全局每日时间，并把「立即全部采集」交给领域层按采集执行者分派。
-func TestSourceSavesDailyTimeAndRequestsAllClientCollections(t *testing.T) {
+// TestSourceSavesDailyTimeAndStartsClientCollectionRound 验证软件清单适配层
+// 保存全局每日时间，并把「立即全部采集」发起为后台采集轮次：采集执行者是
+// 客户端实例的设备登记立即采集请求。
+func TestSourceSavesDailyTimeAndStartsClientCollectionRound(t *testing.T) {
 	st, _ := newTestStore(t)
 	addTestDevice(t, st, "工作站")
 	addTestDevice(t, st, "备份机")
@@ -41,7 +41,8 @@ func TestSourceSavesDailyTimeAndRequestsAllClientCollections(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	if err := source.SetSoftwareInventoryDailyTime(
 		"02:30", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
@@ -65,14 +66,17 @@ func TestSourceSavesDailyTimeAndRequestsAllClientCollections(t *testing.T) {
 	if len(auditRows) != 1 {
 		t.Fatalf("保存每日采集时间应写一条 Web UI 来源审计：%+v", auditRows)
 	}
-	report, err := source.RequestSoftwareInventoryCollectionAll(
-		context.Background(), webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
-	)
-	if err != nil {
+
+	if err := source.StartSoftwareInventoryCollectionRound(
+		"", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+	); err != nil {
 		t.Fatal(err)
 	}
-	if report.Requested != 2 || report.Failed != 0 || len(report.Devices) != 2 {
-		t.Fatalf("立即全部采集应登记两台客户端设备：%+v", report)
+	view := waitRoundView(t, source, func(view *webui.SoftwareInventoryRoundView) bool {
+		return !view.Running && strings.Contains(view.SummaryText, "等待客户端实例 2 台")
+	})
+	if view.StatusText != "本机采集已完成，等待客户端实例回传结果" {
+		t.Fatalf("整轮状态 = %q", view.StatusText)
 	}
 	statuses, err := softwareinventory.New(st).CollectionStatuses(
 		softwareinventory.AllDevicesVisible(), "",
@@ -84,24 +88,5 @@ func TestSourceSavesDailyTimeAndRequestsAllClientCollections(t *testing.T) {
 		if !status.PendingImmediate {
 			t.Fatalf("设备 %s 应登记立即采集请求：%+v", status.DeviceName, status)
 		}
-	}
-}
-
-// TestSourceReturnsInterruptedCollectionReport 验证「立即全部采集」被取消
-// 时，适配层仍把领域层的部分报告交给页面显示。
-func TestSourceReturnsInterruptedCollectionReport(t *testing.T) {
-	st, _ := newTestStore(t)
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	report, err := source.RequestSoftwareInventoryCollectionAll(
-		ctx, webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
-	)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("取消的立即全部采集应返回 context.Canceled，得到 %v", err)
-	}
-	if !report.Interrupted {
-		t.Fatalf("部分报告应带被中断标记：%+v", report)
 	}
 }

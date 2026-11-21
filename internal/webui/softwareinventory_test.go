@@ -2,7 +2,6 @@ package webui
 
 import (
 	"bytes"
-	"context"
 	"encoding/csv"
 	"net/http"
 	"net/http/httptest"
@@ -68,18 +67,15 @@ type stubSoftwareInventorySource struct {
 	searchDevices      []SoftwareInventorySearchDevice
 	searchQuery        string
 	searchFilter       SoftwareInventoryFilter
-	collectResult      SoftwareInventoryCollectionResult
-	collectAllResult   SoftwareInventoryCollectionRoundResult
-	collectAllErr      error
-	collectErr         error
-	collectDevice      string
-	collectAddress     string
-	collectCalled      bool
+	startRoundCalled   bool
+	startRoundDevice   string
+	startRoundAddress  string
+	startRoundErr      error
+	roundView          *SoftwareInventoryRoundView
+	roundErr           error
 	dailyTimeValue     string
 	dailyTimeAddress   string
 	dailyTimeSetCalled bool
-	collectAllAddress  string
-	collectAllCalled   bool
 	todos              SoftwareInventoryTodos
 	collectorForm      SoftwareInventoryCollectorForm
 	collectorErr       error
@@ -125,15 +121,6 @@ func (s *stubSoftwareInventorySource) ExportSoftwareInventoryCSV(
 	return s.exportCSV, s.exportErr
 }
 
-func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollection(
-	_ context.Context, deviceName string, source SoftwareInventoryWriteSource,
-) (SoftwareInventoryCollectionResult, error) {
-	s.collectCalled = true
-	s.collectDevice = deviceName
-	s.collectAddress = source.RemoteAddress
-	return s.collectResult, s.collectErr
-}
-
 func (s *stubSoftwareInventorySource) SoftwareInventoryDailyTime() (string, error) {
 	if s.dailyTimeValue == "" {
 		return "01:00", nil
@@ -150,12 +137,17 @@ func (s *stubSoftwareInventorySource) SetSoftwareInventoryDailyTime(
 	return nil
 }
 
-func (s *stubSoftwareInventorySource) RequestSoftwareInventoryCollectionAll(
-	_ context.Context, source SoftwareInventoryWriteSource,
-) (SoftwareInventoryCollectionRoundResult, error) {
-	s.collectAllCalled = true
-	s.collectAllAddress = source.RemoteAddress
-	return s.collectAllResult, s.collectAllErr
+func (s *stubSoftwareInventorySource) StartSoftwareInventoryCollectionRound(
+	deviceName string, source SoftwareInventoryWriteSource,
+) error {
+	s.startRoundCalled = true
+	s.startRoundDevice = deviceName
+	s.startRoundAddress = source.RemoteAddress
+	return s.startRoundErr
+}
+
+func (s *stubSoftwareInventorySource) SoftwareInventoryRound() (*SoftwareInventoryRoundView, error) {
+	return s.roundView, s.roundErr
 }
 
 func (s *stubSoftwareInventorySource) SoftwareInventoryTodos() (SoftwareInventoryTodos, error) {
@@ -623,17 +615,15 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 	}
 }
 
-// TestSoftwareInventoryImmediateCollectionRequestedForClientCollector 覆盖
-// 客户端实例作为采集执行者时的立即采集行为：只登记请求，页面明确显示等待。
-func TestSoftwareInventoryImmediateCollectionRequestedForClientCollector(t *testing.T) {
+// TestSoftwareInventoryCollectStartsSingleDeviceRoundAndRedirects 验证设
+// 备页单台「立即采集」改为发起只含这一台设备的后台采集轮次并立即跳转
+// 进度页。
+func TestSoftwareInventoryCollectStartsSingleDeviceRoundAndRedirects(t *testing.T) {
 	source := &stubSoftwareInventorySource{
 		device: &SoftwareInventoryDevice{
-			Name: "工作站",
-			Status: SoftwareInventoryStatus{
-				Managed: true, CollectorLabel: "笔记本客户端", PendingImmediate: false,
-			},
+			Name:   "工作站",
+			Status: SoftwareInventoryStatus{Managed: true},
 		},
-		collectResult: SoftwareInventoryCollectionResult{Requested: true},
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	page := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("工作站"))
@@ -644,20 +634,37 @@ func TestSoftwareInventoryImmediateCollectionRequestedForClientCollector(t *test
 		url.Values{"csrf_token": {csrf}},
 	)
 	responseBody := readResponseBody(t, response)
-	if response.StatusCode != http.StatusSeeOther {
-		t.Fatalf("登记立即采集请求应返回 303，实际 %d：\n%s", response.StatusCode, responseBody)
+	if response.StatusCode != http.StatusSeeOther ||
+		response.Header.Get("Location") != "/ui/software-inventory/round" {
+		t.Fatalf("单台立即采集应跳到进度页，状态码=%d Location=%s：%s",
+			response.StatusCode, response.Header.Get("Location"), responseBody)
 	}
-	if location := response.Header.Get("Location"); location != "/ui/software-inventory/devices?collect=requested&device="+url.QueryEscape("工作站") {
-		t.Fatalf("登记立即采集请求后的跳转地址不符：%s", location)
+	if !source.startRoundCalled || source.startRoundDevice != "工作站" ||
+		source.startRoundAddress != "198.51.100.9" {
+		t.Fatalf("单台立即采集应把设备与来源地址交给来源接口发起轮次：%+v", source)
 	}
-	if !source.collectCalled || source.collectDevice != "工作站" || source.collectAddress != "198.51.100.9" {
-		t.Fatalf("立即采集请求应把设备与来源地址交给来源接口：%+v", source)
-	}
+}
 
-	resultPage := doGetWithCookie(t, handler, cookie, response.Header.Get("Location"))
-	resultBody := readResponseBody(t, resultPage)
-	if !strings.Contains(resultBody, "已请求，等待客户端执行。") {
-		t.Fatalf("客户端采集执行者登记请求后应显示等待提示：\n%s", resultBody)
+// TestSoftwareInventoryCollectDeviceNotFound 验证设备不存在时单台立即采集
+// 返回整页 404 错误。
+func TestSoftwareInventoryCollectDeviceNotFound(t *testing.T) {
+	source := &stubSoftwareInventorySource{
+		startRoundErr: &SoftwareInventoryDeviceNotFoundError{DeviceName: "工作站"},
+	}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+	home := doGetWithCookie(t, handler, cookie, "/ui/software-inventory/")
+	csrf := hiddenInputMetaOrHiddenValue(t, readResponseBody(t, home))
+
+	response := postSoftwareInventoryForm(t, handler, cookie,
+		"/ui/software-inventory/collect?device="+url.QueryEscape("工作站"),
+		url.Values{"csrf_token": {csrf}},
+	)
+	responseBody := readResponseBody(t, response)
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("设备不存在应返回 404，实际 %d：%s", response.StatusCode, responseBody)
+	}
+	if !strings.Contains(responseBody, "设备不存在") {
+		t.Fatalf("错误页应说明设备不存在：\n%s", responseBody)
 	}
 }
 

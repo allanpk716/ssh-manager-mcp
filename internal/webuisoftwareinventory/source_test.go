@@ -2,8 +2,6 @@ package webuisoftwareinventory
 
 import (
 	"bytes"
-	"context"
-	"database/sql"
 	"encoding/csv"
 	"errors"
 	"path/filepath"
@@ -137,7 +135,8 @@ func TestSourceBuildsDeviceCardsAndSearchFromUnifiedQueryFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.NowFn = nil
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	devices, err := source.SoftwareInventoryDevices(webui.SoftwareInventoryFilter{})
 	if err != nil {
@@ -288,7 +287,8 @@ func TestSourceExportsCSVFromUnifiedQuery(t *testing.T) {
 		Category: softwareinventory.CategoryServiceProgram,
 		Name:     "nginx", Version: "1.24.0",
 	})
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	blob, err := source.ExportSoftwareInventoryCSV(webui.SoftwareInventoryFilter{
 		Name: "nginx", ExactVersion: "1.25.3", Site: "公司", Network: "总部物理局域网",
@@ -395,7 +395,8 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 	st.NowFn = func() time.Time { return collectedAt.Add(time.Hour) }
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {
@@ -489,67 +490,6 @@ func TestSourceBuildsDeviceViewFromUnifiedQuery(t *testing.T) {
 	}
 }
 
-// TestSourceRequestsCollectionForClientCollector 验证客户端实例作为采集
-// 执行者时，立即采集只登记请求并写 Web UI 来源审计。
-func TestSourceRequestsCollectionForClientCollector(t *testing.T) {
-	st, path := newTestStore(t)
-	addTestDevice(t, st, "工作站")
-	firstAt := time.Unix(1770000000, 0)
-	st.NowFn = func() time.Time { return firstAt }
-	server, err := st.GetServerByName("工作站-ssh")
-	if err != nil || server == nil {
-		t.Fatalf("取服务器条目失败：%v %+v", err, server)
-	}
-	if err := st.ReplaceSoftwareObservedItems("工作站", store.SoftwareObservedWrite{
-		Items: []models.SoftwareObservedItem{{
-			Category: models.SoftwareCategoryOperatingSystem, Name: "Ubuntu", Version: "22.04.5",
-		}}, ServerID: server.ID, CommandSetVersion: softwareinventory.POSIXCommandSetVersion, SystemType: "ubuntu",
-	}, store.CLISource()); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := raw.Exec(
-		`UPDATE software_collection_status SET collector='laptop-client' WHERE device_id=?`, server.DeviceID,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := raw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
-
-	result, err := source.RequestSoftwareInventoryCollection(
-		context.Background(), "工作站",
-		webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !result.Requested {
-		t.Fatalf("客户端采集执行者应只登记请求：%+v", result)
-	}
-	statuses, err := softwareinventory.New(st).CollectionStatuses(softwareinventory.AllDevicesVisible(), "工作站")
-	if err != nil || len(statuses) != 1 {
-		t.Fatalf("读取采集状态失败：%v %+v", err, statuses)
-	}
-	if !statuses[0].PendingImmediate || statuses[0].Collector != "laptop-client" {
-		t.Fatalf("立即采集请求应保持客户端采集执行者并置为待执行：%+v", statuses[0])
-	}
-	auditRows, err := st.QueryAudit(store.AuditFilter{
-		Actions: []string{"software-collect-request"}, Source: store.AuditSourceWebUI,
-		SourceIP: "198.51.100.9", Limit: 10,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(auditRows) != 1 {
-		t.Fatalf("立即采集请求应写一条 Web UI 来源审计：%+v", auditRows)
-	}
-}
-
 // TestSourceBuildsTodosFromDomainResult 验证待办页适配层直接使用领域模块
 // 的三类待办结果，字段不经过第二套计算。
 func TestSourceBuildsTodosFromDomainResult(t *testing.T) {
@@ -572,7 +512,8 @@ func TestSourceBuildsTodosFromDomainResult(t *testing.T) {
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	todos, err := source.SoftwareInventoryTodos()
 	if err != nil {
@@ -614,7 +555,8 @@ func TestSourceDeviceAdvancedSettingsAndSudo(t *testing.T) {
 	if _, _, err := st.AddCacheToken("laptop-client", profileID); err != nil {
 		t.Fatal(err)
 	}
-	source := FromOpener(func() (*store.Store, func(), error) { return st, func() {}, nil })
+	open := func() (*store.Store, func(), error) { return st, func() {}, nil }
+	source := FromOpenerWithRoundManager(open, softwareinventory.NewRoundManager(open))
 
 	device, err := source.SoftwareInventoryDevice("工作站")
 	if err != nil {

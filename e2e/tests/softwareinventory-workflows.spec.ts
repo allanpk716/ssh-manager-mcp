@@ -148,12 +148,14 @@ test("每天采集时间持久保存且立即全部采集登记客户端设备",
   await expect(page.getByLabel("每天采集时间")).toHaveValue("02:30");
 
   await page.getByRole("button", { name: "立即全部采集" }).click();
-  const report = page.locator("section[aria-label='立即全部采集报告']");
-  await expect(report).toContainText("成功 0 台，等待客户端实例 5 台，失败 0 台");
+  await expect(page).toHaveURL(/\/ui\/software-inventory\/round$/);
+  const round = page.locator("section.software-inventory-round");
   for (const device of ["工作站", "虚拟网设备", "分部过期设备", "分部失败设备", "old-1"]) {
-    await expect(report).toContainText(`${device}：已登记，等待客户端实例 laptop-client 执行`);
+    await expect(round.getByRole("heading", { name: device, exact: true })).toBeVisible();
   }
-  await expect(report).not.toContainText("不受管存储");
+  await expect(round.getByText(/已登记，等待客户端实例 laptop-client 执行/)).toHaveCount(5);
+  await expect(round).toContainText("等待客户端 5 台");
+  await expect(round).not.toContainText("不受管存储");
 });
 
 test("软件清单区域撤下旧流程入口", async ({ page, softwareInventoryUI }) => {
