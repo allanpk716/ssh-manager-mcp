@@ -223,7 +223,8 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if report.SystemType != "windows" || report.CommandSetVersion != WindowsCommandSetVersion ||
+		// 夹具是第 1 版输出，报告版本钉住第 1 版；命令按当前命令集生成。
+		if report.SystemType != "windows" || report.CommandSetVersion != "windows-v1" ||
 			report.Incomplete || recorded.shell != test.shell || recorded.command != expectedCommand {
 			t.Fatalf("shell %s 的采集报告或命令包装不正确：report=%+v shell=%s command=%s",
 				test.shell, report, recorded.shell, recorded.command)
@@ -239,10 +240,57 @@ func TestCollectWindowsFullFixtureForEachShell(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if status.SystemType != "windows" || status.CommandSetVersion != WindowsCommandSetVersion ||
+		if status.SystemType != "windows" || status.CommandSetVersion != "windows-v1" ||
 			status.LastIncomplete || status.LastServerName != test.serverEntry {
 			t.Fatalf("shell %s 的采集状态 = %+v", test.shell, status)
 		}
+	}
+}
+
+// TestCollectWindowsV2FullFixture 覆盖第 2 版命令集的一次成功采集：发送
+// 的是第 2 版命令，报告与采集状态记录 windows-v2，落库后查询得到操作系
+// 统四段版本号。
+func TestCollectWindowsV2FullFixture(t *testing.T) {
+	service, st := newCollectService(t)
+	addCollectDeviceWithShell(t, st, "工作站", models.ShellPowerShell, "powershell-entry")
+	var recorded recordedExec
+	service.RemoteExec = replayCollectExec(
+		windowsFixtureOutput(t, "win10-powershell-full-v2-derived.txt"), &recorded, nil,
+	)
+
+	report, err := service.Collect(context.Background(), CollectRequest{
+		Source: CLISource(), DeviceName: "工作站", ServerEntry: "powershell-entry",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedCommand, err := BuildInventoryCommand(models.ShellPowerShell)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SystemType != "windows" || report.CommandSetVersion != "windows-v2" ||
+		report.Incomplete || recorded.command != expectedCommand {
+		t.Fatalf("第 2 版采集报告或命令 = report=%+v command=%s", report, recorded.command)
+	}
+	status, err := st.SoftwareCollectionStatusForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.SystemType != "windows" || status.CommandSetVersion != "windows-v2" ||
+		status.LastIncomplete || status.LastServerName != "powershell-entry" {
+		t.Fatalf("第 2 版采集状态 = %+v", status)
+	}
+	manager := New(st)
+	manager.Now = service.Now
+	result, err := manager.Query(QueryOptions{Device: "工作站", Visibility: AllDevicesVisible()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatingSystem := findItemByNameAndCategory(
+		t, result.Devices[0].Items, CategoryOperatingSystem, "Windows 10 Pro",
+	)
+	if operatingSystem.Version != "10.0.19045.6456" {
+		t.Fatalf("落库后查询的操作系统条目版本 = %q，应为四段版本号", operatingSystem.Version)
 	}
 }
 
@@ -327,7 +375,7 @@ func TestCollectWindowsTruncatedFixture(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !status.LastIncomplete || status.LastSuccessAt.IsZero() ||
-		status.CommandSetVersion != WindowsCommandSetVersion {
+		status.CommandSetVersion != "windows-v1" {
 		t.Fatalf("截断输出的采集状态 = %+v", status)
 	}
 }

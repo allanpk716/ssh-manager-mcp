@@ -215,6 +215,58 @@ func TestQueryMergesUnidentifiedProcessPortsFromWindowsSample(t *testing.T) {
 	}
 }
 
+// TestQueryDefaultReturnsFocusListFromWindowsV2Sample 钉住第 2 版 Windows
+// 输出的重点清单口径：系统自带服务不出现，操作系统条目带完整四段版本号
+// 与收编的监听端口，第三方程序带文件版本，读不到版本标缺版本。
+func TestQueryDefaultReturnsFocusListFromWindowsV2Sample(t *testing.T) {
+	manager := seedWindowsSample(t, "样例工作站", "win10-powershell-full-v2-derived.txt")
+
+	items := querySampleDevice(t, manager, "样例工作站", QueryOptions{})
+	counts := countItemsByName(items)
+	for _, name := range []string{"RpcSs", "CDPSvc", "Spooler", "dasHost", "System"} {
+		if counts[name] != 0 {
+			t.Fatalf("重点清单不应再出现系统自带服务 %s：%+v", name, items)
+		}
+	}
+
+	operatingSystem := findItemByNameAndCategory(
+		t, items, CategoryOperatingSystem, "Windows 10 Pro",
+	)
+	if operatingSystem.Version != "10.0.19045.6456" || operatingSystem.MissingVersion {
+		t.Fatalf("操作系统条目应为完整四段版本号：%+v", operatingSystem)
+	}
+	if findQueryPort(operatingSystem, 135, "tcp") == nil ||
+		findQueryPort(operatingSystem, 445, "tcp") == nil {
+		t.Fatalf("操作系统条目应收编系统自带服务的监听端口 135 与 445：%+v",
+			operatingSystem.ListeningPorts)
+	}
+
+	deepSeek := findItemByNameAndCategory(t, items, CategoryUnidentified, "DeepSeek Harness")
+	if deepSeek.Version != "1.2.3.4" || deepSeek.MissingVersion ||
+		deepSeek.ExecutablePath == "" || len(deepSeek.ListeningPorts) != 2 {
+		t.Fatalf("DeepSeek Harness 应带文件版本、可执行文件路径与合并端口：%+v", deepSeek)
+	}
+	antFeeding := findItemByNameAndCategory(t, items, CategoryUnidentified, "ant-feeding-log")
+	if !antFeeding.MissingVersion {
+		t.Fatalf("读不到文件版本的条目应带缺版本标志：%+v", antFeeding)
+	}
+
+	complete := querySampleDevice(t, manager, "样例工作站", QueryOptions{IncludeSystemPackages: true})
+	if countItemsByName(complete)["Bitwarden"] != 1 {
+		t.Fatalf("完整查询应包含没有监听端口的系统包 Bitwarden：%+v", complete)
+	}
+}
+
+// findQueryPort 在一条查询条目的监听端口里按端口号与协议找第一个匹配。
+func findQueryPort(item QueryItem, port int, protocol string) *ListeningPort {
+	for i := range item.ListeningPorts {
+		if item.ListeningPorts[i].Port == port && item.ListeningPorts[i].Protocol == protocol {
+			return &item.ListeningPorts[i]
+		}
+	}
+	return nil
+}
+
 // TestQuerySortsListeningPortsByExposureFromUbuntuSample 钉住端口排序与
 // 不误合并的边界：监听所有地址的端口排在仅本机监听的端口前；单端口程
 // 序与不满足合并条件（可执行文件路径与进程名都空）的条目保持原样。
