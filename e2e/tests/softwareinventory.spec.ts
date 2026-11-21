@@ -118,6 +118,10 @@ test("设备详情高级采集设置默认折叠并支持采集", async ({ page,
   await expect(advanced.locator("li.record-card").filter({ hasText: "web-1" })).toContainText("已打开");
 
   await page.getByRole("button", { name: "立即采集" }).click();
-  await expect(page.getByText("已请求，等待客户端执行。")).toBeVisible();
-  await expect(page.locator(".status-badges")).toContainText("等待客户端执行");
+  await expect(page).toHaveURL(/\/ui\/software-inventory\/round$/);
+  const round = page.locator("section.software-inventory-round");
+  await expect(round.getByRole("heading", { name: "工作站", exact: true })).toBeVisible();
+  await expect(round).toContainText("本轮只采集设备 工作站");
+  await expect(round).toContainText(/已登记，等待客户端实例 laptop-client 执行/);
+  await expect(round).toContainText("等待客户端 1 台");
 });

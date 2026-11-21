@@ -18,7 +18,7 @@
 <a class="button-link" href="/ui/software-inventory/export?query={{.SoftwareInventory.Filter.Name | urlquery}}&amp;exact_version={{.SoftwareInventory.Filter.ExactVersion | urlquery}}&amp;site={{.SoftwareInventory.Filter.Site | urlquery}}&amp;network={{.SoftwareInventory.Filter.Network | urlquery}}">导出当前筛选</a>
 </div>
 {{if .SoftwareInventory.Round}}
-<p class="schedule-round-entry"><a href="/ui/software-inventory/round">{{if .SoftwareInventory.Round.Running}}采集进行中{{else}}最近一轮采集{{end}}</a>：{{.SoftwareInventory.Round.StartedAt | formatTime}}，{{.SoftwareInventory.Round.SummaryText}}</p>
+<p class="schedule-round-entry"><a href="/ui/software-inventory/round">{{if .SoftwareInventory.Round.Running}}采集进行中{{else}}最近一轮采集{{end}}</a>：{{.SoftwareInventory.Round.StartedAt | formatTime}}，{{if .SoftwareInventory.Round.ScopeText}}{{.SoftwareInventory.Round.ScopeText}}，{{end}}{{.SoftwareInventory.Round.SummaryText}}</p>
 {{end}}
 {{if .SoftwareInventory.ScheduleNotice}}<p class="flash-ok">{{.SoftwareInventory.ScheduleNotice}}</p>{{end}}
 {{if .SoftwareInventory.ScheduleError}}<p class="flash-error">{{.SoftwareInventory.ScheduleError}}</p>{{end}}

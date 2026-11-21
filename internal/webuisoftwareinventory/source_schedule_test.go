@@ -67,7 +67,7 @@ func TestSourceSavesDailyTimeAndStartsClientCollectionRound(t *testing.T) {
 	}
 
 	if err := source.StartSoftwareInventoryCollectionRound(
-		webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
+		"", webui.SoftwareInventoryWriteSource{RemoteAddress: "198.51.100.9"},
 	); err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,6 @@
-// 本文件实现软件清单适配层的采集轮次接线：把 Web UI 的「立即全部采集」
-// 交给进程内的轮次管理器后台执行，并把领域快照换成页面展示数据。
+// 本文件实现软件清单适配层的采集轮次接线：把 Web UI 的「立即采集」（全
+// 部设备或单台）交给进程内的轮次管理器后台执行，并把领域快照换成页面
+// 展示数据。
 package webuisoftwareinventory
 
 import (
@@ -12,12 +13,15 @@ import (
 )
 
 // StartSoftwareInventoryCollectionRound 发起（或在轮次进行中时复用）一轮
-// 全部设备的立即采集；轮次在后台执行，不随本次请求结束而中断。
+// 立即采集：deviceName 空 = 全部设备，非空 = 只含这台设备（设备不存在或
+// 不可见返回 SoftwareInventoryDeviceNotFoundError）；轮次在后台执行，不
+// 随本次请求结束而中断。
 func (s openerSource) StartSoftwareInventoryCollectionRound(
+	deviceName string,
 	source webui.SoftwareInventoryWriteSource,
 ) error {
-	_, err := s.rounds.Start("", softwareinventory.WebUISource(source.RemoteAddress))
-	return err
+	_, err := s.rounds.Start(deviceName, softwareinventory.WebUISource(source.RemoteAddress))
+	return deviceError(deviceName, err)
 }
 
 // SoftwareInventoryRound 返回进行中或最近一轮的展示数据；没有轮次时返回
@@ -37,6 +41,9 @@ func roundView(snapshot softwareinventory.RoundSnapshot) *webui.SoftwareInventor
 		StartedAt:  snapshot.StartedAt,
 		Running:    snapshot.Running(),
 		Refreshing: snapshot.NeedsRefresh(),
+	}
+	if snapshot.Device != "" {
+		view.ScopeText = "本轮只采集设备 " + snapshot.Device
 	}
 	view.SummaryText = fmt.Sprintf(
 		"已完成 %d/%d 台，成功 %d 台，等待客户端 %d 台，失败 %d 台",

@@ -1,10 +1,8 @@
 package webui
 
 import (
-	"context"
 	"errors"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 )
@@ -190,12 +188,6 @@ func (e *SoftwareInventoryDeviceNotFoundError) Error() string {
 	return "设备 " + e.DeviceName + " 不存在或不可见"
 }
 
-// SoftwareInventoryCollectionResult 表示立即采集请求的结果。Requested 为
-// true 表示只登记了请求，等待客户端实例执行。
-type SoftwareInventoryCollectionResult struct {
-	Requested bool
-}
-
 // SoftwareInventoryRoundView 是采集轮次进度页与首页入口的展示数据。
 type SoftwareInventoryRoundView struct {
 	StartedAt time.Time
@@ -210,7 +202,10 @@ type SoftwareInventoryRoundView struct {
 	// StatusText 是整轮状态：「采集进行中」/「本机采集已完成，等待客户
 	// 端实例回传结果」/「采集已完成」。
 	StatusText string
-	Devices    []SoftwareInventoryRoundDeviceView
+	// ScopeText 是采集范围说明；只有单台轮次非空，例如「本轮只采集设
+	// 备 工作站」。
+	ScopeText string
+	Devices   []SoftwareInventoryRoundDeviceView
 }
 
 // SoftwareInventoryRoundDeviceView 是采集轮次里一台设备的展示数据，
@@ -252,16 +247,13 @@ type SoftwareInventorySource interface {
 	SetSoftwareInventorySudo(
 		server string, enabled bool, source SoftwareInventoryWriteSource,
 	) error
-	RequestSoftwareInventoryCollection(
-		ctx context.Context,
-		deviceName string,
-		source SoftwareInventoryWriteSource,
-	) (SoftwareInventoryCollectionResult, error)
 	SoftwareInventoryDailyTime() (string, error)
 	SetSoftwareInventoryDailyTime(value string, source SoftwareInventoryWriteSource) error
 	// StartSoftwareInventoryCollectionRound 发起（或在轮次进行中时复用）
-	// 一轮立即采集，全部设备；轮次在权威端后台执行，不随本次请求结束。
-	StartSoftwareInventoryCollectionRound(source SoftwareInventoryWriteSource) error
+	// 一轮立即采集：deviceName 空 = 全部可见受管设备，非空 = 只含这台设
+	// 备（设备不存在或不可见返回 SoftwareInventoryDeviceNotFoundError）；
+	// 轮次在权威端后台执行，不随本次请求结束。
+	StartSoftwareInventoryCollectionRound(deviceName string, source SoftwareInventoryWriteSource) error
 	// SoftwareInventoryRound 返回进行中或最近一轮的展示数据；nil 表示没
 	// 有轮次。
 	SoftwareInventoryRound() (*SoftwareInventoryRoundView, error)
@@ -365,7 +357,7 @@ func (h *handler) handleSoftwareInventoryCollectAll(w http.ResponseWriter, r *ht
 		return
 	}
 	if err := h.cfg.SoftwareInventory.StartSoftwareInventoryCollectionRound(
-		SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
+		"", SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
 	); err != nil {
 		h.renderError(w, r, http.StatusInternalServerError, "立即全部采集失败", "立即全部采集失败，请稍后重试。")
 		return
@@ -392,8 +384,9 @@ func (h *handler) handleSoftwareInventoryRound(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// handleSoftwareInventoryCollect 处理立即采集表单。本实例采集时同步执行；
-// 客户端实例作为采集执行者时，来源接口只登记请求并返回等待提示。
+// handleSoftwareInventoryCollect 处理设备页的单台「立即采集」：发起只含
+// 这一台设备的后台采集轮次（有轮次进行中时复用它）并立即重定向到进度
+// 页，采集不随本次请求结束而中断。
 func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		h.renderError(w, r, http.StatusMethodNotAllowed, "方法不允许", "立即采集只接受 POST 请求。")
@@ -404,10 +397,9 @@ func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.
 		h.renderError(w, r, http.StatusBadRequest, "缺少设备名", "立即采集请求缺少设备名。")
 		return
 	}
-	result, err := h.cfg.SoftwareInventory.RequestSoftwareInventoryCollection(
-		r.Context(), deviceName, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
-	)
-	if err != nil {
+	if err := h.cfg.SoftwareInventory.StartSoftwareInventoryCollectionRound(
+		deviceName, SoftwareInventoryWriteSource{RemoteAddress: remoteIP(r)},
+	); err != nil {
 		var missing *SoftwareInventoryDeviceNotFoundError
 		if errors.As(err, &missing) {
 			h.renderError(w, r, http.StatusNotFound, "设备不存在", missing.Error())
@@ -416,20 +408,7 @@ func (h *handler) handleSoftwareInventoryCollect(w http.ResponseWriter, r *http.
 		h.renderError(w, r, http.StatusInternalServerError, "立即采集失败", "立即采集失败，请稍后重试。")
 		return
 	}
-	state := "done"
-	if result.Requested {
-		state = "requested"
-	}
-	if returnTo := safeReturnPath(r.PostFormValue("return_to"), "", "/ui/servers/"); returnTo != "" {
-		separator := "&"
-		if !strings.Contains(returnTo, "?") {
-			separator = "?"
-		}
-		http.Redirect(w, r, returnTo+separator+"collect="+state, http.StatusSeeOther)
-		return
-	}
-	target := url.Values{"device": {deviceName}, "collect": {state}}
-	http.Redirect(w, r, "/ui/software-inventory/devices?"+target.Encode(), http.StatusSeeOther)
+	http.Redirect(w, r, "/ui/software-inventory/round", http.StatusSeeOther)
 }
 
 // handleSoftwareInventorySearch 把旧搜索地址跳转回设备优先首页，并保留
@@ -569,12 +548,6 @@ func (h *handler) renderSoftwareInventoryDevice(
 		!softwareInventoryClientKnown(device.Advanced.ClientInstances, form.Collector)
 	data := pageData{Title: device.Name + " · 软件清单", SoftwareInventoryDevice: device}
 	query := r.URL.Query()
-	switch r.URL.Query().Get("collect") {
-	case "done":
-		data.SoftwareInventoryNotice = "已采集完成。"
-	case "requested":
-		data.SoftwareInventoryNotice = "已请求，等待客户端执行。"
-	}
 	switch query.Get("notice") {
 	case "collector-set":
 		data.SoftwareInventoryNotice = "采集执行者已登记。"

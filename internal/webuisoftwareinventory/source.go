@@ -4,7 +4,6 @@ package webuisoftwareinventory
 
 import (
 	"cmp"
-	"context"
 	"errors"
 
 	"ssh-manager-mcp/internal/models"
@@ -26,7 +25,8 @@ func FromOpener(open func() (*store.Store, func(), error)) webui.SoftwareInvento
 
 // FromOpenerWithRoundManager 用给定的采集轮次管理器构造软件清单来源：
 // serve 与单机 Web UI 把构造好的管理器（绑定进程上下文与共享的每设备采
-// 集互斥）交给这里，「立即全部采集」由此发起后台采集轮次。
+// 集互斥）交给这里，Web UI 的「立即采集」（全部设备或单台）由此发起后
+// 台采集轮次。
 func FromOpenerWithRoundManager(
 	open func() (*store.Store, func(), error),
 	rounds *softwareinventory.RoundManager,
@@ -401,31 +401,6 @@ func todoViews(todos softwareinventory.TodoResult) webui.SoftwareInventoryTodos 
 		})
 	}
 	return out
-}
-
-func (s openerSource) RequestSoftwareInventoryCollection(
-	ctx context.Context,
-	deviceName string,
-	source webui.SoftwareInventoryWriteSource,
-) (webui.SoftwareInventoryCollectionResult, error) {
-	st, done, err := s.open()
-	if err != nil {
-		return webui.SoftwareInventoryCollectionResult{}, err
-	}
-	defer done()
-	manager := softwareinventory.New(st)
-	domainSource := softwareinventory.WebUISource(source.RemoteAddress)
-	outcome, err := manager.CollectForScope(
-		ctx, deviceName, softwareinventory.AllDevicesVisible(),
-		&softwareinventory.Service{Store: st}, domainSource,
-	)
-	if err != nil {
-		return webui.SoftwareInventoryCollectionResult{}, deviceError(deviceName, err)
-	}
-	if outcome.Requested {
-		return webui.SoftwareInventoryCollectionResult{Requested: true}, nil
-	}
-	return webui.SoftwareInventoryCollectionResult{}, nil
 }
 
 func (s openerSource) SoftwareInventoryDailyTime() (string, error) {
