@@ -153,8 +153,7 @@ func buildPOSIXV3AptPendingUpdates(section parsedSection) *models.SoftwarePendin
 		if !present {
 			continue
 		}
-		suite, _, _ = strings.Cut(suite, ",")
-		fromSecurityRepo := strings.Contains(suite, "-security")
+		fromSecurityRepo := aptSuitesFromSecurityRepo(suite)
 		if fromSecurityRepo {
 			securityCount++
 		}
@@ -166,6 +165,19 @@ func buildPOSIXV3AptPendingUpdates(section parsedSection) *models.SoftwarePendin
 	return &models.SoftwarePendingUpdates{
 		SecurityCount: securityCount, CacheUpdatedAt: cacheUpdatedAt, Items: items,
 	}
+}
+
+// aptSuitesFromSecurityRepo 判断 apt 可升级行的套件列表里是否有安全仓
+// 库。套件段常是逗号分隔的多套件（例如 jammy-updates,jammy-security），
+// 任一套件带 -security 后缀即算安全来源；只看第一个套件会把安全来源排在
+// 后面的行漏判成普通更新。
+func aptSuitesFromSecurityRepo(suite string) bool {
+	for _, candidate := range strings.Split(suite, ",") {
+		if strings.HasSuffix(candidate, "-security") {
+			return true
+		}
+	}
+	return false
 }
 
 // aptCurrentVersion 从 apt 的方括号提示里取当前版本。apt 只保证这是一段

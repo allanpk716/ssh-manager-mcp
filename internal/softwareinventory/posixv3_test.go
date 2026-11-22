@@ -163,6 +163,8 @@ func TestParsePOSIXV2FixtureStillParsesWithV3Parser(t *testing.T) {
 
 // TestParsePOSIXV3PendingUpdatesFromAptFixture 覆盖 apt 本地缓存路径：
 // 全部可升级明细保留，安全仓库条目标记出来，当前版本从方括号提示里还原。
+// openssl 与 curl 的套件段都是逗号分隔的多套件并带架构列，钉住「任一套件
+// 是安全仓库即算安全来源」的判定。
 func TestParsePOSIXV3PendingUpdatesFromAptFixture(t *testing.T) {
 	collection, err := parsePOSIXInventoryOutput(
 		posixFixtureOutput(t, "ubuntu2204-v3-containers.txt"))
@@ -184,12 +186,16 @@ func TestParsePOSIXV3PendingUpdatesFromAptFixture(t *testing.T) {
 	openssl := pending.Items[0]
 	if openssl.Name != "openssl" || openssl.CurrentVersion != "3.0.2-0ubuntu1.15" ||
 		openssl.AvailableVersion != "3.0.2-0ubuntu1.18" || !openssl.FromSecurityRepo {
-		t.Fatalf("openssl 待装更新字段不全：%+v", openssl)
+		t.Fatalf("多套件行（jammy-updates,jammy-security）的 openssl 应判为安全来源：%+v", openssl)
+	}
+	libssl := pending.Items[1]
+	if libssl.Name != "libssl3" || !libssl.FromSecurityRepo {
+		t.Fatalf("单套件安全行的 libssl3 应判为安全来源：%+v", libssl)
 	}
 	curl := pending.Items[2]
 	if curl.Name != "curl" || curl.CurrentVersion != "7.81.0-1ubuntu1.4" ||
 		curl.AvailableVersion != "7.81.0-1ubuntu1.5" || curl.FromSecurityRepo {
-		t.Fatalf("curl 应保留为普通更新明细：%+v", curl)
+		t.Fatalf("多套件行（jammy-updates,jammy）的 curl 应保留为普通更新明细：%+v", curl)
 	}
 }
 
