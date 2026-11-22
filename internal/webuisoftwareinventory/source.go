@@ -576,6 +576,7 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 	}
 	return webui.SoftwareInventoryItem{
 		CategoryCode: displayCategory.Code(), CategoryLabel: item.CategoryLabel,
+		ItemCategoryCode:    string(item.Category),
 		SearchCategoryLabel: displayCategory.Label(),
 		Name:                item.Name, Version: item.Version,
 		PackageURL: item.PackageURL, CPE: item.CPE, Source: item.Source,

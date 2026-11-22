@@ -539,7 +539,8 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 			}}},
 			{CategoryLabel: "容器", Items: []SoftwareInventoryItem{
 				{
-					CategoryLabel: "容器", Name: "nginx", Version: "1.25.3",
+					CategoryLabel: "容器", ItemCategoryCode: "container",
+					Name: "nginx", Version: "1.25.3",
 					Source: "实测", CollectedAt: &collectedAt,
 					ContainerName: "gateway", ContainerTag: "1.25.3",
 					ContainerDigest: "sha256:abcdef", ContainerRunning: true,
@@ -549,7 +550,8 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					}},
 				},
 				{
-					CategoryLabel: "容器", Name: "本地构建镜像",
+					CategoryLabel: "容器", ItemCategoryCode: "container",
+					Name:   "本地构建镜像",
 					Source: "实测", CollectedAt: &collectedAt,
 					ContainerName: "trainer-old", ContainerRunning: false,
 					MissingVersion: true,
@@ -567,7 +569,8 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 				},
 			},
 			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "未识别进程", Name: "unknown-gateway",
+				CategoryLabel: "未识别进程", ItemCategoryCode: "unidentified_process",
+				Name:        "unknown-gateway",
 				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123, MissingVersion: true,
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{

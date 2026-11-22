@@ -119,16 +119,16 @@
 <ul class="record-cards">
 {{range .}}
 <li class="record-card">
-<h3>{{if eq .CategoryLabel "未识别进程"}}未识别{{if .ProcessName}} · {{.ProcessName}}{{else if .Name}} · {{.Name}}{{end}}{{else}}{{.Name}}{{end}}</h3>
+<h3>{{if eq .ItemCategoryCode "unidentified_process"}}未识别{{if .ProcessName}} · {{.ProcessName}}{{else if .Name}} · {{.Name}}{{end}}{{else}}{{.Name}}{{end}}</h3>
 <dl class="field-list">
-{{if eq .CategoryLabel "未识别进程"}}
+{{if eq .ItemCategoryCode "unidentified_process"}}
 <dt>进程名</dt><dd>{{if .ProcessName}}{{.ProcessName}}{{else}}进程名不可见{{end}}</dd>
 {{if .ExecutablePath}}<dt>可执行文件路径</dt><dd>{{.ExecutablePath}}</dd>{{end}}
 {{if .ProcessID}}<dt>进程号</dt><dd>{{.ProcessID}}</dd>{{end}}
 {{else}}
 <dt>名称</dt><dd>{{.Name}}</dd>
 {{end}}
-<dt>精确版本</dt><dd>{{if .Version}}{{.Version}}{{else}}<span class="missing-version-badge">缺版本</span>{{end}}</dd>
+<dt>精确版本</dt><dd>{{if .MissingVersion}}<span class="missing-version-badge">缺版本</span>{{else}}{{.Version}}{{end}}</dd>
 <dt>采集时间</dt><dd>{{formatOptionalTime .CollectedAt}}</dd>
 <dt>监听端口与暴露级别</dt><dd>{{if .ListeningPorts}}{{range .ListeningPorts}}<div>{{if .Address}}{{.Address}}:{{else}}*:{{end}}{{.Port}}/{{.Protocol}} · {{.ExposureLabel}}</div>{{end}}{{else}}未登记监听端口{{end}}</dd>
 {{if .BelongsTo}}<dt>所属</dt><dd>{{.BelongsTo}}</dd>{{end}}
@@ -136,7 +136,7 @@
 {{if .ContainerTag}}<dt>标签</dt><dd>{{.ContainerTag}}</dd>{{end}}
 {{if .ContainerDigest}}<dt>摘要</dt><dd>{{.ContainerDigest}}</dd>{{end}}
 {{if .ImagePullabilityLabel}}<dt>镜像能否从公开仓库拉取</dt><dd>{{.ImagePullabilityLabel}}</dd>{{end}}
-{{if or (eq .CategoryLabel "容器") (eq .CategoryLabel "容器镜像")}}<dt>运行状态</dt><dd>{{if .ContainerRunning}}运行中{{else if eq .CategoryLabel "容器"}}已停止{{else}}未运行{{end}}</dd>{{end}}
+{{if or (eq .ItemCategoryCode "container") (eq .ItemCategoryCode "container_image")}}<dt>运行状态</dt><dd>{{if .ContainerRunning}}运行中{{else if eq .ItemCategoryCode "container"}}已停止{{else}}未运行{{end}}</dd>{{end}}
 {{if .PackageURL}}<dt>软件包统一地址</dt><dd>{{.PackageURL}}</dd>{{end}}
 {{if .CPE}}<dt>常见平台枚举</dt><dd>{{.CPE}}</dd>{{end}}
 </dl>

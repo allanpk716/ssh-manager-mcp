@@ -23,6 +23,10 @@ type SoftwareInventoryItem struct {
 	// CategoryCode 是页面分组与搜索折叠共用的展示类别稳定代号。
 	CategoryCode  string
 	CategoryLabel string
+	// ItemCategoryCode 是原始软件类别的稳定代号（如 container、
+	// container_image、unidentified_process）。模板按它区分条目形态，
+	// 不用中文文案反推类别。
+	ItemCategoryCode string
 	// SearchCategoryLabel 是全局搜索默认视图的类别文案；操作系统条目与
 	// 内核条目在同一页合成「操作系统与内核」。
 	SearchCategoryLabel string
