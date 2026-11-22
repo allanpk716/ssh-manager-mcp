@@ -127,13 +127,13 @@ func registerSoftwareInventoryTool(
 		func(_ context.Context, _ *mcp.CallToolRequest, in QuerySoftwareInventoryInput) (*mcp.CallToolResult, QuerySoftwareInventoryOutput, error) {
 			if format := in.Format; format != "" && format != "json" && format != "csv" && format != "cyclonedx" {
 				return &mcp.CallToolResult{
-					IsError: true,
-					Content: []mcp.Content{&mcp.TextContent{
-						Text: "format 参数只支持 json、csv 或 cyclonedx",
-					}},
-				}, QuerySoftwareInventoryOutput{
-					Devices: []softwareinventory.QueryDeviceResult{},
-				}, nil
+						IsError: true,
+						Content: []mcp.Content{&mcp.TextContent{
+							Text: "format 参数只支持 json、csv 或 cyclonedx",
+						}},
+					}, QuerySoftwareInventoryOutput{
+						Devices: []softwareinventory.QueryDeviceResult{},
+					}, nil
 			}
 			query := in
 			if in.Format == "cyclonedx" {
@@ -151,11 +151,11 @@ func registerSoftwareInventoryTool(
 				blob, err := softwareinventory.MarshalCSV(result)
 				if err != nil {
 					return &mcp.CallToolResult{
-						IsError: true,
-						Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-					}, QuerySoftwareInventoryOutput{
-						Devices: []softwareinventory.QueryDeviceResult{},
-					}, nil
+							IsError: true,
+							Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+						}, QuerySoftwareInventoryOutput{
+							Devices: []softwareinventory.QueryDeviceResult{},
+						}, nil
 				}
 				return nil, QuerySoftwareInventoryOutput{
 					Devices: []softwareinventory.QueryDeviceResult{}, CSV: string(blob),
@@ -169,11 +169,11 @@ func registerSoftwareInventoryTool(
 				})
 				if err != nil {
 					return &mcp.CallToolResult{
-						IsError: true,
-						Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
-					}, QuerySoftwareInventoryOutput{
-						Devices: []softwareinventory.QueryDeviceResult{},
-					}, nil
+							IsError: true,
+							Content: []mcp.Content{&mcp.TextContent{Text: err.Error()}},
+						}, QuerySoftwareInventoryOutput{
+							Devices: []softwareinventory.QueryDeviceResult{},
+						}, nil
 				}
 				documentsByDevice := make([]CycloneDXDeviceBOM, 0, len(documents))
 				for _, document := range documents {
