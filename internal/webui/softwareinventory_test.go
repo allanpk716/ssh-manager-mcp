@@ -303,8 +303,8 @@ func readSoftwareInventoryExportCSV(t *testing.T, response *http.Response) [][]s
 
 func TestSoftwareInventoryExportUsesCurrentFilters(t *testing.T) {
 	source := &stubSoftwareInventorySource{exportCSV: []byte(
-		"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
-			"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n")}
+		"\uFEFF设备,软件名,版本,缺版本,类别,监听端口,暴露级别,采集时间\r\n" +
+			"工作站,nginx,1.25.3,,监听程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n")}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	response := doGetWithCookie(t, handler, cookie,
 		"/ui/software-inventory/export?query=nginx&exact_version=1.25.3&site=%E5%85%AC%E5%8F%B8&network=%E6%80%BB%E9%83%A8%E7%89%A9%E7%90%86%E5%B1%80%E5%9F%9F%E7%BD%91")
@@ -335,8 +335,8 @@ func TestSoftwareInventoryExportSingleDevice(t *testing.T) {
 	source := &stubSoftwareInventorySource{
 		device: &SoftwareInventoryDevice{Name: "工作站"},
 		exportCSV: []byte(
-			"\uFEFF设备,软件名,版本,类别,监听端口,暴露级别,采集时间\r\n" +
-				"工作站,nginx,1.25.3,服务程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n"),
+			"\uFEFF设备,软件名,版本,缺版本,类别,监听端口,暴露级别,采集时间\r\n" +
+				"工作站,nginx,1.25.3,,监听程序,0.0.0.0:80/tcp,监听所有地址,2026-11-01T08:00:00Z\r\n"),
 	}
 	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
 	devicePage := doGetWithCookie(t, handler, cookie,
@@ -498,10 +498,12 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		Status: SoftwareInventoryStatus{
 			Managed: true, Collector: "", CollectorLabel: "权威端",
 			PreferredServerEntry: "web-1", ServerEntry: "web-1",
-			LastSuccessAt:     &collectedAt,
-			LastFailureAt:     &failedAt,
-			LastFailureReason: "连接超时",
-			Stale:             true,
+			LastSuccessAt:               &collectedAt,
+			LastFailureAt:               &failedAt,
+			LastFailureReason:           "连接超时",
+			Stale:                       true,
+			UnusedImageCount:            2,
+			PendingSecurityUpdatesLabel: "2 个（缓存于 2026-11-20 09:00）",
 		},
 		Summary: SoftwareInventoryDeviceSummary{
 			Name: "工作站", SystemName: "Ubuntu", SystemVersion: "24.04.1 LTS",
@@ -520,18 +522,33 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					Source: "实测", CollectedAt: &collectedAt,
 				},
 			}},
-			{CategoryLabel: "服务程序", Items: []SoftwareInventoryItem{{
+			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "服务程序", Name: "nginx", Version: "1.24.0",
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
 					Address: "0.0.0.0", Port: 80, Protocol: "tcp", ExposureLabel: "监听所有地址",
 				}},
 			}}},
-			{CategoryLabel: "容器镜像", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "容器镜像", Name: "postgres", Version: "16.4",
-				Source: "实测", CollectedAt: &collectedAt, BelongsTo: "Docker",
-				ContainerTag: "16-alpine", ContainerDigest: "sha256:abcdef", ContainerRunning: true,
-			}}},
+			{CategoryLabel: "容器", Items: []SoftwareInventoryItem{
+				{
+					CategoryLabel: "容器", ItemCategoryCode: "container",
+					Name: "nginx", Version: "1.25.3",
+					Source: "实测", CollectedAt: &collectedAt,
+					ContainerName: "gateway", ContainerTag: "1.25.3",
+					ContainerDigest: "sha256:abcdef", ContainerRunning: true,
+					ImagePullabilityLabel: "可公开拉取",
+					ListeningPorts: []SoftwareInventoryPort{{
+						Address: "0.0.0.0", Port: 8080, Protocol: "tcp", ExposureLabel: "监听所有地址",
+					}},
+				},
+				{
+					CategoryLabel: "容器", ItemCategoryCode: "container",
+					Name:   "本地构建镜像",
+					Source: "实测", CollectedAt: &collectedAt,
+					ContainerName: "trainer-old", ContainerRunning: false,
+					MissingVersion: true,
+				},
+			}},
 			{CategoryLabel: "驱动与固件", Items: []SoftwareInventoryItem{{
 				CategoryLabel: "驱动与固件", Name: "NVIDIA 显卡驱动", Version: "550.120",
 				Source: "实测", CollectedAt: &collectedAt,
@@ -543,9 +560,10 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 					{CategoryLabel: "系统包", Name: "openssh-client", Version: "1:8.9p1-3ubuntu0.10", Source: "实测", CollectedAt: &collectedAt},
 				},
 			},
-			{CategoryLabel: "未识别进程", Items: []SoftwareInventoryItem{{
-				CategoryLabel: "未识别进程", Name: "unknown-gateway",
-				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123,
+			{CategoryLabel: "监听程序", Items: []SoftwareInventoryItem{{
+				CategoryLabel: "未识别进程", ItemCategoryCode: "unidentified_process",
+				Name:        "unknown-gateway",
+				ProcessName: "gateway", ExecutablePath: "/opt/gateway/gateway", ProcessID: 8123, MissingVersion: true,
 				Source: "实测", CollectedAt: &collectedAt,
 				ListeningPorts: []SoftwareInventoryPort{{
 					Address: "127.0.0.1", Port: 8443, Protocol: "tcp", ExposureLabel: "仅本机",
@@ -577,12 +595,16 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		"<h1>工作站 · 软件清单</h1>",
 		"系统与内核", "Ubuntu 24.04.1 LTS；Linux 内核 6.8.0-49-generic",
 		"重点软件", "全部软件", "未识别进程",
+		"未使用镜像",
+		"待装安全更新", "2 个（缓存于 2026-11-20 09:00）",
 		"采集时间", "2026-11-01 10:30:00", "采集失败", "清单过期", "连接超时",
 		"0.0.0.0:80/tcp", "监听所有地址",
-		"postgres", "16.4", "Docker", "16-alpine", "sha256:abcdef", "运行中",
+		"nginx", "1.25.3", "sha256:abcdef", "容器名", "gateway", "运行中",
+		"镜像能否从公开仓库拉取", "可公开拉取", "0.0.0.0:8080/tcp", "已停止", "trainer-old",
 		"NVIDIA 显卡驱动", "550.120",
 		"系统包（2 条，默认折叠）", "curl", "openssh-client",
 		"未识别", "gateway", "/opt/gateway/gateway", "8123", "127.0.0.1:8443/tcp", "仅本机",
+		`<span class="missing-version-badge">缺版本</span>`,
 		"版本变化", "8.8.0-1", "8.9.1-1ubuntu2",
 		"立即采集",
 		`id="software-inventory-advanced"`, "高级采集设置", "权威端", "笔记本客户端",
@@ -594,7 +616,7 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 	}
 	previous := -1
 	for _, label := range []string{
-		"操作系统与内核", "服务程序", "容器镜像", "驱动与固件", "系统包", "未识别进程",
+		"操作系统与内核", "监听程序", "容器", "驱动与固件", "系统包",
 	} {
 		position := strings.Index(body, "<h2>"+label)
 		if position < 0 || position < previous {
@@ -612,6 +634,27 @@ func TestSoftwareInventoryDevicePageShowsSummaryGroupsAndAdvanced(t *testing.T) 
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("设备清单页不应出现 %q：\n%s", forbidden, body)
 		}
+	}
+}
+
+// TestSoftwareInventoryDevicePageShowsUnknownPendingSecurityUpdates 钉住
+// 未知口径：Linux 缓存不可读或没有包管理器时显示「未知」，不能显示 0。
+func TestSoftwareInventoryDevicePageShowsUnknownPendingSecurityUpdates(t *testing.T) {
+	source := &stubSoftwareInventorySource{device: &SoftwareInventoryDevice{
+		Name:   "嵌入式板",
+		Status: SoftwareInventoryStatus{PendingSecurityUpdatesLabel: "未知"},
+	}}
+	handler, cookie := newSoftwareInventoryHandler(t, RoleStandalone, source)
+
+	response := doGetWithCookie(
+		t, handler, cookie, "/ui/software-inventory/devices?device="+url.QueryEscape("嵌入式板"),
+	)
+	body := readResponseBody(t, response)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("设备清单页状态码 = %d，应为 200：\n%s", response.StatusCode, body)
+	}
+	if !strings.Contains(body, "待装安全更新") || !strings.Contains(body, "未知") {
+		t.Fatalf("设备清单页应显示待装安全更新未知：\n%s", body)
 	}
 }
 

@@ -9,16 +9,18 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
-// parseWindowsInventoryOutput 解析 Windows 固定命令集的输出。输出没有开头
-// 标记时返回错误；节缺失、节内命令失败或输出截断时保留已解析条目并标为
-// 不完整。
+// parseWindowsInventoryOutput 解析 Windows 固定命令集的输出，按开头标记里
+// 的命令集版本选择解析规则：第 1 版保持升级前的口径，第 2 版起系统自带服
+// 务并入操作系统条目、其余监听进程带文件版本与产品名。输出没有开头标记
+// 时返回错误；节缺失、节内命令失败或输出截断时保留已解析条目并标为不完
+// 整。
 func parseWindowsInventoryOutput(output string) (*ParsedCollection, error) {
 	sections, version, sawEnd, err := splitInventorySections(output)
 	if err != nil {
 		return nil, err
 	}
 	collection := &ParsedCollection{CommandSetVersion: version}
-	for _, name := range windowsV1Sections {
+	for _, name := range windowsCommandSections {
 		section, present := sections[name]
 		if !present {
 			collection.Incomplete = true
@@ -35,14 +37,17 @@ func parseWindowsInventoryOutput(output string) (*ParsedCollection, error) {
 		collection.Notes = append(collection.Notes, "缺少结尾标记")
 	}
 
+	v2 := version != windowsCommandSetV1Version
 	osInfo := parseWindowsOSSection(sectionOrEmpty(sections, "os").lines)
 	collection.SystemType = osInfo.systemType
 	if collection.SystemType == "" {
 		collection.Incomplete = true
 		collection.Notes = append(collection.Notes, "系统识别结果为空")
 	}
+	operatingSystemIndex := -1
 	if osInfo.recognized {
-		collection.Items = append(collection.Items, buildWindowsOSItem(osInfo))
+		operatingSystemIndex = len(collection.Items)
+		collection.Items = append(collection.Items, buildWindowsOSItem(osInfo, v2))
 	}
 	installed, installedIndexes := buildWindowsInstalledItems(sectionOrEmpty(sections, "installed"))
 	collection.Items = append(collection.Items, installed...)
@@ -51,13 +56,23 @@ func parseWindowsInventoryOutput(output string) (*ParsedCollection, error) {
 	for name, index := range installedIndexes {
 		installedByName[name] = &collection.Items[installedStart+index]
 	}
-	collection.Items = append(collection.Items, buildWindowsListeningItems(
+	listeningItems, operatingSystemPorts := buildWindowsListeningItems(
 		sectionOrEmpty(sections, "listen-tcp"),
 		sectionOrEmpty(sections, "listen-udp"),
 		sectionOrEmpty(sections, "processes"),
 		sectionOrEmpty(sections, "services"),
-		installedByName,
-	)...)
+		installedByName, v2,
+	)
+	collection.Items = append(collection.Items, listeningItems...)
+	if len(operatingSystemPorts) > 0 && operatingSystemIndex >= 0 {
+		// 系统自带服务的监听端口并入操作系统条目；端口来自多个进程，条
+		// 目本身不带进程编号。os 节整节为空时没有可并入的条目，这些端
+		// 口随「系统识别结果为空」一起标为不完整。
+		operatingSystem := &collection.Items[operatingSystemIndex]
+		operatingSystem.ListeningPorts = append(
+			operatingSystem.ListeningPorts, operatingSystemPorts...,
+		)
+	}
 	collection.Items = append(collection.Items,
 		buildWindowsFirmwareItems(sectionOrEmpty(sections, "firmware"))...)
 	collection.Items = append(collection.Items,
@@ -71,6 +86,8 @@ type windowsOSInfo struct {
 	releaseVersion   string
 	currentBuild     string
 	updateRevision   string
+	majorVersion     string
+	minorVersion     string
 	edition          string
 	installationType string
 	architecture     string
@@ -98,6 +115,10 @@ func parseWindowsOSSection(lines []string) windowsOSInfo {
 		case "UBR":
 			// UBR 是注册表输出里的更新修订号。
 			info.updateRevision = value
+		case "CurrentMajorVersionNumber":
+			info.majorVersion = value
+		case "CurrentMinorVersionNumber":
+			info.minorVersion = value
 		case "EditionID":
 			info.edition = value
 		case "InstallationType":
@@ -112,10 +133,22 @@ func parseWindowsOSSection(lines []string) windowsOSInfo {
 	return info
 }
 
-func buildWindowsOSItem(info windowsOSInfo) models.SoftwareObservedItem {
-	version := cmp.Or(info.displayVersion, info.releaseVersion, info.currentBuild)
-	if version == "" {
-		version = "unknown"
+// buildWindowsOSItem 构造操作系统条目。fullVersion 为 true（第 2 版及以后
+// 的输出）时，主版本、次版本、构建号与补丁修订号都非空就拼成完整四段版
+// 本号，任一为空回退第 1 版口径；Windows 10 之前的注册表没有两个版本号
+// 键，输出空值行，自然走回退。
+func buildWindowsOSItem(info windowsOSInfo, fullVersion bool) models.SoftwareObservedItem {
+	version := ""
+	if fullVersion && info.majorVersion != "" && info.minorVersion != "" &&
+		info.currentBuild != "" && info.updateRevision != "" {
+		version = strings.Join([]string{
+			info.majorVersion, info.minorVersion, info.currentBuild, info.updateRevision,
+		}, ".")
+	} else {
+		version = cmp.Or(info.displayVersion, info.releaseVersion, info.currentBuild)
+		if version == "" {
+			version = "unknown"
+		}
 	}
 	name := cmp.Or(info.productName, "Windows")
 	return models.SoftwareObservedItem{
@@ -179,9 +212,11 @@ func disambiguateWindowsStableKeysByRegistryKey(items []models.SoftwareObservedI
 }
 
 type windowsProcess struct {
-	processID int
-	name      string
-	path      string
+	processID   int
+	name        string
+	path        string
+	fileVersion string
+	productName string
 }
 
 type windowsListenLine struct {
@@ -189,6 +224,21 @@ type windowsListenLine struct {
 	address   string
 	port      int
 	processID int
+}
+
+// windowsSystemProcess 判定一个监听进程是否属于 Windows 系统自带服务：
+// 可执行文件路径在 Windows 系统目录下（形如 <盘符>:\windows\...，盘符不
+// 限、windows 段大小写不敏感；svchost.exe、spoolsv.exe、DriverStore 内
+// 的驱动服务都在此列），或路径为空且进程名为 System（Windows 内核进程，
+// 监听 135、137-139、445 等）。
+func windowsSystemProcess(process windowsProcess) bool {
+	if process.path == "" {
+		return strings.EqualFold(process.name, "system")
+	}
+	if len(process.path) < 3 || process.path[1] != ':' || process.path[2] != '\\' {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(process.path[3:]), "windows\\")
 }
 
 func parseWindowsProcesses(section parsedSection) map[int]windowsProcess {
@@ -205,11 +255,23 @@ func parseWindowsProcesses(section parsedSection) map[int]windowsProcess {
 		if err != nil {
 			continue
 		}
+		// 第 2 版起第 4、5 列是可执行文件自带的文件版本与产品名；第 1
+		// 版只有前三列，两列按空处理。
+		fileVersion, productName := "", ""
+		if len(fields) >= 4 {
+			fileVersion = fields[3]
+		}
+		if len(fields) >= 5 {
+			productName = fields[4]
+		}
 		path := ""
 		if len(fields) >= 3 {
 			path = fields[2]
 		}
-		processes[processID] = windowsProcess{processID: processID, name: fields[1], path: path}
+		processes[processID] = windowsProcess{
+			processID: processID, name: fields[1], path: path,
+			fileVersion: fileVersion, productName: productName,
+		}
 	}
 	return processes
 }
@@ -255,12 +317,18 @@ func parseWindowsListenSection(section parsedSection, protocol string) []windows
 	return lines
 }
 
+// buildWindowsListeningItems 把监听端口归到条目上。mergeSystemIntoOS 为
+// true（第 2 版及以后）时，系统自带服务的宿主进程不单独成条，其端口去重
+// 后作为第二个返回值交给调用方并入操作系统条目。服务程序条目与未识别进
+// 程条目在第 2 版输出下带文件版本；第 1 版输出没有这两列，取到的是空值，
+// 行为与升级前一致。
 func buildWindowsListeningItems(
 	listenTCP, listenUDP, processesSection, servicesSection parsedSection,
 	installedByName map[string]*models.SoftwareObservedItem,
-) []models.SoftwareObservedItem {
+	mergeSystemIntoOS bool,
+) ([]models.SoftwareObservedItem, []models.SoftwareListeningPort) {
 	if listenTCP.outcome == sectionAbsent && listenUDP.outcome == sectionAbsent {
-		return nil
+		return nil, nil
 	}
 	processes := parseWindowsProcesses(processesSection)
 	services := parseWindowsServices(servicesSection)
@@ -268,21 +336,22 @@ func buildWindowsListeningItems(
 	unidentified := map[string]*models.SoftwareObservedItem{}
 	var serviceOrder []string
 	var unidentifiedOrder []string
+	var operatingSystemPorts []models.SoftwareListeningPort
 
 	appendPort := func(item *models.SoftwareObservedItem, line windowsListenLine) {
 		if item.ProcessID == 0 {
 			item.ProcessID = line.processID
 		}
-		for _, existing := range item.ListeningPorts {
+		appendListenPort(item, line)
+	}
+	appendOperatingSystemPort := func(line windowsListenLine) {
+		for _, existing := range operatingSystemPorts {
 			if existing.Address == line.address && existing.Port == line.port &&
 				existing.Protocol == line.protocol {
 				return
 			}
 		}
-		item.ListeningPorts = append(item.ListeningPorts, models.SoftwareListeningPort{
-			Address: line.address, Port: line.port, Protocol: line.protocol,
-			Exposure: exposureForListenAddress(line.address),
-		})
+		operatingSystemPorts = append(operatingSystemPorts, listenPortFromLine(line))
 	}
 
 	for _, line := range append(
@@ -290,6 +359,10 @@ func buildWindowsListeningItems(
 		parseWindowsListenSection(listenUDP, "udp")...,
 	) {
 		process := processes[line.processID]
+		if mergeSystemIntoOS && windowsSystemProcess(process) {
+			appendOperatingSystemPort(line)
+			continue
+		}
 		if process.name == "" && process.path == "" {
 			unidentifiedOrder = appendWindowsUnidentifiedItem(
 				unidentified, unidentifiedOrder, process, line, appendPort,
@@ -310,6 +383,7 @@ func buildWindowsListeningItems(
 					item = &models.SoftwareObservedItem{
 						Category:       models.SoftwareCategoryServiceProgram,
 						Name:           serviceName,
+						Version:        process.fileVersion,
 						ProcessName:    process.name,
 						ExecutablePath: process.path,
 						ProcessID:      line.processID,
@@ -337,7 +411,28 @@ func buildWindowsListeningItems(
 	for _, key := range unidentifiedOrder {
 		items = append(items, *unidentified[key])
 	}
-	return items
+	return items, operatingSystemPorts
+}
+
+// listenPortFromLine 把一条监听记录转换成软件条目的监听端口，暴露级别按
+// 本地地址推导。
+func listenPortFromLine(line windowsListenLine) models.SoftwareListeningPort {
+	return models.SoftwareListeningPort{
+		Address: line.address, Port: line.port, Protocol: line.protocol,
+		Exposure: exposureForListenAddress(line.address),
+	}
+}
+
+// appendListenPort 把一条监听记录追加到条目的端口列表末尾；地址、端口与
+// 协议都相同的不重复追加。
+func appendListenPort(item *models.SoftwareObservedItem, line windowsListenLine) {
+	for _, existing := range item.ListeningPorts {
+		if existing.Address == line.address && existing.Port == line.port &&
+			existing.Protocol == line.protocol {
+			return
+		}
+	}
+	item.ListeningPorts = append(item.ListeningPorts, listenPortFromLine(line))
 }
 
 func appendWindowsUnidentifiedItem(
@@ -350,9 +445,12 @@ func appendWindowsUnidentifiedItem(
 	key := unidentifiedStableKey(line.protocol, strconv.Itoa(line.port), process.path)
 	item, present := unidentified[key]
 	if !present {
+		// 第 2 版起条目名优先取产品名（第 1 版输出里恒空，仍取进程名），
+		// 版本取文件版本；产品名不进稳定键。
 		item = &models.SoftwareObservedItem{
 			Category:       models.SoftwareCategoryUnidentified,
-			Name:           cmp.Or(process.name, "未识别进程"),
+			Name:           cmp.Or(process.productName, process.name, "未识别进程"),
+			Version:        process.fileVersion,
 			ProcessName:    process.name,
 			ExecutablePath: process.path,
 			ProcessID:      line.processID,

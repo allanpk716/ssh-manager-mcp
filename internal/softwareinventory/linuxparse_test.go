@@ -86,7 +86,7 @@ func TestParsePOSIXUbuntuFullFixture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if collection.CommandSetVersion != POSIXCommandSetVersion {
+	if collection.CommandSetVersion != "posix-v2" {
 		t.Fatalf("命令集版本 = %q", collection.CommandSetVersion)
 	}
 	if collection.SystemType != "ubuntu" {

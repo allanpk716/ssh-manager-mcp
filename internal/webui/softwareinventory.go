@@ -21,6 +21,10 @@ type SoftwareInventoryItem struct {
 	// CategoryCode 是页面分组与搜索折叠共用的展示类别稳定代号。
 	CategoryCode  string
 	CategoryLabel string
+	// ItemCategoryCode 是原始软件类别的稳定代号（如 container、
+	// container_image、unidentified_process）。模板按它区分条目形态，
+	// 不用中文文案反推类别。
+	ItemCategoryCode string
 	// SearchCategoryLabel 是全局搜索默认视图的类别文案；操作系统条目与
 	// 内核条目在同一页合成「操作系统与内核」。
 	SearchCategoryLabel string
@@ -35,14 +39,22 @@ type SoftwareInventoryItem struct {
 	BelongsTo           string
 	Note                string
 	Architecture        string
-	ContainerTag        string
-	ContainerDigest     string
-	ContainerRunning    bool
+	// ContainerName 是容器条目里的容器名；容器镜像条目与旧版采集结
+	// 果没有这个值，模板按空值隐藏。
+	ContainerName string
+	// ImagePullabilityLabel 是镜像能否从公开仓库拉取的中文显示名；
+	// 采集结果没有判定时代号为空，这里也保持空字符串。
+	ImagePullabilityLabel string
+	ContainerTag          string
+	ContainerDigest       string
+	ContainerRunning      bool
 	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目的进
 	// 程可得信息；采集时看不到的字段为空。
 	ProcessName    string
 	ExecutablePath string
 	ProcessID      int
+	// MissingVersion 表示这条条目拿不到版本号，页面要显示缺版本标记。
+	MissingVersion bool
 }
 
 // SoftwareInventoryGroup 是设备清单页的一个类别分组。系统包默认只带数
@@ -72,6 +84,13 @@ type SoftwareInventoryStatus struct {
 	NeverCollected       bool
 	Stale                bool
 	PendingImmediate     bool
+	// UnusedImageCount 是设备上不再被任何容器使用的镜像数量；第 2 版
+	// 采集结果没有这个值，数量为零时不显示。
+	UnusedImageCount int
+	// PendingSecurityUpdatesLabel 是待装安全更新数量的显示文本，带缓存
+	// 时间；没有包管理器或缓存不可读时为「未知」；不采集待装安全更新的系统
+	// （Windows、macOS）为空，页面不显示这一行。
+	PendingSecurityUpdatesLabel string
 }
 
 // SoftwareInventoryChange 是一条变化历史。

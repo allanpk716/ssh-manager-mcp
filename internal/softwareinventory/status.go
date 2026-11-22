@@ -58,6 +58,10 @@ func collectionStatusCore(stored models.SoftwareCollectionStatus, now time.Time)
 		PreferredServerID: stored.PreferredServerID,
 		ServerEntry:       stored.LastServerName, LastFailureReason: stored.LastFailureReason,
 		Incomplete: stored.LastIncomplete, CommandSetVersion: stored.CommandSetVersion,
+		SystemType: stored.SystemType,
+		DistroID:   stored.DistroID, DistroVersionID: stored.DistroVersionID,
+		UnusedImageCount: stored.UnusedImageCount,
+		PendingUpdates:   stored.PendingUpdates,
 		PendingImmediate: stored.PendingImmediate,
 	}
 	if stored.LastSuccessAt.Unix() <= 0 {

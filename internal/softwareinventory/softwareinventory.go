@@ -43,6 +43,7 @@ type (
 	DeclarationEdit         = models.SoftwareDeclarationEdit
 	Category                = models.SoftwareCategory
 	Exposure                = models.SoftwareExposure
+	ImagePullability        = models.SoftwareImagePullability
 	ListeningPort           = models.SoftwareListeningPort
 	Visibility              = store.SoftwareDeviceScope
 	SoftwareDeclarationView = store.SoftwareDeclarationView
@@ -53,6 +54,7 @@ type (
 const (
 	CategoryOperatingSystem = models.SoftwareCategoryOperatingSystem
 	CategoryServiceProgram  = models.SoftwareCategoryServiceProgram
+	CategoryContainer       = models.SoftwareCategoryContainer
 	CategoryContainerImage  = models.SoftwareCategoryContainerImage
 	CategoryDriverFirmware  = models.SoftwareCategoryDriverFirmware
 	CategorySystemPackage   = models.SoftwareCategorySystemPackage
@@ -104,14 +106,18 @@ type Item struct {
 	Source         string          `json:"source"`
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
 	// ObservedStableKey 是认领实测时使用的稳定键，只在条目有实测来源时填。
-	ObservedStableKey string     `json:"observed_stable_key,omitempty"`
-	DeclaredVersion   string     `json:"declared_version,omitempty"`
-	VersionMismatch   bool       `json:"version_mismatch,omitempty"`
-	Mismatch          bool       `json:"mismatch,omitempty"`
-	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
-	ContainerTag      string     `json:"container_tag,omitempty"`
-	ContainerDigest   string     `json:"container_digest,omitempty"`
-	ContainerRunning  bool       `json:"container_running,omitempty"`
+	ObservedStableKey string           `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string           `json:"declared_version,omitempty"`
+	VersionMismatch   bool             `json:"version_mismatch,omitempty"`
+	Mismatch          bool             `json:"mismatch,omitempty"`
+	ConfirmedAt       *time.Time       `json:"confirmed_at,omitempty"`
+	ContainerTag      string           `json:"container_tag,omitempty"`
+	ContainerDigest   string           `json:"container_digest,omitempty"`
+	ContainerRunning  bool             `json:"container_running,omitempty"`
+	ContainerName     string           `json:"container_name,omitempty"`
+	ImagePullability  ImagePullability `json:"image_pullability,omitempty"`
+	// MissingVersion 表示这条条目拿不到版本号，需要人工或外部程序补查。
+	MissingVersion bool `json:"missing_version,omitempty"`
 }
 
 // ItemGroup 是按设备查看时的一个类别分组。系统包默认只返回数量；加参数
@@ -254,5 +260,7 @@ func queryItemAsItem(row QueryItem) Item {
 		DeclaredVersion: row.DeclaredVersion, Mismatch: row.Mismatch,
 		ConfirmedAt: row.ConfirmedAt, ContainerTag: row.ContainerTag,
 		ContainerDigest: row.ContainerDigest, ContainerRunning: row.ContainerRunning,
+		ContainerName: row.ContainerName, ImagePullability: row.ImagePullability,
+		MissingVersion: row.MissingVersion,
 	}
 }

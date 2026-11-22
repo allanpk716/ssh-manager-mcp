@@ -41,6 +41,18 @@ func anySlice(t *testing.T, value any, context string) []any {
 	return items
 }
 
+// TestCycloneDXContainerCategoryGetsComponentType 钉住容器条目的最小映
+// 射，避免默认重点清单导出时因新类别失败。
+func TestCycloneDXContainerCategoryGetsComponentType(t *testing.T) {
+	componentType, err := cycloneDXComponentType(CategoryContainer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if componentType != "container" {
+		t.Fatalf("容器条目的 CycloneDX 组件类型 = %q", componentType)
+	}
+}
+
 func TestCycloneDXExportDocumentStructure(t *testing.T) {
 	generatedAt := time.Date(2026, 11, 9, 12, 30, 5, 0, time.UTC)
 	document, err := MarshalCycloneDX(QueryResult{Devices: []QueryDeviceResult{{
@@ -236,6 +248,196 @@ func TestCycloneDXExportIsStable(t *testing.T) {
 	if nestedMap(t, workstationItems[0], "工作站第一条")["name"] != "macOS" ||
 		nestedMap(t, workstationItems[1], "工作站第一条")["name"] != "zlib" {
 		t.Fatalf("软件类别顺序不稳定：%+v", workstationItems)
+	}
+}
+
+// TestCycloneDXPerDeviceFromPOSIXV3Sample 钉住第 3 版 POSIX 样例到每台
+// 设备一份 CycloneDX 文档的完整导出面：操作系统做主组件，系统包软件包
+// 统一地址带发行版限定，容器组件换用 oci 类型并带镜像摘要。
+func TestCycloneDXPerDeviceFromPOSIXV3Sample(t *testing.T) {
+	manager := seedPOSIXSample(t, "容器工作站", "ubuntu2204-v3-containers.txt")
+	result, err := manager.Query(QueryOptions{
+		Device: "容器工作站", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents, err := MarshalCycloneDXPerDevice(result, CycloneDXExportOptions{
+		GeneratedAt:       time.Date(2026, 11, 21, 8, 0, 0, 0, time.UTC),
+		SSHManagerVersion: "9.9.9-test", ProfileName: "inventory-profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 1 || documents[0].DeviceName != "容器工作站" {
+		t.Fatalf("每台设备导出应为一份文档：%+v", documents)
+	}
+
+	value := decodeCycloneDX(t, documents[0].Document)
+	metadata := nestedMap(t, value["metadata"], "metadata")
+	mainComponent := nestedMap(t, metadata["component"], "metadata.component")
+	if mainComponent["type"] != "operating-system" || mainComponent["name"] != "ubuntu" ||
+		mainComponent["version"] != "22.04" {
+		t.Fatalf("操作系统主组件 = %+v", mainComponent)
+	}
+	mainProperties := propertiesByName(t, mainComponent)
+	if mainProperties["sshmgr:distro-id"] != "ubuntu" ||
+		mainProperties["sshmgr:distro-version-id"] != "22.04" {
+		t.Fatalf("操作系统主组件的发行版属性 = %+v", mainProperties)
+	}
+
+	device := nestedMap(t, anySlice(t, value["components"], "顶层组件")[0], "设备组件")
+	components := anySlice(t, device["components"], "设备内软件组件")
+	var libc6, nginx, litellm map[string]any
+	for _, raw := range components {
+		component := nestedMap(t, raw, "软件组件")
+		switch {
+		case component["name"] == "libc6":
+			libc6 = component
+		case component["purl"] == "pkg:oci/nginx@sha256%3A2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0?tag=1.25.3":
+			nginx = component
+		case component["purl"] == "pkg:oci/litellm@sha256%3A9c2f1e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70?repository_url=ghcr.io%2Fberriai%2Flitellm&tag=main-stable":
+			litellm = component
+		}
+	}
+	if libc6 == nil {
+		t.Fatalf("文档缺少 libc6 组件：%+v", components)
+	}
+	if got := libc6["purl"]; got != "pkg:deb/ubuntu/libc6@2.35-0ubuntu3.8?arch=amd64&distro=ubuntu-22.04" {
+		t.Fatalf("libc6 的软件包统一地址 = %v", got)
+	}
+	if nginx == nil {
+		t.Fatalf("文档缺少 nginx 容器组件：%+v", components)
+	}
+	if litellm == nil {
+		t.Fatalf("文档缺少带 repository_url 限定符的 litellm 容器组件：%+v", components)
+	}
+	hashes := anySlice(t, nginx["hashes"], "nginx 镜像摘要")
+	firstHash := nestedMap(t, hashes[0], "nginx 镜像摘要")
+	if firstHash["alg"] != "SHA-256" ||
+		firstHash["content"] != "2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0" {
+		t.Fatalf("nginx 镜像摘要 = %+v", firstHash)
+	}
+	nginxProperties := propertiesByName(t, nginx)
+	if nginxProperties["sshmgr:container-running"] != "true" {
+		t.Fatalf("nginx 容器运行状态属性 = %+v", nginxProperties)
+	}
+
+	var instance any
+	if err := json.Unmarshal(documents[0].Document, &instance); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadCycloneDXSchemaForTest(t).Validate(instance); err != nil {
+		t.Fatalf("CycloneDX 输出不符合 1.6 Schema：%v\n%s", err, documents[0].Document)
+	}
+}
+
+// TestCycloneDXPerDeviceFromWindowsV2Sample 钉住 Windows 样例的主组件：
+// 操作系统带完整四段版本号；Windows 采集没有发行版编号，因此不带发行版
+// 属性。
+func TestCycloneDXPerDeviceFromWindowsV2Sample(t *testing.T) {
+	manager := seedWindowsSample(t, "win工作站", "win10-powershell-full-v2-derived.txt")
+	result, err := manager.Query(QueryOptions{
+		Device: "win工作站", IncludeSystemPackages: true, Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	documents, err := MarshalCycloneDXPerDevice(result, CycloneDXExportOptions{
+		GeneratedAt:       time.Date(2026, 11, 21, 8, 5, 0, 0, time.UTC),
+		SSHManagerVersion: "9.9.9-test", ProfileName: "inventory-profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 1 || documents[0].DeviceName != "win工作站" {
+		t.Fatalf("每台设备导出应为一份文档：%+v", documents)
+	}
+
+	metadata := nestedMap(t, decodeCycloneDX(t, documents[0].Document)["metadata"], "metadata")
+	mainComponent := nestedMap(t, metadata["component"], "metadata.component")
+	if mainComponent["type"] != "operating-system" ||
+		mainComponent["name"] != "Windows 10 Pro" ||
+		mainComponent["version"] != "10.0.19045.6456" {
+		t.Fatalf("Windows 操作系统主组件 = %+v", mainComponent)
+	}
+	if rawProperties, exists := mainComponent["properties"]; exists {
+		properties := propertiesByName(t, mainComponent)
+		if properties["sshmgr:distro-id"] != "" {
+			t.Fatalf("Windows 主组件不应带发行版编号属性：%+v", rawProperties)
+		}
+	}
+}
+
+// TestCycloneDXPerDeviceReturnsOneDocumentPerDevice 钉住多设备导出的拆分
+// 规则：按设备名稳定排序，一台设备一份文档，主组件与条目都不串到另一台
+// 设备。
+func TestCycloneDXPerDeviceReturnsOneDocumentPerDevice(t *testing.T) {
+	result := QueryResult{Devices: []QueryDeviceResult{
+		{
+			DeviceID: "device-2", DeviceName: "z工作站",
+			Collection: CollectionStatus{DistroID: "ubuntu", DistroVersionID: "24.04"},
+			Items: []QueryItem{
+				{ID: "z系统", DeviceID: "device-2", Category: CategoryOperatingSystem, Name: "Ubuntu", Version: "24.04"},
+				{ID: "z软件", DeviceID: "device-2", Category: CategoryServiceProgram, Name: "z服务", Version: "1.0"},
+			},
+		},
+		{
+			DeviceID: "device-1", DeviceName: "a工作站",
+			Items: []QueryItem{
+				{ID: "a系统", DeviceID: "device-1", Category: CategoryOperatingSystem, Name: "Windows 11 Pro", Version: "10.0.26100.1"},
+				{ID: "a软件", DeviceID: "device-1", Category: CategoryServiceProgram, Name: "a服务", Version: "2.0"},
+			},
+		},
+	}}
+	documents, err := MarshalCycloneDXPerDevice(result, CycloneDXExportOptions{
+		GeneratedAt:       time.Date(2026, 11, 21, 8, 10, 0, 0, time.UTC),
+		SSHManagerVersion: "9.9.9-test", ProfileName: "inventory-profile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(documents) != 2 || documents[0].DeviceName != "a工作站" ||
+		documents[1].DeviceName != "z工作站" {
+		t.Fatalf("多设备文档拆分或排序不正确：%+v", documents)
+	}
+
+	wanted := []struct {
+		deviceName  string
+		mainName    string
+		mainVersion string
+		itemName    string
+	}{{
+		deviceName: "a工作站", mainName: "Windows 11 Pro", mainVersion: "10.0.26100.1", itemName: "a服务",
+	}, {
+		deviceName: "z工作站", mainName: "ubuntu", mainVersion: "24.04", itemName: "z服务",
+	}}
+	for i, want := range wanted {
+		value := decodeCycloneDX(t, documents[i].Document)
+		mainComponent := nestedMap(
+			t, nestedMap(t, value["metadata"], "metadata")["component"], "metadata.component",
+		)
+		if mainComponent["name"] != want.mainName || mainComponent["version"] != want.mainVersion {
+			t.Fatalf("设备 %s 的主组件 = %+v", want.deviceName, mainComponent)
+		}
+		topComponents := anySlice(t, value["components"], "顶层组件")
+		if len(topComponents) != 1 {
+			t.Fatalf("设备 %s 的文档应只包含本设备：%+v", want.deviceName, topComponents)
+		}
+		deviceComponent := nestedMap(t, topComponents[0], "设备组件")
+		if deviceComponent["name"] != want.deviceName {
+			t.Fatalf("文档 %d 的设备名 = %v，应为 %s", i, deviceComponent["name"], want.deviceName)
+		}
+		items := anySlice(t, deviceComponent["components"], "设备内软件组件")
+		found := false
+		for _, raw := range items {
+			if nestedMap(t, raw, "软件组件")["name"] == want.itemName {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("设备 %s 的文档缺少本设备条目 %s：%+v", want.deviceName, want.itemName, items)
+		}
 	}
 }
 

@@ -2,6 +2,7 @@ package softwareinventory
 
 import (
 	"context"
+	"maps"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 	}
 	if submission.DeviceName != "工作站" || submission.DeviceID != "device-id" ||
 		submission.ServerID != servers["甲入口"].ID || submission.Sudo ||
-		submission.CommandSetVersion != POSIXCommandSetVersion ||
+		submission.CommandSetVersion != "posix-v2" ||
 		submission.SystemType != "ubuntu" || submission.Failed ||
 		len(submission.Items) <= 1041 {
 		t.Fatalf("客户端待上交结果 = %+v", submission)
@@ -43,6 +44,94 @@ func TestCollectForSubmissionDoesNotWriteLocalInventory(t *testing.T) {
 	if status, err := st.SoftwareCollectionStatusForDevice("工作站"); err != nil ||
 		!status.LastSuccessAt.IsZero() || status.Collector.IsClient() {
 		t.Fatalf("客户端本地不应保存采集状态：%+v err=%v", status, err)
+	}
+}
+
+// TestCollectForSubmissionCarriesPOSIXV3Fields 钉住客户端实例上交第 3 版
+// 结果时的设备级字段与容器条目字段。
+func TestCollectForSubmissionCarriesPOSIXV3Fields(t *testing.T) {
+	service, st := newCollectService(t)
+	servers := addCollectDevice(t, st, "容器工作站", "容器入口")
+	assignment := models.SoftwareCollectionAssignment{
+		DeviceName: "容器工作站", DeviceID: "device-id", ServerID: servers["容器入口"].ID,
+		ServerName: "容器入口",
+	}
+	service.RemoteExec = replayCollectExec(
+		posixFixtureOutput(t, "ubuntu2204-v3-containers.txt"), &recordedExec{}, nil,
+	)
+
+	submission, _, err := service.CollectForSubmission(context.Background(), assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if submission.CommandSetVersion != "posix-v3" || submission.DistroID != "ubuntu" ||
+		submission.DistroVersionID != "22.04" || submission.UnusedImageCount != 2 {
+		t.Fatalf("客户端待上交的第 3 版设备级字段 = %+v", submission)
+	}
+	if submission.PendingUpdates == nil || submission.PendingUpdates.SecurityCount != 2 {
+		t.Fatalf("客户端待上交的待装安全更新 = %+v", submission.PendingUpdates)
+	}
+	gateway := findObservedItem(
+		t, submission.Items, models.SoftwareCategoryContainer, "nginx")
+	if gateway.ContainerName != "gateway" ||
+		gateway.ImagePullability != models.SoftwareImagePullabilityPublic {
+		t.Fatalf("客户端待上交的容器条目 = %+v", gateway)
+	}
+}
+
+// TestCollectForSubmissionWindowsV2 验证客户端实例用第 2 版 Windows 命令集
+// 采集得到与权威端一致的结果：待上交结果的版本、系统类型与条目数和权威
+// 端对同样本的一次采集相同，客户端本地仍不落库。
+func TestCollectForSubmissionWindowsV2(t *testing.T) {
+	service, st := newCollectService(t)
+	servers := addCollectDeviceWithShell(t, st, "工作站", models.ShellPowerShell, "甲入口")
+	assignment := models.SoftwareCollectionAssignment{
+		DeviceName: "工作站", DeviceID: "device-id", ServerID: servers["甲入口"].ID,
+		ServerName: "甲入口",
+	}
+	output := windowsFixtureOutput(t, "win10-powershell-full-v2-derived.txt")
+	service.RemoteExec = replayCollectExec(output, &recordedExec{}, nil)
+
+	submission, report, err := service.CollectForSubmission(context.Background(), assignment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report == nil || report.ServerEntryName != "甲入口" || report.CommandSetVersion != "windows-v2" {
+		t.Fatalf("客户端第 2 版采集报告 = %+v", report)
+	}
+	if submission.DeviceName != "工作站" || submission.DeviceID != "device-id" ||
+		submission.CommandSetVersion != "windows-v2" || submission.SystemType != "windows" ||
+		submission.Failed || len(submission.Items) == 0 {
+		t.Fatalf("客户端第 2 版待上交结果 = %+v", submission)
+	}
+	// 客户端本地不落库：状态与实测条目都为空。
+	if items, err := st.SoftwareObservedItemsForDevice("工作站"); err != nil || len(items) != 0 {
+		t.Fatalf("客户端本地不应保存实测条目：items=%d err=%v", len(items), err)
+	}
+	if status, err := st.SoftwareCollectionStatusForDevice("工作站"); err != nil ||
+		!status.LastSuccessAt.IsZero() {
+		t.Fatalf("客户端本地不应保存采集状态：%+v err=%v", status, err)
+	}
+
+	// 同样本交给权威端链路采集一次：结果必须与客户端一致。
+	authorityReport, err := service.Collect(context.Background(), CollectRequest{
+		Source: CLISource(), DeviceName: "工作站", ServerEntry: "甲入口",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if authorityReport.CommandSetVersion != submission.CommandSetVersion ||
+		authorityReport.SystemType != submission.SystemType ||
+		!maps.Equal(authorityReport.ItemCounts, submission.ItemCounts) {
+		t.Fatalf("权威端与客户端的第 2 版结果不一致：authority=%+v submission=%+v",
+			authorityReport, submission)
+	}
+	items, err := st.SoftwareObservedItemsForDevice("工作站")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != len(submission.Items) {
+		t.Fatalf("权威端落库条目数 = %d，客户端待上交条目数 = %d", len(items), len(submission.Items))
 	}
 }
 

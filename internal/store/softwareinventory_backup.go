@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // SnapshotSoftwareObservedItem 是全量备份里的实测软件条目行。
@@ -20,6 +22,8 @@ type SnapshotSoftwareObservedItem struct {
 	ContainerTag     string `json:"container_tag,omitempty"`
 	ContainerDigest  string `json:"container_digest,omitempty"`
 	ContainerRunning bool   `json:"container_running,omitempty"`
+	ContainerName    string `json:"container_name,omitempty"`
+	ImagePullability string `json:"image_pullability,omitempty"`
 	ExecutablePath   string `json:"executable_path,omitempty"`
 	ProcessName      string `json:"process_name,omitempty"`
 	ProcessID        int    `json:"process_id,omitempty"`
@@ -40,17 +44,21 @@ type SnapshotSoftwareObservedPort struct {
 // SnapshotSoftwareCollectionStatus 是全量备份里的采集状态行；清单过期不
 // 落库，恢复后按读取时刻重新计算。
 type SnapshotSoftwareCollectionStatus struct {
-	DeviceID          string `json:"device_id"`
-	Collector         string `json:"collector"`
-	PreferredServerID string `json:"preferred_server_id,omitempty"`
-	LastServerID      string `json:"last_server_id,omitempty"`
-	LastSuccessAt     int64  `json:"last_success_at"`
-	LastFailureAt     int64  `json:"last_failure_at"`
-	LastFailureReason string `json:"last_failure_reason,omitempty"`
-	LastIncomplete    bool   `json:"last_incomplete,omitempty"`
-	CommandSetVersion string `json:"command_set_version,omitempty"`
-	SystemType        string `json:"system_type,omitempty"`
-	PendingImmediate  bool   `json:"pending_immediate,omitempty"`
+	DeviceID          string                         `json:"device_id"`
+	Collector         string                         `json:"collector"`
+	PreferredServerID string                         `json:"preferred_server_id,omitempty"`
+	LastServerID      string                         `json:"last_server_id,omitempty"`
+	LastSuccessAt     int64                          `json:"last_success_at"`
+	LastFailureAt     int64                          `json:"last_failure_at"`
+	LastFailureReason string                         `json:"last_failure_reason,omitempty"`
+	LastIncomplete    bool                           `json:"last_incomplete,omitempty"`
+	CommandSetVersion string                         `json:"command_set_version,omitempty"`
+	SystemType        string                         `json:"system_type,omitempty"`
+	DistroID          string                         `json:"distro_id,omitempty"`
+	DistroVersionID   string                         `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int                            `json:"unused_images,omitempty"`
+	PendingUpdates    *models.SoftwarePendingUpdates `json:"pending_updates,omitempty"`
+	PendingImmediate  bool                           `json:"pending_immediate,omitempty"`
 }
 
 // SnapshotSoftwareCollectSudoSetting 是全量备份里的 sudo 采集开关行。
@@ -87,7 +95,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 	items := make([]SnapshotSoftwareObservedItem, 0)
 	itemRows, err := s.db.Query(`
 		SELECT id,device_id,stable_key,category,name,version,package_url,belongs_to,
-		       architecture,container_tag,container_digest,container_running,executable_path,
+		       architecture,container_tag,container_digest,container_running,
+		       container_name,image_pullability,executable_path,
 		       process_name,process_id,collected_at
 		FROM software_observed_items ORDER BY id`)
 	if err != nil {
@@ -98,7 +107,8 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 		if err := itemRows.Scan(
 			&row.ID, &row.DeviceID, &row.StableKey, &row.Category, &row.Name, &row.Version,
 			&row.PackageURL, &row.BelongsTo, &row.Architecture, &row.ContainerTag,
-			&row.ContainerDigest, &row.ContainerRunning, &row.ExecutablePath,
+			&row.ContainerDigest, &row.ContainerRunning,
+			&row.ContainerName, &row.ImagePullability, &row.ExecutablePath,
 			&row.ProcessName, &row.ProcessID, &row.CollectedAt,
 		); err != nil {
 			itemRows.Close()
@@ -144,21 +154,27 @@ func (s *Store) snapshotSoftwareCollectionBackup() (
 	statusRows, err := s.db.Query(`
 		SELECT device_id,collector,COALESCE(preferred_server_id,''),COALESCE(last_server_id,''),
 		       last_success_at,last_failure_at,last_failure_reason,last_incomplete,
-		       command_set_version,system_type,pending_immediate
+		       command_set_version,system_type,distro_id,distro_version_id,unused_images,
+		       COALESCE(pending_updates,''),
+		       pending_immediate
 		FROM software_collection_status ORDER BY device_id`)
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
 	}
 	for statusRows.Next() {
 		var row SnapshotSoftwareCollectionStatus
+		var pendingUpdatesText string
 		if err := statusRows.Scan(
 			&row.DeviceID, &row.Collector, &row.PreferredServerID, &row.LastServerID,
 			&row.LastSuccessAt, &row.LastFailureAt, &row.LastFailureReason, &row.LastIncomplete,
-			&row.CommandSetVersion, &row.SystemType, &row.PendingImmediate,
+			&row.CommandSetVersion, &row.SystemType,
+			&row.DistroID, &row.DistroVersionID, &row.UnusedImageCount,
+			&pendingUpdatesText, &row.PendingImmediate,
 		); err != nil {
 			statusRows.Close()
 			return nil, nil, nil, nil, nil, err
 		}
+		row.PendingUpdates = softwarePendingUpdatesFromStorage(pendingUpdatesText)
 		statuses = append(statuses, row)
 	}
 	if err := statusRows.Err(); err != nil {
@@ -227,12 +243,14 @@ func importSoftwareCollectionBackupTx(tx *sql.Tx, snap *Snapshot) error {
 		if _, err := tx.Exec(`
 			INSERT INTO software_observed_items(
 				id,device_id,stable_key,category,name,name_lower,version,package_url,belongs_to,
-				architecture,container_tag,container_digest,container_running,executable_path,
+				architecture,container_tag,container_digest,container_running,
+				container_name,image_pullability,executable_path,
 				process_name,process_id,collected_at
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			row.ID, row.DeviceID, row.StableKey, row.Category, row.Name,
 			strings.ToLower(row.Name), row.Version, row.PackageURL, row.BelongsTo,
 			row.Architecture, row.ContainerTag, row.ContainerDigest, row.ContainerRunning,
+			row.ContainerName, row.ImagePullability,
 			row.ExecutablePath, row.ProcessName, row.ProcessID, row.CollectedAt,
 		); err != nil {
 			return fmt.Errorf("insert software observed item %s: %w", row.ID, err)
@@ -249,15 +267,22 @@ func importSoftwareCollectionBackupTx(tx *sql.Tx, snap *Snapshot) error {
 		}
 	}
 	for _, row := range snap.SoftwareCollectionStatuses {
+		pendingUpdatesText, err := softwarePendingUpdatesText(row.PendingUpdates)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`
 			INSERT INTO software_collection_status(
 				device_id,collector,preferred_server_id,last_server_id,last_success_at,
 				last_failure_at,last_failure_reason,last_incomplete,command_set_version,
-				system_type,pending_immediate
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+				system_type,distro_id,distro_version_id,unused_images,pending_updates,
+				pending_immediate
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			row.DeviceID, row.Collector, row.PreferredServerID, row.LastServerID,
 			row.LastSuccessAt, row.LastFailureAt, row.LastFailureReason, row.LastIncomplete,
-			row.CommandSetVersion, row.SystemType, row.PendingImmediate,
+			row.CommandSetVersion, row.SystemType,
+			row.DistroID, row.DistroVersionID, row.UnusedImageCount, pendingUpdatesText,
+			row.PendingImmediate,
 		); err != nil {
 			return fmt.Errorf("insert software collection status %s: %w", row.DeviceID, err)
 		}

@@ -9,6 +9,7 @@ type SoftwareCategory string
 const (
 	SoftwareCategoryOperatingSystem SoftwareCategory = "operating_system"
 	SoftwareCategoryServiceProgram  SoftwareCategory = "service_program"
+	SoftwareCategoryContainer       SoftwareCategory = "container"
 	SoftwareCategoryContainerImage  SoftwareCategory = "container_image"
 	SoftwareCategoryDriverFirmware  SoftwareCategory = "driver_firmware"
 	SoftwareCategorySystemPackage   SoftwareCategory = "system_package"
@@ -19,6 +20,7 @@ const (
 var SoftwareCategories = []SoftwareCategory{
 	SoftwareCategoryOperatingSystem,
 	SoftwareCategoryServiceProgram,
+	SoftwareCategoryContainer,
 	SoftwareCategoryContainerImage,
 	SoftwareCategoryDriverFirmware,
 	SoftwareCategorySystemPackage,
@@ -37,6 +39,8 @@ func (c SoftwareCategory) Label() string {
 		return "操作系统"
 	case SoftwareCategoryServiceProgram:
 		return "服务程序"
+	case SoftwareCategoryContainer:
+		return "容器"
 	case SoftwareCategoryContainerImage:
 		return "容器镜像"
 	case SoftwareCategoryDriverFirmware:
@@ -47,6 +51,30 @@ func (c SoftwareCategory) Label() string {
 		return "未识别进程"
 	default:
 		return string(c)
+	}
+}
+
+// SoftwareImagePullability 表示一个容器镜像能否从公开仓库拉取。代号保存
+// 在数据库与 JSON 里；Label 给命令行和 Web UI 显示中文。
+type SoftwareImagePullability string
+
+const (
+	SoftwareImagePullabilityPublic    SoftwareImagePullability = "public"
+	SoftwareImagePullabilityNotPublic SoftwareImagePullability = "not_public"
+	SoftwareImagePullabilityUnknown   SoftwareImagePullability = "unknown"
+)
+
+// Label 返回镜像可拉取性的中文显示名。
+func (p SoftwareImagePullability) Label() string {
+	switch p {
+	case SoftwareImagePullabilityPublic:
+		return "可公开拉取"
+	case SoftwareImagePullabilityNotPublic:
+		return "不可公开拉取"
+	case SoftwareImagePullabilityUnknown:
+		return "能否拉取未知"
+	default:
+		return string(p)
 	}
 }
 
@@ -143,7 +171,7 @@ var (
 func ValidateSoftwareDeclaration(declaration SoftwareDeclaration) error {
 	switch declaration.Category {
 	case SoftwareCategoryOperatingSystem, SoftwareCategoryServiceProgram,
-		SoftwareCategoryContainerImage, SoftwareCategoryDriverFirmware,
+		SoftwareCategoryContainer, SoftwareCategoryContainerImage, SoftwareCategoryDriverFirmware,
 		SoftwareCategorySystemPackage:
 	default:
 		return ErrSoftwareCategoryInvalid

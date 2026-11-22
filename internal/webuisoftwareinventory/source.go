@@ -5,6 +5,7 @@ package webuisoftwareinventory
 import (
 	"cmp"
 	"errors"
+	"strconv"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/softwareinventory"
@@ -249,10 +250,12 @@ func (s openerSource) ExportSoftwareInventoryCSV(
 		return nil, err
 	}
 	defer done()
+	// 总表只导出重点清单：查询走默认口径，不带 include_system_packages；
+	// MarshalCSV 内部对没有监听端口的系统包再过滤一次作为保险。
 	result, err := softwareinventory.New(st).Query(softwareinventory.QueryOptions{
 		Device: filter.Device, Name: filter.Name, ExactVersion: filter.ExactVersion,
 		Site: filter.Site, Network: filter.Network,
-		IncludeSystemPackages: true, Visibility: softwareinventory.AllDevicesVisible(),
+		Visibility: softwareinventory.AllDevicesVisible(),
 	})
 	if err != nil {
 		return nil, deviceError(filter.Device, err)
@@ -443,18 +446,48 @@ func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInv
 		LastSuccessAt: status.LastSuccessAt, LastFailureAt: status.LastFailureAt,
 		LastFailureReason: status.LastFailureReason, Incomplete: status.Incomplete,
 		NeverCollected: status.NeverCollected, Stale: status.Stale,
-		PendingImmediate: status.PendingImmediate,
+		PendingImmediate:            status.PendingImmediate,
+		UnusedImageCount:            status.UnusedImageCount,
+		PendingSecurityUpdatesLabel: pendingSecurityUpdatesLabel(status.CollectionStatus),
 	}
 }
 
+// pendingSecurityUpdatesLabel 把待装安全更新数量转成页面文本。缓存时间
+// 按本机时区显示到分钟；未知时不写成 0。
+func pendingSecurityUpdatesLabel(status softwareinventory.CollectionStatus) string {
+	if status.PendingUpdates == nil {
+		if status.SystemType == "windows" || status.SystemType == "darwin" {
+			return ""
+		}
+		return "未知"
+	}
+	label := strconv.Itoa(status.PendingUpdates.SecurityCount) + " 个"
+	if !status.PendingUpdates.CacheUpdatedAt.IsZero() {
+		label += "（缓存于 " +
+			status.PendingUpdates.CacheUpdatedAt.Local().Format("2006-01-02 15:04") + "）"
+	}
+	return label
+}
+
 func groupViews(items []softwareinventory.QueryItem) []webui.SoftwareInventoryGroup {
-	// 设备详情的固定分组顺序：操作系统条目与内核条目合并展示，系统包
-	// 排在未识别进程前并默认折叠。
+	// 设备详情的固定分组顺序：重点清单分组在前（操作系统与内核、监听
+	// 程序、容器、驱动与固件），系统包最后并默认折叠。监听程序分组按全
+	// 部端口的最高暴露级别降序排，仅本机监听的程序排后面。
 	categories := softwareinventory.AllDisplayCategories()
 	buckets := make([][]webui.SoftwareInventoryItem, len(categories))
 	for _, item := range items {
 		category := softwareinventory.ItemDisplayCategory(item)
 		buckets[category] = append(buckets[category], itemView(item))
+	}
+	listening := make([]softwareinventory.QueryItem, 0)
+	for _, item := range items {
+		if softwareinventory.ItemDisplayCategory(item) == softwareinventory.DisplayCategoryListeningProgram {
+			listening = append(listening, item)
+		}
+	}
+	softwareinventory.SortListeningProgramItems(listening)
+	for i, item := range listening {
+		buckets[softwareinventory.DisplayCategoryListeningProgram][i] = itemView(item)
 	}
 	groups := make([]webui.SoftwareInventoryGroup, 0, len(categories))
 	for _, category := range categories {
@@ -483,17 +516,23 @@ func itemView(item softwareinventory.QueryItem) webui.SoftwareInventoryItem {
 		})
 	}
 	displayCategory := softwareinventory.ItemDisplayCategory(item)
+	imagePullabilityLabel := ""
+	if item.ImagePullability != "" {
+		imagePullabilityLabel = item.ImagePullability.Label()
+	}
 	return webui.SoftwareInventoryItem{
 		CategoryCode: displayCategory.Code(), CategoryLabel: item.CategoryLabel,
+		ItemCategoryCode:    string(item.Category),
 		SearchCategoryLabel: displayCategory.Label(),
 		Name:                item.Name, Version: item.Version,
 		PackageURL: item.PackageURL, CPE: item.CPE, Source: item.Source,
 		CollectedAt: item.CollectedAt, ConfirmedAt: item.ConfirmedAt,
 		ListeningPorts: ports, BelongsTo: item.BelongsTo, Note: item.Note,
+		ContainerName: item.ContainerName, ImagePullabilityLabel: imagePullabilityLabel,
 		ContainerTag: item.ContainerTag, ContainerDigest: item.ContainerDigest,
 		ContainerRunning: item.ContainerRunning,
 		ProcessName:      item.ProcessName, ExecutablePath: item.ExecutablePath,
-		ProcessID: item.ProcessID,
+		ProcessID: item.ProcessID, MissingVersion: item.MissingVersion,
 	}
 }
 

@@ -58,7 +58,7 @@ func TestSoftwareInventoryImmediateCollectionForwardEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	if response.DeviceName != "gpu-设备" || response.Report == nil ||
-		response.Report.CommandSetVersion != softwareinventory.POSIXCommandSetVersion {
+		response.Report.CommandSetVersion != "posix-v2" {
 		t.Fatalf("立即采集响应 = %s", body)
 	}
 	audit, err := fx.st.QueryAudit(store.AuditFilter{Actions: []string{"software-collect"}})

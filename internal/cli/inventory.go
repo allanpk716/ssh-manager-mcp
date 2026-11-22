@@ -66,7 +66,7 @@ func inventoryAddCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Short: "Register a declared software item",
 		Long: `登记一条声明。版本按输入原样保存；类别可用值：
-operating_system、service_program、container_image、driver_firmware、system_package。
+operating_system、service_program、container、container_image、driver_firmware、system_package。
 
 监听端口参数可重复，格式为“监听地址,端口,协议,暴露级别”。协议可用 tcp 或 udp；
 暴露级别可用 local_machine、specific_address、all_addresses、local_area_network、
@@ -309,6 +309,7 @@ func parseInventoryCategory(value string) (softwareinventory.Category, error) {
 	switch category {
 	case softwareinventory.CategoryOperatingSystem,
 		softwareinventory.CategoryServiceProgram,
+		softwareinventory.CategoryContainer,
 		softwareinventory.CategoryContainerImage,
 		softwareinventory.CategoryDriverFirmware,
 		softwareinventory.CategorySystemPackage:

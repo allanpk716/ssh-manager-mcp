@@ -23,9 +23,17 @@ type CollectionStatus struct {
 	LastFailureReason string     `json:"last_failure_reason,omitempty"`
 	Incomplete        bool       `json:"incomplete,omitempty"`
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
-	NeverCollected    bool       `json:"never_collected"`
-	Stale             bool       `json:"stale"`
-	PendingImmediate  bool       `json:"pending_immediate"`
+	SystemType        string     `json:"system_type,omitempty"`
+	DistroID          string     `json:"distro_id,omitempty"`
+	DistroVersionID   string     `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int        `json:"unused_images,omitempty"`
+	// PendingUpdates 是这台设备的待装安全更新：全部可升级明细、安全来源标
+	// 记与缓存更新时间。没有包管理器或缓存不可读时为 nil（数量未知而
+	// 不是 0）；Windows 不采集。
+	PendingUpdates   *models.SoftwarePendingUpdates `json:"pending_updates,omitempty"`
+	NeverCollected   bool                           `json:"never_collected"`
+	Stale            bool                           `json:"stale"`
+	PendingImmediate bool                           `json:"pending_immediate"`
 }
 
 // QueryOptions 是软件清单查询的全部过滤条件。所有条件都可选；空值表示
@@ -60,18 +68,22 @@ type QueryItem struct {
 	CollectedAt    *time.Time      `json:"collected_at,omitempty"`
 	ConfirmedAt    *time.Time      `json:"confirmed_at,omitempty"`
 	// ObservedStableKey 供声明认领实测使用；只有声明来源的条目为空。
-	ObservedStableKey string `json:"observed_stable_key,omitempty"`
-	DeclaredVersion   string `json:"declared_version,omitempty"`
-	VersionMismatch   bool   `json:"version_mismatch,omitempty"`
-	Mismatch          bool   `json:"mismatch,omitempty"`
-	ContainerTag      string `json:"container_tag,omitempty"`
-	ContainerDigest   string `json:"container_digest,omitempty"`
-	ContainerRunning  bool   `json:"container_running,omitempty"`
+	ObservedStableKey string           `json:"observed_stable_key,omitempty"`
+	DeclaredVersion   string           `json:"declared_version,omitempty"`
+	VersionMismatch   bool             `json:"version_mismatch,omitempty"`
+	Mismatch          bool             `json:"mismatch,omitempty"`
+	ContainerTag      string           `json:"container_tag,omitempty"`
+	ContainerDigest   string           `json:"container_digest,omitempty"`
+	ContainerRunning  bool             `json:"container_running,omitempty"`
+	ContainerName     string           `json:"container_name,omitempty"`
+	ImagePullability  ImagePullability `json:"image_pullability,omitempty"`
 	// ProcessName、ExecutablePath 与 ProcessID 是未识别进程条目从实测
 	// 采集结果带出的进程可得信息；其余类别的条目为空。
 	ProcessName    string `json:"process_name,omitempty"`
 	ExecutablePath string `json:"executable_path,omitempty"`
 	ProcessID      int    `json:"process_id,omitempty"`
+	// MissingVersion 表示这条条目拿不到版本号，需要人工或外部程序补查。
+	MissingVersion bool `json:"missing_version,omitempty"`
 }
 
 // QueryDeviceResult 是一台设备的查询结果：设备、采集状态与匹配的软件
@@ -154,7 +166,8 @@ func queryItemFromObserved(deviceID string, row models.SoftwareObservedItem) Que
 		ListeningPorts: ports, BelongsTo: row.BelongsTo, Source: SourceObserved,
 		CollectedAt: &collectedAt, ObservedStableKey: row.StableKey,
 		ContainerTag: row.ContainerTag, ContainerDigest: row.ContainerDigest,
-		ContainerRunning: row.ContainerRunning,
+		ContainerRunning: row.ContainerRunning, ContainerName: row.ContainerName,
+		ImagePullability: row.ImagePullability,
 		ProcessName:      row.ProcessName, ExecutablePath: row.ExecutablePath,
 		ProcessID: row.ProcessID,
 	}
@@ -191,7 +204,8 @@ func combineObservedAndDeclared(bundle queryBundle) []QueryItem {
 			DeclaredVersion: declaration.Version,
 			VersionMismatch: declaration.Version != observed.Version && observed.Version != "",
 			ContainerTag:    observed.ContainerTag, ContainerDigest: observed.ContainerDigest,
-			ContainerRunning: observed.ContainerRunning,
+			ContainerRunning: observed.ContainerRunning, ContainerName: observed.ContainerName,
+			ImagePullability: observed.ImagePullability,
 		}
 		confirmedAt := declaration.ConfirmedAt
 		item.ConfirmedAt = &confirmedAt
@@ -247,22 +261,98 @@ func combinedPorts(observed, declared []ListeningPort) []ListeningPort {
 	return out
 }
 
+// unidentifiedProcessKey 返回一条未识别进程条目的程序合并键：可执行文件
+// 路径非空按路径，否则进程名非空按小写进程名；两者都空返回空串（不合
+// 并）。非未识别进程类别恒返回空串。
+func unidentifiedProcessKey(item QueryItem) string {
+	if item.Category != CategoryUnidentified {
+		return ""
+	}
+	if item.ExecutablePath != "" {
+		return "exe:" + item.ExecutablePath
+	}
+	if item.ProcessName != "" {
+		return "name:" + strings.ToLower(item.ProcessName)
+	}
+	return ""
+}
+
+// mergeUnidentifiedProcessItems 在查询输出层把同一程序的未识别进程条目
+// 合并为一行：合并行的名称、进程可得信息、采集时间与稳定键取首条，监听
+// 端口按出现顺序拼接并去掉地址、端口、协议都相同的重复项。依据是领域词
+// 「未识别进程」：每个程序合并为一行，多个端口合并列出。
+func mergeUnidentifiedProcessItems(items []QueryItem) []QueryItem {
+	out := make([]QueryItem, 0, len(items))
+	position := make(map[string]int, len(items))
+	for _, item := range items {
+		key := unidentifiedProcessKey(item)
+		if key == "" {
+			out = append(out, item)
+			continue
+		}
+		at, merged := position[key]
+		if !merged {
+			position[key] = len(out)
+			out = append(out, item)
+			continue
+		}
+		out[at].ListeningPorts = appendUniquePorts(out[at].ListeningPorts, item.ListeningPorts)
+	}
+	return out
+}
+
+// appendUniquePorts 把一组监听端口拼到基础列表末尾；地址、端口与协议都
+// 相同才算重复，不再次拼接。
+func appendUniquePorts(base, extra []ListeningPort) []ListeningPort {
+	for _, port := range extra {
+		duplicate := false
+		for _, existing := range base {
+			if existing.Address == port.Address && existing.Port == port.Port &&
+				existing.Protocol == port.Protocol {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			base = append(base, port)
+		}
+	}
+	return base
+}
+
+// sortListeningPorts 按暴露级别从高到低、端口号升序、地址排序一组监听
+// 端口，让攻击面大的端口排在前面；仅本机监听的端口自然排到最后。
+func sortListeningPorts(ports []ListeningPort) {
+	sort.SliceStable(ports, func(i, j int) bool {
+		left, right := exposureRank(ports[i].Exposure), exposureRank(ports[j].Exposure)
+		if left != right {
+			return left > right
+		}
+		if ports[i].Port != ports[j].Port {
+			return ports[i].Port < ports[j].Port
+		}
+		return ports[i].Address < ports[j].Address
+	})
+}
+
 func categoryRank(category Category) int {
 	switch category {
 	case CategoryOperatingSystem:
 		return 1
 	case CategoryServiceProgram:
 		return 2
-	case CategoryContainerImage:
+	case CategoryContainer:
 		return 3
-	case CategoryDriverFirmware:
+	case CategoryContainerImage:
 		return 4
-	case CategorySystemPackage:
+	case CategoryDriverFirmware:
 		return 5
-	case CategoryUnidentified:
+	case CategorySystemPackage:
 		return 6
-	default:
+	case CategoryUnidentified:
 		return 7
+	default:
+		return 8
 	}
 }
 
@@ -282,7 +372,7 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 	options.Network = strings.TrimSpace(options.Network)
 	if options.Category != "" {
 		switch options.Category {
-		case CategoryOperatingSystem, CategoryServiceProgram, CategoryContainerImage,
+		case CategoryOperatingSystem, CategoryServiceProgram, CategoryContainer, CategoryContainerImage,
 			CategoryDriverFirmware, CategorySystemPackage, CategoryUnidentified:
 		default:
 			return QueryResult{}, fmt.Errorf("软件类别代号不合法：%q", options.Category)
@@ -356,6 +446,11 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 		for _, observed := range bundle.Observed {
 			items = append(items, queryItemFromObserved(bundle.DeviceID, observed))
 		}
+		items = mergeUnidentifiedProcessItems(items)
+		for i := range items {
+			items[i].MissingVersion = items[i].Version == ""
+			sortListeningPorts(items[i].ListeningPorts)
+		}
 		sort.Slice(items, func(i, j int) bool {
 			if items[i].Category != items[j].Category {
 				return categoryRank(items[i].Category) < categoryRank(items[j].Category)
@@ -380,7 +475,10 @@ func (m *Manager) Query(options QueryOptions) (QueryResult, error) {
 			if options.ExactVersion != "" && item.Version != options.ExactVersion {
 				continue
 			}
-			if item.Category == CategorySystemPackage && !options.IncludeSystemPackages {
+			// 重点清单口径：默认只排除没有监听端口的系统包；带监听端口
+			// 的系统包是「监听端口的程序」，保留。
+			if item.Category == CategorySystemPackage && len(item.ListeningPorts) == 0 &&
+				!options.IncludeSystemPackages {
 				continue
 			}
 			if options.MinimumExposure != "" &&

@@ -57,6 +57,19 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 		}},
 		ServerID: server.ID, CommandSetVersion: "posix-v2", SystemType: "ubuntu",
 		Incomplete: true,
+		PendingUpdates: &models.SoftwarePendingUpdates{
+			SecurityCount: 2, CacheUpdatedAt: secondAt,
+			Items: []models.SoftwarePendingUpdate{
+				{
+					Name: "openssl", CurrentVersion: "3.0.2-0ubuntu1.15",
+					AvailableVersion: "3.0.2-0ubuntu1.18", FromSecurityRepo: true,
+				},
+				{
+					Name: "curl", CurrentVersion: "7.81.0-1ubuntu1.4",
+					AvailableVersion: "7.81.0-1ubuntu1.5",
+				},
+			},
+		},
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}
@@ -146,6 +159,12 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 		status.LastFailureReason != "连接超时" || !status.LastIncomplete ||
 		status.CommandSetVersion != "posix-v2" || status.SystemType != "ubuntu" {
 		t.Fatalf("恢复后的采集状态 = %+v", status)
+	}
+	pending := status.PendingUpdates
+	if pending == nil || pending.SecurityCount != 2 || len(pending.Items) != 2 ||
+		!pending.CacheUpdatedAt.Equal(secondAt) || !pending.Items[0].FromSecurityRepo ||
+		pending.Items[1].Name != "curl" {
+		t.Fatalf("恢复后的待装安全更新 = %+v", pending)
 	}
 	sudo, err := target.SoftwareCollectSudoEnabled()
 	if err != nil {

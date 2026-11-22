@@ -53,27 +53,49 @@ var _ driver.Valuer = Collector{}
 // SoftwareObservedItem 是一次实测采集中的一条软件条目。Version 原样保留
 // 包管理器或镜像仓库给出的字符串；StableKey 是整体替换实测结果后仍保持
 // 稳定的条目键（设备 + 类别 + 名称 + 所属；未识别进程再加端口、协议与
-// 可执行文件路径），声明认领实测时引用它。
+// 可执行文件路径，容器条目再加容器名），声明认领实测时引用它。
 type SoftwareObservedItem struct {
-	Category         SoftwareCategory        `json:"category"`
-	Name             string                  `json:"name"`
-	Version          string                  `json:"version"`
-	PackageURL       string                  `json:"purl,omitempty"`
-	BelongsTo        string                  `json:"belongs_to,omitempty"`
-	Architecture     string                  `json:"architecture,omitempty"`
-	ContainerTag     string                  `json:"container_tag,omitempty"`
-	ContainerDigest  string                  `json:"container_digest,omitempty"`
-	ContainerRunning bool                    `json:"container_running,omitempty"`
-	ExecutablePath   string                  `json:"executable_path,omitempty"`
-	ProcessName      string                  `json:"process_name,omitempty"`
-	ProcessID        int                     `json:"process_id,omitempty"`
-	StableKey        string                  `json:"stable_key"`
-	ListeningPorts   []SoftwareListeningPort `json:"listening_ports,omitempty"`
-	CollectedAt      time.Time               `json:"collected_at"`
+	Category         SoftwareCategory         `json:"category"`
+	Name             string                   `json:"name"`
+	Version          string                   `json:"version"`
+	PackageURL       string                   `json:"purl,omitempty"`
+	BelongsTo        string                   `json:"belongs_to,omitempty"`
+	Architecture     string                   `json:"architecture,omitempty"`
+	ContainerTag     string                   `json:"container_tag,omitempty"`
+	ContainerDigest  string                   `json:"container_digest,omitempty"`
+	ContainerRunning bool                     `json:"container_running,omitempty"`
+	ContainerName    string                   `json:"container_name,omitempty"`
+	ImagePullability SoftwareImagePullability `json:"image_pullability,omitempty"`
+	ExecutablePath   string                   `json:"executable_path,omitempty"`
+	ProcessName      string                   `json:"process_name,omitempty"`
+	ProcessID        int                      `json:"process_id,omitempty"`
+	StableKey        string                   `json:"stable_key"`
+	ListeningPorts   []SoftwareListeningPort  `json:"listening_ports,omitempty"`
+	CollectedAt      time.Time                `json:"collected_at"`
 }
 
-// SoftwareCollectionStatus 是一台设备的采集状态。清单是否过期不在这里存
-// 储，读取时按「当前时间减上次成功时间超过 7 天」计算。
+// SoftwarePendingUpdate 是包管理器本地缓存中已知、尚未安装的一条升级。
+type SoftwarePendingUpdate struct {
+	Name             string `json:"name"`
+	CurrentVersion   string `json:"current_version,omitempty"`
+	AvailableVersion string `json:"available_version,omitempty"`
+	// FromSecurityRepo 表示这条升级来自安全仓库（apt 的套件名）或安全
+	// 公告（dnf/yum 的安全更新筛选）。
+	FromSecurityRepo bool `json:"from_security_repo,omitempty"`
+}
+
+// SoftwarePendingUpdates 是一台设备的待装安全更新集合：全部可升级明细安
+// 全来源单独标出，附包管理器本地缓存的更新时间。SecurityCount 是安全
+// 来源条数，构造时与 Items 保持一致。
+type SoftwarePendingUpdates struct {
+	SecurityCount  int                     `json:"security_count"`
+	CacheUpdatedAt time.Time               `json:"cache_updated_at,omitempty"`
+	Items          []SoftwarePendingUpdate `json:"items"`
+}
+
+// SoftwareCollectionStatus 是一台设备的采集状态。发行版编号、发行版版本
+// 编号与未被容器使用的镜像数量来自最近一次成功采集；清单是否过期不在
+// 这里存储，读取时按「当前时间减上次成功时间超过 7 天」计算。
 type SoftwareCollectionStatus struct {
 	DeviceID          string    `json:"device_id"`
 	DeviceName        string    `json:"device_name"`
@@ -90,7 +112,13 @@ type SoftwareCollectionStatus struct {
 	LastIncomplete    bool      `json:"last_incomplete"`
 	CommandSetVersion string    `json:"command_set_version,omitempty"`
 	SystemType        string    `json:"system_type,omitempty"`
-	PendingImmediate  bool      `json:"pending_immediate"`
+	DistroID          string    `json:"distro_id,omitempty"`
+	DistroVersionID   string    `json:"distro_version_id,omitempty"`
+	UnusedImageCount  int       `json:"unused_images,omitempty"`
+	// PendingUpdates 是最近一次成功采集到的待装安全更新；没有包管理器或缓存
+	// 不可读时为 nil（数量未知）。
+	PendingUpdates   *SoftwarePendingUpdates `json:"pending_updates,omitempty"`
+	PendingImmediate bool                    `json:"pending_immediate"`
 }
 
 // SoftwareCollectionAssignment 是权威端下发给一个客户端实例的采集分派。
