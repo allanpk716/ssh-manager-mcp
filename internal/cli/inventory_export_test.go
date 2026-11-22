@@ -151,7 +151,7 @@ func TestInventoryExportCSVUsesCommandLineFilters(t *testing.T) {
 		"--name", "nginx", "--version", "1.25.3",
 		"--site", "公司", "--network", "总部物理局域网")
 	rows := readInventoryExportCSV(t, output)
-	if strings.Join(rows[0], "|") != "设备|软件名|版本|缺版本|类别|监听端口|暴露级别|采集时间" {
+	if strings.Join(rows[0], "|") != "设备|软件名|版本|缺版本|类别|监听端口|暴露级别|采集时间|待装安全更新" {
 		t.Fatalf("CSV 表头 = %#v", rows[0])
 	}
 	if len(rows) != 2 || rows[1][0] != "工作站" ||

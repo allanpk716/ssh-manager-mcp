@@ -680,6 +680,7 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 		"the result is the focus list",
 		"system packages without listening ports are omitted",
 		"packages with listening ports appear as listening programs",
+		"collection status includes pending_updates",
 		"cyclonedx",
 		"Trivy",
 		"Grype",
@@ -711,6 +712,28 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 	for _, wanted := range []string{"focus list", "listening programs", "full package list"} {
 		if !strings.Contains(description, wanted) {
 			t.Fatalf("include_system_packages 参数说明缺少 %q：%s", wanted, description)
+		}
+	}
+
+	outputSchemaBlob, err := json.Marshal(tool.OutputSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var outputSchema struct {
+		Properties map[string]struct {
+			Description string `json:"description"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(outputSchemaBlob, &outputSchema); err != nil {
+		t.Fatal(err)
+	}
+	description = outputSchema.Properties["devices"].Description
+	for _, wanted := range []string{
+		"pending_updates", "security_count", "cache_updated_at",
+		"items include package name, current version, available version, and whether it is from a security source",
+	} {
+		if !strings.Contains(description, wanted) {
+			t.Fatalf("devices 输出说明缺少 %q：%s", wanted, description)
 		}
 	}
 }

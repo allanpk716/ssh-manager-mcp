@@ -571,6 +571,11 @@ func migrate(db *sql.DB) error {
 	if err := addColumnIfMissing(db, "software_collection_status", "unused_images", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
+	// 票 #354：软件清单状态表补充待装更新列（JSON 文本：明细与缓存时
+	// 间；空串表示未知）。
+	if err := addColumnIfMissing(db, "software_collection_status", "pending_updates", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := migrateSoftwareObservedItemsContainerCategory(db); err != nil {
 		return err
 	}

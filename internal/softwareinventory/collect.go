@@ -171,6 +171,7 @@ func (s *Service) Collect(parent context.Context, request CollectRequest) (*Coll
 		CommandSetVersion: collection.CommandSetVersion, SystemType: collection.SystemType,
 		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
 		UnusedImageCount: collection.UnusedImageCount,
+		PendingUpdates:   collection.PendingUpdates,
 		Incomplete:       incomplete,
 	}, source.origin); err != nil {
 		return nil, err

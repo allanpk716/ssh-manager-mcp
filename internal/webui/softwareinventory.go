@@ -85,6 +85,10 @@ type SoftwareInventoryStatus struct {
 	// UnusedImageCount 是设备上不再被任何容器使用的镜像数量；第 2 版
 	// 采集结果没有这个值，数量为零时不显示。
 	UnusedImageCount int
+	// PendingSecurityUpdatesLabel 是待装安全更新数量的显示文本，带缓存
+	// 时间；没有包管理器或缓存不可读时为「未知」；不采集待装更新的系统
+	// （Windows、macOS）为空，页面不显示这一行。
+	PendingSecurityUpdatesLabel string
 }
 
 // SoftwareInventoryChange 是一条变化历史。

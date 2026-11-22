@@ -54,7 +54,9 @@ func TestMarshalCSVProducesFlatSoftwareTable(t *testing.T) {
 	}
 
 	rows := readCSVForTest(t, blob)
-	wantHeader := []string{"设备", "软件名", "版本", "缺版本", "类别", "监听端口", "暴露级别", "采集时间"}
+	wantHeader := []string{
+		"设备", "软件名", "版本", "缺版本", "类别", "监听端口", "暴露级别", "采集时间", "待装安全更新",
+	}
 	if len(rows) != 2 {
 		t.Fatalf("CSV 行数 = %d（含表头应为 2，没有监听端口的系统包不导出）：\n%q", len(rows), blob)
 	}
@@ -64,11 +66,56 @@ func TestMarshalCSVProducesFlatSoftwareTable(t *testing.T) {
 	wantFirst := []string{
 		"gpu工作站", "nginx,网页服务\n含引号\"特\"", "1.25.3", "", "监听程序",
 		"0.0.0.0:80/tcp;192.0.2.10:8443/tcp", "监听所有地址;监听特定地址",
-		"2026-11-01T08:00:00Z",
+		"2026-11-01T08:00:00Z", "",
 	}
 	if strings.Join(rows[1], "|") != strings.Join(wantFirst, "|") {
 		t.Fatalf("多端口软件行 = %#v，想要 %#v", rows[1], wantFirst)
 	}
+}
+
+// TestMarshalCSVShowsPendingSecurityUpdates 钉住 CSV 的未知口径：待装安
+// 全更新已知时逐行写数量，未知时留空而不写成 0。
+func TestMarshalCSVShowsPendingSecurityUpdates(t *testing.T) {
+	manager := seedPOSIXSample(t, "容器工作站", "ubuntu2204-v3-containers.txt")
+	result, err := manager.Query(QueryOptions{
+		Device: "容器工作站", Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := readCSVForTest(t, mustMarshalCSV(t, result))
+	pendingColumn := len(rows[0]) - 1
+	if rows[0][pendingColumn] != "待装安全更新" {
+		t.Fatalf("CSV 表头缺少待装安全更新列：%#v", rows[0])
+	}
+	for _, row := range rows[1:] {
+		if row[pendingColumn] != "2" {
+			t.Fatalf("容器工作站的待装安全更新列应为 2：%#v", row)
+		}
+	}
+
+	manager = seedPOSIXSample(t, "嵌入式板", "vendor-linux-v3-no-package-manager.txt")
+	result, err = manager.Query(QueryOptions{
+		Device: "嵌入式板", Visibility: AllDevicesVisible(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows = readCSVForTest(t, mustMarshalCSV(t, result))
+	for _, row := range rows[1:] {
+		if row[len(row)-1] != "" {
+			t.Fatalf("未知待装安全更新应留空，不能写成 0：%#v", row)
+		}
+	}
+}
+
+func mustMarshalCSV(t *testing.T, result QueryResult) []byte {
+	t.Helper()
+	blob, err := MarshalCSV(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return blob
 }
 
 // TestMarshalCSVExportsFocusListOnlyWithMissingVersionColumn 钉住平铺总表

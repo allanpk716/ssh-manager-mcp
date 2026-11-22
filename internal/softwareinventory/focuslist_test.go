@@ -49,6 +49,7 @@ func seedParsedSample(t *testing.T, deviceName string, collection *ParsedCollect
 		SystemType: collection.SystemType, Incomplete: collection.Incomplete,
 		DistroID: collection.DistroID, DistroVersionID: collection.DistroVersionID,
 		UnusedImageCount: collection.UnusedImageCount,
+		PendingUpdates:   collection.PendingUpdates,
 	}, store.CLISource()); err != nil {
 		t.Fatal(err)
 	}

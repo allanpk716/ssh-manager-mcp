@@ -4,19 +4,24 @@ import (
 	"bytes"
 	"encoding/csv"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
+
+	"ssh-manager-mcp/internal/models"
 )
 
 // csvHeader 是平铺 CSV 总表的固定列顺序。
-var csvHeader = []string{"设备", "软件名", "版本", "缺版本", "类别", "监听端口", "暴露级别", "采集时间"}
+var csvHeader = []string{
+	"设备", "软件名", "版本", "缺版本", "类别", "监听端口", "暴露级别", "采集时间", "待装安全更新",
+}
 
 // MarshalCSV 把统一查询结果序列化成平铺 CSV 总表。每个软件条目一行；
 // 一条软件有多个监听端口时仍是一行，两个单元格按端口顺序列出全部值。
 // 总表只导出重点清单：即使查询结果带着系统包（例如按名称搜索时自动包
 // 含），没有监听端口的系统包也不写行。缺版本列在条目版本为空时标
-// 「是」，否则留空。输出是带 UTF-8 字节顺序标记的字节，行结束符为回车
-// 加换行。
+// 「是」，否则留空。待装安全更新未知时留空，已知为 0 时写 0。输出是带
+// UTF-8 字节顺序标记的字节，行结束符为回车加换行。
 func MarshalCSV(result QueryResult) ([]byte, error) {
 	var buffer bytes.Buffer
 	// 字节顺序标记帮助表格软件把文件识别为 UTF-8。
@@ -37,6 +42,7 @@ func MarshalCSV(result QueryResult) ([]byte, error) {
 				csvListeningPorts(item.ListeningPorts),
 				csvExposureLevels(item.ListeningPorts),
 				csvCollectedAt(item.CollectedAt),
+				csvPendingSecurityUpdates(device.Collection.PendingUpdates),
 			}
 			if err := writer.Write(record); err != nil {
 				return nil, err
@@ -79,4 +85,13 @@ func csvCollectedAt(collectedAt *time.Time) string {
 		return ""
 	}
 	return collectedAt.UTC().Format(time.RFC3339)
+}
+
+// csvPendingSecurityUpdates 返回设备级待装安全更新数量。没有包管理器或
+// 缓存不可读时未知留空；已知没有安全更新时写 0。
+func csvPendingSecurityUpdates(pendingUpdates *models.SoftwarePendingUpdates) string {
+	if pendingUpdates == nil {
+		return ""
+	}
+	return strconv.Itoa(pendingUpdates.SecurityCount)
 }

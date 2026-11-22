@@ -46,6 +46,9 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 	if version == POSIXCommandSetVersion {
 		collection.DistroID = osInfo.osRelease["ID"]
 		collection.DistroVersionID = osInfo.osRelease["VERSION_ID"]
+		collection.PendingUpdates = buildPOSIXV3PendingUpdates(
+			sectionOrEmpty(sections, "pending-updates-apt"),
+			sectionOrEmpty(sections, "pending-updates-dnf"))
 	}
 	if collection.SystemType == "" {
 		collection.Incomplete = true

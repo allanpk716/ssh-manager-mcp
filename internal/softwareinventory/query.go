@@ -23,12 +23,17 @@ type CollectionStatus struct {
 	LastFailureReason string     `json:"last_failure_reason,omitempty"`
 	Incomplete        bool       `json:"incomplete,omitempty"`
 	CommandSetVersion string     `json:"command_set_version,omitempty"`
+	SystemType        string     `json:"system_type,omitempty"`
 	DistroID          string     `json:"distro_id,omitempty"`
 	DistroVersionID   string     `json:"distro_version_id,omitempty"`
 	UnusedImageCount  int        `json:"unused_images,omitempty"`
-	NeverCollected    bool       `json:"never_collected"`
-	Stale             bool       `json:"stale"`
-	PendingImmediate  bool       `json:"pending_immediate"`
+	// PendingUpdates 是这台设备的待装更新：全部可升级明细、安全来源标
+	// 记与缓存更新时间。没有包管理器或缓存不可读时为 nil（数量未知而
+	// 不是 0）；Windows 不采集。
+	PendingUpdates   *models.SoftwarePendingUpdates `json:"pending_updates,omitempty"`
+	NeverCollected   bool                           `json:"never_collected"`
+	Stale            bool                           `json:"stale"`
+	PendingImmediate bool                           `json:"pending_immediate"`
 }
 
 // QueryOptions 是软件清单查询的全部过滤条件。所有条件都可选；空值表示

@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"strconv"
 
 	"ssh-manager-mcp/internal/models"
 	"ssh-manager-mcp/internal/softwareinventory"
@@ -499,9 +500,27 @@ func statusView(status softwareinventory.CollectionStatusView) webui.SoftwareInv
 		LastSuccessAt: status.LastSuccessAt, LastFailureAt: status.LastFailureAt,
 		LastFailureReason: status.LastFailureReason, Incomplete: status.Incomplete,
 		NeverCollected: status.NeverCollected, Stale: status.Stale,
-		PendingImmediate: status.PendingImmediate,
-		UnusedImageCount: status.UnusedImageCount,
+		PendingImmediate:            status.PendingImmediate,
+		UnusedImageCount:            status.UnusedImageCount,
+		PendingSecurityUpdatesLabel: pendingSecurityUpdatesLabel(status.CollectionStatus),
 	}
+}
+
+// pendingSecurityUpdatesLabel 把待装安全更新数量转成页面文本。缓存时间
+// 按本机时区显示到分钟；未知时不写成 0。
+func pendingSecurityUpdatesLabel(status softwareinventory.CollectionStatus) string {
+	if status.PendingUpdates == nil {
+		if status.SystemType == "windows" || status.SystemType == "darwin" {
+			return ""
+		}
+		return "未知"
+	}
+	label := strconv.Itoa(status.PendingUpdates.SecurityCount) + " 个"
+	if !status.PendingUpdates.CacheUpdatedAt.IsZero() {
+		label += "（缓存于 " +
+			status.PendingUpdates.CacheUpdatedAt.Local().Format("2006-01-02 15:04") + "）"
+	}
+	return label
 }
 
 func groupViews(items []softwareinventory.QueryItem) []webui.SoftwareInventoryGroup {

@@ -102,4 +102,37 @@ if [ -r /proc/driver/nvidia/version ] || command -v nvidia-smi >/dev/null 2>&1; 
   nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>&1
   echo "$M STATUS gpu-driver 0"
 else echo "$M ABSENT gpu-driver"; fi
+echo "$M SECTION pending-updates-apt"
+# apt list --upgradable 只读取本地软件包索引，不刷新索引、不安装升级。
+if command -v apt >/dev/null 2>&1; then
+  apt_pending=$(LC_ALL=C apt list --upgradable 2>/dev/null); apt_rc=$?
+  if [ "$apt_rc" -eq 0 ]; then
+    printf '%s\n' "$apt_pending"
+    printf 'cache-time\t%s\n' "$(stat -c %Y /var/lib/apt/lists 2>/dev/null)"
+    echo "$M STATUS pending-updates-apt 0"
+  else
+    echo "$M STATUS pending-updates-apt $apt_rc"
+  fi
+else echo "$M ABSENT pending-updates-apt"; fi
+echo "$M SECTION pending-updates-dnf"
+# dnf/yum 使用 --cacheonly 只读本地元数据，并用 --security 只取安全更新。
+if command -v dnf >/dev/null 2>&1; then
+  dnf_pending=$(dnf -q -C --security check-update 2>/dev/null); dnf_rc=$?
+  if [ "$dnf_rc" -eq 0 ] || [ "$dnf_rc" -eq 100 ]; then
+    printf '%s\n' "$dnf_pending"
+    printf 'cache-time\t%s\n' "$(stat -c %Y /var/cache/dnf 2>/dev/null)"
+    echo "$M STATUS pending-updates-dnf 0"
+  else
+    echo "$M STATUS pending-updates-dnf $dnf_rc"
+  fi
+elif command -v yum >/dev/null 2>&1; then
+  yum_pending=$(yum -q -C --security check-update 2>/dev/null); yum_rc=$?
+  if [ "$yum_rc" -eq 0 ] || [ "$yum_rc" -eq 100 ]; then
+    printf '%s\n' "$yum_pending"
+    printf 'cache-time\t%s\n' "$(stat -c %Y /var/cache/yum 2>/dev/null)"
+    echo "$M STATUS pending-updates-dnf 0"
+  else
+    echo "$M STATUS pending-updates-dnf $yum_rc"
+  fi
+else echo "$M ABSENT pending-updates-dnf"; fi
 echo "$M END"
