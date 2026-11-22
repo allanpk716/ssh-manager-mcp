@@ -238,7 +238,7 @@ func unixSecondsTime(value string) time.Time {
 func appendPOSIXContainerItems(
 	collection *ParsedCollection, sections map[string]*parsedSection, commandSetVersion string,
 ) {
-	if commandSetVersion != POSIXCommandSetVersion {
+	if commandSetVersion != posixV3CommandSetVersion {
 		collection.Items = append(collection.Items, buildLinuxContainerItems(
 			sectionOrEmpty(sections, "container-images"),
 			sectionOrEmpty(sections, "containers"))...)

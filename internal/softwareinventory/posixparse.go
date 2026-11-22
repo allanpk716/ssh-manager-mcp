@@ -43,7 +43,7 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 		collection.Notes = append(collection.Notes, "缺少结尾标记")
 	}
 	collection.SystemType = osInfo.systemType
-	if version == POSIXCommandSetVersion {
+	if version == posixV3CommandSetVersion {
 		collection.DistroID = osInfo.osRelease["ID"]
 		collection.DistroVersionID = osInfo.osRelease["VERSION_ID"]
 		collection.PendingUpdates = buildPOSIXV3PendingUpdates(
@@ -106,7 +106,7 @@ func parsePOSIXInventoryOutput(output string) (*ParsedCollection, error) {
 // requiredPOSIXSections 返回一种系统实际采集时必须完整得到的节。基础采
 // 集系统忽略其余节，因此那些节的失败不影响完整标记。
 func requiredPOSIXSections(systemType, commandSetVersion string) []string {
-	if commandSetVersion == POSIXCommandSetVersion {
+	if commandSetVersion == posixV3CommandSetVersion {
 		switch systemType {
 		case "ubuntu", "debian":
 			return []string{

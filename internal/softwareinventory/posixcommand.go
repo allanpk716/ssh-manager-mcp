@@ -14,7 +14,13 @@ const InventoryMarker = "SSHMGR-INVENTORY"
 
 // POSIXCommandSetVersion 是所有 POSIX 系统共用的固定命令集版本号。每次
 // 采集结果记录所用版本，命令集升级后前后结果仍可比较。
-const POSIXCommandSetVersion = "posix-v3"
+const POSIXCommandSetVersion = posixV3CommandSetVersion
+
+// posixV3CommandSetVersion 是第 3 版 POSIX 固定命令集的版本号。解析侧按
+// 它识别第 3 版输出：命令集升级到更新的版本后，库里的存量第 3 版结果仍
+// 按第 3 版规则解析展示，直到被新结果替换（与 Windows 侧
+// windowsCommandSetV1Version 的做法一致）。
+const posixV3CommandSetVersion = "posix-v3"
 
 // posixCommandSet 是随二进制发布的 POSIX 固定命令集原文。它只由固定
 // 模板组成，不拼接任何来自机密库或用户的自由文本。
