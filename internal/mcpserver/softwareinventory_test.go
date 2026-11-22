@@ -678,6 +678,7 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 	}
 	for _, wanted := range []string{
 		"the result is the focus list",
+		"every program with a listening port",
 		"system packages without listening ports are omitted",
 		"packages with listening ports appear as listening programs",
 		"collection status includes pending_updates",
@@ -709,7 +710,7 @@ func TestQuerySoftwareInventoryToolExplainsFocusList(t *testing.T) {
 	}
 
 	description := schema.Properties["include_system_packages"].Description
-	for _, wanted := range []string{"focus list", "listening programs", "full package list"} {
+	for _, wanted := range []string{"focus list", "every program with a listening port", "listening programs", "full package list"} {
 		if !strings.Contains(description, wanted) {
 			t.Fatalf("include_system_packages 参数说明缺少 %q：%s", wanted, description)
 		}
