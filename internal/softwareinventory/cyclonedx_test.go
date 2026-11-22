@@ -276,7 +276,7 @@ func TestCycloneDXPerDeviceFromPOSIXV3Sample(t *testing.T) {
 	value := decodeCycloneDX(t, documents[0].Document)
 	metadata := nestedMap(t, value["metadata"], "metadata")
 	mainComponent := nestedMap(t, metadata["component"], "metadata.component")
-	if mainComponent["type"] != "operating-system" || mainComponent["name"] != "Ubuntu" ||
+	if mainComponent["type"] != "operating-system" || mainComponent["name"] != "ubuntu" ||
 		mainComponent["version"] != "22.04" {
 		t.Fatalf("操作系统主组件 = %+v", mainComponent)
 	}
@@ -288,14 +288,16 @@ func TestCycloneDXPerDeviceFromPOSIXV3Sample(t *testing.T) {
 
 	device := nestedMap(t, anySlice(t, value["components"], "顶层组件")[0], "设备组件")
 	components := anySlice(t, device["components"], "设备内软件组件")
-	var libc6, nginx map[string]any
+	var libc6, nginx, litellm map[string]any
 	for _, raw := range components {
 		component := nestedMap(t, raw, "软件组件")
 		switch {
 		case component["name"] == "libc6":
 			libc6 = component
-		case component["purl"] == "pkg:oci/nginx@sha256:2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0?tag=1.25.3":
+		case component["purl"] == "pkg:oci/nginx@sha256%3A2f1b0af53c34b7d4c9d1d55a30fb8f0e6f8b2f9b0b9e1f1aaaaaaaaaaaaaaaa0?tag=1.25.3":
 			nginx = component
+		case component["purl"] == "pkg:oci/litellm@sha256%3A9c2f1e63b3a44f4f8f5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70?repository_url=ghcr.io%2Fberriai%2Flitellm&tag=main-stable":
+			litellm = component
 		}
 	}
 	if libc6 == nil {
@@ -306,6 +308,9 @@ func TestCycloneDXPerDeviceFromPOSIXV3Sample(t *testing.T) {
 	}
 	if nginx == nil {
 		t.Fatalf("文档缺少 nginx 容器组件：%+v", components)
+	}
+	if litellm == nil {
+		t.Fatalf("文档缺少带 repository_url 限定符的 litellm 容器组件：%+v", components)
 	}
 	hashes := anySlice(t, nginx["hashes"], "nginx 镜像摘要")
 	firstHash := nestedMap(t, hashes[0], "nginx 镜像摘要")
@@ -405,7 +410,7 @@ func TestCycloneDXPerDeviceReturnsOneDocumentPerDevice(t *testing.T) {
 	}{{
 		deviceName: "a工作站", mainName: "Windows 11 Pro", mainVersion: "10.0.26100.1", itemName: "a服务",
 	}, {
-		deviceName: "z工作站", mainName: "Ubuntu", mainVersion: "24.04", itemName: "z服务",
+		deviceName: "z工作站", mainName: "ubuntu", mainVersion: "24.04", itemName: "z服务",
 	}}
 	for i, want := range wanted {
 		value := decodeCycloneDX(t, documents[i].Document)

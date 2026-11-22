@@ -411,7 +411,7 @@ func TestQuerySoftwareInventoryAuthorityFaceReturnsCycloneDX(t *testing.T) {
 	}
 	metadata := softwareInventoryNestedMapForTest(t, bom["metadata"], "metadata")
 	mainComponent := softwareInventoryNestedMapForTest(t, metadata["component"], "metadata.component")
-	if mainComponent["name"] != "Ubuntu" || mainComponent["version"] != "22.04" {
+	if mainComponent["name"] != "ubuntu" || mainComponent["version"] != "22.04" {
 		t.Fatalf("操作系统主组件 = %+v", mainComponent)
 	}
 	device := softwareInventoryNestedMapForTest(

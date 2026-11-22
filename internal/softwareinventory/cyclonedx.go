@@ -116,6 +116,14 @@ func MarshalCycloneDX(result QueryResult, options CycloneDXExportOptions) ([]byt
 				mainComponent := cycloneDXComponent{
 					Type: "operating-system", Name: item.Name, Version: item.Version,
 				}
+				// Trivy 一类扫描工具要求操作系统组件名是小写发行版编号
+				// （如 ubuntu）；采集到发行版编号时改用编号与版本编号。
+				if device.Collection.DistroID != "" {
+					mainComponent.Name = device.Collection.DistroID
+					if device.Collection.DistroVersionID != "" {
+						mainComponent.Version = device.Collection.DistroVersionID
+					}
+				}
 				if device.Collection.DistroID != "" {
 					mainComponent.Properties = append(mainComponent.Properties, cycloneDXProperty{
 						Name: "sshmgr:distro-id", Value: device.Collection.DistroID,
@@ -233,20 +241,118 @@ func cycloneDXPackageURL(item QueryItem, collection CollectionStatus) string {
 	if packageURL == "" {
 		return packageURL
 	}
+	if (item.Category == CategoryContainer || item.Category == CategoryContainerImage) &&
+		strings.HasPrefix(packageURL, "pkg:docker/") {
+		packageURL = ociPackageURL(packageURL)
+	}
 	if item.Category == CategorySystemPackage &&
 		collection.DistroID != "" && collection.DistroVersionID != "" &&
 		!strings.Contains(packageURL, "distro=") {
-		separator := "?"
-		if strings.Contains(packageURL, "?") {
-			separator = "&"
-		}
-		packageURL += separator + "distro=" + collection.DistroID + "-" + collection.DistroVersionID
-	}
-	if (item.Category == CategoryContainer || item.Category == CategoryContainerImage) &&
-		strings.HasPrefix(packageURL, "pkg:docker/") {
-		packageURL = strings.Replace(packageURL, "pkg:docker/", "pkg:oci/", 1)
+		packageURL = withPurlQualifier(
+			packageURL, "distro", collection.DistroID+"-"+collection.DistroVersionID)
 	}
 	return packageURL
+}
+
+// ociPackageURL 把 pkg:docker 形式的容器软件包统一地址改写成符合 purl
+// 规范的 oci 类型：oci 不允许命名空间，名称段只留镜像名的最后一段，完
+// 整镜像仓库地址挪到 repository_url 限定符，摘要中的冒号按规范转义。存
+// 储格式没有仓库地址与摘要时原样返回，不编造信息。
+func ociPackageURL(packageURL string) string {
+	path, query, _ := strings.Cut(strings.TrimPrefix(packageURL, "pkg:docker/"), "?")
+	repository, digest, hasDigest := strings.Cut(path, "@")
+	if !hasDigest || repository == "" || digest == "" {
+		return packageURL
+	}
+	name := repository
+	qualifiers := parsePurlQualifiers(query)
+	if lastSlash := strings.LastIndex(repository, "/"); lastSlash >= 0 {
+		name = repository[lastSlash+1:]
+		qualifiers = append(qualifiers, purlQualifier{key: "repository_url", value: repository})
+	}
+	return "pkg:oci/" + name + "@" + percentEncodePURL(digest) + buildPurlQualifiers(qualifiers)
+}
+
+// purlQualifier 是软件包统一地址问号后的一个键值对。
+type purlQualifier struct {
+	key, value string
+}
+
+// parsePurlQualifiers 解析软件包统一地址问号后的限定符串。这里读的地址
+// 由采集侧生成，键值都是未转义的明文。
+func parsePurlQualifiers(query string) []purlQualifier {
+	qualifiers := []purlQualifier{}
+	for _, part := range strings.Split(query, "&") {
+		if part == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(part, "=")
+		qualifiers = append(qualifiers, purlQualifier{key: key, value: value})
+	}
+	return qualifiers
+}
+
+// withPurlQualifier 在软件包统一地址上追加一个限定符，按键排序并转义后
+// 重建限定符串。
+func withPurlQualifier(packageURL, key, value string) string {
+	base, query, _ := strings.Cut(packageURL, "?")
+	qualifiers := append(
+		parsePurlQualifiers(query), purlQualifier{key: key, value: value})
+	return base + buildPurlQualifiers(qualifiers)
+}
+
+// buildPurlQualifiers 把限定符按键排序、按键值转义后拼成带问号前缀的限
+// 定符串；没有限定符时返回空串。
+func buildPurlQualifiers(qualifiers []purlQualifier) string {
+	if len(qualifiers) == 0 {
+		return ""
+	}
+	sort.SliceStable(qualifiers, func(i, j int) bool {
+		return qualifiers[i].key < qualifiers[j].key
+	})
+	parts := make([]string, 0, len(qualifiers))
+	for _, qualifier := range qualifiers {
+		parts = append(parts,
+			percentEncodePURL(qualifier.key)+"="+percentEncodePURL(qualifier.value))
+	}
+	return "?" + strings.Join(parts, "&")
+}
+
+// percentEncodePURL 转义软件包统一地址里需要编码的段：只保留字母数字与
+// 连字符、点、下划线、波浪线，其余字节写成大写十六进制百分号转义（镜像
+// 摘要的冒号写成 %3A，仓库地址的斜杠写成 %2F）。
+func percentEncodePURL(value string) string {
+	needsEncoding := false
+	for i := 0; i < len(value); i++ {
+		if !isPURLUnreserved(value[i]) {
+			needsEncoding = true
+			break
+		}
+	}
+	if !needsEncoding {
+		return value
+	}
+	var builder strings.Builder
+	for i := 0; i < len(value); i++ {
+		if isPURLUnreserved(value[i]) {
+			builder.WriteByte(value[i])
+			continue
+		}
+		fmt.Fprintf(&builder, "%%%02X", value[i])
+	}
+	return builder.String()
+}
+
+func isPURLUnreserved(char byte) bool {
+	switch {
+	case char >= 'a' && char <= 'z', char >= 'A' && char <= 'Z',
+		char >= '0' && char <= '9':
+		return true
+	case char == '-', char == '.', char == '_', char == '~':
+		return true
+	default:
+		return false
+	}
 }
 
 func cycloneDXCategoryRank(category Category) int {
