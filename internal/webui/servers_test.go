@@ -205,6 +205,9 @@ type stubServerWriter struct {
 	otherAdds      []OtherDeviceAddForm
 	edits          []ServerEditForm
 	editIDs        []string
+	noteEdits      []ServerAccountNoteEdit
+	noteConflict   *ServerEditConflictView
+	noteErr        error
 	addressEdits   []stubServerAddressEdit
 	deletes        []string
 	importRuns     []stubImportRun
@@ -285,6 +288,19 @@ func (w *stubServerWriter) EditServer(id string, form ServerEditForm, source Ser
 		return nil, w.conflict, nil
 	}
 	return &ServerEditResultView{Detail: &ServerDetailView{ID: id, Name: form.NameValue()}}, nil, nil
+}
+
+func (w *stubServerWriter) EditAccountNotes(
+	edits []ServerAccountNoteEdit, source ServerWriteSource,
+) (*ServerEditConflictView, error) {
+	w.noteEdits = append(w.noteEdits, edits...)
+	if w.noteErr != nil {
+		return nil, w.noteErr
+	}
+	if w.noteConflict != nil {
+		return w.noteConflict, nil
+	}
+	return nil, nil
 }
 
 func (w *stubServerWriter) EditServerAddresses(
@@ -733,7 +749,7 @@ func TestAuthorityServerCredentialWritesNeedRecentVerify(t *testing.T) {
 		"credential_action": {"password"}, "password": {"authority-secret"},
 	}, cookie)
 	if after.StatusCode != http.StatusSeeOther ||
-		after.Header.Get("Location") != "/ui/servers/srv-fine?saved=connection#server-card-connection" {
+		after.Header.Get("Location") != "/ui/servers/srv-fine?notice=saved-connection#server-card-connection" {
 		t.Fatalf("验证后的凭据提交应通过，状态码=%d 跳转=%s", after.StatusCode, after.Header.Get("Location"))
 	}
 	if len(writer.edits) != 1 || writer.edits[0].PasswordValue() != "authority-secret" {

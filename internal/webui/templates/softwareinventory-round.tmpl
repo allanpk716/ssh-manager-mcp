@@ -1,0 +1,16 @@
+{{define "content"}}
+<section class="software-inventory-round"{{if and .SoftwareInventoryRound .SoftwareInventoryRound.Refreshing}} id="software-inventory-round" hx-get="/ui/software-inventory/round" hx-trigger="every 2s" hx-swap="outerHTML"{{end}}>
+<h1>采集进度</h1>
+{{if .SoftwareInventoryRound}}
+<p>{{if .SoftwareInventoryRound.ScopeText}}{{.SoftwareInventoryRound.ScopeText}} · {{end}}{{.SoftwareInventoryRound.StatusText}}：{{.SoftwareInventoryRound.SummaryText}}</p>
+<ul class="record-cards">
+{{range .SoftwareInventoryRound.Devices}}
+<li class="record-card"><h3>{{.DeviceName}}</h3><p>{{.StatusText}}</p></li>
+{{else}}<li class="empty-text">这一轮没有要采集的设备。</li>{{end}}
+</ul>
+{{else}}
+<p>没有进行中的采集。可以在软件清单页发起「立即全部采集」，或在设备页对单台设备发起「立即采集」。</p>
+{{end}}
+<div class="inline-form"><a class="button-link" href="/ui/software-inventory/">返回软件清单</a></div>
+</section>
+{{end}}

@@ -36,15 +36,20 @@ const ServerAddressNetworkOther = "other"
 // 同机账号数；字段名由模板逐项展示。
 type ServerCard struct {
 	ServerListEntry
-	SiteID           string
-	SitePath         string
-	NetworkIDs       []string
-	NetworkNames     []string
-	SameMachineCount int
-	ClientCount      int
-	SecretCount      int
-	SharedStoreCount int
-	SearchText       string
+	SiteID       string
+	SitePath     string
+	NetworkIDs   []string
+	NetworkNames []string
+	// NetworkAddresses 是设备全部网络成员地址，供列表搜索与展示复用。
+	NetworkAddresses []string
+	// PreferredNetworkAddress 是条目主机为空时卡片显示的首选网络地址，来
+	// 自设备连接候选。
+	PreferredNetworkAddress string
+	SameMachineCount        int
+	ClientCount             int
+	SecretCount             int
+	SharedStoreCount        int
+	SearchText              string
 }
 
 // ServerListFilterView 是服务器列表搜索与筛选的当前值与可选项。
@@ -331,8 +336,11 @@ type OtherDeviceAddResultView struct {
 // ServerAddResultView 是新增成功后的结果页数据；连接测试任务提供轮询状态
 // 与保存事务携带的锚复制事实。
 type ServerAddResultView struct {
-	Detail                   *ServerDetailView
-	DeviceName               string
+	Detail     *ServerDetailView
+	DeviceName string
+	// PreferredNetworkAddress 是空主机条目的首选网络地址（本机起点）；
+	// 主机非空或没有局域网候选时为空串，「连接」行照旧或退为「用户 · 端口 N」。
+	PreferredNetworkAddress  string
 	ProfileNames             []string
 	ProfileNamesUnavailable  bool
 	ConnectionTest           *ServerConnectionTestStatus
@@ -436,6 +444,14 @@ func (e *ServerFormError) Error() string { return e.Message }
 // ServerEditConflictView 表示编辑表单打开后服务器条目已被别的入口修改。
 type ServerEditConflictView struct {
 	Current *ServerDetailView
+}
+
+// ServerAccountNoteEdit 是同机账号说明保存里的一台条目：Note 是显示说明的
+// 最终值，Revision 是表单打开时那台条目的修订号。
+type ServerAccountNoteEdit struct {
+	ServerID string
+	Note     string
+	Revision int64
 }
 
 // ServerDeletePreviewView 是删除影响清单。
@@ -553,6 +569,9 @@ type ServerWriter interface {
 	FinishServerAdd(form ServerAddFinishForm, source ServerWriteSource) error
 	AddOtherDevice(form OtherDeviceAddForm, source ServerWriteSource) (*OtherDeviceAddResultView, error)
 	EditServer(id string, form ServerEditForm, source ServerWriteSource) (*ServerEditResultView, *ServerEditConflictView, error)
+	// EditAccountNotes 在一个事务内保存多台同机账号的显示说明；任一台修订
+	// 号不符整批回滚，冲突时返回那台条目的最新页面数据。
+	EditAccountNotes(edits []ServerAccountNoteEdit, source ServerWriteSource) (*ServerEditConflictView, error)
 	// EditServerAddresses 用一份最终清单同时保存网络成员与其他地址。
 	EditServerAddresses(id string, form ServerAddressListForm, source ServerWriteSource) (*ServerAddressListResultView, *ServerEditConflictView, error)
 	DeleteServerPreview(identifier string) (*ServerDeletePreviewView, error)
@@ -659,7 +678,7 @@ func (h *handler) serverListViews(
 	var topology *TopologyData
 	if h.cfg.Topology != nil {
 		var err error
-		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), "")
+		topology, err = h.cfg.Topology.Topology(h.requestClientInstance(r), TopologyProbeOriginSelf)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -686,6 +705,10 @@ func (h *handler) serverListViews(
 			card.SiteID, card.SitePath = device.SiteID, device.LocationPath
 			card.NetworkIDs = indexes.networkIndexes.idsByDevice[device.ID]
 			card.NetworkNames = indexes.networkIndexes.namesByDevice[device.ID]
+			card.NetworkAddresses = indexes.networkIndexes.addressesByDevice[device.ID]
+			if row.Host == "" {
+				card.PreferredNetworkAddress = preferredNetworkAddress(device.Candidates)
+			}
 			card.SameMachineCount = len(device.Servers)
 		}
 		for _, profileID := range profileIDsByServer[row.ID] {
@@ -693,7 +716,8 @@ func (h *handler) serverListViews(
 		}
 		card.SearchText = strings.ToLower(strings.Join([]string{
 			row.Name, row.User, row.Host, strconv.Itoa(row.Port), card.SitePath,
-			strings.Join(card.NetworkNames, " "), strings.Join(row.AttentionReasons, " "),
+			strings.Join(card.NetworkNames, " "), strings.Join(card.NetworkAddresses, " "),
+			strings.Join(row.AttentionReasons, " "),
 		}, " "))
 		allCards = append(allCards, card)
 	}
@@ -712,8 +736,9 @@ func (h *handler) serverListViews(
 }
 
 type serverListNetworkIndexes struct {
-	idsByDevice   map[string][]string
-	namesByDevice map[string][]string
+	idsByDevice       map[string][]string
+	namesByDevice     map[string][]string
+	addressesByDevice map[string][]string
 }
 
 type serverListTopologyOptions struct {
@@ -862,14 +887,52 @@ func networkIndexesByDevice(
 ) serverListNetworkIndexes {
 	indexes := serverListNetworkIndexes{
 		idsByDevice: map[string][]string{}, namesByDevice: map[string][]string{},
+		addressesByDevice: map[string][]string{},
 	}
 	for _, membership := range memberships {
+		// 成员地址属于设备：即使网络行缺失，地址也要能被列表搜索命中。
+		indexes.addressesByDevice[membership.DeviceID] = append(
+			indexes.addressesByDevice[membership.DeviceID], membership.Address)
 		if network, ok := networks[membership.NetworkID]; ok {
 			indexes.idsByDevice[membership.DeviceID] = append(indexes.idsByDevice[membership.DeviceID], network.ID)
 			indexes.namesByDevice[membership.DeviceID] = append(indexes.namesByDevice[membership.DeviceID], network.Name)
 		}
 	}
 	return indexes
+}
+
+// serverPreferredNetworkAddress 返回空主机条目详情视图的首选网络地址：
+// 以本机为起点读拓扑（与列表卡片、详情页页头同一起点），在设备连接候选
+// 里取第一个物理局域网或虚拟局域网地址。主机非空、拓扑不可用、找不到设
+// 备或没有候选时返回空串，调用方按退化形态显示。
+func (h *handler) serverPreferredNetworkAddress(r *http.Request, detail *ServerDetailView) string {
+	if detail == nil || detail.Host != "" || h.cfg.Topology == nil {
+		return ""
+	}
+	data, err := h.cfg.Topology.Topology(h.requestClientInstance(r), TopologyProbeOriginSelf)
+	if err != nil {
+		return ""
+	}
+	for index := range data.Devices {
+		if data.Devices[index].Name != detail.DeviceName {
+			continue
+		}
+		return preferredNetworkAddress(data.Devices[index].Candidates)
+	}
+	return ""
+}
+
+// preferredNetworkAddress 把拓扑数据里的设备连接候选转成共享函数的
+// 输入，取第一个物理局域网或虚拟局域网地址；列表卡片与详情页页头共
+// 用，保证同一个条目在两处算出同一个结果。
+func preferredNetworkAddress(candidates []TopologyCandidate) string {
+	converted := make([]models.NetworkAddressCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		converted = append(converted, models.NetworkAddressCandidate{
+			Address: candidate.Address, Source: models.DialAddressSource(candidate.Source),
+		})
+	}
+	return models.PreferredNetworkAddress(converted)
 }
 
 func serverListNetworkNote(network TopologyNetwork) string {
@@ -1347,16 +1410,12 @@ func (h *handler) handleServerDescriptionEditPost(w http.ResponseWriter, r *http
 	h.redirectServerDetailSaved(w, r, result.Detail.ID, serverDetailEditDescription)
 }
 
-// handleServerAccountNotesEditPost 处理同机账号说明弹层：先校验全部发生
-// 变化账号的修订号，全部匹配后才逐条写入说明；登录信息不在这一层提交。
+// handleServerAccountNotesEditPost 处理同机账号说明弹层：只过滤出同一台
+// 机器上有变化的账号并校验修订号，然后在一个事务内整批写入说明；登录信
+// 息不在这一层提交。
 func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *http.Request, detail *ServerDetailView) {
 	drafts := map[string]string{}
-	type accountNoteEdit struct {
-		id       string
-		note     string
-		revision int64
-	}
-	edits := make([]accountNoteEdit, 0, len(r.PostForm))
+	edits := make([]ServerAccountNoteEdit, 0, len(r.PostForm))
 	for key, values := range r.PostForm {
 		if !strings.HasPrefix(key, "account_note_") || len(values) == 0 {
 			continue
@@ -1387,24 +1446,20 @@ func (h *handler) handleServerAccountNotesEditPost(w http.ResponseWriter, r *htt
 			h.renderAccountNotesError(w, r, detail, nil, &ServerEditConflictView{Current: sibling}, drafts)
 			return
 		}
-		edits = append(edits, accountNoteEdit{id: accountID, note: note, revision: revision})
+		edits = append(edits, ServerAccountNoteEdit{ServerID: accountID, Note: note, Revision: revision})
 	}
-	sort.Slice(edits, func(left, right int) bool { return edits[left].id < edits[right].id })
-	for _, edit := range edits {
-		_, conflict, err := h.cfg.ServerWriter.EditServer(edit.id, ServerEditForm{
-			Description: &edit.note, ExpectedRevision: edit.revision,
-		}, ServerWriteSource{RemoteAddress: remoteIP(r)})
-		if conflict != nil {
-			h.renderAccountNotesError(w, r, detail, nil, conflict, drafts)
-			return
-		}
-		if err != nil {
-			h.renderAccountNotesError(w, r, detail, err, nil, drafts)
-			return
-		}
+	sort.Slice(edits, func(left, right int) bool { return edits[left].ServerID < edits[right].ServerID })
+	conflict, err := h.cfg.ServerWriter.EditAccountNotes(edits, ServerWriteSource{RemoteAddress: remoteIP(r)})
+	if err != nil {
+		h.renderAccountNotesError(w, r, detail, err, nil, drafts)
+		return
+	}
+	if conflict != nil {
+		h.renderAccountNotesError(w, r, detail, nil, conflict, drafts)
+		return
 	}
 	http.Redirect(
-		w, r, serverDetailPath(detail.ID)+"?saved=accounts"+serverDetailCardAnchor(serverDetailEditAccounts),
+		w, r, serverDetailPath(detail.ID)+"?notice=saved-accounts"+serverDetailCardAnchor(serverDetailEditAccounts),
 		http.StatusSeeOther,
 	)
 }
@@ -1434,7 +1489,7 @@ func (h *handler) renderAccountNotesError(
 // redirectServerDetailSaved 保存成功后回到统一详情页并定位对应卡片。
 func (h *handler) redirectServerDetailSaved(w http.ResponseWriter, r *http.Request, id, scope string) {
 	http.Redirect(
-		w, r, serverDetailPath(id)+"?saved="+scope+serverDetailCardAnchor(scope), http.StatusSeeOther,
+		w, r, serverDetailPath(id)+"?notice=saved-"+scope+serverDetailCardAnchor(scope), http.StatusSeeOther,
 	)
 }
 
@@ -1754,18 +1809,21 @@ func requestCounts(r *http.Request) completeCounts {
 }
 
 type serverCompleteView struct {
-	Detail            *ServerDetailView
-	Queue             []string
-	Position          int
-	ShowPassword      bool
-	ShowKeyPassphrase bool
-	SharedKeyServers  []string
-	NeedsReverify     bool
-	ReverifyPath      string
-	Notice            string
-	Imported          int
-	Skipped           int
-	Failed            int
+	Detail *ServerDetailView
+	// PreferredNetworkAddress 是空主机条目的首选网络地址（本机起点）；
+	// 主机非空或没有局域网候选时为空串，「连接」行照旧或退为「用户 · 端口 N」。
+	PreferredNetworkAddress string
+	Queue                   []string
+	Position                int
+	ShowPassword            bool
+	ShowKeyPassphrase       bool
+	SharedKeyServers        []string
+	NeedsReverify           bool
+	ReverifyPath            string
+	Notice                  string
+	Imported                int
+	Skipped                 int
+	Failed                  int
 }
 
 func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, queue []string, position int, notice string, submitted *ServerCompleteForm, status int) {
@@ -1792,9 +1850,10 @@ func (h *handler) renderCompleteForm(w http.ResponseWriter, r *http.Request, que
 	counts := requestCounts(r)
 	view := &serverCompleteView{
 		Detail: detail, Queue: queue, Position: position, Notice: notice,
-		ShowPassword:      detail.CredentialType == "",
-		ShowKeyPassphrase: containsString(detail.AttentionReasons, models.ReasonNeedsPassphrase),
-		Imported:          counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
+		PreferredNetworkAddress: h.serverPreferredNetworkAddress(r, detail),
+		ShowPassword:            detail.CredentialType == "",
+		ShowKeyPassphrase:       containsString(detail.AttentionReasons, models.ReasonNeedsPassphrase),
+		Imported:                counts.Imported, Skipped: counts.Skipped, Failed: counts.Failed,
 	}
 	if view.ShowKeyPassphrase {
 		if names, err := h.cfg.ServerWriter.SharedCredentialServers(detail.ID); err == nil {

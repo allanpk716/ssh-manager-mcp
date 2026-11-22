@@ -152,7 +152,7 @@ func projectsShowCmd() *cobra.Command {
 				if srv == nil {
 					continue
 				}
-				fmt.Fprintf(out, "  - %-16s %s@%s:%d\n", srv.Name, srv.User, srv.Host, srv.Port)
+				fmt.Fprintf(out, "  - %-16s %s\n", srv.Name, entryConnectionText(s, srv))
 			}
 			return nil
 		},

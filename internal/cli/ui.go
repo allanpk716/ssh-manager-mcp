@@ -141,7 +141,7 @@ func runUICommand(cmd *cobra.Command, instance string) error {
 		shareRevokeRunner = webuishares.RevokeTasksFromStoreWithContext(openStoreForUI, uiContext)
 		shareReselectRunner = webuishares.ReselectTasksFromStoreWithContext(openStoreForUI, uiContext)
 		shareResidueRunner = webuishares.ResidueTasksFromStoreWithContext(openStoreForUI, uiContext, shareRemoteTasks)
-		softwareInventorySource = standaloneUISoftwareInventoryStore()
+		softwareInventorySource = standaloneUISoftwareInventoryStore(uiContext)
 		topologySource = webuitopology.FromStoreOpener(openStoreForUI)
 		topologyWriter = webuitopology.WriterFromOpener(openStoreForUI)
 		topologyProbe = webuitopology.ProbeFromStoreOpener(openStoreForUI, topologySource)

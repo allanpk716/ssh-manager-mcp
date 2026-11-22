@@ -41,6 +41,9 @@ type Scheduler struct {
 	Concurrency int
 	// Logf 为空时不输出日志；serve 注入 stderr 记录每轮结论。
 	Logf func(format string, arguments ...any)
+	// DeviceLocks 与「立即采集轮次」共享的每设备采集互斥；空值时不互斥
+	//（保持既有行为）。
+	DeviceLocks *DeviceCollectionLocks
 
 	service *Service
 }
@@ -132,7 +135,7 @@ func (s *Scheduler) ExecuteRound(ctx context.Context) (*SchedulerRoundReport, er
 					reports[index] = device
 					continue
 				}
-				result, err := s.collect()(ctx, CollectRequest{
+				result, err := s.collectWithDeviceLock(ctx, CollectRequest{
 					DeviceName:  due[index].DeviceName,
 					ServerEntry: due[index].PreferredServerID,
 					Source:      CLISource(),
@@ -239,4 +242,20 @@ func (s *Scheduler) collect() SchedulerCollectFunc {
 		s.service = &Service{Store: s.Store}
 	}
 	return s.service.Collect
+}
+
+// collectWithDeviceLock 在持有该设备的采集互斥期间执行一次采集；没有配
+// 置互斥表时直接执行，保持既有行为。轮次停止等导致拿不到采集权时返回
+// errRoundStopped。
+func (s *Scheduler) collectWithDeviceLock(
+	ctx context.Context, request CollectRequest,
+) (*CollectionReport, error) {
+	if s.DeviceLocks == nil {
+		return s.collect()(ctx, request)
+	}
+	if !s.DeviceLocks.Acquire(ctx, request.DeviceName) {
+		return nil, errRoundStopped
+	}
+	defer s.DeviceLocks.Release(request.DeviceName)
+	return s.collect()(ctx, request)
 }

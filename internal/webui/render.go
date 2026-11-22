@@ -106,6 +106,7 @@ type pageData struct {
 	ShareDesktopGuide                 *ShareDesktopGuideView
 	SoftwareInventoryDevices          []SoftwareInventoryDeviceSummary
 	SoftwareInventory                 *SoftwareInventoryPageView
+	SoftwareInventoryRound            *SoftwareInventoryRoundView
 	SoftwareInventoryDevice           *SoftwareInventoryDevice
 	SoftwareInventoryQuery            string
 	SoftwareInventoryTodos            SoftwareInventoryTodos

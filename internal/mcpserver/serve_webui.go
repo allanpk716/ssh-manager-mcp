@@ -14,6 +14,7 @@ import (
 	"ssh-manager-mcp/internal/ops"
 	"ssh-manager-mcp/internal/secretmanage"
 	"ssh-manager-mcp/internal/servermanage"
+	"ssh-manager-mcp/internal/softwareinventory"
 	"ssh-manager-mcp/internal/store"
 	"ssh-manager-mcp/internal/vault"
 	"ssh-manager-mcp/internal/webui"
@@ -99,6 +100,10 @@ func servePortFromAddr(addr string) int {
 	return port
 }
 
+// softwareCollectionDeviceLocks 是权威端进程内软件清单采集的每设备互斥，
+// 每日定时采集与 Web UI 立即采集轮次共享，避免同一台设备被并发重复采集。
+var softwareCollectionDeviceLocks = softwareinventory.NewDeviceCollectionLocks()
+
 // startWebUIListenerManager 构造权威端 Web UI Handler 与监听管理者，并同步
 // 执行第一次地址推导。绑定失败由管理者记录并重试，不阻断主监听。
 func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tlsKey, fingerprint, addr string, serveOpts ServeOpts) (*webUIListenerManager, error) {
@@ -134,6 +139,13 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		Audit:      opsManager.WriteRestartAudit,
 	})
 	remoteTasks := webuishares.RemoteTasksFromStoreWithContext(openServeWebUIStore, ctx)
+	// 采集轮次管理器与每日定时采集共享每设备互斥，随 serve 上下文退出。
+	inventoryRounds := softwareinventory.NewRoundManager(openServeWebUIStore)
+	inventoryRounds.DeviceLocks = softwareCollectionDeviceLocks
+	inventoryRounds.Context = ctx
+	inventoryRounds.Logf = func(format string, args ...any) {
+		fmt.Fprintf(os.Stderr, "sshmgr serve: 软件清单采集轮次："+format+"\n", args...)
+	}
 	handler, control, err := webui.NewAuthority(webui.Config{
 		Role: webui.RoleServer, Port: port,
 		Servers:                serveWebUIServerSource{store: st},
@@ -149,12 +161,10 @@ func startWebUIListenerManager(ctx context.Context, st *store.Store, tlsCert, tl
 		ShareRevokeRunner:      webuishares.RevokeTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		ShareReselectRunner:    webuishares.ReselectTasksFromStoreWithContext(openServeWebUIStore, ctx),
 		ShareResidueRunner:     webuishares.ResidueTasksFromStoreWithContext(openServeWebUIStore, ctx, remoteTasks),
-		SoftwareInventory: webuisoftwareinventory.FromOpener(func() (*store.Store, func(), error) {
-			return st, func() {}, nil
-		}),
-		Topology:       webuitopology.FromStore(st),
-		TopologyWriter: webuitopology.WriterFromStore(st),
-		TopologyProbe:  webuitopology.ProbeFromStore(st),
+		SoftwareInventory:      webuisoftwareinventory.FromOpenerWithRoundManager(openServeWebUIStore, inventoryRounds),
+		Topology:               webuitopology.FromStore(st),
+		TopologyWriter:         webuitopology.WriterFromStore(st),
+		TopologyProbe:          webuitopology.ProbeFromStore(st),
 		Access: webuiaccess.FromManager(access.New(st, access.WithServeCertFingerprint(func() (string, error) {
 			return fingerprint, nil
 		}))),

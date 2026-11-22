@@ -10,6 +10,15 @@ import (
 	"ssh-manager-mcp/internal/models"
 )
 
+// 地址列表校验的五种错误码；入口层按错误码映射字段归属与界面文案。
+const (
+	TopologyCodeOtherAddressWhitespace      = "other-address-whitespace"
+	TopologyCodeMembershipIncomplete        = "membership-incomplete"
+	TopologyCodeMembershipAddressWhitespace = "membership-address-whitespace"
+	TopologyCodeDuplicateNetwork            = "duplicate-network"
+	TopologyCodeAddressRequired             = "address-required"
+)
+
 // ReplaceDeviceAddressListRequest 描述一次服务器详情地址列表保存：网络成员
 // 是最终清单，OtherAddress 是这台服务器条目的其他地址最终值。
 type ReplaceDeviceAddressListRequest struct {
@@ -195,7 +204,9 @@ func normalizeDeviceAddressList(
 ) (string, []NetworkMembershipWrite, error) {
 	otherAddress = strings.TrimSpace(otherAddress)
 	if otherAddress != "" && containsUnicodeSpace(otherAddress) {
-		return "", nil, &TopologyValidationError{Message: "地址不能包含空白字符"}
+		return "", nil, &TopologyValidationError{
+			Message: "地址不能包含空白字符", Code: TopologyCodeOtherAddressWhitespace,
+		}
 	}
 	memberships := make([]NetworkMembershipWrite, 0, len(requested))
 	seenNetworks := make(map[string]struct{}, len(requested))
@@ -203,19 +214,27 @@ func normalizeDeviceAddressList(
 		membership.Network = strings.TrimSpace(membership.Network)
 		membership.Address = strings.TrimSpace(membership.Address)
 		if membership.Network == "" || membership.Address == "" {
-			return "", nil, &TopologyValidationError{Message: "每行网络地址必须同时选择网络并填写地址"}
+			return "", nil, &TopologyValidationError{
+				Message: "每行网络地址必须同时选择网络并填写地址", Code: TopologyCodeMembershipIncomplete,
+			}
 		}
 		if containsUnicodeSpace(membership.Address) {
-			return "", nil, &TopologyValidationError{Message: "地址不能包含空白字符"}
+			return "", nil, &TopologyValidationError{
+				Message: "地址不能包含空白字符", Code: TopologyCodeMembershipAddressWhitespace,
+			}
 		}
 		if _, duplicate := seenNetworks[membership.Network]; duplicate {
-			return "", nil, &TopologyValidationError{Message: "同一台机器在同一个网络里只能登记一个地址"}
+			return "", nil, &TopologyValidationError{
+				Message: "同一台机器在同一个网络里只能登记一个地址", Code: TopologyCodeDuplicateNetwork,
+			}
 		}
 		seenNetworks[membership.Network] = struct{}{}
 		memberships = append(memberships, membership)
 	}
 	if otherAddress == "" && len(memberships) == 0 {
-		return "", nil, &TopologyValidationError{Message: "至少填写一个地址"}
+		return "", nil, &TopologyValidationError{
+			Message: "至少填写一个地址", Code: TopologyCodeAddressRequired,
+		}
 	}
 	return otherAddress, memberships, nil
 }

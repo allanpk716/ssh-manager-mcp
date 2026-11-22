@@ -17,24 +17,11 @@
 </form>
 <a class="button-link" href="/ui/software-inventory/export?query={{.SoftwareInventory.Filter.Name | urlquery}}&amp;exact_version={{.SoftwareInventory.Filter.ExactVersion | urlquery}}&amp;site={{.SoftwareInventory.Filter.Site | urlquery}}&amp;network={{.SoftwareInventory.Filter.Network | urlquery}}">导出当前筛选</a>
 </div>
+{{if .SoftwareInventory.Round}}
+<p class="collection-round-entry"><a href="/ui/software-inventory/round">{{if .SoftwareInventory.Round.Running}}采集进行中{{else}}最近一轮采集{{end}}</a>：{{.SoftwareInventory.Round.StartedAt | formatTime}}，{{if .SoftwareInventory.Round.ScopeText}}{{.SoftwareInventory.Round.ScopeText}}，{{end}}{{.SoftwareInventory.Round.SummaryText}}</p>
+{{end}}
 {{if .SoftwareInventory.ScheduleNotice}}<p class="flash-ok">{{.SoftwareInventory.ScheduleNotice}}</p>{{end}}
 {{if .SoftwareInventory.ScheduleError}}<p class="flash-error">{{.SoftwareInventory.ScheduleError}}</p>{{end}}
-{{if .SoftwareInventory.CollectionReport}}
-<section aria-label="立即全部采集报告">
-<h2>立即全部采集报告</h2>
-{{if .SoftwareInventory.CollectionReport.Interrupted}}
-<p>立即全部采集被中断：已处理部分设备；成功 {{.SoftwareInventory.CollectionReport.Succeeded}} 台，等待客户端实例 {{.SoftwareInventory.CollectionReport.Requested}} 台，失败 {{.SoftwareInventory.CollectionReport.Failed}} 台。</p>
-<p>仍有设备未处理，需要时请重新发起立即全部采集。</p>
-{{else}}
-<p>立即全部采集完成：成功 {{.SoftwareInventory.CollectionReport.Succeeded}} 台，等待客户端实例 {{.SoftwareInventory.CollectionReport.Requested}} 台，失败 {{.SoftwareInventory.CollectionReport.Failed}} 台。</p>
-{{end}}
-<ul>
-{{range .SoftwareInventory.CollectionReport.Devices}}
-<li>{{if .Requested}}{{if .CollectorName}}{{.DeviceName}}：已登记，等待客户端实例 {{.CollectorName}} 执行{{else}}{{.DeviceName}}：已登记，等待客户端实例执行{{end}}{{else if .Err}}{{.DeviceName}}：失败，{{.Err}}{{else}}{{.DeviceName}}：采集成功{{end}}</li>
-{{else}}<li>没有受管设备。</li>{{end}}
-</ul>
-</section>
-{{end}}
 
 <form id="software-inventory-search-form" class="software-inventory-filter" method="get" action="/ui/software-inventory/">
 <h2>全局软件搜索</h2>
