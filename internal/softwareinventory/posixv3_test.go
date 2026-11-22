@@ -37,8 +37,8 @@ func TestParsePOSIXV3ContainerFixture(t *testing.T) {
 	if collection.UnusedImageCount != 2 {
 		t.Fatalf("未使用镜像数量 = %d，应为 2（旧版 nginx 行与本地构建行）", collection.UnusedImageCount)
 	}
-	if count := countObserved(collection.Items, models.SoftwareCategoryContainer); count != 5 {
-		t.Fatalf("容器条目 = %d 条，应为 5：%+v", count, collection.Items)
+	if count := countObserved(collection.Items, models.SoftwareCategoryContainer); count != 6 {
+		t.Fatalf("容器条目 = %d 条，应为 6：%+v", count, collection.Items)
 	}
 	if count := countObserved(collection.Items, models.SoftwareCategoryContainerImage); count != 0 {
 		t.Fatalf("第 3 版不应再逐条列出镜像，得到 %d 条容器镜像条目", count)
@@ -107,6 +107,20 @@ func TestParsePOSIXV3ContainerFixture(t *testing.T) {
 	}
 	if trainer.ListeningPorts[0].Exposure != models.SoftwareExposureLocal {
 		t.Fatalf("127.0.0.1 上的容器端口暴露级别应为仅本机：%+v", trainer.ListeningPorts)
+	}
+
+	// 本地构建的镜像没有仓库摘要：即使镜像名是单段（长得像官方仓库镜
+	// 像），也标为不可公开拉取，不产生软件包统一地址。
+	taskboard := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryContainer, "agent-taskboard")
+	if taskboard.ContainerName != "taskboard" || !taskboard.ContainerRunning {
+		t.Fatalf("本地构建镜像容器条目 = %+v", taskboard)
+	}
+	if taskboard.ImagePullability != models.SoftwareImagePullabilityNotPublic {
+		t.Fatalf("没有仓库摘要的本地构建镜像应判断为不可公开拉取：%+v", taskboard)
+	}
+	if taskboard.ContainerDigest != "" || taskboard.PackageURL != "" {
+		t.Fatalf("本地构建镜像不应带仓库摘要或软件包统一地址：%+v", taskboard)
 	}
 
 	var stopped models.SoftwareObservedItem

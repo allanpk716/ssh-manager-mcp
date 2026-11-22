@@ -105,10 +105,18 @@ func buildPOSIXV3ContainerItems(
 		if imageRowPresent && (repository == "<none>" || repository == "") {
 			repository = containerName
 		}
+		// 没有仓库摘要是本地构建的信号：镜像从未从任何仓库拉取过，公开仓
+		// 库里不存在对应地址，标为不可公开拉取。镜像名本身看不出这一点：
+		// 单段镜像名（如 agent-taskboard）长得像官方仓库镜像，实际是本地
+		// 构建。
+		pullability := models.SoftwareImagePullabilityNotPublic
+		if digest != "" {
+			pullability = imagePullability(repository)
+		}
 		item := models.SoftwareObservedItem{
 			Category: models.SoftwareCategoryContainer, Name: repository,
 			Version: imageLabelsByVersion[imageID], ContainerName: containerName,
-			ImagePullability: imagePullability(repository),
+			ImagePullability: pullability,
 			ContainerTag:     tag,
 			ContainerDigest:  digest,
 			ContainerRunning: fields[4] == "running",
