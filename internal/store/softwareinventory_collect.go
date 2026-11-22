@@ -551,7 +551,7 @@ func softwarePendingUpdatesText(
 	}
 	blob, err := json.Marshal(pendingUpdates)
 	if err != nil {
-		return "", fmt.Errorf("序列化待装更新失败: %w", err)
+		return "", fmt.Errorf("序列化待装安全更新失败: %w", err)
 	}
 	return string(blob), nil
 }

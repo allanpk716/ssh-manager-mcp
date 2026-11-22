@@ -131,7 +131,7 @@ func buildPOSIXV3ContainerItems(
 	return items, unusedImageCount
 }
 
-// buildPOSIXV3PendingUpdates 从第 3 版的待装更新节构建设备级结果。apt
+// buildPOSIXV3PendingUpdates 从第 3 版的待装安全更新节构建设备级结果。apt
 // 与 dnf/yum 的缓存都有效时优先使用 apt；任一可用来源都必须是完整节，
 // 否则保持空指针，让调用方把数量显示为未知。
 func buildPOSIXV3PendingUpdates(apt, dnf parsedSection) *models.SoftwarePendingUpdates {

@@ -164,7 +164,7 @@ func TestSoftwareCollectionBackupProfileSnapshotAndRevision(t *testing.T) {
 	if pending == nil || pending.SecurityCount != 2 || len(pending.Items) != 2 ||
 		!pending.CacheUpdatedAt.Equal(secondAt) || !pending.Items[0].FromSecurityRepo ||
 		pending.Items[1].Name != "curl" {
-		t.Fatalf("恢复后的待装更新 = %+v", pending)
+		t.Fatalf("恢复后的待装安全更新 = %+v", pending)
 	}
 	sudo, err := target.SoftwareCollectSudoEnabled()
 	if err != nil {

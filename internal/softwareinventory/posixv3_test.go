@@ -9,7 +9,7 @@ import (
 )
 
 // 本文件钉住 POSIX 固定命令集第 3 版的解析口径：以容器为单位生成容器
-// 条目、未使用镜像只计数、发行版编号与待装更新随结果上交；第 2 版样例
+// 条目、未使用镜像只计数、发行版编号与待装安全更新随结果上交；第 2 版样例
 // 仍按原规则解析（回归钉住）。
 
 // TestParsePOSIXV3ContainerFixture 覆盖第 3 版样例的主路径：运行中与已停
@@ -171,7 +171,7 @@ func TestParsePOSIXV2FixtureStillParsesWithV3Parser(t *testing.T) {
 		t.Fatalf("第 2 版结果不应带第 3 版的设备级字段：%+v", collection)
 	}
 	if collection.PendingUpdates != nil {
-		t.Fatalf("第 2 版结果不应带待装更新：%+v", collection.PendingUpdates)
+		t.Fatalf("第 2 版结果不应带待装安全更新：%+v", collection.PendingUpdates)
 	}
 }
 
@@ -187,10 +187,10 @@ func TestParsePOSIXV3PendingUpdatesFromAptFixture(t *testing.T) {
 	}
 	pending := collection.PendingUpdates
 	if pending == nil {
-		t.Fatalf("apt 缓存可读时应带待装更新：%+v", collection)
+		t.Fatalf("apt 缓存可读时应带待装安全更新：%+v", collection)
 	}
 	if pending.SecurityCount != 2 || len(pending.Items) != 3 {
-		t.Fatalf("待装更新安全来源数量 = %d、明细 = %d 条，应为 2、3：%+v",
+		t.Fatalf("待装安全更新安全来源数量 = %d、明细 = %d 条，应为 2、3：%+v",
 			pending.SecurityCount, len(pending.Items), pending)
 	}
 	wantTime := time.Unix(1795136400, 0).UTC()
@@ -226,10 +226,10 @@ func TestParsePOSIXV3PendingUpdatesFromDnfFixture(t *testing.T) {
 	}
 	pending := collection.PendingUpdates
 	if pending == nil {
-		t.Fatalf("dnf 缓存可读时应带待装更新：%+v", collection)
+		t.Fatalf("dnf 缓存可读时应带待装安全更新：%+v", collection)
 	}
 	if pending.SecurityCount != 3 || len(pending.Items) != 3 {
-		t.Fatalf("待装更新安全来源数量 = %d、明细 = %d 条，应为 3、3：%+v",
+		t.Fatalf("待装安全更新安全来源数量 = %d、明细 = %d 条，应为 3、3：%+v",
 			pending.SecurityCount, len(pending.Items), pending)
 	}
 	wantTime := time.Unix(1795050000, 0).UTC()
@@ -239,7 +239,7 @@ func TestParsePOSIXV3PendingUpdatesFromDnfFixture(t *testing.T) {
 	kernel := pending.Items[1]
 	if kernel.Name != "kernel" || kernel.CurrentVersion != "" ||
 		kernel.AvailableVersion != "5.14.0-427.42.1.el9_4" || !kernel.FromSecurityRepo {
-		t.Fatalf("kernel 待装更新字段不全：%+v", kernel)
+		t.Fatalf("kernel 待装安全更新字段不全：%+v", kernel)
 	}
 	if pending.Items[2].Name != "NetworkManager" ||
 		pending.Items[2].AvailableVersion != "1:1.46.0-13.el9_4" {
@@ -248,7 +248,7 @@ func TestParsePOSIXV3PendingUpdatesFromDnfFixture(t *testing.T) {
 }
 
 // TestParsePOSIXV3PendingUpdatesUnknownWithoutPackageManager 钉住未知语
-// 义：没有 apt 与 dnf/yum 时待装更新为空指针；#353 时代的旧第 3 版输出
+// 义：没有 apt 与 dnf/yum 时待装安全更新为空指针；#353 时代的旧第 3 版输出
 // 缺少这两节也不算不完整。
 func TestParsePOSIXV3PendingUpdatesUnknownWithoutPackageManager(t *testing.T) {
 	output := posixFixtureOutput(t, "vendor-linux-v3-no-package-manager.txt")
@@ -268,7 +268,7 @@ func TestParsePOSIXV3PendingUpdatesUnknownWithoutPackageManager(t *testing.T) {
 		t.Fatal(err)
 	}
 	if legacy.PendingUpdates != nil || legacy.Incomplete {
-		t.Fatalf("旧第 3 版输出缺少待装更新节时应为未知且完整：%+v", legacy)
+		t.Fatalf("旧第 3 版输出缺少待装安全更新节时应为未知且完整：%+v", legacy)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestQueryPOSIXV3ContainerItemsThroughStore(t *testing.T) {
 	}
 }
 
-// TestQueryPOSIXV3PendingUpdatesThroughStore 钉住待装更新落库与查询：
+// TestQueryPOSIXV3PendingUpdatesThroughStore 钉住待装安全更新落库与查询：
 // apt 样例读回安全来源数量与明细；没有包管理器的设备保持未知空指针。
 func TestQueryPOSIXV3PendingUpdatesThroughStore(t *testing.T) {
 	manager := seedPOSIXSample(t, "容器工作站", "ubuntu2204-v3-containers.txt")
@@ -346,7 +346,7 @@ func TestQueryPOSIXV3PendingUpdatesThroughStore(t *testing.T) {
 	pending := device.Collection.PendingUpdates
 	if pending == nil || pending.SecurityCount != 2 || len(pending.Items) != 3 ||
 		!pending.CacheUpdatedAt.Equal(time.Unix(1795136400, 0).UTC()) {
-		t.Fatalf("查询结果应带 apt 待装更新数量、明细与缓存时间：%+v", pending)
+		t.Fatalf("查询结果应带 apt 待装安全更新数量、明细与缓存时间：%+v", pending)
 	}
 
 	manager = seedPOSIXSample(t, "嵌入式板", "vendor-linux-v3-no-package-manager.txt")
@@ -361,6 +361,6 @@ func TestQueryPOSIXV3PendingUpdatesThroughStore(t *testing.T) {
 		t.Fatal("嵌入式板不在查询结果里")
 	}
 	if device.Collection.PendingUpdates != nil {
-		t.Fatalf("没有包管理器时待装更新应保持未知：%+v", device.Collection.PendingUpdates)
+		t.Fatalf("没有包管理器时待装安全更新应保持未知：%+v", device.Collection.PendingUpdates)
 	}
 }

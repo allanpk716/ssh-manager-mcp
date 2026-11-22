@@ -54,7 +54,7 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 	}
 	for _, line := range strings.Split(command, "\n") {
 		if strings.Contains(line, "check-update") && !strings.Contains(line, " -C ") {
-			t.Fatalf("dnf/yum 检查待装更新时必须只用本地缓存：%s", line)
+			t.Fatalf("dnf/yum 检查待装安全更新时必须只用本地缓存：%s", line)
 		}
 	}
 }

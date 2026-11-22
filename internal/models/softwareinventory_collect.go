@@ -84,7 +84,7 @@ type SoftwarePendingUpdate struct {
 	FromSecurityRepo bool `json:"from_security_repo,omitempty"`
 }
 
-// SoftwarePendingUpdates 是一台设备的待装更新集合：全部可升级明细安
+// SoftwarePendingUpdates 是一台设备的待装安全更新集合：全部可升级明细安
 // 全来源单独标出，附包管理器本地缓存的更新时间。SecurityCount 是安全
 // 来源条数，构造时与 Items 保持一致。
 type SoftwarePendingUpdates struct {
@@ -115,7 +115,7 @@ type SoftwareCollectionStatus struct {
 	DistroID          string    `json:"distro_id,omitempty"`
 	DistroVersionID   string    `json:"distro_version_id,omitempty"`
 	UnusedImageCount  int       `json:"unused_images,omitempty"`
-	// PendingUpdates 是最近一次成功采集到的待装更新；没有包管理器或缓存
+	// PendingUpdates 是最近一次成功采集到的待装安全更新；没有包管理器或缓存
 	// 不可读时为 nil（数量未知）。
 	PendingUpdates   *SoftwarePendingUpdates `json:"pending_updates,omitempty"`
 	PendingImmediate bool                    `json:"pending_immediate"`

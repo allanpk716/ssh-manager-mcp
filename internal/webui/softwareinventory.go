@@ -90,7 +90,7 @@ type SoftwareInventoryStatus struct {
 	// 采集结果没有这个值，数量为零时不显示。
 	UnusedImageCount int
 	// PendingSecurityUpdatesLabel 是待装安全更新数量的显示文本，带缓存
-	// 时间；没有包管理器或缓存不可读时为「未知」；不采集待装更新的系统
+	// 时间；没有包管理器或缓存不可读时为「未知」；不采集待装安全更新的系统
 	// （Windows、macOS）为空，页面不显示这一行。
 	PendingSecurityUpdatesLabel string
 }

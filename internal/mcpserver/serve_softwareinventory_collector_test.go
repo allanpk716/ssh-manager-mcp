@@ -269,7 +269,7 @@ func TestSoftwareInventorySubmissionEndpointLandsResult(t *testing.T) {
 	if pending == nil || pending.SecurityCount != 1 || len(pending.Items) != 1 ||
 		pending.Items[0].Name != "openssl" || !pending.Items[0].FromSecurityRepo ||
 		!pending.CacheUpdatedAt.Equal(time.Unix(1795136400, 0).UTC()) {
-		t.Fatalf("上交后的待装更新 = %+v", pending)
+		t.Fatalf("上交后的待装安全更新 = %+v", pending)
 	}
 }
 
