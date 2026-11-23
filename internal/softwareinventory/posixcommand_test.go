@@ -37,6 +37,31 @@ func TestBuildPOSIXInventoryCommandIsFixedTemplate(t *testing.T) {
 			t.Fatalf("固定命令集缺少 %s 节", section)
 		}
 	}
+	// #372：Docker 19.03 的 docker ps --format 没有 .State 字段，容器节只保留
+	// 四列；运行状态改由 container-image-refs 节的 docker inspect 第三列提供。
+	// docker inspect --format 不解析 \t，分隔符必须由模板里的 printf 输出。
+	if strings.Contains(posixCommandSet, "{{.State}}") {
+		t.Fatal("containers-v3 节不得使用 Docker 20.10 才加入的 {{.State}} 字段")
+	}
+	if !strings.Contains(posixCommandSet,
+		`docker ps -a --no-trunc --format '{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Ports}}'`) {
+		t.Fatalf("containers-v3 节应只输出容器标识、镜像、容器名与端口四列：\n%s",
+			firstLines(command, 3))
+	}
+	if !strings.Contains(posixCommandSet, `{{printf "%s\t%s\t" .Id .Image}}{{.State.Status}}`) {
+		t.Fatal("container-image-refs 节应从 docker inspect 的 .State.Status 取运行状态并用制表符分列")
+	}
+	// 经典镜像存储下 .Config 是结构体，containerd 镜像存储下模板的结构体路径
+	// 也是结构体，字段访问对两种存储都成立；镜像编号用 .ID（Go 字段名）避免
+	// docker CLI 退回缺键即报错的 JSON map 路径。
+	if strings.Contains(posixCommandSet, `{{if .Config.Labels}}`) {
+		t.Fatal("container-image-labels 节不得直接访问 .Config.Labels")
+	}
+	if !strings.Contains(posixCommandSet,
+		`{{printf "%s\t" .ID}}{{with .Config}}{{with .Labels}}`+
+			`{{index . "org.opencontainers.image.version"}}{{end}}{{end}}`) {
+		t.Fatal("container-image-labels 节应安全读取镜像版本标签")
+	}
 	if strings.Contains(command, "Win32_Product") {
 		t.Fatal("固定命令集不应包含有副作用的 Win32_Product 查询")
 	}

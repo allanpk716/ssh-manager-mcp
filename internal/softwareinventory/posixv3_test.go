@@ -150,6 +150,116 @@ func TestParsePOSIXV3ContainerFixture(t *testing.T) {
 	}
 }
 
+// TestParsePOSIXV3ContainerRunningFollowsInspectStatus 钉住运行状态来源：
+// 容器节只有四列，状态取自 container-image-refs 节的 inspect 第三列。paused
+// 与 exited 都判为未运行，其余运行中容器不受影响。
+func TestParsePOSIXV3ContainerRunningFollowsInspectStatus(t *testing.T) {
+	output := posixFixtureOutput(t, "ubuntu2204-v3-containers.txt")
+	gatewayID := normalizeContainerImageID(
+		"sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b")
+	output = mapV3InspectStatuses(t, output, func(containerID, status string) (string, bool) {
+		if containerID == gatewayID {
+			return "paused", true
+		}
+		return status, true
+	})
+	collection, err := parsePOSIXInventoryOutput(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	paused := findObservedItem(
+		t, collection.Items, models.SoftwareCategoryContainer, "nginx")
+	if paused.ContainerRunning {
+		t.Fatalf("paused 容器不应标记运行状态：%+v", paused)
+	}
+	exited := findObservedContainer(t, collection.Items, "trainer-old")
+	if exited.ContainerRunning {
+		t.Fatalf("exited 容器不应标记运行状态：%+v", exited)
+	}
+	running := findObservedContainer(t, collection.Items, "litellm")
+	if !running.ContainerRunning {
+		t.Fatalf("running 容器应标记运行状态：%+v", running)
+	}
+}
+
+// TestParsePOSIXV3ContainerStatusUnknownWithoutInspectColumn 钉住容错：
+// container-image-refs 节缺第三列（旧输出或截断）时解析器不崩溃，状态视为
+// 未知，容器按未运行处理，容器条目不丢。
+func TestParsePOSIXV3ContainerStatusUnknownWithoutInspectColumn(t *testing.T) {
+	output := mapV3InspectStatuses(
+		t, posixFixtureOutput(t, "ubuntu2204-v3-containers.txt"),
+		func(_, _ string) (string, bool) { return "", false },
+	)
+	collection, err := parsePOSIXInventoryOutput(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count := countObserved(collection.Items, models.SoftwareCategoryContainer); count != 6 {
+		t.Fatalf("container-image-refs 节缺状态列时不应丢容器条目，得到 %d 条：%+v",
+			count, collection.Items)
+	}
+	for _, item := range collection.Items {
+		if item.Category == models.SoftwareCategoryContainer && item.ContainerRunning {
+			t.Fatalf("container-image-refs 节缺状态列时容器状态应视为未知（未运行）：%+v", item)
+		}
+	}
+}
+
+// mapV3InspectStatuses 改写 container-image-refs 节每行的第三列。rewrite 收
+// 到去掉 sha256: 前缀的容器编号与原状态，返回新状态与是否保留该列。
+func mapV3InspectStatuses(
+	t *testing.T, output string, rewrite func(containerID, status string) (string, bool),
+) string {
+	t.Helper()
+	lines := strings.Split(output, "\n")
+	inRefs := false
+	refLines := 0
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "SSHMGR-INVENTORY SECTION container-image-refs"):
+			inRefs = true
+		case strings.HasPrefix(line, "SSHMGR-INVENTORY STATUS container-image-refs"):
+			inRefs = false
+		case inRefs && line != "":
+			fields := strings.Split(line, "\t")
+			if len(fields) < 2 {
+				t.Fatalf("container-image-refs 行至少应有 2 列：%q", line)
+			}
+			status := ""
+			if len(fields) >= 3 {
+				status = fields[2]
+			}
+			newStatus, keep := rewrite(normalizeContainerImageID(fields[0]), status)
+			if keep {
+				fields = append(fields[:2], newStatus)
+			} else {
+				fields = fields[:2]
+			}
+			lines[i] = strings.Join(fields, "\t")
+			refLines++
+		}
+	}
+	if refLines == 0 {
+		t.Fatal("夹具里没有 container-image-refs 行")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// findObservedContainer 按容器名查找容器条目。
+func findObservedContainer(
+	t *testing.T, items []models.SoftwareObservedItem, containerName string,
+) models.SoftwareObservedItem {
+	t.Helper()
+	for _, item := range items {
+		if item.Category == models.SoftwareCategoryContainer &&
+			item.ContainerName == containerName {
+			return item
+		}
+	}
+	t.Fatalf("找不到容器名为 %s 的容器条目：%+v", containerName, items)
+	return models.SoftwareObservedItem{}
+}
+
 // TestParsePOSIXV2FixtureStillParsesWithV3Parser 钉住向后兼容：第 2 版样
 // 例在支持第 3 版的解析器里仍按原规则解析出容器镜像条目，不产生容器条
 // 目，也没有设备级新字段。

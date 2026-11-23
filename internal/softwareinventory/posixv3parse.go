@@ -33,6 +33,7 @@ func buildPOSIXV3ContainerItems(
 		repository, tag, digest, imageID string
 	}
 	containerImageIDs := map[string]string{}
+	containerStatuses := map[string]string{}
 	usedImageIDs := map[string]bool{}
 	for _, line := range imageRefs.lines {
 		fields := strings.Split(line, "\t")
@@ -43,6 +44,11 @@ func buildPOSIXV3ContainerItems(
 		imageID := normalizeContainerImageID(fields[1])
 		containerImageIDs[containerID] = imageID
 		usedImageIDs[imageID] = true
+		// 第三列是 docker inspect 的 .State.Status。旧输出或截断行缺这一列时
+		// 不写映射，容器状态按未知处理（视为未运行）。
+		if len(fields) >= 3 {
+			containerStatuses[containerID] = strings.TrimSpace(fields[2])
+		}
 	}
 
 	imageRows := make([]imageRow, 0, len(images.lines))
@@ -79,11 +85,14 @@ func buildPOSIXV3ContainerItems(
 	items := make([]models.SoftwareObservedItem, 0, len(containers.lines))
 	for _, line := range containers.lines {
 		fields := strings.Split(line, "\t")
-		if len(fields) < 5 {
+		// 容器节不再带状态列：容器标识、镜像引用、容器名、端口列四列即可。
+		if len(fields) < 4 {
 			continue
 		}
 		containerID, imageReference, containerName := fields[0], fields[1], fields[2]
-		imageID := containerImageIDs[normalizeContainerImageID(containerID)]
+		normalizedContainerID := normalizeContainerImageID(containerID)
+		imageID := containerImageIDs[normalizedContainerID]
+		containerRunning := containerStatuses[normalizedContainerID] == "running"
 		candidates := rowsByImageID[imageID]
 		imageRowPresent := len(candidates) > 0
 		if len(candidates) == 0 {
@@ -119,7 +128,7 @@ func buildPOSIXV3ContainerItems(
 			ImagePullability: pullability,
 			ContainerTag:     tag,
 			ContainerDigest:  digest,
-			ContainerRunning: fields[4] == "running",
+			ContainerRunning: containerRunning,
 			BelongsTo:        "docker",
 			ListeningPorts:   parseContainerPublishedPorts(fields[3]),
 		}

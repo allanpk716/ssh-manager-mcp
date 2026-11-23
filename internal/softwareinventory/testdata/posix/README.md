@@ -32,7 +32,7 @@ ARM 板（血球 ARM 板）在录制时 SSH 握手失败，没有真实夹具；
 - `brew`：`formula|cask<TAB><名字> <版本...>`（`brew list --versions`，可能有多个版本以空格分隔）。root 运行时命令集用控制台用户身份执行 brew 与 docker。
 - `synology-packages`：`<套件名>-<版本>: <描述>`；版本是最后两段以 `-` 分隔的部分（例：`Node.js_v12-12.22.12-2031` → 名字 `Node.js_v12`，版本 `12.22.12-2031`）。
 - 第 3 版新增的容器三节（`containers-v3`、`container-image-refs`、`container-image-labels`；`container-images` 节与第 2 版格式相同）：
-  - `containers-v3`：`docker ps -a --no-trunc` 每容器一行（容器标识、镜像引用、容器名、端口列、运行状态）；端口列只解析带箭头的主机端口映射。
-  - `container-image-refs`：`docker inspect` 每容器一行（带 `sha256:` 前缀的完整容器标识、带 `sha256:` 前缀的完整镜像标识），把容器关联到镜像行。
+  - `containers-v3`：`docker ps -a --no-trunc` 每容器一行（容器标识、镜像引用、容器名、端口列）；端口列只解析带箭头的主机端口映射。运行状态不在此节：Docker 19.03 的 ps 格式没有可用的状态枚举字段。
+  - `container-image-refs`：`docker inspect` 每容器一行（带 `sha256:` 前缀的完整容器标识、带 `sha256:` 前缀的完整镜像标识、运行状态），把容器关联到镜像行并提供容器运行状态。
   - `container-image-labels`：`docker image inspect` 每镜像一行（带 `sha256:` 前缀的完整镜像标识、镜像自带的开放容器标准版本标签 `org.opencontainers.image.version`；无标签时行尾只有制表符或整行省略）。
 - 其余节与旧版 Linux 命令集相同。

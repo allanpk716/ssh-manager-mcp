@@ -71,13 +71,18 @@ if command -v docker >/dev/null 2>&1; then
 else echo "$M ABSENT container-images"; fi
 echo "$M SECTION containers-v3"
 if command -v docker >/dev/null 2>&1; then
-  $AS docker ps -a --no-trunc --format '{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Ports}}\t{{.State}}' 2>&1; echo "$M STATUS containers-v3 $?"
+  # ps 的 .State 字段是 Docker 20.10 才加入的，19.03 没有；运行状态改由
+  # container-image-refs 节的 docker inspect 提供，这里只保留四列。
+  $AS docker ps -a --no-trunc --format '{{.ID}}\t{{.Image}}\t{{.Names}}\t{{.Ports}}' 2>&1; echo "$M STATUS containers-v3 $?"
 else echo "$M ABSENT containers-v3"; fi
 echo "$M SECTION container-image-refs"
 if command -v docker >/dev/null 2>&1; then
   container_ids=$($AS docker ps -aq 2>/dev/null)
   if [ -n "$container_ids" ]; then
-    $AS docker inspect --format '{{.Id}}\t{{.Image}}' $container_ids 2>&1
+    # docker inspect --format 不像 docker ps --format 那样把 \t 转成制表符，
+    # 分隔符必须由模板里的 printf 输出。第三列 .State.Status 在 Docker 19.03
+    # 上就存在，取值与 20.10 ps 的 .State 一致（created/running/paused/exited/dead）。
+    $AS docker inspect --format '{{printf "%s\t%s\t" .Id .Image}}{{.State.Status}}' $container_ids 2>&1
   fi
   echo "$M STATUS container-image-refs $?"
 else echo "$M ABSENT container-image-refs"; fi
@@ -85,7 +90,11 @@ echo "$M SECTION container-image-labels"
 if command -v docker >/dev/null 2>&1; then
   image_ids=$($AS docker images -q --no-trunc 2>/dev/null | sort -u)
   if [ -n "$image_ids" ]; then
-    $AS docker image inspect --format '{{.Id}}\t{{if .Config.Labels}}{{index .Config.Labels "org.opencontainers.image.version"}}{{end}}' $image_ids 2>&1
+    # 经典镜像存储下 .Config 是结构体，containerd 镜像存储下模板的结构体路径
+    # 也是结构体（空配置镜像的 Labels 是 nil map，with 判空后跳过）；两种存
+    # 储的 .Labels 字段访问都成立。镜像编号必须写 .ID（Go 字段名）：写 .Id
+    # 会让 docker CLI 退回 JSON map 路径，而该路径对缺 Labels 键的 map 报错。
+    $AS docker image inspect --format '{{printf "%s\t" .ID}}{{with .Config}}{{with .Labels}}{{index . "org.opencontainers.image.version"}}{{end}}{{end}}' $image_ids 2>&1
   fi
   echo "$M STATUS container-image-labels $?"
 else echo "$M ABSENT container-image-labels"; fi
